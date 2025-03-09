@@ -32,7 +32,7 @@ func (s *ConstService) register(router gin.IRouter) {
 	group.PATCH("/:id/value", s.setValueById)
 
 	group.GET("/name/:name", s.getByName)
-	group.POST("/name", s.getByNames)
+	group.POST("/names", s.getByNames)
 
 	group.POST("/get_value", s.getValueByNames)
 	group.PATCH("/set_value", s.setValueByNames)
@@ -189,16 +189,16 @@ func (s *ConstService) getByName(ctx *gin.Context) {
 func (s *ConstService) getByNames(ctx *gin.Context) {
 	var params struct {
 		NodeId string   `json:"node_id"`
-		Name   []string `json:"name"`
+		Names  []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*pb.Const, 0, len(params.Name))
+	ret := make([]*pb.Const, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Core().GetConst().Name(ctx,
 			&cores.ConstNameRequest{NodeId: params.NodeId, Name: name})
 		if err != nil {
@@ -223,16 +223,16 @@ func (s *ConstService) getByNames(ctx *gin.Context) {
 func (s *ConstService) getValueByNames(ctx *gin.Context) {
 	var params struct {
 		NodeId string   `json:"node_id"`
-		Name   []string `json:"name"`
+		Names  []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*cores.ConstNameValue, 0, len(params.Name))
+	ret := make([]*cores.ConstNameValue, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Core().GetConst().GetValueByName(ctx,
 			&cores.ConstGetValueByNameRequest{NodeId: params.NodeId, Name: name})
 		if err != nil {
@@ -256,8 +256,8 @@ func (s *ConstService) getValueByNames(ctx *gin.Context) {
 
 func (s *ConstService) setValueByNames(ctx *gin.Context) {
 	var params struct {
-		NodeId    string            `json:"node_id"`
-		NameValue map[string]string `json:"name_value"`
+		NodeId     string            `json:"node_id"`
+		NameValues map[string]string `json:"values"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
@@ -266,7 +266,7 @@ func (s *ConstService) setValueByNames(ctx *gin.Context) {
 
 	errors := make(map[string]string)
 
-	for name, value := range params.NameValue {
+	for name, value := range params.NameValues {
 		_, err := s.as.Core().GetConst().SetValueByName(ctx,
 			&cores.ConstNameValue{NodeId: params.NodeId, Name: name, Value: value})
 		if err != nil {

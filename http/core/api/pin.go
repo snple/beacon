@@ -30,7 +30,7 @@ func (s *PinService) register(router gin.IRouter) {
 	group.PATCH("/:id/value", s.setValueById)
 
 	group.GET("/name/:name", s.getByName)
-	group.POST("/name", s.getByNames)
+	group.POST("/names", s.getByNames)
 
 	group.POST("/get_value", s.getValueByNames)
 	group.PATCH("/set_value", s.setValueByNames)
@@ -206,16 +206,16 @@ func (s *PinService) getByName(ctx *gin.Context) {
 func (s *PinService) getByNames(ctx *gin.Context) {
 	var params struct {
 		NodeId string   `json:"node_id"`
-		Name   []string `json:"name"`
+		Names  []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*pb.Pin, 0, len(params.Name))
+	ret := make([]*pb.Pin, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Core().GetPin().Name(ctx,
 			&cores.PinNameRequest{NodeId: params.NodeId, Name: name})
 		if err != nil {
@@ -240,16 +240,16 @@ func (s *PinService) getByNames(ctx *gin.Context) {
 func (s *PinService) getValueByNames(ctx *gin.Context) {
 	var params struct {
 		NodeId string   `json:"node_id"`
-		Name   []string `json:"name"`
+		Names  []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*cores.PinNameValue, 0, len(params.Name))
+	ret := make([]*cores.PinNameValue, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Core().GetPin().GetValueByName(ctx,
 			&cores.PinGetValueByNameRequest{NodeId: params.NodeId, Name: name})
 		if err != nil {
@@ -273,8 +273,8 @@ func (s *PinService) getValueByNames(ctx *gin.Context) {
 
 func (s *PinService) setValueByNames(ctx *gin.Context) {
 	var params struct {
-		NodeId    string            `json:"node_id"`
-		NameValue map[string]string `json:"name_value"`
+		NodeId     string            `json:"node_id"`
+		NameValues map[string]string `json:"values"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
@@ -283,7 +283,7 @@ func (s *PinService) setValueByNames(ctx *gin.Context) {
 
 	errors := make(map[string]string)
 
-	for name, value := range params.NameValue {
+	for name, value := range params.NameValues {
 		_, err := s.as.Core().GetPin().SetValueByName(ctx,
 			&cores.PinNameValue{NodeId: params.NodeId, Name: name, Value: value})
 		if err != nil {
@@ -308,16 +308,16 @@ func (s *PinService) setValueByNames(ctx *gin.Context) {
 func (s *PinService) getWriteByNames(ctx *gin.Context) {
 	var params struct {
 		NodeId string   `json:"node_id"`
-		Name   []string `json:"name"`
+		Names  []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*cores.PinNameValue, 0, len(params.Name))
+	ret := make([]*cores.PinNameValue, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Core().GetPin().GetWriteByName(ctx,
 			&cores.PinGetValueByNameRequest{NodeId: params.NodeId, Name: name})
 		if err != nil {
@@ -341,8 +341,8 @@ func (s *PinService) getWriteByNames(ctx *gin.Context) {
 
 func (s *PinService) setWriteByNames(ctx *gin.Context) {
 	var params struct {
-		NodeId    string            `json:"node_id"`
-		NameValue map[string]string `json:"name_value"`
+		NodeId     string            `json:"node_id"`
+		NameValues map[string]string `json:"values"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
@@ -351,7 +351,7 @@ func (s *PinService) setWriteByNames(ctx *gin.Context) {
 
 	errors := make(map[string]string)
 
-	for name, value := range params.NameValue {
+	for name, value := range params.NameValues {
 		_, err := s.as.Core().GetPin().SetWriteByName(ctx,
 			&cores.PinNameValue{NodeId: params.NodeId, Name: name, Value: value})
 		if err != nil {

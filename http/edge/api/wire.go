@@ -124,16 +124,16 @@ func (s *WireService) getByName(ctx *gin.Context) {
 
 func (s *WireService) getByNames(ctx *gin.Context) {
 	var params struct {
-		Name []string `json:"name"`
+		Names []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*pb.Wire, 0, len(params.Name))
+	ret := make([]*pb.Wire, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Edge().GetWire().Name(ctx,
 			&pb.Name{Name: name})
 		if err != nil {

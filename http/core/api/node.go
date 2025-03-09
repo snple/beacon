@@ -28,7 +28,7 @@ func (s *NodeService) register(router gin.IRouter) {
 	group.GET("/:id", s.getById)
 
 	group.GET("/name/:name", s.getByName)
-	group.POST("/name", s.getByNames)
+	group.POST("/names", s.getByNames)
 
 	group.PATCH("/link", s.link)
 }
@@ -115,16 +115,16 @@ func (s *NodeService) getByName(ctx *gin.Context) {
 
 func (s *NodeService) getByNames(ctx *gin.Context) {
 	var params struct {
-		Name []string `json:"name"`
+		Names []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*pb.Node, 0, len(params.Name))
+	ret := make([]*pb.Node, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Core().GetNode().Name(ctx,
 			&pb.Name{Name: name})
 		if err != nil {

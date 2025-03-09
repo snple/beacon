@@ -28,7 +28,7 @@ func (s *WireService) register(router gin.IRouter) {
 	group.GET("/:id", s.getById)
 
 	group.GET("/name/:name", s.getByName)
-	group.POST("/name", s.getByNames)
+	group.POST("/names", s.getByNames)
 
 	group.PATCH("/link", s.link)
 }
@@ -135,16 +135,16 @@ func (s *WireService) getByName(ctx *gin.Context) {
 func (s *WireService) getByNames(ctx *gin.Context) {
 	var params struct {
 		NodeId string   `json:"node_id"`
-		Name   []string `json:"name"`
+		Names  []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*pb.Wire, 0, len(params.Name))
+	ret := make([]*pb.Wire, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Core().GetWire().Name(ctx,
 			&cores.WireNameRequest{NodeId: params.NodeId, Name: name})
 		if err != nil {

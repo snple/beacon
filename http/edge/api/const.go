@@ -32,7 +32,7 @@ func (s *ConstService) register(router gin.IRouter) {
 	group.PATCH("/:id/value", s.setValueById)
 
 	group.GET("/name/:name", s.getByName)
-	group.POST("/name", s.getByNames)
+	group.POST("/names", s.getByNames)
 
 	group.POST("/get_value", s.getValueByNames)
 	group.PATCH("/set_value", s.setValueByNames)
@@ -178,16 +178,16 @@ func (s *ConstService) getByName(ctx *gin.Context) {
 
 func (s *ConstService) getByNames(ctx *gin.Context) {
 	var params struct {
-		Name []string `json:"name"`
+		Names []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*pb.Const, 0, len(params.Name))
+	ret := make([]*pb.Const, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Edge().GetConst().Name(ctx,
 			&pb.Name{Name: name})
 		if err != nil {
@@ -211,16 +211,16 @@ func (s *ConstService) getByNames(ctx *gin.Context) {
 
 func (s *ConstService) getValueByNames(ctx *gin.Context) {
 	var params struct {
-		Name []string `json:"name"`
+		Names []string `json:"names"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
 		return
 	}
 
-	ret := make([]*pb.ConstNameValue, 0, len(params.Name))
+	ret := make([]*pb.ConstNameValue, 0, len(params.Names))
 
-	for _, name := range params.Name {
+	for _, name := range params.Names {
 		reply, err := s.as.Edge().GetConst().GetValueByName(ctx,
 			&pb.Name{Name: name})
 		if err != nil {
@@ -244,7 +244,7 @@ func (s *ConstService) getValueByNames(ctx *gin.Context) {
 
 func (s *ConstService) setValueByNames(ctx *gin.Context) {
 	var params struct {
-		NameValue map[string]string `json:"name_value"`
+		NameValues map[string]string `json:"values"`
 	}
 	if err := ctx.Bind(&params); err != nil {
 		ctx.JSON(util.Error(400, err.Error()))
@@ -253,7 +253,7 @@ func (s *ConstService) setValueByNames(ctx *gin.Context) {
 
 	errors := make(map[string]string)
 
-	for name, value := range params.NameValue {
+	for name, value := range params.NameValues {
 		_, err := s.as.Edge().GetConst().SetValueByName(ctx,
 			&pb.ConstNameValue{Name: name, Value: value})
 		if err != nil {
