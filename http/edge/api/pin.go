@@ -117,9 +117,7 @@ func (s *PinService) getById(ctx *gin.Context) {
 
 	shiftime.Pin(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) getValueById(ctx *gin.Context) {
@@ -140,9 +138,7 @@ func (s *PinService) getValueById(ctx *gin.Context) {
 
 	shiftime.PinValue(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) setValueById(ctx *gin.Context) {
@@ -170,9 +166,7 @@ func (s *PinService) setValueById(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) getByName(ctx *gin.Context) {
@@ -194,9 +188,7 @@ func (s *PinService) getByName(ctx *gin.Context) {
 
 	shiftime.Pin(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) getByNames(ctx *gin.Context) {

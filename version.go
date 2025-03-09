@@ -1,3 +1,3 @@
 package beacon
 
-const Version = "0.1.0-250303"
+const Version = "0.1.1-250309"

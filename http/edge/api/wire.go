@@ -97,9 +97,7 @@ func (s *WireService) getById(ctx *gin.Context) {
 
 	shiftime.Wire(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *WireService) getByName(ctx *gin.Context) {
@@ -121,9 +119,7 @@ func (s *WireService) getByName(ctx *gin.Context) {
 
 	shiftime.Wire(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *WireService) getByNames(ctx *gin.Context) {

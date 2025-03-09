@@ -95,9 +95,7 @@ func (s *NodeService) get(ctx *gin.Context) {
 
 	shiftime.Node(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *NodeService) post(ctx *gin.Context) {
@@ -116,9 +114,7 @@ func (s *NodeService) post(ctx *gin.Context) {
 
 	shiftime.Node(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *NodeService) patch(ctx *gin.Context) {

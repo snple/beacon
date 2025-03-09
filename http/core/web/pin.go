@@ -108,9 +108,7 @@ func (s *PinService) get(ctx *gin.Context) {
 
 	shiftime.Pin(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) post(ctx *gin.Context) {
@@ -129,9 +127,7 @@ func (s *PinService) post(ctx *gin.Context) {
 
 	shiftime.Pin(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) patch(ctx *gin.Context) {

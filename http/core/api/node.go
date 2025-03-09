@@ -89,9 +89,7 @@ func (s *NodeService) getById(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *NodeService) getByName(ctx *gin.Context) {
@@ -112,9 +110,7 @@ func (s *NodeService) getByName(ctx *gin.Context) {
 
 	shiftime.Node(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *NodeService) getByNames(ctx *gin.Context) {

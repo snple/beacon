@@ -97,9 +97,7 @@ func (s *SlotService) get(ctx *gin.Context) {
 
 	shiftime.Slot(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *SlotService) post(ctx *gin.Context) {
@@ -118,9 +116,7 @@ func (s *SlotService) post(ctx *gin.Context) {
 
 	shiftime.Slot(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *SlotService) patch(ctx *gin.Context) {

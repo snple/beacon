@@ -100,9 +100,7 @@ func (s *ConstService) getById(ctx *gin.Context) {
 
 	shiftime.Const(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *ConstService) getValueById(ctx *gin.Context) {
@@ -123,9 +121,7 @@ func (s *ConstService) getValueById(ctx *gin.Context) {
 
 	shiftime.ConstValue(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *ConstService) setValueById(ctx *gin.Context) {
@@ -154,7 +150,7 @@ func (s *ConstService) setValueById(ctx *gin.Context) {
 	}
 
 	ctx.JSON(util.Success(gin.H{
-		"item": reply,
+		"ok": reply.GetBool(),
 	}))
 }
 
@@ -177,9 +173,7 @@ func (s *ConstService) getByName(ctx *gin.Context) {
 
 	shiftime.Const(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *ConstService) getByNames(ctx *gin.Context) {

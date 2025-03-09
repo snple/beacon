@@ -95,9 +95,7 @@ func (s *UserService) get(ctx *gin.Context) {
 
 	shiftime.User(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *UserService) post(ctx *gin.Context) {
@@ -130,9 +128,7 @@ func (s *UserService) post(ctx *gin.Context) {
 
 	shiftime.User(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *UserService) patch(ctx *gin.Context) {

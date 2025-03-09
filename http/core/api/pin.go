@@ -119,9 +119,7 @@ func (s *PinService) getById(ctx *gin.Context) {
 
 	shiftime.Pin(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) getValueById(ctx *gin.Context) {
@@ -142,9 +140,7 @@ func (s *PinService) getValueById(ctx *gin.Context) {
 
 	shiftime.PinValue(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) setValueById(ctx *gin.Context) {
@@ -173,7 +169,7 @@ func (s *PinService) setValueById(ctx *gin.Context) {
 	}
 
 	ctx.JSON(util.Success(gin.H{
-		"item": reply,
+		"ok": reply.GetBool(),
 	}))
 }
 
@@ -204,9 +200,7 @@ func (s *PinService) getByName(ctx *gin.Context) {
 
 	shiftime.Pin(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *PinService) getByNames(ctx *gin.Context) {
@@ -382,11 +376,5 @@ func (s *PinService) setWriteByNames(ctx *gin.Context) {
 func shiftTimeForPinNameValue(item *cores.PinNameValue) {
 	if item != nil {
 		item.Updated = item.Updated / 1000
-	}
-}
-
-func shiftTimeForPinNameValues(items []*cores.PinNameValue) {
-	for _, item := range items {
-		shiftTimeForPinNameValue(item)
 	}
 }

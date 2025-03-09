@@ -88,9 +88,7 @@ func (s *ConstService) get(ctx *gin.Context) {
 
 	shiftime.Const(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *ConstService) post(ctx *gin.Context) {
@@ -109,9 +107,7 @@ func (s *ConstService) post(ctx *gin.Context) {
 
 	shiftime.Const(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *ConstService) patch(ctx *gin.Context) {

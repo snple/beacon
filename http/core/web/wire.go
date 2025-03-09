@@ -97,9 +97,7 @@ func (s *WireService) get(ctx *gin.Context) {
 
 	shiftime.Wire(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *WireService) post(ctx *gin.Context) {
@@ -118,9 +116,7 @@ func (s *WireService) post(ctx *gin.Context) {
 
 	shiftime.Wire(reply)
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
 
 func (s *WireService) patch(ctx *gin.Context) {

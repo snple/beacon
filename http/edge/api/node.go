@@ -38,7 +38,5 @@ func (s *NodeService) view(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(util.Success(gin.H{
-		"item": reply,
-	}))
+	ctx.JSON(util.Success(reply))
 }
