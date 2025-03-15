@@ -5,12 +5,10 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/snple/beacon"
@@ -40,8 +38,6 @@ func main() {
 			return
 		}
 	}
-
-	rand.Seed(time.Now().Unix())
 
 	config.Parse()
 

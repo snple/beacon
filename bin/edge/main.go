@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -44,7 +43,6 @@ func main() {
 		}
 	}
 
-	rand.Seed(time.Now().Unix())
 
 	config.Parse()
 

@@ -5,8 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"io/ioutil"
-	"math/rand"
+	"os"
 	"time"
 
 	"github.com/snple/beacon/client/edge/service"
@@ -22,8 +21,6 @@ const (
 )
 
 func main() {
-	rand.Seed(time.Now().Unix())
-
 	logger, _ := zap.NewDevelopment()
 
 	logger.Info("main : Started")
@@ -98,7 +95,7 @@ func main() {
 func loadCert() (*tls.Config, error) {
 	pool := x509.NewCertPool()
 
-	ca, err := ioutil.ReadFile("certs/ca.crt")
+	ca, err := os.ReadFile("certs/ca.crt")
 	if err != nil {
 		return nil, err
 	}

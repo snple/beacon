@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"math/rand"
 	"os"
 	"time"
 
@@ -22,8 +21,6 @@ const (
 )
 
 func main() {
-	rand.Seed(time.Now().Unix())
-
 	logger, _ := zap.NewDevelopment()
 
 	logger.Info("main : Started")
