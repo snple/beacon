@@ -17,7 +17,6 @@ type ConfigStruct struct {
 	TcpNodeService TCPService  `toml:"tcp_node"`
 	Status         Status      `toml:"status"`
 	Gin            Gin         `toml:"gin"`
-	WebService     HttpService `toml:"web"`
 	ApiService     HttpService `toml:"api"`
 	Statics        []Static    `toml:"static"`
 }
@@ -92,9 +91,6 @@ func DefaultConfig() ConfigStruct {
 		},
 		Status: Status{
 			LinkTTL: 3 * 60,
-		},
-		WebService: HttpService{
-			Addr: ":8006",
 		},
 		ApiService: HttpService{
 			Addr: ":8008",

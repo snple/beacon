@@ -30,5 +30,4 @@ const (
 	SYNC_GLOBAL_WIRE  = "wire"
 	SYNC_GLOBAL_PIN   = "pin"
 	SYNC_GLOBAL_CONST = "const"
-	SYNC_GLOBAL_USER  = "user"
 )
