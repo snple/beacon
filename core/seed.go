@@ -10,7 +10,6 @@ import (
 	"github.com/snple/beacon/core/model"
 	"github.com/snple/beacon/util"
 	"github.com/uptrace/bun"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func Seed(db *bun.DB) error {
@@ -55,47 +54,6 @@ func seed(db bun.Tx) error {
 		if err != nil {
 			if err == sql.ErrNoRows {
 				if err = seedNode(); err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		}
-	}
-
-	{
-		seedUser := func() error {
-			randPass := util.RandPass(10)
-
-			passwd, err := bcrypt.GenerateFromPassword([]byte(randPass), bcrypt.DefaultCost)
-			if err != nil {
-				return err
-			}
-
-			user := model.User{
-				ID:      util.RandomID(),
-				Name:    "root",
-				Desc:    "root",
-				Pass:    string(passwd),
-				Status:  consts.ON,
-				Created: time.Now(),
-				Updated: time.Now(),
-			}
-
-			_, err = db.NewInsert().Model(&user).Exec(ctx)
-			if err != nil {
-				return err
-			}
-
-			fmt.Printf("seed: The initial password for the root user is: %v\n", randPass)
-
-			return nil
-		}
-
-		err = db.NewSelect().Model(&model.User{}).Where("name = ?", "root").Scan(ctx)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				if err = seedUser(); err != nil {
 					return err
 				}
 			} else {

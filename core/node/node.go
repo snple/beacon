@@ -27,9 +27,6 @@ type NodeService struct {
 	pin      *PinService
 	constant *ConstService
 
-	auth *AuthService
-	user *UserService
-
 	ctx     context.Context
 	cancel  func()
 	closeWG sync.WaitGroup
@@ -63,9 +60,6 @@ func Node(cs *core.CoreService, opts ...NodeOption) (*NodeService, error) {
 	ns.pin = newPinService(ns)
 	ns.constant = newConstService(ns)
 
-	ns.auth = newAuthService(ns)
-	ns.user = newUserService(ns)
-
 	return ns, nil
 }
 
@@ -97,9 +91,6 @@ func (ns *NodeService) RegisterGrpc(server *grpc.Server) {
 	nodes.RegisterWireServiceServer(server, ns.wire)
 	nodes.RegisterPinServiceServer(server, ns.pin)
 	nodes.RegisterConstServiceServer(server, ns.constant)
-
-	nodes.RegisterAuthServiceServer(server, ns.auth)
-	nodes.RegisterUserServiceServer(server, ns.user)
 }
 
 type nodeOptions struct {

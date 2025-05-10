@@ -27,9 +27,6 @@ type CoreService struct {
 
 	clone *cloneService
 
-	auth *AuthService
-	user *UserService
-
 	ctx     context.Context
 	cancel  func()
 	closeWG sync.WaitGroup
@@ -73,9 +70,6 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 	cs.constant = newConstService(cs)
 
 	cs.clone = newCloneService(cs)
-
-	cs.auth = newAuthService(cs)
-	cs.user = newUserService(cs)
 
 	return cs, nil
 }
@@ -133,14 +127,6 @@ func (cs *CoreService) getClone() *cloneService {
 	return cs.clone
 }
 
-func (cs *CoreService) GetAuth() *AuthService {
-	return cs.auth
-}
-
-func (cs *CoreService) GetUser() *UserService {
-	return cs.user
-}
-
 func (cs *CoreService) Context() context.Context {
 	return cs.ctx
 }
@@ -168,7 +154,6 @@ func (cs *CoreService) cacheGC() {
 				cs.GetWire().GC()
 				cs.GetPin().GC()
 				cs.GetConst().GC()
-				cs.GetUser().GC()
 			}
 		}
 	}
@@ -182,9 +167,6 @@ func (cs *CoreService) Register(server *grpc.Server) {
 	cores.RegisterWireServiceServer(server, cs.wire)
 	cores.RegisterPinServiceServer(server, cs.pin)
 	cores.RegisterConstServiceServer(server, cs.constant)
-
-	cores.RegisterAuthServiceServer(server, cs.auth)
-	cores.RegisterUserServiceServer(server, cs.user)
 }
 
 func CreateSchema(db bun.IDB) error {
@@ -198,7 +180,6 @@ func CreateSchema(db bun.IDB) error {
 		(*model.Const)(nil),
 		(*model.PinValue)(nil),
 		(*model.PinWrite)(nil),
-		(*model.User)(nil),
 	}
 
 	for _, model := range models {

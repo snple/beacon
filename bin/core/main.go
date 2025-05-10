@@ -19,7 +19,6 @@ import (
 	"github.com/snple/beacon/db"
 	"github.com/snple/beacon/http"
 	"github.com/snple/beacon/http/core/api"
-	"github.com/snple/beacon/http/core/web"
 	tcp_node "github.com/snple/beacon/tcp/node"
 	"github.com/snple/beacon/util"
 	_ "github.com/snple/beacon/util/compress/zstd"
@@ -185,69 +184,6 @@ func main() {
 
 	if !config.Config.Gin.Debug {
 		gin.SetMode(gin.ReleaseMode)
-	}
-
-	if config.Config.WebService.Enable {
-		opts := make([]http.HttpServerOption, 0)
-
-		opts = append(opts, http.WithAppName("web"))
-		opts = append(opts, http.WithAddr(config.Config.WebService.Addr))
-		opts = append(opts, http.WithDebug(config.Config.WebService.Debug))
-
-		if config.Config.WebService.TLS {
-			if config.Config.WebService.CA != "" {
-				pool := x509.NewCertPool()
-
-				ca, err := os.ReadFile(config.Config.WebService.CA)
-				if err != nil {
-					log.Logger.Sugar().Fatal(err)
-				}
-
-				if ok := pool.AppendCertsFromPEM(ca); !ok {
-					log.Logger.Sugar().Fatal(err)
-				}
-
-				tlsConfig := &tls.Config{
-					ClientAuth: tls.RequireAndVerifyClientCert,
-					ClientCAs:  pool,
-				}
-
-				opts = append(opts, http.WithTLSConfig(tlsConfig))
-			}
-
-			opts = append(opts, http.WithTLS(config.Config.WebService.Cert, config.Config.WebService.Key))
-		}
-
-		hs, err := http.NewHttpServer(cs.Context(), opts...)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("NewHttpServer: %v", err)
-		}
-
-		{
-			ws, err := web.NewWebService(cs)
-			if err != nil {
-				log.Logger.Sugar().Fatalf("NewWebService: %v", err)
-			}
-
-			ws.Register(hs.Engine())
-
-			go ws.Start()
-			defer ws.Stop()
-
-			as, err := api.NewApiService(cs)
-			if err != nil {
-				log.Logger.Sugar().Fatalf("NewApiService: %v", err)
-			}
-
-			apiGroup := hs.Engine().Group("/api", ws.GetAuth().MiddlewareFunc())
-			as.Register(apiGroup)
-
-			go as.Start()
-			defer as.Stop()
-		}
-
-		go hs.Start()
-		defer hs.Stop()
 	}
 
 	if config.Config.ApiService.Enable {
