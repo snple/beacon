@@ -51,14 +51,14 @@ func (r *Root) Execute() error {
 func (r *Root) init() {
 	cobra.OnInitialize(r.initConfig)
 
-	r.rootCmd.PersistentFlags().StringVarP(&r.cfgFile, "config", "c", "beacon.toml", "config file")
+	r.rootCmd.PersistentFlags().StringVarP(&r.cfgFile, "config", "c", "", "config file")
 	r.rootCmd.PersistentFlags().BoolP("debug", "d", false, "debug")
 	r.rootCmd.PersistentFlags().StringP("addr", "a", "127.0.0.1:6006", "addr")
 	r.rootCmd.PersistentFlags().StringP("ca", "", "certs/ca.crt", "ca")
 	r.rootCmd.PersistentFlags().StringP("cert", "", "certs/client.crt", "cert")
 	r.rootCmd.PersistentFlags().StringP("key", "", "certs/client.key", "key")
-	r.rootCmd.PersistentFlags().StringP("server_name", "", "beacon", "server name")
-	r.rootCmd.PersistentFlags().BoolP("insecure_skip_verify", "", false, "insecure skip verify")
+	r.rootCmd.PersistentFlags().StringP("server_name", "", "", "server name")
+	r.rootCmd.PersistentFlags().BoolP("insecure", "", false, "skip verify server hostname")
 
 	r.rootCmd.AddCommand(r.versionCmd())
 	r.rootCmd.AddCommand(r.nodeCmd())
@@ -69,8 +69,22 @@ func (r *Root) init() {
 	viper.BindPFlag("cert", r.rootCmd.PersistentFlags().Lookup("cert"))
 	viper.BindPFlag("key", r.rootCmd.PersistentFlags().Lookup("key"))
 	viper.BindPFlag("server_name", r.rootCmd.PersistentFlags().Lookup("server_name"))
-	viper.BindPFlag("insecure_skip_verify", r.rootCmd.PersistentFlags().Lookup("insecure_skip_verify"))
+	viper.BindPFlag("insecure", r.rootCmd.PersistentFlags().Lookup("insecure"))
 
+}
+
+func (r *Root) versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the version number of Beacon",
+		Long:  `All software has versions. This is Beacon's`,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("Beacon v%s\n", beacon.Version)
+		},
+	}
+}
+
+func (r *Root) initConfig() {
 	{
 		var logger *zap.Logger
 		var err error
@@ -88,20 +102,7 @@ func (r *Root) init() {
 
 		r.logger = logger
 	}
-}
 
-func (r *Root) versionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print the version number of Beacon",
-		Long:  `All software has versions. This is Beacon's`,
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("Beacon v%s\n", beacon.Version)
-		},
-	}
-}
-
-func (r *Root) initConfig() {
 	if r.cfgFile != "" {
 		viper.SetConfigFile(r.cfgFile)
 	} else {
@@ -206,7 +207,7 @@ func loadCert() (*tls.Config, error) {
 		Certificates:       []tls.Certificate{cert},
 		ServerName:         viper.GetString("server_name"),
 		RootCAs:            pool,
-		InsecureSkipVerify: viper.GetBool("insecure_skip_verify"),
+		InsecureSkipVerify: viper.GetBool("insecure"),
 	}
 
 	return cfg, nil
