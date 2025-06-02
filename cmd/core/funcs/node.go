@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func (r *Root) nodeCmd() *cobra.Command {
@@ -24,9 +26,9 @@ func (r *Root) nodeCmd() *cobra.Command {
 	}
 
 	nodeCmd.AddCommand(r.nodeListCmd())
-	// nodeCmd.AddCommand(r.nodeCreateCmd())
-	// nodeCmd.AddCommand(r.nodeUpdateCmd())
-	// nodeCmd.AddCommand(r.nodeDeleteCmd())
+	nodeCmd.AddCommand(r.nodeDeleteCmd())
+	nodeCmd.AddCommand(r.nodeDeleteWireCmd())
+	nodeCmd.AddCommand(r.nodeDeletePinCmd())
 	nodeCmd.AddCommand(r.nodeExportCmd())
 	nodeCmd.AddCommand(r.nodeImportCmd())
 	return nodeCmd
@@ -122,55 +124,191 @@ func (r *Root) nodeList(ctx context.Context, client cores.NodeServiceClient, cmd
 	fmt.Println(t.Render())
 }
 
-func (r *Root) nodeCreateCmd() *cobra.Command {
+func (r *Root) nodeDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create a node",
-		Long:  `Create a node`,
+		Use:   "delete [name]",
+		Short: "Delete a node",
+		Long:  `Delete a node`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cobra.ExactArgs(1)(cmd, args) != nil {
+				return errors.New("must provide a node name")
+			}
+
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := context.Background()
 
-			r.nodeCreate(ctx, cores.NewNodeServiceClient(r.GetConn()), cmd)
+			r.nodeDelete(ctx, r.GetConn(), cmd, args[0])
 		},
 	}
 
 	return cmd
 }
 
-func (r *Root) nodeCreate(ctx context.Context, client cores.NodeServiceClient, cmd *cobra.Command) {
-
-}
-
-func (r *Root) nodeUpdateCmd() *cobra.Command {
+func (r *Root) nodeDeleteWireCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "update",
-		Short: "Update a node",
-		Long:  `Update a node`,
+		Use:   "delete-wire [name]",
+		Short: "Delete a wire",
+		Long:  `Delete a wire`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cobra.ExactArgs(1)(cmd, args) != nil {
+				return errors.New("must provide a wire name")
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+
+			r.nodeDeleteWire(ctx, r.GetConn(), cmd, args[0])
+		},
 	}
 
 	return cmd
 }
 
-func (r *Root) nodeUpdate(ctx context.Context, client cores.NodeServiceClient, cmd *cobra.Command) {
-
-}
-
-func (r *Root) nodeDeleteCmd() *cobra.Command {
+func (r *Root) nodeDeletePinCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete",
-		Short: "Delete a node",
-		Long:  `Delete a node`,
+		Use:   "delete-pin [name]",
+		Short: "Delete a pin",
+		Long:  `Delete a pin`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cobra.ExactArgs(1)(cmd, args) != nil {
+				return errors.New("must provide a pin name")
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+
+			r.nodeDeletePin(ctx, r.GetConn(), cmd, args[0])
+		},
 	}
 
 	return cmd
 }
 
-func (r *Root) nodeDelete(ctx context.Context, client cores.NodeServiceClient, cmd *cobra.Command) {
+func (r *Root) nodeDelete(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Command, name string) {
+	nodeClient := cores.NewNodeServiceClient(conn)
+	wireClient := cores.NewWireServiceClient(conn)
 
+	request := &pb.Name{
+		Name: name,
+	}
+
+	reply, err := nodeClient.Name(ctx, request)
+	if err != nil {
+		r.logger.Error("failed to get node", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("node: %s, %s\n", reply.Id, reply.Name)
+
+	{
+		reply, err := wireClient.List(ctx, &cores.WireListRequest{
+			NodeId: reply.Id,
+		})
+		if err != nil {
+			r.logger.Error("failed to get wires", zap.Error(err))
+			os.Exit(1)
+		}
+
+		for _, wire := range reply.GetWire() {
+			fmt.Printf("wire: %s, %s\n", wire.Id, wire.Name)
+
+			r.nodeDeleteWire2(ctx, conn, wire.Id)
+		}
+	}
+
+	_, err = nodeClient.Delete(ctx, &pb.Id{Id: reply.Id})
+	if err != nil {
+		r.logger.Error("failed to delete node", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("node deleted: %s, %s\n", reply.Id, reply.Name)
+}
+
+func (r *Root) nodeDeleteWire(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Command, name string) {
+	wireClient := cores.NewWireServiceClient(conn)
+
+	reply, err := wireClient.NameFull(ctx, &pb.Name{
+		Name: name,
+	})
+	if err != nil {
+		r.logger.Error("failed to get wire", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("wire: %s, %s\n", reply.Id, reply.Name)
+
+	r.nodeDeleteWire2(ctx, conn, reply.Id)
+}
+
+func (r *Root) nodeDeletePin(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Command, name string) {
+	pinClient := cores.NewPinServiceClient(conn)
+
+	reply, err := pinClient.NameFull(ctx, &pb.Name{
+		Name: name,
+	})
+	if err != nil {
+		r.logger.Error("failed to get pin", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("pin: %s, %s\n", reply.Id, reply.Name)
+
+	r.nodeDeletePin2(ctx, conn, reply.Id)
+}
+
+func (r *Root) nodeDeleteWire2(ctx context.Context, conn *grpc.ClientConn, wireId string) {
+	wireClient := cores.NewWireServiceClient(conn)
+	pinClient := cores.NewPinServiceClient(conn)
+
+	{
+		reply, err := pinClient.List(ctx, &cores.PinListRequest{
+			WireId: wireId,
+		})
+		if err != nil {
+			r.logger.Error("failed to get pins", zap.Error(err))
+			os.Exit(1)
+		}
+
+		for _, pin := range reply.GetPin() {
+			fmt.Printf("pin: %s, %s\n", pin.Id, pin.Name)
+
+			r.nodeDeletePin2(ctx, conn, pin.Id)
+		}
+	}
+
+	_, err := wireClient.Delete(ctx, &pb.Id{
+		Id: wireId,
+	})
+	if err != nil {
+		r.logger.Error("failed to delete wire", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("wire deleted: %s\n", wireId)
+}
+
+func (r *Root) nodeDeletePin2(ctx context.Context, conn *grpc.ClientConn, pinId string) {
+	pinClient := cores.NewPinServiceClient(conn)
+
+	_, err := pinClient.Delete(ctx, &pb.Id{
+		Id: pinId,
+	})
+	if err != nil {
+		r.logger.Error("failed to delete pin", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("pin deleted: %s\n", pinId)
 }
 
 type ExportNode struct {
-	Id     string       `toml:"id"`
 	Name   string       `toml:"name"`
 	Desc   string       `toml:"desc"`
 	Tags   string       `toml:"tags"`
@@ -180,7 +318,6 @@ type ExportNode struct {
 }
 
 type ExportWire struct {
-	Id     string      `toml:"id"`
 	Name   string      `toml:"name"`
 	Desc   string      `toml:"desc"`
 	Tags   string      `toml:"tags"`
@@ -191,7 +328,6 @@ type ExportWire struct {
 }
 
 type ExportPin struct {
-	Id       string `toml:"id"`
 	Name     string `toml:"name"`
 	Desc     string `toml:"desc"`
 	Tags     string `toml:"tags"`
@@ -204,12 +340,12 @@ type ExportPin struct {
 
 func (r *Root) nodeExportCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "export [id]",
+		Use:   "export [name]",
 		Short: "Export a node",
 		Long:  `Export a node`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cobra.ExactArgs(1)(cmd, args) != nil {
-				return errors.New("must provide a node id")
+				return errors.New("must provide a node name")
 			}
 
 			return nil
@@ -222,20 +358,22 @@ func (r *Root) nodeExportCmd() *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringP("output", "o", "", "output")
+	cmd.PersistentFlags().Bool("ignore-id", false, "ignore id")
 
 	return cmd
 }
 
-func (r *Root) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Command, id string) {
+func (r *Root) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Command, name string) {
 	nodeClient := cores.NewNodeServiceClient(conn)
 	wireClient := cores.NewWireServiceClient(conn)
 	pinClient := cores.NewPinServiceClient(conn)
+
 	// query node
-	request := &pb.Id{
-		Id: id,
+	request := &pb.Name{
+		Name: name,
 	}
 
-	reply, err := nodeClient.View(ctx, request)
+	reply, err := nodeClient.Name(ctx, request)
 	if err != nil {
 		r.logger.Error("failed to get node", zap.Error(err))
 		os.Exit(1)
@@ -243,7 +381,7 @@ func (r *Root) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 
 	// query wires
 	wireRequest := &cores.WireListRequest{
-		NodeId: id,
+		NodeId: reply.Id,
 	}
 
 	wires, err := wireClient.List(ctx, wireRequest)
@@ -253,7 +391,6 @@ func (r *Root) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 	}
 
 	exportNode := &ExportNode{
-		Id:     reply.Id,
 		Name:   reply.Name,
 		Desc:   reply.Desc,
 		Tags:   reply.Tags,
@@ -263,7 +400,6 @@ func (r *Root) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 
 	for _, wire := range wires.GetWire() {
 		exportWire := &ExportWire{
-			Id:     wire.Id,
 			Name:   wire.Name,
 			Desc:   wire.Desc,
 			Tags:   wire.Tags,
@@ -284,7 +420,6 @@ func (r *Root) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 
 		for _, pin := range pins.GetPin() {
 			exportPin := ExportPin{
-				Id:       pin.Id,
 				Name:     pin.Name,
 				Desc:     pin.Desc,
 				Tags:     pin.Tags,
@@ -326,36 +461,32 @@ func (r *Root) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 
 func (r *Root) nodeImportCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "import",
+		Use:   "import [file]",
 		Short: "Import a node",
 		Long:  `Import a node`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cobra.ExactArgs(1)(cmd, args) != nil {
+				return errors.New("must provide a file")
+			}
+
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := context.Background()
 
-			r.nodeImport(ctx, r.GetConn(), cmd)
+			r.nodeImport(ctx, r.GetConn(), cmd, args[0])
 		},
 	}
-
-	cmd.PersistentFlags().StringP("input", "i", "", "input")
-	cmd.MarkPersistentFlagRequired("input")
 
 	return cmd
 }
 
-func (r *Root) nodeImport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Command) {
-	// nodeClient := cores.NewNodeServiceClient(conn)
-	// wireClient := cores.NewWireServiceClient(conn)
-	// pinClient := cores.NewPinServiceClient(conn)
+func (r *Root) nodeImport(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Command, fileName string) {
+	nodeClient := cores.NewNodeServiceClient(conn)
 
-	input, err := cmd.Flags().GetString("input")
+	content, err := os.ReadFile(fileName)
 	if err != nil {
-		r.logger.Error("failed to get input", zap.Error(err))
-		os.Exit(1)
-	}
-
-	content, err := os.ReadFile(input)
-	if err != nil {
-		r.logger.Error("failed to read input", zap.Error(err))
+		r.logger.Error("failed to read file", zap.Error(err))
 		os.Exit(1)
 	}
 
@@ -367,6 +498,192 @@ func (r *Root) nodeImport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 		os.Exit(1)
 	}
 
-	fmt.Println(importNode)
+	request := &pb.Name{
+		Name: importNode.Name,
+	}
 
+	reply, err := nodeClient.Name(ctx, request)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			r.nodeImportCreateNode(ctx, conn, importNode)
+		} else {
+			r.logger.Error("failed to get node", zap.Error(err))
+			os.Exit(1)
+		}
+	} else {
+		r.nodeImportUpdateNode(ctx, conn, reply, importNode)
+	}
+}
+
+func (r *Root) nodeImportCreateNode(ctx context.Context, conn *grpc.ClientConn, importNode *ExportNode) {
+	nodeClient := cores.NewNodeServiceClient(conn)
+
+	node := &pb.Node{
+		Name:   importNode.Name,
+		Desc:   importNode.Desc,
+		Tags:   importNode.Tags,
+		Secret: importNode.Secret,
+		Config: importNode.Config,
+	}
+
+	reply, err := nodeClient.Create(ctx, node)
+	if err != nil {
+		r.logger.Error("failed to create node", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("node created: %s, %s\n", reply.Id, reply.Name)
+
+	for _, wire := range importNode.Wires {
+		r.nodeImportCreateWire(ctx, conn, reply.Id, &wire)
+	}
+}
+
+func (r *Root) nodeImportUpdateNode(ctx context.Context, conn *grpc.ClientConn, node *pb.Node, importNode *ExportNode) {
+	nodeClient := cores.NewNodeServiceClient(conn)
+	wireClient := cores.NewWireServiceClient(conn)
+
+	node.Name = importNode.Name
+	node.Desc = importNode.Desc
+	node.Tags = importNode.Tags
+	node.Secret = importNode.Secret
+	node.Config = importNode.Config
+
+	reply, err := nodeClient.Update(ctx, node)
+	if err != nil {
+		r.logger.Error("failed to update node", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("node updated: %s, %s\n", reply.Id, reply.Name)
+
+	for _, wire := range importNode.Wires {
+		request := &cores.WireNameRequest{
+			NodeId: node.Id,
+			Name:   wire.Name,
+		}
+
+		reply, err := wireClient.Name(ctx, request)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				r.nodeImportCreateWire(ctx, conn, node.Id, &wire)
+			} else {
+				r.logger.Error("failed to get wire", zap.Error(err))
+				os.Exit(1)
+			}
+		} else {
+			r.nodeImportUpdateWire(ctx, conn, reply, &wire)
+		}
+	}
+}
+
+func (r *Root) nodeImportCreateWire(ctx context.Context, conn *grpc.ClientConn, nodeId string, importWire *ExportWire) {
+	wireClient := cores.NewWireServiceClient(conn)
+
+	wire := &pb.Wire{
+		NodeId: nodeId,
+		Name:   importWire.Name,
+		Desc:   importWire.Desc,
+		Tags:   importWire.Tags,
+		Source: importWire.Source,
+		Params: importWire.Params,
+		Config: importWire.Config,
+	}
+
+	reply, err := wireClient.Create(ctx, wire)
+	if err != nil {
+		r.logger.Error("failed to create wire", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("wire created: %s, %s\n", reply.Id, reply.Name)
+
+	for _, pin := range importWire.Pins {
+		r.nodeImportCreatePin(ctx, conn, nodeId, reply.Id, &pin)
+	}
+}
+
+func (r *Root) nodeImportUpdateWire(ctx context.Context, conn *grpc.ClientConn, wire *pb.Wire, importWire *ExportWire) {
+	wireClient := cores.NewWireServiceClient(conn)
+	pinClient := cores.NewPinServiceClient(conn)
+
+	wire.Name = importWire.Name
+	wire.Desc = importWire.Desc
+	wire.Tags = importWire.Tags
+	wire.Source = importWire.Source
+	wire.Params = importWire.Params
+	wire.Config = importWire.Config
+
+	reply, err := wireClient.Update(ctx, wire)
+	if err != nil {
+		r.logger.Error("failed to update wire", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("wire updated: %s, %s\n", reply.Id, reply.Name)
+
+	for _, pin := range importWire.Pins {
+		request := &cores.PinNameRequest{
+			NodeId: wire.NodeId,
+			Name:   fmt.Sprintf("%s.%s", wire.Name, pin.Name),
+		}
+
+		reply, err := pinClient.Name(ctx, request)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				r.nodeImportCreatePin(ctx, conn, wire.NodeId, wire.Id, &pin)
+			} else {
+				r.logger.Error("failed to get pin", zap.Error(err))
+				os.Exit(1)
+			}
+		} else {
+			r.nodeImportUpdatePin(ctx, conn, reply, &pin)
+		}
+	}
+}
+
+func (r *Root) nodeImportCreatePin(ctx context.Context, conn *grpc.ClientConn, nodeId string, wireId string, importPin *ExportPin) {
+	pinClient := cores.NewPinServiceClient(conn)
+
+	pin := &pb.Pin{
+		NodeId:   nodeId,
+		WireId:   wireId,
+		Name:     importPin.Name,
+		Desc:     importPin.Desc,
+		Tags:     importPin.Tags,
+		DataType: importPin.DataType,
+		Address:  importPin.Address,
+		Value:    importPin.Value,
+		Config:   importPin.Config,
+		Access:   importPin.Access,
+	}
+
+	reply, err := pinClient.Create(ctx, pin)
+	if err != nil {
+		r.logger.Error("failed to create pin", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("pin created: %s, %s\n", reply.Id, reply.Name)
+}
+
+func (r *Root) nodeImportUpdatePin(ctx context.Context, conn *grpc.ClientConn, pin *pb.Pin, importPin *ExportPin) {
+	pinClient := cores.NewPinServiceClient(conn)
+
+	pin.Name = importPin.Name
+	pin.Desc = importPin.Desc
+	pin.Tags = importPin.Tags
+	pin.DataType = importPin.DataType
+	pin.Address = importPin.Address
+	pin.Value = importPin.Value
+	pin.Config = importPin.Config
+	pin.Access = importPin.Access
+
+	reply, err := pinClient.Update(ctx, pin)
+	if err != nil {
+		r.logger.Error("failed to update pin", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("pin updated: %s, %s\n", reply.Id, reply.Name)
 }
