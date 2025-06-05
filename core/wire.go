@@ -83,7 +83,6 @@ func (s *WireService) Create(ctx context.Context, in *pb.Wire) (*pb.Wire, error)
 		Desc:    in.GetDesc(),
 		Tags:    in.GetTags(),
 		Source:  in.GetSource(),
-		Params:  in.GetParams(),
 		Config:  in.GetConfig(),
 		Status:  in.GetStatus(),
 		Created: time.Now(),
@@ -155,7 +154,6 @@ func (s *WireService) Update(ctx context.Context, in *pb.Wire) (*pb.Wire, error)
 	item.Desc = in.GetDesc()
 	item.Tags = in.GetTags()
 	item.Source = in.GetSource()
-	item.Params = in.GetParams()
 	item.Config = in.GetConfig()
 	item.Status = in.GetStatus()
 	item.Updated = time.Now()
@@ -508,7 +506,6 @@ func (s *WireService) copyModelToOutput(output *pb.Wire, item *model.Wire) {
 	output.Desc = item.Desc
 	output.Tags = item.Tags
 	output.Source = item.Source
-	output.Params = item.Params
 	output.Config = item.Config
 	output.Link = s.cs.GetStatus().GetLink(item.ID)
 	output.Status = item.Status
@@ -710,7 +707,6 @@ SKIP:
 			Desc:    in.GetDesc(),
 			Tags:    in.GetTags(),
 			Source:  in.GetSource(),
-			Params:  in.GetParams(),
 			Config:  in.GetConfig(),
 			Status:  in.GetStatus(),
 			Created: time.UnixMicro(in.GetCreated()),
@@ -757,7 +753,6 @@ SKIP:
 		item.Desc = in.GetDesc()
 		item.Tags = in.GetTags()
 		item.Source = in.GetSource()
-		item.Params = in.GetParams()
 		item.Config = in.GetConfig()
 		item.Status = in.GetStatus()
 		item.Updated = time.UnixMicro(in.GetUpdated())

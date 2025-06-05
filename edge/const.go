@@ -48,11 +48,11 @@ func (s *ConstService) Create(ctx context.Context, in *pb.Const) (*pb.Const, err
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Name")
 		}
 
-		if !dt.ValidateType(in.GetDataType()) {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.DataType")
+		if !dt.ValidateType(in.GetType()) {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Type")
 		}
 
-		if !dt.ValidateValue(in.GetValue(), in.GetDataType()) {
+		if !dt.ValidateValue(in.GetValue(), in.GetType()) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Value")
 		}
 	}
@@ -74,16 +74,16 @@ func (s *ConstService) Create(ctx context.Context, in *pb.Const) (*pb.Const, err
 	}
 
 	item := model.Const{
-		ID:       in.GetId(),
-		Name:     in.GetName(),
-		Desc:     in.GetDesc(),
-		Tags:     in.GetTags(),
-		DataType: in.GetDataType(),
-		Value:    in.GetValue(),
-		Config:   in.GetConfig(),
-		Status:   in.GetStatus(),
-		Created:  time.Now(),
-		Updated:  time.Now(),
+		ID:      in.GetId(),
+		Name:    in.GetName(),
+		Desc:    in.GetDesc(),
+		Tags:    in.GetTags(),
+		Type:    in.GetType(),
+		Value:   in.GetValue(),
+		Config:  in.GetConfig(),
+		Status:  in.GetStatus(),
+		Created: time.Now(),
+		Updated: time.Now(),
 	}
 
 	if item.ID == "" {
@@ -122,11 +122,11 @@ func (s *ConstService) Update(ctx context.Context, in *pb.Const) (*pb.Const, err
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Name")
 		}
 
-		if !dt.ValidateType(in.GetDataType()) {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.DataType")
+		if !dt.ValidateType(in.GetType()) {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Type")
 		}
 
-		if !dt.ValidateValue(in.GetValue(), in.GetDataType()) {
+		if !dt.ValidateValue(in.GetValue(), in.GetType()) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Value")
 		}
 	}
@@ -158,7 +158,7 @@ func (s *ConstService) Update(ctx context.Context, in *pb.Const) (*pb.Const, err
 	item.Name = in.GetName()
 	item.Desc = in.GetDesc()
 	item.Tags = in.GetTags()
-	item.DataType = in.GetDataType()
+	item.Type = in.GetType()
 	item.Value = in.GetValue()
 	item.Config = in.GetConfig()
 	item.Status = in.GetStatus()
@@ -409,7 +409,7 @@ func (s *ConstService) copyModelToOutput(output *pb.Const, item *model.Const) {
 	output.Name = item.Name
 	output.Desc = item.Desc
 	output.Tags = item.Tags
-	output.DataType = item.DataType
+	output.Type = item.Type
 	output.Value = item.Value
 	output.Config = item.Config
 	output.Status = item.Status
@@ -589,17 +589,17 @@ SKIP:
 		}
 
 		item := model.Const{
-			ID:       in.GetId(),
-			Name:     in.GetName(),
-			Desc:     in.GetDesc(),
-			Tags:     in.GetTags(),
-			DataType: in.GetDataType(),
-			Value:    in.GetValue(),
-			Config:   in.GetConfig(),
-			Status:   in.GetStatus(),
-			Created:  time.UnixMicro(in.GetCreated()),
-			Updated:  time.UnixMicro(in.GetUpdated()),
-			Deleted:  time.UnixMicro(in.GetDeleted()),
+			ID:      in.GetId(),
+			Name:    in.GetName(),
+			Desc:    in.GetDesc(),
+			Tags:    in.GetTags(),
+			Type:    in.GetType(),
+			Value:   in.GetValue(),
+			Config:  in.GetConfig(),
+			Status:  in.GetStatus(),
+			Created: time.UnixMicro(in.GetCreated()),
+			Updated: time.UnixMicro(in.GetUpdated()),
+			Deleted: time.UnixMicro(in.GetDeleted()),
 		}
 
 		_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -636,7 +636,7 @@ SKIP:
 		item.Name = in.GetName()
 		item.Desc = in.GetDesc()
 		item.Tags = in.GetTags()
-		item.DataType = in.GetDataType()
+		item.Type = in.GetType()
 		item.Value = in.GetValue()
 		item.Config = in.GetConfig()
 		item.Status = in.GetStatus()
@@ -755,7 +755,7 @@ func (s *ConstService) SetValue(ctx context.Context, in *pb.ConstValue) (*pb.MyB
 		return &output, status.Errorf(codes.FailedPrecondition, "Const.Status != ON")
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.DataType) {
+	if !dt.ValidateValue(in.GetValue(), item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Const.Value")
 	}
 
@@ -831,7 +831,7 @@ func (s *ConstService) SetValueByName(ctx context.Context, in *pb.ConstNameValue
 		return &output, status.Errorf(codes.FailedPrecondition, "Const.Status != ON")
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.DataType) {
+	if !dt.ValidateValue(in.GetValue(), item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Const.Value")
 	}
 

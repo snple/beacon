@@ -56,8 +56,8 @@ func (s *PinService) Create(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
 		}
 
-		if !dt.ValidateType(in.GetDataType()) {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.DataType")
+		if !dt.ValidateType(in.GetType()) {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Type")
 		}
 	}
 
@@ -86,18 +86,18 @@ func (s *PinService) Create(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
 	}
 
 	item := model.Pin{
-		ID:       in.GetId(),
-		WireID:   in.GetWireId(),
-		Name:     in.GetName(),
-		Desc:     in.GetDesc(),
-		Tags:     in.GetTags(),
-		DataType: in.GetDataType(),
-		Address:  in.GetAddress(),
-		Config:   in.GetConfig(),
-		Status:   in.GetStatus(),
-		Access:   in.GetAccess(),
-		Created:  time.Now(),
-		Updated:  time.Now(),
+		ID:      in.GetId(),
+		WireID:  in.GetWireId(),
+		Name:    in.GetName(),
+		Desc:    in.GetDesc(),
+		Tags:    in.GetTags(),
+		Type:    in.GetType(),
+		Addr:    in.GetAddr(),
+		Config:  in.GetConfig(),
+		Status:  in.GetStatus(),
+		Rw:      in.GetRw(),
+		Created: time.Now(),
+		Updated: time.Now(),
 	}
 
 	if item.ID == "" {
@@ -141,8 +141,8 @@ func (s *PinService) Update(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
 		}
 
-		if !dt.ValidateType(in.GetDataType()) {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.DataType")
+		if !dt.ValidateType(in.GetType()) {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Type")
 		}
 	}
 
@@ -173,11 +173,11 @@ func (s *PinService) Update(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
 	item.Name = in.GetName()
 	item.Desc = in.GetDesc()
 	item.Tags = in.GetTags()
-	item.DataType = in.GetDataType()
-	item.Address = in.GetAddress()
+	item.Type = in.GetType()
+	item.Addr = in.GetAddr()
 	item.Config = in.GetConfig()
 	item.Status = in.GetStatus()
-	item.Access = in.GetAccess()
+	item.Rw = in.GetRw()
 	item.Updated = time.Now()
 
 	_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
@@ -492,11 +492,11 @@ func (s *PinService) copyModelToOutput(output *pb.Pin, item *model.Pin) {
 	output.Name = item.Name
 	output.Desc = item.Desc
 	output.Tags = item.Tags
-	output.DataType = item.DataType
-	output.Address = item.Address
+	output.Type = item.Type
+	output.Addr = item.Addr
 	output.Config = item.Config
 	output.Status = item.Status
-	output.Access = item.Access
+	output.Rw = item.Rw
 	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()
 	output.Deleted = item.Deleted.UnixMicro()
@@ -634,8 +634,8 @@ func (s *PinService) Sync(ctx context.Context, in *pb.Pin) (*pb.MyBool, error) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
 		}
 
-		if !dt.ValidateType(in.GetDataType()) {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.DataType")
+		if !dt.ValidateType(in.GetType()) {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Type")
 		}
 
 		if in.GetUpdated() == 0 {
@@ -681,19 +681,19 @@ SKIP:
 		}
 
 		item := model.Pin{
-			ID:       in.GetId(),
-			WireID:   in.GetWireId(),
-			Name:     in.GetName(),
-			Desc:     in.GetDesc(),
-			Tags:     in.GetTags(),
-			DataType: in.GetDataType(),
-			Address:  in.GetAddress(),
-			Config:   in.GetConfig(),
-			Status:   in.GetStatus(),
-			Access:   in.GetAccess(),
-			Created:  time.UnixMicro(in.GetCreated()),
-			Updated:  time.UnixMicro(in.GetUpdated()),
-			Deleted:  time.UnixMicro(in.GetDeleted()),
+			ID:      in.GetId(),
+			WireID:  in.GetWireId(),
+			Name:    in.GetName(),
+			Desc:    in.GetDesc(),
+			Tags:    in.GetTags(),
+			Type:    in.GetType(),
+			Addr:    in.GetAddr(),
+			Config:  in.GetConfig(),
+			Status:  in.GetStatus(),
+			Rw:      in.GetRw(),
+			Created: time.UnixMicro(in.GetCreated()),
+			Updated: time.UnixMicro(in.GetUpdated()),
+			Deleted: time.UnixMicro(in.GetDeleted()),
 		}
 
 		// wire validation
@@ -738,11 +738,11 @@ SKIP:
 		item.Name = in.GetName()
 		item.Desc = in.GetDesc()
 		item.Tags = in.GetTags()
-		item.DataType = in.GetDataType()
-		item.Address = in.GetAddress()
+		item.Type = in.GetType()
+		item.Addr = in.GetAddr()
 		item.Config = in.GetConfig()
 		item.Status = in.GetStatus()
-		item.Access = in.GetAccess()
+		item.Rw = in.GetRw()
 		item.Updated = time.UnixMicro(in.GetUpdated())
 		item.Deleted = time.UnixMicro(in.GetDeleted())
 
@@ -912,7 +912,7 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.DataType) {
+	if !dt.ValidateValue(in.GetValue(), item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
 	}
 
@@ -1037,7 +1037,7 @@ func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*
 		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.DataType) {
+	if !dt.ValidateValue(in.GetValue(), item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
 	}
 
@@ -1254,7 +1254,7 @@ func (s *PinService) SyncValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool
 		return &output, err
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.DataType) {
+	if !dt.ValidateValue(in.GetValue(), item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
 	}
 
@@ -1428,11 +1428,11 @@ func (s *PinService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
 	}
 
-	if item.Access != consts.WRITE {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Access != WRITE")
+	if item.Rw != consts.WRITE {
+		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.DataType) {
+	if !dt.ValidateValue(in.GetValue(), item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
 	}
 
@@ -1557,11 +1557,11 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *pb.PinNameValue) (*
 		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
 	}
 
-	if item.Access != consts.WRITE {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Access != WRITE")
+	if item.Rw != consts.WRITE {
+		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.DataType) {
+	if !dt.ValidateValue(in.GetValue(), item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
 	}
 
@@ -1778,7 +1778,7 @@ func (s *PinService) SyncWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool
 		return &output, err
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.DataType) {
+	if !dt.ValidateValue(in.GetValue(), item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
 	}
 

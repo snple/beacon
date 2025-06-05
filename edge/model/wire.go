@@ -13,7 +13,6 @@ type Wire struct {
 	Desc          string    `bun:"desc,type:TEXT" json:"desc"`
 	Tags          string    `bun:"tags,type:TEXT" json:"tags"`
 	Source        string    `bun:"source,type:TEXT" json:"source"`
-	Params        string    `bun:"params,type:TEXT" json:"params"`
 	Config        string    `bun:"config,type:TEXT" json:"config"`
 	Status        int32     `bun:"status" json:"status"`
 	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
@@ -28,11 +27,11 @@ type Pin struct {
 	Name          string    `bun:"name,type:TEXT" json:"name"`
 	Desc          string    `bun:"desc,type:TEXT" json:"desc"`
 	Tags          string    `bun:"tags,type:TEXT" json:"tags"`
-	DataType      string    `bun:"data_type,type:TEXT" json:"data_type"`
-	Address       string    `bun:"address,type:TEXT" json:"address"`
+	Type          string    `bun:"type,type:TEXT" json:"type"`
+	Addr          string    `bun:"addr,type:TEXT" json:"addr"`
 	Config        string    `bun:"config,type:TEXT" json:"config"`
 	Status        int32     `bun:"status" json:"status"`
-	Access        int32     `bun:"access" json:"access"`
+	Rw            int32     `bun:"rw" json:"rw"`
 	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
 	Created       time.Time `bun:"created" json:"created"`
 	Updated       time.Time `bun:"updated" json:"updated"`

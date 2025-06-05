@@ -59,13 +59,13 @@ func PinName(ctx context.Context, client cores.PinServiceClient) {
 
 func PinCreate(ctx context.Context, client cores.PinServiceClient) {
 	request := &pb.Pin{
-		WireId:   "01946a51cd5bc0cd7a776f35",
-		Name:     "pin1",
-		Desc:     "",
-		Address:  "",
-		DataType: "F32",
-		Access:   consts.WRITE,
-		Status:   consts.ON,
+		WireId: "01946a51cd5bc0cd7a776f35",
+		Name:   "pin1",
+		Desc:   "",
+		Addr:   "",
+		Type:   "F32",
+		Rw:     consts.WRITE,
+		Status: consts.ON,
 	}
 
 	reply, err := client.Create(ctx, request)

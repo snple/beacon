@@ -12,7 +12,7 @@ type Const struct {
 	Name          string    `bun:"name,type:TEXT" json:"name"`
 	Desc          string    `bun:"desc,type:TEXT" json:"desc"`
 	Tags          string    `bun:"tags,type:TEXT" json:"tags"`
-	DataType      string    `bun:"data_type,type:TEXT" json:"data_type"`
+	Type          string    `bun:"type,type:TEXT" json:"type"`
 	Value         string    `bun:"value,type:TEXT" json:"value"`
 	Config        string    `bun:"config,type:TEXT" json:"config"`
 	Status        int32     `bun:"status" json:"status"`

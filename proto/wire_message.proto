@@ -10,13 +10,12 @@ message Wire {
     string desc = 4;
     string tags = 5;
     string source = 6;
-    string params = 7;
-    string config = 8;
-    sint32 link = 9;
-    sint32 status = 10;
-    int64 created = 11;
-    int64 updated = 12;
-    int64 deleted = 13;
+    string config = 7;
+    sint32 link = 8;
+    sint32 status = 9;
+    int64 created = 10;
+    int64 updated = 11;
+    int64 deleted = 12;
 }
 
 message Pin {
@@ -26,12 +25,12 @@ message Pin {
     string name = 4;
     string desc = 5;
     string tags = 6;
-    string data_type = 7;
-    string address = 8;
+    string type = 7;
+    string addr = 8;
     string value = 9;
     string config = 10;
     sint32 status = 11;
-    sint32 access = 12;
+    sint32 rw = 12;
     int64 created = 13;
     int64 updated = 14;
     int64 deleted = 15;

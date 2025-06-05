@@ -61,7 +61,7 @@ func (r *Root) init() {
 	r.rootCmd.PersistentFlags().BoolP("insecure", "", false, "skip verify server hostname")
 
 	r.rootCmd.AddCommand(r.versionCmd())
-	r.rootCmd.AddCommand(r.nodeCmd())
+	r.rootCmd.AddCommand(nodeCmd(r))
 
 	viper.BindPFlag("debug", r.rootCmd.PersistentFlags().Lookup("debug"))
 	viper.BindPFlag("addr", r.rootCmd.PersistentFlags().Lookup("addr"))

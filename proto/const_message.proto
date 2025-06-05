@@ -9,7 +9,7 @@ message Const {
     string name = 3;
     string desc = 4;
     string tags = 5;
-    string data_type = 6;
+    string type = 6;
     string value = 7;
     string config = 8;
     sint32 status = 9;

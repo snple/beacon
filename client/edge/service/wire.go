@@ -55,7 +55,6 @@ func WireCreate(ctx context.Context, client edges.WireServiceClient) {
 		Name:   "wire1",
 		Desc:   "wire1",
 		Source: "wire",
-		Params: "params",
 		Config: "config",
 		Status: consts.ON,
 		Tags:   "tag1,tag2",
