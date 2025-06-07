@@ -62,7 +62,6 @@ func (c *Conn) ID() string {
 }
 
 func (c *Conn) auth() error {
-	// 设置读取超时
 	c.Conn.SetReadDeadline(time.Now().Add(time.Second * 10))
 
 	req, err := nson.ReadMap(c.Conn)
@@ -70,7 +69,6 @@ func (c *Conn) auth() error {
 		return err
 	}
 
-	// 清除读取超时
 	c.Conn.SetReadDeadline(time.Time{})
 
 	fn, err := req.GetString("fn")
@@ -85,12 +83,46 @@ func (c *Conn) auth() error {
 
 		return errors.New("invalid request")
 	}
+	var node *pb.Node
 
-	nodeId, err := req.GetString("id")
-	if err != nil {
-		writeError(c.Conn, err)
+	if req.Contains("id") {
+		nodeId, err := req.GetString("id")
+		if err != nil {
+			writeError(c.Conn, err)
 
-		return err
+			return err
+		}
+
+		node, err = c.ns.Core().GetNode().View(c.ns.Context(), &pb.Id{Id: nodeId})
+		if err != nil {
+			writeError(c.Conn, err)
+
+			return err
+		}
+	} else if req.Contains("name") {
+		nodeName, err := req.GetString("name")
+		if err != nil {
+			writeError(c.Conn, err)
+
+			return err
+		}
+
+		node, err = c.ns.Core().GetNode().Name(c.ns.Context(), &pb.Name{Name: nodeName})
+		if err != nil {
+			writeError(c.Conn, err)
+
+			return err
+		}
+	} else {
+		writeError(c.Conn, errors.New("invalid request, id or name is required"))
+
+		return errors.New("invalid request")
+	}
+
+	if node.Status != consts.ON {
+		writeError(c.Conn, errors.New("invalid request, node is not enable"))
+
+		return errors.New("invalid request")
 	}
 
 	secret, err := req.GetString("secret")
@@ -100,34 +132,13 @@ func (c *Conn) auth() error {
 		return err
 	}
 
-	if nodeId == "" {
-		writeError(c.Conn, errors.New("invalid request, nodeId is empty"))
-
-		return errors.New("invalid request")
-	}
-
-	request := &pb.Id{Id: nodeId}
-
-	reply, err := c.ns.Core().GetNode().View(c.ns.Context(), request)
-	if err != nil {
-		writeError(c.Conn, err)
-
-		return err
-	}
-
-	if reply.GetStatus() != consts.ON {
-		writeError(c.Conn, errors.New("invalid request, node is not enable"))
-
-		return errors.New("invalid request")
-	}
-
-	if reply.GetSecret() != secret {
+	if node.Secret != secret {
 		writeError(c.Conn, errors.New("invalid request, secret is not valid"))
 
 		return errors.New("invalid request")
 	}
 
-	c.id = nodeId
+	c.id = node.Id
 
 	resp := nson.Map{
 		"fn": nson.String("auth"),

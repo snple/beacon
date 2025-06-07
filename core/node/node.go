@@ -138,44 +138,52 @@ func (s *NodeService) Login(ctx context.Context, in *nodes.NodeLoginRequest) (*n
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
+		if in.Id == "" && in.Name == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID or Node.Name")
 		}
 
-		if in.GetSecret() == "" {
+		if in.Secret == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Secret")
 		}
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	var node *pb.Node
+	var err error
 
-	reply, err := s.Core().GetNode().View(ctx, request)
+	if in.Id != "" {
+		node, err = s.Core().GetNode().View(ctx, &pb.Id{Id: in.Id})
+	} else if in.Name != "" {
+		node, err = s.Core().GetNode().Name(ctx, &pb.Name{Name: in.Name})
+	} else {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID or Node.Name")
+	}
+
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetStatus() != consts.ON {
+	if node.Status != consts.ON {
 		s.Logger().Sugar().Errorf("node connect error: node is not enable, id: %v, ip: %v",
-			in.GetId(), metadata.GetPeerAddr(ctx))
+			in.Id, metadata.GetPeerAddr(ctx))
 		return &output, status.Error(codes.FailedPrecondition, "The node is not enable")
 	}
 
-	if reply.GetSecret() != in.GetSecret() {
+	if node.Secret != in.Secret {
 		s.Logger().Sugar().Errorf("node connect error: node secret is not valid, id: %v, ip: %v",
-			in.GetId(), metadata.GetPeerAddr(ctx))
+			in.Id, metadata.GetPeerAddr(ctx))
 		return &output, status.Error(codes.Unauthenticated, "Please supply valid secret")
 	}
 
-	token, err := token.ClaimNodeToken(reply.Id)
+	token, err := token.ClaimNodeToken(node.Id)
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "claim token: %v", err)
 	}
 
-	s.Logger().Sugar().Infof("node connect success, id: %v, ip: %v", in.GetId(), metadata.GetPeerAddr(ctx))
+	s.Logger().Sugar().Infof("node connect success, id: %v, ip: %v", node.Id, metadata.GetPeerAddr(ctx))
 
-	reply.Secret = ""
+	node.Secret = ""
 
-	output.Node = reply
+	output.Node = node
 	output.Token = token
 
 	return &output, nil
@@ -210,8 +218,8 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 		return &output, err
 	}
 
-	if in.GetId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: in.GetId() != nodeID")
+	if in.Id != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: in.Id != nodeID")
 	}
 
 	request := &pb.Id{Id: nodeID}
@@ -221,8 +229,8 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 		return &output, err
 	}
 
-	in.Secret = reply.GetSecret()
-	in.Status = reply.GetStatus()
+	in.Secret = reply.Secret
+	in.Status = reply.Status
 
 	return s.Core().GetNode().Update(ctx, in)
 }
@@ -271,7 +279,7 @@ func (s *NodeService) Link(ctx context.Context, in *nodes.NodeLinkRequest) (*pb.
 		return &output, err
 	}
 
-	request := &cores.NodeLinkRequest{Id: nodeID, Status: in.GetStatus()}
+	request := &cores.NodeLinkRequest{Id: nodeID, Status: in.Status}
 
 	return s.Core().GetNode().Link(ctx, request)
 }
@@ -320,8 +328,8 @@ func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error)
 		return &output, err
 	}
 
-	if in.GetId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: in.GetId() != nodeID")
+	if in.Id != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: in.Id != nodeID")
 	}
 
 	request := &pb.Id{Id: nodeID}
@@ -331,9 +339,9 @@ func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error)
 		return &output, err
 	}
 
-	in.Secret = reply.GetSecret()
-	in.Status = reply.GetStatus()
-	in.Deleted = reply.GetDeleted()
+	in.Secret = reply.Secret
+	in.Status = reply.Status
+	in.Deleted = reply.Deleted
 
 	return s.Core().GetNode().Sync(ctx, in)
 }
