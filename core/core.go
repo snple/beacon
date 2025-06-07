@@ -20,7 +20,6 @@ type CoreService struct {
 	sync        *SyncService
 	sync_global *SyncGlobalService
 	node        *NodeService
-	slot        *SlotService
 	wire        *WireService
 	pin         *PinService
 	constant    *ConstService
@@ -64,7 +63,6 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 	cs.sync = newSyncService(cs)
 	cs.sync_global = newSyncGlobalService(cs)
 	cs.node = newNodeService(cs)
-	cs.slot = newSlotService(cs)
 	cs.wire = newWireService(cs)
 	cs.pin = newPinService(cs)
 	cs.constant = newConstService(cs)
@@ -105,10 +103,6 @@ func (cs *CoreService) GetSyncGlobal() *SyncGlobalService {
 
 func (cs *CoreService) GetNode() *NodeService {
 	return cs.node
-}
-
-func (cs *CoreService) GetSlot() *SlotService {
-	return cs.slot
 }
 
 func (cs *CoreService) GetWire() *WireService {
@@ -163,7 +157,6 @@ func (cs *CoreService) Register(server *grpc.Server) {
 	cores.RegisterSyncServiceServer(server, cs.sync)
 	cores.RegisterSyncGlobalServiceServer(server, cs.sync_global)
 	cores.RegisterNodeServiceServer(server, cs.node)
-	cores.RegisterSlotServiceServer(server, cs.slot)
 	cores.RegisterWireServiceServer(server, cs.wire)
 	cores.RegisterPinServiceServer(server, cs.pin)
 	cores.RegisterConstServiceServer(server, cs.constant)
@@ -174,7 +167,6 @@ func CreateSchema(db bun.IDB) error {
 		(*model.Sync)(nil),
 		(*model.SyncGlobal)(nil),
 		(*model.Node)(nil),
-		(*model.Slot)(nil),
 		(*model.Wire)(nil),
 		(*model.Pin)(nil),
 		(*model.Const)(nil),

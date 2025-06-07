@@ -22,7 +22,6 @@ type EdgeService struct {
 	status   *StatusService
 	sync     *SyncService
 	node     *NodeService
-	slot     *SlotService
 	wire     *WireService
 	pin      *PinService
 	constant *ConstService
@@ -78,7 +77,6 @@ func EdgeContext(ctx context.Context, db *bun.DB, opts ...EdgeOption) (*EdgeServ
 	es.status = newStatusService(es)
 	es.sync = newSyncService(es)
 	es.node = newNodeService(es)
-	es.slot = newSlotService(es)
 	es.wire = newWireService(es)
 	es.pin = newPinService(es)
 	es.constant = newConstService(es)
@@ -171,10 +169,6 @@ func (es *EdgeService) GetNode() *NodeService {
 	return es.node
 }
 
-func (es *EdgeService) GetSlot() *SlotService {
-	return es.slot
-}
-
 func (es *EdgeService) GetWire() *WireService {
 	return es.wire
 }
@@ -226,7 +220,6 @@ func (es *EdgeService) cacheGC() {
 func (es *EdgeService) Register(server *grpc.Server) {
 	edges.RegisterSyncServiceServer(server, es.sync)
 	edges.RegisterNodeServiceServer(server, es.node)
-	edges.RegisterSlotServiceServer(server, es.slot)
 	edges.RegisterWireServiceServer(server, es.wire)
 	edges.RegisterPinServiceServer(server, es.pin)
 	edges.RegisterConstServiceServer(server, es.constant)
@@ -235,7 +228,6 @@ func (es *EdgeService) Register(server *grpc.Server) {
 func CreateSchema(db bun.IDB) error {
 	models := []any{
 		(*model.Node)(nil),
-		(*model.Slot)(nil),
 		(*model.Wire)(nil),
 		(*model.Pin)(nil),
 		(*model.Const)(nil),

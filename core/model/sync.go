@@ -26,7 +26,6 @@ type SyncGlobal struct {
 
 const (
 	SYNC_GLOBAL_NODE  = "node"
-	SYNC_GLOBAL_SLOT  = "slot"
 	SYNC_GLOBAL_WIRE  = "wire"
 	SYNC_GLOBAL_PIN   = "pin"
 	SYNC_GLOBAL_CONST = "const"

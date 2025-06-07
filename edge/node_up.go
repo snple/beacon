@@ -278,10 +278,6 @@ func (s *NodeUpService) NodeServiceClient() nodes.NodeServiceClient {
 	return nodes.NewNodeServiceClient(s.NodeConn)
 }
 
-func (s *NodeUpService) SlotServiceClient() nodes.SlotServiceClient {
-	return nodes.NewSlotServiceClient(s.NodeConn)
-}
-
 func (s *NodeUpService) WireServiceClient() nodes.WireServiceClient {
 	return nodes.NewWireServiceClient(s.NodeConn)
 }
@@ -636,32 +632,6 @@ func (s *NodeUpService) syncRemoteToLocal(ctx context.Context) error {
 		}
 	}
 
-	// slot
-	{
-		after := nodeUpdated2.UnixMicro()
-		limit := uint32(10)
-
-		for {
-			remotes, err := s.SlotServiceClient().Pull(ctx, &nodes.SlotPullRequest{After: after, Limit: limit})
-			if err != nil {
-				return err
-			}
-
-			for _, remote := range remotes.GetSlot() {
-				_, err := s.es.GetSlot().Sync(ctx, remote)
-				if err != nil {
-					return err
-				}
-
-				after = remote.GetUpdated()
-			}
-
-			if len(remotes.GetSlot()) < int(limit) {
-				break
-			}
-		}
-	}
-
 	// wire
 	{
 		after := nodeUpdated2.UnixMicro()
@@ -768,32 +738,6 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 		_, err = s.NodeServiceClient().Sync(ctx, local)
 		if err != nil {
 			return err
-		}
-	}
-
-	// slot
-	{
-		after := nodeUpdated2.UnixMicro()
-		limit := uint32(10)
-
-		for {
-			locals, err := s.es.GetSlot().Pull(ctx, &edges.SlotPullRequest{After: after, Limit: limit})
-			if err != nil {
-				return err
-			}
-
-			for _, local := range locals.GetSlot() {
-				_, err = s.SlotServiceClient().Sync(ctx, local)
-				if err != nil {
-					return err
-				}
-
-				after = local.GetUpdated()
-			}
-
-			if len(locals.GetSlot()) < int(limit) {
-				break
-			}
 		}
 	}
 

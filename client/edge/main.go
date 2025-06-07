@@ -57,14 +57,6 @@ func main() {
 	service.NodeView(ctx, node)
 	// service.NodeUpdate(ctx, node)
 
-	// slot := edges.NewSlotServiceClient(conn)
-	// service.SlotList(ctx, slot)
-	// service.SlotView(ctx, slot)
-	// service.SlotName(ctx, slot)
-	// service.SlotCreate(ctx, slot)
-	// service.SlotUpdate(ctx, slot)
-	// service.SlotDelete(ctx, slot)
-
 	// wire := edges.NewWireServiceClient(conn)
 	// service.WireList(ctx, wire)
 	// service.WireView(ctx, wire)

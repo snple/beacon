@@ -22,7 +22,6 @@ type NodeService struct {
 	cs *core.CoreService
 
 	sync     *SyncService
-	slot     *SlotService
 	wire     *WireService
 	pin      *PinService
 	constant *ConstService
@@ -55,7 +54,6 @@ func Node(cs *core.CoreService, opts ...NodeOption) (*NodeService, error) {
 	}
 
 	ns.sync = newSyncService(ns)
-	ns.slot = newSlotService(ns)
 	ns.wire = newWireService(ns)
 	ns.pin = newPinService(ns)
 	ns.constant = newConstService(ns)
@@ -87,7 +85,6 @@ func (ns *NodeService) Logger() *zap.Logger {
 func (ns *NodeService) RegisterGrpc(server *grpc.Server) {
 	nodes.RegisterSyncServiceServer(server, ns.sync)
 	nodes.RegisterNodeServiceServer(server, ns)
-	nodes.RegisterSlotServiceServer(server, ns.slot)
 	nodes.RegisterWireServiceServer(server, ns.wire)
 	nodes.RegisterPinServiceServer(server, ns.pin)
 	nodes.RegisterConstServiceServer(server, ns.constant)

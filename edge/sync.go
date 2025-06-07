@@ -86,52 +86,6 @@ func (s *SyncService) WaitNodeUpdated(in *pb.MyEmpty,
 	return s.waitUpdated(in, stream, NOTIFY)
 }
 
-func (s *SyncService) SetSlotUpdated(ctx context.Context, in *edges.SyncUpdated) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.GetUpdated() == 0 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Slot.Updated")
-		}
-	}
-
-	err = s.setSlotUpdated(ctx, time.UnixMicro(in.GetUpdated()))
-	if err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
-func (s *SyncService) GetSlotUpdated(ctx context.Context, in *pb.MyEmpty) (*edges.SyncUpdated, error) {
-	var output edges.SyncUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	t, err := s.getSlotUpdated(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Updated = t.UnixMicro()
-
-	return &output, nil
-}
-
 func (s *SyncService) SetWireUpdated(ctx context.Context, in *edges.SyncUpdated) (*pb.MyBool, error) {
 	var output pb.MyBool
 	var err error
@@ -387,14 +341,6 @@ func (s *SyncService) setNodeUpdated(ctx context.Context, updated time.Time) err
 	s.notifyUpdated(NOTIFY)
 
 	return nil
-}
-
-func (s *SyncService) getSlotUpdated(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_SLOT)
-}
-
-func (s *SyncService) setSlotUpdated(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_SLOT, updated)
 }
 
 func (s *SyncService) getWireUpdated(ctx context.Context) (time.Time, error) {

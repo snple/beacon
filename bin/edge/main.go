@@ -21,7 +21,6 @@ import (
 	"github.com/snple/beacon/bin/edge/log"
 	"github.com/snple/beacon/db"
 	"github.com/snple/beacon/edge"
-	"github.com/snple/beacon/edge/slot"
 	"github.com/snple/beacon/http"
 	"github.com/snple/beacon/http/edge/api"
 	"github.com/snple/beacon/util"
@@ -42,7 +41,6 @@ func main() {
 			return
 		}
 	}
-
 
 	config.Parse()
 
@@ -183,50 +181,6 @@ func main() {
 
 		go func() {
 			log.Logger.Sugar().Infof("edge grpc start: %v, tls: %v", config.Config.EdgeService.Addr, config.Config.EdgeService.TLS)
-			if err := s.Serve(lis); err != nil {
-				log.Logger.Sugar().Fatalf("failed to serve: %v", err)
-			}
-		}()
-	}
-
-	if config.Config.SlotService.Enable {
-		slotOpts := make([]slot.SlotOption, 0)
-
-		ns, err := slot.Slot(es, slotOpts...)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("NewSlotService: %v", err)
-		}
-
-		ns.Start()
-		defer ns.Stop()
-
-		grpcOpts := []grpc.ServerOption{
-			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{PermitWithoutStream: true}),
-		}
-
-		if config.Config.SlotService.TLS {
-			tlsConfig, err := util.LoadServerCert(config.Config.SlotService.CA, config.Config.SlotService.Cert, config.Config.SlotService.Key)
-			if err != nil {
-				log.Logger.Sugar().Fatal(err)
-			}
-
-			grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
-		} else {
-			grpcOpts = append(grpcOpts, grpc.Creds(insecure.NewCredentials()))
-		}
-
-		s := grpc.NewServer(grpcOpts...)
-		defer s.Stop()
-
-		ns.RegisterGrpc(s)
-
-		lis, err := net.Listen("tcp", config.Config.SlotService.Addr)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("failed to listen: %v", err)
-		}
-
-		go func() {
-			log.Logger.Sugar().Infof("slot grpc start: %v", config.Config.SlotService.Addr)
 			if err := s.Serve(lis); err != nil {
 				log.Logger.Sugar().Fatalf("failed to serve: %v", err)
 			}

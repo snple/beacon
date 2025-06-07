@@ -27,48 +27,6 @@ func newCloneService(es *EdgeService) *cloneService {
 	}
 }
 
-func (s *cloneService) slot(ctx context.Context, db bun.IDB, slotID string) error {
-	var err error
-
-	item := model.Slot{
-		ID: slotID,
-	}
-
-	err = db.NewSelect().Model(&item).WherePK().Scan(ctx)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return status.Errorf(codes.NotFound, "Query: %v", err)
-		}
-
-		return status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	item.ID = util.RandomID()
-	item.Name = fmt.Sprintf("%v_clone_%v", item.Name, randNameSuffix())
-
-	item.Created = time.Now()
-	item.Updated = time.Now()
-
-	_, err = db.NewInsert().Model(&item).Exec(ctx)
-	if err != nil {
-		return status.Errorf(codes.Internal, "Insert: %v", err)
-	}
-
-	{
-		err = s.es.GetSync().setNodeUpdated(ctx, time.Now())
-		if err != nil {
-			return status.Errorf(codes.Internal, "Insert: %v", err)
-		}
-
-		err = s.es.GetSync().setSlotUpdated(ctx, time.Now())
-		if err != nil {
-			return status.Errorf(codes.Internal, "Insert: %v", err)
-		}
-	}
-
-	return nil
-}
-
 func (s *cloneService) wire(ctx context.Context, db bun.IDB, wireID string) error {
 	var err error
 

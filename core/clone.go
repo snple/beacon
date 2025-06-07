@@ -54,29 +54,6 @@ func (s *cloneService) node(ctx context.Context, db bun.IDB, nodeID string) erro
 		return status.Errorf(codes.Internal, "Insert: %v", err)
 	}
 
-	// slot
-	{
-		var slots []model.Slot
-
-		err = db.NewSelect().Model(&slots).Where("node_id = ?", nodeID).Order("id ASC").Scan(ctx)
-		if err != nil {
-			return status.Errorf(codes.Internal, "Query: %v", err)
-		}
-
-		for _, slot := range slots {
-			slot.ID = util.RandomID()
-			slot.NodeID = node.ID
-
-			slot.Created = time.Now()
-			slot.Updated = time.Now()
-
-			_, err = db.NewInsert().Model(&slot).Exec(ctx)
-			if err != nil {
-				return status.Errorf(codes.Internal, "Insert: %v", err)
-			}
-		}
-	}
-
 	// wire
 	{
 		var wires []model.Wire
@@ -150,59 +127,6 @@ func (s *cloneService) node(ctx context.Context, db bun.IDB, nodeID string) erro
 	}
 
 	err = s.cs.GetSync().setNodeUpdated(ctx, db, node.ID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Insert: %v", err)
-	}
-
-	return nil
-}
-
-func (s *cloneService) slot(ctx context.Context, db bun.IDB, slotID, nodeID string) error {
-	var err error
-
-	item := model.Slot{
-		ID: slotID,
-	}
-
-	err = db.NewSelect().Model(&item).WherePK().Scan(ctx)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return status.Errorf(codes.NotFound, "Query: %v", err)
-		}
-
-		return status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	// node validation
-	if nodeID != "" {
-		node := model.Node{
-			ID: nodeID,
-		}
-
-		err = db.NewSelect().Model(&node).WherePK().Scan(ctx)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				return status.Error(codes.InvalidArgument, "Please supply valid NodeID")
-			}
-
-			return status.Errorf(codes.Internal, "Query: %v", err)
-		}
-
-		item.NodeID = node.ID
-	}
-
-	item.ID = util.RandomID()
-	item.Name = fmt.Sprintf("%v_clone_%v", item.Name, randNameSuffix())
-
-	item.Created = time.Now()
-	item.Updated = time.Now()
-
-	_, err = db.NewInsert().Model(&item).Exec(ctx)
-	if err != nil {
-		return status.Errorf(codes.Internal, "Insert: %v", err)
-	}
-
-	err = s.cs.GetSync().setNodeUpdated(ctx, db, item.NodeID, time.Now())
 	if err != nil {
 		return status.Errorf(codes.Internal, "Insert: %v", err)
 	}

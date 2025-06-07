@@ -17,7 +17,6 @@ type ConfigStruct struct {
 	BadgerDB    BadgerDB    `toml:"badger"`
 	NodeClient  TCPClient   `toml:"node"`
 	EdgeService TCPService  `toml:"edge"`
-	SlotService TCPService  `toml:"slot"`
 	Sync        Sync        `toml:"sync"`
 	Status      Status      `toml:"status"`
 	Gin         Gin         `toml:"gin"`
@@ -115,13 +114,6 @@ func DefaultConfig() ConfigStruct {
 		},
 		EdgeService: TCPService{
 			Addr: "127.0.0.1:6010",
-			TLS:  true,
-			CA:   "certs/ca.crt",
-			Cert: "certs/server.crt",
-			Key:  "certs/server.key",
-		},
-		SlotService: TCPService{
-			Addr: "127.0.0.1:6011",
 			TLS:  true,
 			CA:   "certs/ca.crt",
 			Cert: "certs/server.crt",

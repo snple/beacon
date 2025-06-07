@@ -374,7 +374,6 @@ func (s *NodeService) Destory(ctx context.Context, in *pb.Id) (*pb.MyBool, error
 
 	err = func() error {
 		models := []any{
-			(*model.Slot)(nil),
 			(*model.Wire)(nil),
 			(*model.Pin)(nil),
 			(*model.Const)(nil),
