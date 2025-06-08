@@ -59,15 +59,15 @@ func (s *WireService) Update(ctx context.Context, in *pb.Wire) (*pb.Wire, error)
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetWire().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetWire().Update(ctx, in)
@@ -94,8 +94,8 @@ func (s *WireService) View(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -117,15 +117,15 @@ func (s *WireService) Name(ctx context.Context, in *pb.Name) (*pb.Wire, error) {
 		return &output, err
 	}
 
-	request := &cores.WireNameRequest{NodeId: nodeID, Name: in.GetName()}
+	request := &cores.WireNameRequest{NodeId: nodeID, Name: in.Name}
 
 	reply, err := s.ns.Core().GetWire().Name(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -152,8 +152,8 @@ func (s *WireService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error)
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetWire().Delete(ctx, in)
@@ -178,8 +178,8 @@ func (s *WireService) List(ctx context.Context, in *nodes.WireListRequest) (*nod
 	request := &cores.WireListRequest{
 		Page:   in.GetPage(),
 		NodeId: nodeID,
-		Tags:   in.GetTags(),
-		Source: in.GetSource(),
+		Tags:   in.Tags,
+		Source: in.Source,
 	}
 
 	reply, err := s.ns.Core().GetWire().List(ctx, request)
@@ -188,8 +188,8 @@ func (s *WireService) List(ctx context.Context, in *nodes.WireListRequest) (*nod
 	}
 
 	output.Count = reply.Count
-	output.Page = reply.GetPage()
-	output.Wire = reply.GetWire()
+	output.Page = reply.Page
+	output.Wires = reply.Wires
 
 	return &output, nil
 }
@@ -215,8 +215,8 @@ func (s *WireService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Wire,
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -233,8 +233,8 @@ func (s *WireService) Pull(ctx context.Context, in *nodes.WirePullRequest) (*nod
 		}
 	}
 
-	output.After = in.GetAfter()
-	output.Limit = in.GetLimit()
+	output.After = in.After
+	output.Limit = in.Limit
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
@@ -242,10 +242,10 @@ func (s *WireService) Pull(ctx context.Context, in *nodes.WirePullRequest) (*nod
 	}
 
 	request := &cores.WirePullRequest{
-		After:  in.GetAfter(),
-		Limit:  in.GetLimit(),
+		After:  in.After,
+		Limit:  in.Limit,
 		NodeId: nodeID,
-		Source: in.GetSource(),
+		Source: in.Source,
 	}
 
 	reply, err := s.ns.Core().GetWire().Pull(ctx, request)
@@ -253,7 +253,7 @@ func (s *WireService) Pull(ctx context.Context, in *nodes.WirePullRequest) (*nod
 		return &output, err
 	}
 
-	output.Wire = reply.GetWire()
+	output.Wires = reply.Wires
 
 	return &output, nil
 }

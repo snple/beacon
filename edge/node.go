@@ -40,18 +40,18 @@ func newNodeService(es *EdgeService) *NodeService {
 				return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 			}
 
-			if in.GetName() == "" {
+			if in.Name == "" {
 				return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
 			}
 		}
 
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
 			}
 
-			err = s.es.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.es.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -62,11 +62,11 @@ func newNodeService(es *EdgeService) *NodeService {
 		}
 
 		item := model.Node{
-			ID:      in.GetId(),
-			Name:    in.GetName(),
-			Desc:    in.GetDesc(),
-			Tags:    in.GetTags(),
-			Config:  in.GetConfig(),
+			ID:      in.Id,
+			Name:    in.Name,
+			Desc:    in.Desc,
+			Tags:    in.Tags,
+			Config:  in.Config,
 			Created: time.Now(),
 			Updated: time.Now(),
 		}
@@ -100,14 +100,14 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
 		}
 	}
 
 	// name validation
 	{
-		if len(in.GetName()) < 2 {
+		if len(in.Name) < 2 {
 			return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
 		}
 	}
@@ -117,10 +117,10 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 		return &output, err
 	}
 
-	item.Name = in.GetName()
-	item.Desc = in.GetDesc()
-	item.Tags = in.GetTags()
-	item.Config = in.GetConfig()
+	item.Name = in.Name
+	item.Desc = in.Desc
+	item.Tags = in.Tags
+	item.Config = in.Config
 	item.Updated = time.Now()
 
 	_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
@@ -129,8 +129,8 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 	}
 
 	// update node id
-	if len(in.GetId()) > 0 && in.GetId() != item.ID {
-		_, err = s.es.GetDB().NewUpdate().Model(&item).Set("id = ?", in.GetId()).WherePK().Exec(ctx)
+	if len(in.Id) > 0 && in.Id != item.ID {
+		_, err = s.es.GetDB().NewUpdate().Model(&item).Set("id = ?", in.Id).WherePK().Exec(ctx)
 		if err != nil {
 			return &output, status.Errorf(codes.Internal, "Update: %v", err)
 		}
@@ -296,15 +296,15 @@ func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Updated")
 		}
 	}
@@ -332,11 +332,11 @@ SKIP:
 	if insert {
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
 			}
 
-			err = s.es.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.es.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -347,14 +347,14 @@ SKIP:
 		}
 
 		item := model.Node{
-			ID:      in.GetId(),
-			Name:    in.GetName(),
-			Desc:    in.GetDesc(),
-			Tags:    in.GetTags(),
-			Config:  in.GetConfig(),
-			Created: time.UnixMicro(in.GetCreated()),
-			Updated: time.UnixMicro(in.GetUpdated()),
-			Deleted: time.UnixMicro(in.GetDeleted()),
+			ID:      in.Id,
+			Name:    in.Name,
+			Desc:    in.Desc,
+			Tags:    in.Tags,
+			Config:  in.Config,
+			Created: time.UnixMicro(in.Created),
+			Updated: time.UnixMicro(in.Updated),
+			Deleted: time.UnixMicro(in.Deleted),
 		}
 
 		_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -365,18 +365,18 @@ SKIP:
 
 	// update
 	if update {
-		if in.GetUpdated() <= item.Updated.UnixMicro() {
+		if in.Updated <= item.Updated.UnixMicro() {
 			return &output, nil
 		}
 
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
 			}
 
 			modelItem := model.Node{}
-			err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -388,12 +388,12 @@ SKIP:
 			}
 		}
 
-		item.Name = in.GetName()
-		item.Desc = in.GetDesc()
-		item.Tags = in.GetTags()
-		item.Config = in.GetConfig()
-		item.Updated = time.UnixMicro(in.GetUpdated())
-		item.Deleted = time.UnixMicro(in.GetDeleted())
+		item.Name = in.Name
+		item.Desc = in.Desc
+		item.Tags = in.Tags
+		item.Config = in.Config
+		item.Updated = time.UnixMicro(in.Updated)
+		item.Deleted = time.UnixMicro(in.Deleted)
 
 		_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().WhereAllWithDeleted().Exec(ctx)
 		if err != nil {
@@ -401,8 +401,8 @@ SKIP:
 		}
 
 		// update node id
-		if len(in.GetId()) > 0 && in.GetId() != item.ID {
-			_, err = s.es.GetDB().NewUpdate().Model(&item).Set("id = ?", in.GetId()).WherePK().WhereAllWithDeleted().Exec(ctx)
+		if in.Id != "" && in.Id != item.ID {
+			_, err = s.es.GetDB().NewUpdate().Model(&item).Set("id = ?", in.Id).WherePK().WhereAllWithDeleted().Exec(ctx)
 			if err != nil {
 				return &output, status.Errorf(codes.Internal, "Update: %v", err)
 			}

@@ -44,12 +44,12 @@ func (s *SyncService) SetNodeUpdated(ctx context.Context, in *edges.SyncUpdated)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Updated")
 		}
 	}
 
-	err = s.setNodeUpdated(ctx, time.UnixMicro(in.GetUpdated()))
+	err = s.setNodeUpdated(ctx, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -96,12 +96,12 @@ func (s *SyncService) SetWireUpdated(ctx context.Context, in *edges.SyncUpdated)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Source.Updated")
 		}
 	}
 
-	err = s.setWireUpdated(ctx, time.UnixMicro(in.GetUpdated()))
+	err = s.setWireUpdated(ctx, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -142,12 +142,12 @@ func (s *SyncService) SetPinUpdated(ctx context.Context, in *edges.SyncUpdated) 
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Updated")
 		}
 	}
 
-	err = s.setPinUpdated(ctx, time.UnixMicro(in.GetUpdated()))
+	err = s.setPinUpdated(ctx, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -188,12 +188,12 @@ func (s *SyncService) SetConstUpdated(ctx context.Context, in *edges.SyncUpdated
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Updated")
 		}
 	}
 
-	err = s.setConstUpdated(ctx, time.UnixMicro(in.GetUpdated()))
+	err = s.setConstUpdated(ctx, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -234,12 +234,12 @@ func (s *SyncService) SetPinValueUpdated(ctx context.Context, in *edges.SyncUpda
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value.Updated")
 		}
 	}
 
-	err = s.setPinValueUpdated(ctx, time.UnixMicro(in.GetUpdated()))
+	err = s.setPinValueUpdated(ctx, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -286,12 +286,12 @@ func (s *SyncService) SetPinWriteUpdated(ctx context.Context, in *edges.SyncUpda
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Write.Updated")
 		}
 	}
 
-	err = s.setPinWriteUpdated(ctx, time.UnixMicro(in.GetUpdated()))
+	err = s.setPinWriteUpdated(ctx, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}

@@ -39,15 +39,15 @@ func (s *PinService) Create(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
 			return &output, err
 		}
 
-		request := &pb.Id{Id: in.GetWireId()}
+		request := &pb.Id{Id: in.WireId}
 
 		reply, err := s.ns.Core().GetWire().View(ctx, request)
 		if err != nil {
 			return &output, err
 		}
 
-		if reply.GetNodeId() != nodeID {
-			return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+		if reply.NodeId != nodeID {
+			return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 		}
 	}
 
@@ -70,15 +70,15 @@ func (s *PinService) Update(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetPin().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().Update(ctx, in)
@@ -105,8 +105,8 @@ func (s *PinService) View(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -128,15 +128,15 @@ func (s *PinService) Name(ctx context.Context, in *pb.Name) (*pb.Pin, error) {
 		return &output, err
 	}
 
-	request := &cores.PinNameRequest{NodeId: nodeID, Name: in.GetName()}
+	request := &cores.PinNameRequest{NodeId: nodeID, Name: in.Name}
 
 	reply, err := s.ns.Core().GetPin().Name(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -163,8 +163,8 @@ func (s *PinService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error) 
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().Delete(ctx, in)
@@ -189,8 +189,8 @@ func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes
 	request := &cores.PinListRequest{
 		Page:   in.GetPage(),
 		NodeId: nodeID,
-		WireId: in.GetWireId(),
-		Tags:   in.GetTags(),
+		WireId: in.WireId,
+		Tags:   in.Tags,
 	}
 
 	reply, err := s.ns.Core().GetPin().List(ctx, request)
@@ -199,8 +199,8 @@ func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes
 	}
 
 	output.Count = reply.Count
-	output.Page = reply.GetPage()
-	output.Pin = reply.GetPin()
+	output.Page = reply.Page
+	output.Pins = reply.Pins
 
 	return &output, nil
 }
@@ -226,8 +226,8 @@ func (s *PinService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Pin, e
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -244,8 +244,8 @@ func (s *PinService) Pull(ctx context.Context, in *nodes.PinPullRequest) (*nodes
 		}
 	}
 
-	output.After = in.GetAfter()
-	output.Limit = in.GetLimit()
+	output.After = in.After
+	output.Limit = in.Limit
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
@@ -253,10 +253,10 @@ func (s *PinService) Pull(ctx context.Context, in *nodes.PinPullRequest) (*nodes
 	}
 
 	request := &cores.PinPullRequest{
-		After:  in.GetAfter(),
-		Limit:  in.GetLimit(),
+		After:  in.After,
+		Limit:  in.Limit,
 		NodeId: nodeID,
-		WireId: in.GetWireId(),
+		WireId: in.WireId,
 	}
 
 	reply, err := s.ns.Core().GetPin().Pull(ctx, request)
@@ -264,7 +264,7 @@ func (s *PinService) Pull(ctx context.Context, in *nodes.PinPullRequest) (*nodes
 		return &output, err
 	}
 
-	output.Pin = reply.GetPin()
+	output.Pins = reply.Pins
 
 	return &output, nil
 }
@@ -313,8 +313,8 @@ func (s *PinService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue, err
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().GetValue(ctx, in)
@@ -336,15 +336,15 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetPin().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().SetValue(ctx, in)
@@ -367,15 +367,15 @@ func (s *PinService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 	}
 
 	reply, err := s.ns.Core().GetPin().GetValueByName(ctx,
-		&cores.PinGetValueByNameRequest{NodeId: nodeID, Name: in.GetName()})
+		&cores.PinGetValueByNameRequest{NodeId: nodeID, Name: in.Name})
 	if err != nil {
 		return &output, err
 	}
 
-	output.Id = reply.GetId()
-	output.Name = reply.GetName()
-	output.Value = reply.GetValue()
-	output.Updated = reply.GetUpdated()
+	output.Id = reply.Id
+	output.Name = reply.Name
+	output.Value = reply.Value
+	output.Updated = reply.Updated
 
 	return &output, nil
 }
@@ -397,7 +397,7 @@ func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*
 	}
 
 	return s.ns.Core().GetPin().SetValueByName(ctx,
-		&cores.PinNameValue{NodeId: nodeID, Name: in.GetName(), Value: in.GetValue()})
+		&cores.PinNameValue{NodeId: nodeID, Name: in.Name, Value: in.Value})
 }
 
 func (s *PinService) ViewValue(ctx context.Context, in *pb.Id) (*pb.PinValueUpdated, error) {
@@ -421,8 +421,8 @@ func (s *PinService) ViewValue(ctx context.Context, in *pb.Id) (*pb.PinValueUpda
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -449,8 +449,8 @@ func (s *PinService) DeleteValue(ctx context.Context, in *pb.Id) (*pb.MyBool, er
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().DeleteValue(ctx, in)
@@ -467,8 +467,8 @@ func (s *PinService) PullValue(ctx context.Context, in *nodes.PinPullValueReques
 		}
 	}
 
-	output.After = in.GetAfter()
-	output.Limit = in.GetLimit()
+	output.After = in.After
+	output.Limit = in.Limit
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
@@ -476,10 +476,10 @@ func (s *PinService) PullValue(ctx context.Context, in *nodes.PinPullValueReques
 	}
 
 	request := &cores.PinPullValueRequest{
-		After:  in.GetAfter(),
-		Limit:  in.GetLimit(),
+		After:  in.After,
+		Limit:  in.Limit,
 		NodeId: nodeID,
-		WireId: in.GetWireId(),
+		WireId: in.WireId,
 	}
 
 	reply, err := s.ns.Core().GetPin().PullValue(ctx, request)
@@ -487,7 +487,7 @@ func (s *PinService) PullValue(ctx context.Context, in *nodes.PinPullValueReques
 		return &output, err
 	}
 
-	output.Pin = reply.GetPin()
+	output.Pins = reply.Pins
 
 	return &output, nil
 }
@@ -508,15 +508,15 @@ func (s *PinService) SyncValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetPin().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().SyncValue(ctx, in)
@@ -545,8 +545,8 @@ func (s *PinService) GetWrite(ctx context.Context, in *pb.Id) (*pb.PinValue, err
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().GetWrite(ctx, in)
@@ -568,15 +568,15 @@ func (s *PinService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetPin().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().SetWrite(ctx, in)
@@ -599,15 +599,15 @@ func (s *PinService) GetWriteByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 	}
 
 	reply, err := s.ns.Core().GetPin().GetWriteByName(ctx,
-		&cores.PinGetValueByNameRequest{NodeId: nodeID, Name: in.GetName()})
+		&cores.PinGetValueByNameRequest{NodeId: nodeID, Name: in.Name})
 	if err != nil {
 		return &output, err
 	}
 
-	output.Id = reply.GetId()
-	output.Name = reply.GetName()
-	output.Value = reply.GetValue()
-	output.Updated = reply.GetUpdated()
+	output.Id = reply.Id
+	output.Name = reply.Name
+	output.Value = reply.Value
+	output.Updated = reply.Updated
 
 	return &output, nil
 }
@@ -629,7 +629,7 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *pb.PinNameValue) (*
 	}
 
 	return s.ns.Core().GetPin().SetValueByName(ctx,
-		&cores.PinNameValue{NodeId: nodeID, Name: in.GetName(), Value: in.GetValue()})
+		&cores.PinNameValue{NodeId: nodeID, Name: in.Name, Value: in.Value})
 }
 
 func (s *PinService) ViewWrite(ctx context.Context, in *pb.Id) (*pb.PinValueUpdated, error) {
@@ -653,8 +653,8 @@ func (s *PinService) ViewWrite(ctx context.Context, in *pb.Id) (*pb.PinValueUpda
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -681,8 +681,8 @@ func (s *PinService) DeleteWrite(ctx context.Context, in *pb.Id) (*pb.MyBool, er
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().DeleteWrite(ctx, in)
@@ -699,8 +699,8 @@ func (s *PinService) PullWrite(ctx context.Context, in *nodes.PinPullValueReques
 		}
 	}
 
-	output.After = in.GetAfter()
-	output.Limit = in.GetLimit()
+	output.After = in.After
+	output.Limit = in.Limit
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
@@ -708,10 +708,10 @@ func (s *PinService) PullWrite(ctx context.Context, in *nodes.PinPullValueReques
 	}
 
 	request := &cores.PinPullValueRequest{
-		After:  in.GetAfter(),
-		Limit:  in.GetLimit(),
+		After:  in.After,
+		Limit:  in.Limit,
 		NodeId: nodeID,
-		WireId: in.GetWireId(),
+		WireId: in.WireId,
 	}
 
 	reply, err := s.ns.Core().GetPin().PullWrite(ctx, request)
@@ -719,7 +719,7 @@ func (s *PinService) PullWrite(ctx context.Context, in *nodes.PinPullValueReques
 		return &output, err
 	}
 
-	output.Pin = reply.GetPin()
+	output.Pins = reply.Pins
 
 	return &output, nil
 }
@@ -740,15 +740,15 @@ func (s *PinService) SyncWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetPin().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetPin().SyncWrite(ctx, in)

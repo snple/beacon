@@ -159,7 +159,7 @@ func (s *cloneService) wire(ctx context.Context, db bun.IDB, wireID, nodeID stri
 		err = db.NewSelect().Model(&node).WherePK().Scan(ctx)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				return status.Error(codes.InvalidArgument, "Please supply valid NodeID")
+				return status.Error(codes.InvalidArgument, "Please supply valid NodeId")
 			}
 
 			return status.Errorf(codes.Internal, "Query: %v", err)
@@ -290,7 +290,7 @@ func (s *cloneService) const_(ctx context.Context, db bun.IDB, constID, nodeID s
 		err = db.NewSelect().Model(&node).WherePK().Scan(ctx)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				return status.Error(codes.InvalidArgument, "Please supply valid NodeID")
+				return status.Error(codes.InvalidArgument, "Please supply valid NodeId")
 			}
 
 			return status.Errorf(codes.Internal, "Query: %v", err)

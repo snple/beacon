@@ -42,30 +42,30 @@ func (s *WireService) Create(ctx context.Context, in *pb.Wire) (*pb.Wire, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
 		}
 	}
 
 	item := model.Wire{
-		ID:      in.GetId(),
-		Name:    in.GetName(),
-		Desc:    in.GetDesc(),
-		Tags:    in.GetTags(),
-		Source:  in.GetSource(),
-		Config:  in.GetConfig(),
-		Status:  in.GetStatus(),
+		ID:      in.Id,
+		Name:    in.Name,
+		Desc:    in.Desc,
+		Tags:    in.Tags,
+		Source:  in.Source,
+		Config:  in.Config,
+		Status:  in.Status,
 		Created: time.Now(),
 		Updated: time.Now(),
 	}
 
 	// name validation
 	{
-		if len(in.GetName()) < 2 {
+		if len(in.Name) < 2 {
 			return &output, status.Error(codes.InvalidArgument, "Wire.Name min 2 character")
 		}
 
-		err = s.es.GetDB().NewSelect().Model(&model.Wire{}).Where("name = ?", in.GetName()).Scan(ctx)
+		err = s.es.GetDB().NewSelect().Model(&model.Wire{}).Where("name = ?", in.Name).Scan(ctx)
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -103,28 +103,28 @@ func (s *WireService) Update(ctx context.Context, in *pb.Wire) (*pb.Wire, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
 
 	// name validation
 	{
-		if len(in.GetName()) < 2 {
+		if len(in.Name) < 2 {
 			return &output, status.Error(codes.InvalidArgument, "Wire.Name min 2 character")
 		}
 
 		modelItem := model.Wire{}
-		err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.GetName()).Scan(ctx)
+		err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -136,12 +136,12 @@ func (s *WireService) Update(ctx context.Context, in *pb.Wire) (*pb.Wire, error)
 		}
 	}
 
-	item.Name = in.GetName()
-	item.Desc = in.GetDesc()
-	item.Tags = in.GetTags()
-	item.Source = in.GetSource()
-	item.Config = in.GetConfig()
-	item.Status = in.GetStatus()
+	item.Name = in.Name
+	item.Desc = in.Desc
+	item.Tags = in.Tags
+	item.Source = in.Source
+	item.Config = in.Config
+	item.Status = in.Status
 	item.Updated = time.Now()
 
 	_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
@@ -168,12 +168,12 @@ func (s *WireService) View(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -193,12 +193,12 @@ func (s *WireService) Name(ctx context.Context, in *pb.Name) (*pb.Wire, error) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.GetName())
+	item, err := s.ViewByName(ctx, in.Name)
 	if err != nil {
 		return &output, err
 	}
@@ -218,12 +218,12 @@ func (s *WireService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -282,8 +282,8 @@ func (s *WireService) List(ctx context.Context, in *edges.WireListRequest) (*edg
 		})
 	}
 
-	if in.GetTags() != "" {
-		tagsSplit := strings.Split(in.GetTags(), ",")
+	if in.Tags != "" {
+		tagsSplit := strings.Split(in.Tags, ",")
 
 		if len(tagsSplit) == 1 {
 			search := fmt.Sprintf("%%%v%%", tagsSplit[0])
@@ -302,8 +302,8 @@ func (s *WireService) List(ctx context.Context, in *edges.WireListRequest) (*edg
 		}
 	}
 
-	if len(in.GetSource()) > 0 {
-		query = query.Where(`source = ?`, in.GetSource())
+	if in.Source != "" {
+		query = query.Where(`source = ?`, in.Source)
 	}
 
 	if in.GetPage().GetOrderBy() != "" && (in.GetPage().GetOrderBy() == "id" || in.GetPage().GetOrderBy() == "name" ||
@@ -325,7 +325,7 @@ func (s *WireService) List(ctx context.Context, in *edges.WireListRequest) (*edg
 
 		s.copyModelToOutput(&item, &items[i])
 
-		output.Wire = append(output.Wire, &item)
+		output.Wires = append(output.Wires, &item)
 	}
 
 	return &output, nil
@@ -341,7 +341,7 @@ func (s *WireService) Clone(ctx context.Context, in *edges.WireCloneRequest) (*p
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
 		}
 	}
@@ -357,7 +357,7 @@ func (s *WireService) Clone(ctx context.Context, in *edges.WireCloneRequest) (*p
 		}
 	}()
 
-	err = s.es.getClone().wire(ctx, tx, in.GetId())
+	err = s.es.getClone().wire(ctx, tx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -464,12 +464,12 @@ func (s *WireService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Wire,
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
 		}
 	}
 
-	item, err := s.viewWithDeleted(ctx, in.GetId())
+	item, err := s.viewWithDeleted(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -507,18 +507,18 @@ func (s *WireService) Pull(ctx context.Context, in *edges.WirePullRequest) (*edg
 		}
 	}
 
-	output.After = in.GetAfter()
-	output.Limit = in.GetLimit()
+	output.After = in.After
+	output.Limit = in.Limit
 
 	var items []model.Wire
 
 	query := s.es.GetDB().NewSelect().Model(&items)
 
-	if in.GetSource() != "" {
-		query = query.Where(`source = ?`, in.GetSource())
+	if in.Source != "" {
+		query = query.Where(`source = ?`, in.Source)
 	}
 
-	err = query.Where("updated > ?", time.UnixMicro(in.GetAfter())).WhereAllWithDeleted().Order("updated ASC").Limit(int(in.GetLimit())).Scan(ctx)
+	err = query.Where("updated > ?", time.UnixMicro(in.After)).WhereAllWithDeleted().Order("updated ASC").Limit(int(in.Limit)).Scan(ctx)
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "Query: %v", err)
 	}
@@ -528,7 +528,7 @@ func (s *WireService) Pull(ctx context.Context, in *edges.WirePullRequest) (*edg
 
 		s.copyModelToOutput(&item, &items[i])
 
-		output.Wire = append(output.Wire, &item)
+		output.Wires = append(output.Wires, &item)
 	}
 
 	return &output, nil
@@ -544,15 +544,15 @@ func (s *WireService) Sync(ctx context.Context, in *pb.Wire) (*pb.MyBool, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Updated")
 		}
 	}
@@ -560,7 +560,7 @@ func (s *WireService) Sync(ctx context.Context, in *pb.Wire) (*pb.MyBool, error)
 	insert := false
 	update := false
 
-	item, err := s.viewWithDeleted(ctx, in.GetId())
+	item, err := s.viewWithDeleted(ctx, in.Id)
 	if err != nil {
 		if code, ok := status.FromError(err); ok {
 			if code.Code() == codes.NotFound {
@@ -580,11 +580,11 @@ SKIP:
 	if insert {
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Wire.Name min 2 character")
 			}
 
-			err = s.es.GetDB().NewSelect().Model(&model.Wire{}).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.es.GetDB().NewSelect().Model(&model.Wire{}).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -595,16 +595,16 @@ SKIP:
 		}
 
 		item := model.Wire{
-			ID:      in.GetId(),
-			Name:    in.GetName(),
-			Desc:    in.GetDesc(),
-			Tags:    in.GetTags(),
-			Source:  in.GetSource(),
-			Config:  in.GetConfig(),
-			Status:  in.GetStatus(),
-			Created: time.UnixMicro(in.GetCreated()),
-			Updated: time.UnixMicro(in.GetUpdated()),
-			Deleted: time.UnixMicro(in.GetDeleted()),
+			ID:      in.Id,
+			Name:    in.Name,
+			Desc:    in.Desc,
+			Tags:    in.Tags,
+			Source:  in.Source,
+			Config:  in.Config,
+			Status:  in.Status,
+			Created: time.UnixMicro(in.Created),
+			Updated: time.UnixMicro(in.Updated),
+			Deleted: time.UnixMicro(in.Deleted),
 		}
 
 		_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -615,18 +615,18 @@ SKIP:
 
 	// update
 	if update {
-		if in.GetUpdated() <= item.Updated.UnixMicro() {
+		if in.Updated <= item.Updated.UnixMicro() {
 			return &output, nil
 		}
 
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Wire.Name min 2 character")
 			}
 
 			modelItem := model.Wire{}
-			err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -638,14 +638,14 @@ SKIP:
 			}
 		}
 
-		item.Name = in.GetName()
-		item.Desc = in.GetDesc()
-		item.Tags = in.GetTags()
-		item.Source = in.GetSource()
-		item.Config = in.GetConfig()
-		item.Status = in.GetStatus()
-		item.Updated = time.UnixMicro(in.GetUpdated())
-		item.Deleted = time.UnixMicro(in.GetDeleted())
+		item.Name = in.Name
+		item.Desc = in.Desc
+		item.Tags = in.Tags
+		item.Source = in.Source
+		item.Config = in.Config
+		item.Status = in.Status
+		item.Updated = time.UnixMicro(in.Updated)
+		item.Deleted = time.UnixMicro(in.Deleted)
 
 		_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().WhereAllWithDeleted().Exec(ctx)
 		if err != nil {

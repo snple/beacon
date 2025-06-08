@@ -32,7 +32,7 @@ func (s *SyncService) SetNodeUpdated(ctx context.Context, in *nodes.SyncUpdated)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Updated")
 		}
 	}
@@ -43,7 +43,7 @@ func (s *SyncService) SetNodeUpdated(ctx context.Context, in *nodes.SyncUpdated)
 	}
 
 	return s.ns.Core().GetSync().SetNodeUpdated(ctx,
-		&cores.SyncUpdated{Id: nodeID, Updated: in.GetUpdated()})
+		&cores.SyncUpdated{Id: nodeID, Updated: in.Updated})
 }
 
 func (s *SyncService) GetNodeUpdated(ctx context.Context, in *pb.MyEmpty) (*nodes.SyncUpdated, error) {
@@ -67,7 +67,7 @@ func (s *SyncService) GetNodeUpdated(ctx context.Context, in *pb.MyEmpty) (*node
 		return &output, err
 	}
 
-	output.Updated = reply.GetUpdated()
+	output.Updated = reply.Updated
 
 	return &output, nil
 }
@@ -100,7 +100,7 @@ func (s *SyncService) SetPinValueUpdated(ctx context.Context, in *nodes.SyncUpda
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value.Updated")
 		}
 	}
@@ -111,7 +111,7 @@ func (s *SyncService) SetPinValueUpdated(ctx context.Context, in *nodes.SyncUpda
 	}
 
 	return s.ns.Core().GetSync().SetPinValueUpdated(ctx,
-		&cores.SyncUpdated{Id: nodeID, Updated: in.GetUpdated()})
+		&cores.SyncUpdated{Id: nodeID, Updated: in.Updated})
 }
 
 func (s *SyncService) GetPinValueUpdated(ctx context.Context, in *pb.MyEmpty) (*nodes.SyncUpdated, error) {
@@ -135,7 +135,7 @@ func (s *SyncService) GetPinValueUpdated(ctx context.Context, in *pb.MyEmpty) (*
 		return &output, err
 	}
 
-	output.Updated = reply.GetUpdated()
+	output.Updated = reply.Updated
 
 	return &output, nil
 }
@@ -168,7 +168,7 @@ func (s *SyncService) SetPinWriteUpdated(ctx context.Context, in *nodes.SyncUpda
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Write.Updated")
 		}
 	}
@@ -179,7 +179,7 @@ func (s *SyncService) SetPinWriteUpdated(ctx context.Context, in *nodes.SyncUpda
 	}
 
 	return s.ns.Core().GetSync().SetPinWriteUpdated(ctx,
-		&cores.SyncUpdated{Id: nodeID, Updated: in.GetUpdated()})
+		&cores.SyncUpdated{Id: nodeID, Updated: in.Updated})
 }
 
 func (s *SyncService) GetPinWriteUpdated(ctx context.Context, in *pb.MyEmpty) (*nodes.SyncUpdated, error) {
@@ -203,7 +203,7 @@ func (s *SyncService) GetPinWriteUpdated(ctx context.Context, in *pb.MyEmpty) (*
 		return &output, err
 	}
 
-	output.Updated = reply.GetUpdated()
+	output.Updated = reply.Updated
 
 	return &output, nil
 }

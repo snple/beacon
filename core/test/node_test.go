@@ -92,18 +92,18 @@ var _ = ginkgo.Describe("Test core node API", ginkgo.Label("library"), func() {
 				_ = reply
 
 				{
-					reply, err := cs.GetSync().GetNodeUpdated(ctx, &pb.Id{Id: reply.GetId()})
+					reply, err := cs.GetSync().GetNodeUpdated(ctx, &pb.Id{Id: reply.Id})
 					gomega.Expect(err).ToNot(gomega.HaveOccurred())
 					gomega.Expect(reply.Updated > 0).To(gomega.Equal(true))
 				}
 
 				{
-					_, err = cs.GetNode().Destory(ctx, &pb.Id{Id: reply.GetId()})
+					_, err = cs.GetNode().Destory(ctx, &pb.Id{Id: reply.Id})
 					gomega.Expect(err).ToNot(gomega.HaveOccurred())
 				}
 
 				{
-					reply, err := cs.GetSync().GetNodeUpdated(ctx, &pb.Id{Id: reply.GetId()})
+					reply, err := cs.GetSync().GetNodeUpdated(ctx, &pb.Id{Id: reply.Id})
 					gomega.Expect(err).ToNot(gomega.HaveOccurred())
 					gomega.Expect(reply.Updated < 0).To(gomega.Equal(true))
 				}

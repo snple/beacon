@@ -137,49 +137,49 @@ func DefaultConfig() ConfigStruct {
 var Config = DefaultConfig()
 
 func (c *ConfigStruct) Validate() error {
-	if len(c.NodeID) == 0 {
+	if c.NodeID == "" {
 		return errors.New("NodeID must be specified")
 	}
 
-	if len(c.Secret) == 0 {
+	if c.Secret == "" {
 		return errors.New("Secret must be specified")
 	}
 
 	{
-		if len(c.NodeClient.Addr) == 0 {
+		if c.NodeClient.Addr == "" {
 			return errors.New("NodeClient.Addr must be specified")
 		}
 
 		if c.NodeClient.TLS {
-			if len(c.NodeClient.CA) == 0 {
+			if c.NodeClient.CA == "" {
 				return errors.New("NodeClient.CA must be specified")
 			}
 
-			if len(c.NodeClient.Cert) == 0 {
+			if c.NodeClient.Cert == "" {
 				return errors.New("NodeClient.Cert must be specified")
 			}
 
-			if len(c.NodeClient.Key) == 0 {
+			if c.NodeClient.Key == "" {
 				return errors.New("NodeClient.Key must be specified")
 			}
 		}
 	}
 
 	if c.EdgeService.Enable {
-		if len(c.EdgeService.Addr) == 0 {
+		if c.EdgeService.Addr == "" {
 			return errors.New("EdgeService.Addr must be specified")
 		}
 
 		if c.EdgeService.TLS {
-			if len(c.EdgeService.CA) == 0 {
+			if c.EdgeService.CA == "" {
 				return errors.New("EdgeService.CA must be specified")
 			}
 
-			if len(c.EdgeService.Cert) == 0 {
+			if c.EdgeService.Cert == "" {
 				return errors.New("EdgeService.Cert must be specified")
 			}
 
-			if len(c.EdgeService.Key) == 0 {
+			if c.EdgeService.Key == "" {
 				return errors.New("EdgeService.Key must be specified")
 			}
 		}

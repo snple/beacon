@@ -88,14 +88,14 @@ func (s *PinService) list(ctx *gin.Context) {
 		return
 	}
 
-	items := reply.GetPin()
+	items := reply.Pins
 
 	shiftime.Pins(items)
 
 	ctx.JSON(util.Success(gin.H{
 		"wire":  wire,
 		"items": items,
-		"total": reply.GetCount(),
+		"total": reply.Count,
 	}))
 }
 

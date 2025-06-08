@@ -291,13 +291,13 @@ func (s *NodeUpService) login(ctx context.Context) error {
 		return err
 	}
 
-	if len(reply.GetToken()) == 0 {
+	if reply.Token == "" {
 		return errors.New("login: reply token is empty")
 	}
 
 	// set token
 	s.lock.Lock()
-	s.token = reply.GetToken()
+	s.token = reply.Token
 	s.lock.Unlock()
 
 	return nil
@@ -575,7 +575,7 @@ func (s *NodeUpService) syncRemoteToLocal(ctx context.Context) error {
 		return err
 	}
 
-	if nodeUpdated.GetUpdated() <= nodeUpdated2.UnixMicro() {
+	if nodeUpdated.Updated <= nodeUpdated2.UnixMicro() {
 		return nil
 	}
 
@@ -603,16 +603,16 @@ func (s *NodeUpService) syncRemoteToLocal(ctx context.Context) error {
 				return err
 			}
 
-			for _, remote := range remotes.GetWire() {
+			for _, remote := range remotes.Wires {
 				_, err = s.es.GetWire().Sync(ctx, remote)
 				if err != nil {
 					return err
 				}
 
-				after = remote.GetUpdated()
+				after = remote.Updated
 			}
 
-			if len(remotes.GetWire()) < int(limit) {
+			if len(remotes.Wires) < int(limit) {
 				break
 			}
 		}
@@ -629,16 +629,16 @@ func (s *NodeUpService) syncRemoteToLocal(ctx context.Context) error {
 				return err
 			}
 
-			for _, remote := range remotes.GetPin() {
+			for _, remote := range remotes.Pins {
 				_, err := s.es.GetPin().Sync(ctx, remote)
 				if err != nil {
 					return err
 				}
 
-				after = remote.GetUpdated()
+				after = remote.Updated
 			}
 
-			if len(remotes.GetPin()) < int(limit) {
+			if len(remotes.Pins) < int(limit) {
 				break
 			}
 		}
@@ -655,16 +655,16 @@ func (s *NodeUpService) syncRemoteToLocal(ctx context.Context) error {
 				return err
 			}
 
-			for _, remote := range remotes.GetConst() {
+			for _, remote := range remotes.Consts {
 				_, err := s.es.GetConst().Sync(ctx, remote)
 				if err != nil {
 					return err
 				}
 
-				after = remote.GetUpdated()
+				after = remote.Updated
 			}
 
-			if len(remotes.GetConst()) < int(limit) {
+			if len(remotes.Consts) < int(limit) {
 				break
 			}
 		}
@@ -712,16 +712,16 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 				return err
 			}
 
-			for _, local := range locals.GetWire() {
+			for _, local := range locals.Wires {
 				_, err = s.WireServiceClient().Sync(ctx, local)
 				if err != nil {
 					return err
 				}
 
-				after = local.GetUpdated()
+				after = local.Updated
 			}
 
-			if len(locals.GetWire()) < int(limit) {
+			if len(locals.Wires) < int(limit) {
 				break
 			}
 		}
@@ -738,16 +738,16 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 				return err
 			}
 
-			for _, local := range locals.GetPin() {
+			for _, local := range locals.Pins {
 				_, err = s.PinServiceClient().Sync(ctx, local)
 				if err != nil {
 					return err
 				}
 
-				after = local.GetUpdated()
+				after = local.Updated
 			}
 
-			if len(locals.GetPin()) < int(limit) {
+			if len(locals.Pins) < int(limit) {
 				break
 			}
 		}
@@ -764,7 +764,7 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 				return err
 			}
 
-			for _, local := range locals.GetConst() {
+			for _, local := range locals.Consts {
 				_, err = s.ConstServiceClient().Sync(ctx, local)
 				if err != nil {
 					return err
@@ -773,7 +773,7 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 				after = local.GetUpdated()
 			}
 
-			if len(locals.GetConst()) < int(limit) {
+			if len(locals.Consts) < int(limit) {
 				break
 			}
 		}
@@ -793,7 +793,7 @@ func (s *NodeUpService) syncPinValueRemoteToLocal(ctx context.Context) error {
 		return err
 	}
 
-	if pinValueUpdated.GetUpdated() <= pinValueUpdated2.UnixMicro() {
+	if pinValueUpdated.Updated <= pinValueUpdated2.UnixMicro() {
 		return nil
 	}
 
@@ -807,22 +807,22 @@ PULL:
 			return err
 		}
 
-		for _, remote := range remotes.GetPin() {
-			if remote.GetUpdated() > pinValueUpdated.GetUpdated() {
+		for _, remote := range remotes.Pins {
+			if remote.Updated > pinValueUpdated.Updated {
 				break PULL
 			}
 
 			_, err = s.es.GetPin().SyncValue(ctx,
-				&pb.PinValue{Id: remote.GetId(), Value: remote.GetValue(), Updated: remote.GetUpdated()})
+				&pb.PinValue{Id: remote.Id, Value: remote.Value, Updated: remote.Updated})
 			if err != nil {
 				s.es.Logger().Sugar().Errorf("SyncValue: %v", err)
 				return err
 			}
 
-			after = remote.GetUpdated()
+			after = remote.Updated
 		}
 
-		if len(remotes.GetPin()) < int(limit) {
+		if len(remotes.Pins) < int(limit) {
 			break
 		}
 	}
@@ -855,22 +855,22 @@ PULL:
 			return err
 		}
 
-		for _, local := range locals.GetPin() {
-			if local.GetUpdated() > pinValueUpdated.UnixMicro() {
+		for _, local := range locals.Pins {
+			if local.Updated > pinValueUpdated.UnixMicro() {
 				break PULL
 			}
 
 			_, err = s.PinServiceClient().SyncValue(ctx,
-				&pb.PinValue{Id: local.GetId(), Value: local.GetValue(), Updated: local.GetUpdated()})
+				&pb.PinValue{Id: local.Id, Value: local.Value, Updated: local.Updated})
 			if err != nil {
 				s.es.Logger().Sugar().Errorf("SyncValue: %v", err)
 				return err
 			}
 
-			after = local.GetUpdated()
+			after = local.Updated
 		}
 
-		if len(locals.GetPin()) < int(limit) {
+		if len(locals.Pins) < int(limit) {
 			break
 		}
 	}
@@ -889,7 +889,7 @@ func (s *NodeUpService) syncPinWriteRemoteToLocal(ctx context.Context) error {
 		return err
 	}
 
-	if pinWriteUpdated.GetUpdated() <= pinWriteUpdated2.UnixMicro() {
+	if pinWriteUpdated.Updated <= pinWriteUpdated2.UnixMicro() {
 		return nil
 	}
 
@@ -903,22 +903,22 @@ PULL:
 			return err
 		}
 
-		for _, remote := range remotes.GetPin() {
-			if remote.GetUpdated() > pinWriteUpdated.GetUpdated() {
+		for _, remote := range remotes.Pins {
+			if remote.Updated > pinWriteUpdated.Updated {
 				break PULL
 			}
 
 			_, err = s.es.GetPin().SyncWrite(ctx,
-				&pb.PinValue{Id: remote.GetId(), Value: remote.GetValue(), Updated: remote.GetUpdated()})
+				&pb.PinValue{Id: remote.Id, Value: remote.Value, Updated: remote.Updated})
 			if err != nil {
 				s.es.Logger().Sugar().Errorf("SyncWrite: %v", err)
 				return err
 			}
 
-			after = remote.GetUpdated()
+			after = remote.Updated
 		}
 
-		if len(remotes.GetPin()) < int(limit) {
+		if len(remotes.Pins) < int(limit) {
 			break
 		}
 	}
@@ -951,22 +951,22 @@ PULL:
 			return err
 		}
 
-		for _, local := range locals.GetPin() {
-			if local.GetUpdated() > pinWriteUpdated.UnixMicro() {
+		for _, local := range locals.Pins {
+			if local.Updated > pinWriteUpdated.UnixMicro() {
 				break PULL
 			}
 
 			_, err = s.PinServiceClient().SyncWrite(ctx,
-				&pb.PinValue{Id: local.GetId(), Value: local.GetValue(), Updated: local.GetUpdated()})
+				&pb.PinValue{Id: local.Id, Value: local.Value, Updated: local.Updated})
 			if err != nil {
 				s.es.Logger().Sugar().Errorf("SyncWrite: %v", err)
 				return err
 			}
 
-			after = local.GetUpdated()
+			after = local.Updated
 		}
 
-		if len(locals.GetPin()) < int(limit) {
+		if len(locals.Pins) < int(limit) {
 			break
 		}
 	}

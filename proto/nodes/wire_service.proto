@@ -17,7 +17,7 @@ message WireListRequest {
 message WireListResponse {
     pb.Page page = 1;
     uint32 count = 2;
-    repeated pb.Wire wire = 3;
+    repeated pb.Wire wires = 3;
 }
 
 message WirePullRequest {
@@ -30,7 +30,7 @@ message WirePullRequest {
 message WirePullResponse {
     int64 after = 1;
     uint32 limit = 2;
-    repeated pb.Wire wire = 3;
+    repeated pb.Wire wires = 3;
 }
 
 service WireService {
@@ -56,7 +56,7 @@ message PinListRequest {
 message PinListResponse {
     pb.Page page = 1;
     uint32 count = 2;
-    repeated pb.Pin pin = 3;
+    repeated pb.Pin pins = 3;
 }
 
 message PinPullRequest {
@@ -69,7 +69,7 @@ message PinPullRequest {
 message PinPullResponse {
     int64 after = 1;
     uint32 limit = 2;
-    repeated pb.Pin pin = 3;
+    repeated pb.Pin pins = 3;
 }
 
 message PinPullValueRequest {
@@ -82,7 +82,7 @@ message PinPullValueRequest {
 message PinPullValueResponse {
     int64 after = 1;
     uint32 limit = 2;
-    repeated pb.PinValueUpdated pin = 3;
+    repeated pb.PinValueUpdated pins = 3;
 }
 
 service PinService {

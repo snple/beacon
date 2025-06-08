@@ -15,7 +15,7 @@ message ConstListRequest {
 message ConstListResponse {
     pb.Page page = 1;
     uint32 count = 2;
-    repeated pb.Const const = 3;
+    repeated pb.Const consts = 3;
 }
 
 message ConstNameRequest {
@@ -50,7 +50,7 @@ message ConstPullRequest {
 message ConstPullResponse {
     int64 after = 1;
     uint32 limit = 2;
-    repeated pb.Const const = 3;
+    repeated pb.Const consts = 3;
 }
 
 service ConstService {

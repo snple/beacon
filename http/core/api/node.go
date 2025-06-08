@@ -66,8 +66,8 @@ func (s *NodeService) list(ctx *gin.Context) {
 	}
 
 	ctx.JSON(util.Success(gin.H{
-		"items": reply.GetNode(),
-		"total": reply.GetCount(),
+		"items": reply.Nodes,
+		"total": reply.Count,
 	}))
 }
 

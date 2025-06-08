@@ -45,16 +45,16 @@ func (s *SyncService) SetNodeUpdated(ctx context.Context, in *cores.SyncUpdated)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Updated")
 		}
 	}
 
-	err = s.setNodeUpdated(ctx, s.cs.GetDB(), in.GetId(), time.UnixMicro(in.GetUpdated()))
+	err = s.setNodeUpdated(ctx, s.cs.GetDB(), in.Id, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -74,14 +74,14 @@ func (s *SyncService) GetNodeUpdated(ctx context.Context, in *pb.Id) (*cores.Syn
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
 		}
 	}
 
-	output.Id = in.GetId()
+	output.Id = in.Id
 
-	t, err := s.getNodeUpdated(ctx, s.cs.GetDB(), in.GetId())
+	t, err := s.getNodeUpdated(ctx, s.cs.GetDB(), in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -107,16 +107,16 @@ func (s *SyncService) SetPinValueUpdated(ctx context.Context, in *cores.SyncUpda
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Tag.Value.Updated")
 		}
 	}
 
-	err = s.setPinValueUpdated(ctx, s.cs.GetDB(), in.GetId(), time.UnixMicro(in.GetUpdated()))
+	err = s.setPinValueUpdated(ctx, s.cs.GetDB(), in.Id, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -136,14 +136,14 @@ func (s *SyncService) GetPinValueUpdated(ctx context.Context, in *pb.Id) (*cores
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 		}
 	}
 
-	output.Id = in.GetId()
+	output.Id = in.Id
 
-	t, err := s.getPinValueUpdated(ctx, s.cs.GetDB(), in.GetId())
+	t, err := s.getPinValueUpdated(ctx, s.cs.GetDB(), in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -169,16 +169,16 @@ func (s *SyncService) SetPinWriteUpdated(ctx context.Context, in *cores.SyncUpda
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Write.Updated")
 		}
 	}
 
-	err = s.setPinWriteUpdated(ctx, s.cs.GetDB(), in.GetId(), time.UnixMicro(in.GetUpdated()))
+	err = s.setPinWriteUpdated(ctx, s.cs.GetDB(), in.Id, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -198,14 +198,14 @@ func (s *SyncService) GetPinWriteUpdated(ctx context.Context, in *pb.Id) (*cores
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 		}
 	}
 
-	output.Id = in.GetId()
+	output.Id = in.Id
 
-	t, err := s.getPinWriteUpdated(ctx, s.cs.GetDB(), in.GetId())
+	t, err := s.getPinWriteUpdated(ctx, s.cs.GetDB(), in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -474,12 +474,12 @@ func (s *SyncService) waitUpdated(in *pb.Id, stream waitUpdatedStream, nt Notify
 			return status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return status.Error(codes.InvalidArgument, "Please supply valid NodeID")
+		if in.Id == "" {
+			return status.Error(codes.InvalidArgument, "Please supply valid NodeId")
 		}
 	}
 
-	notify := s.Notify(in.GetId(), nt)
+	notify := s.Notify(in.Id, nt)
 	defer notify.Close()
 
 	for {

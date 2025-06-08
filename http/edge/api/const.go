@@ -72,13 +72,13 @@ func (s *ConstService) list(ctx *gin.Context) {
 		return
 	}
 
-	items := reply.GetConst()
+	items := reply.Consts
 
 	shiftime.Consts(items)
 
 	ctx.JSON(util.Success(gin.H{
 		"items": items,
-		"total": reply.GetCount(),
+		"total": reply.Count,
 	}))
 }
 
@@ -150,7 +150,7 @@ func (s *ConstService) setValueById(ctx *gin.Context) {
 	}
 
 	ctx.JSON(util.Success(gin.H{
-		"ok": reply.GetBool(),
+		"ok": reply.Bool,
 	}))
 }
 

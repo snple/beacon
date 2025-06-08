@@ -14,7 +14,7 @@ message NodeListRequest {
 message NodeListResponse {
     pb.Page page = 1;
     uint32 count = 2;
-    repeated pb.Node node = 3;
+    repeated pb.Node nodes = 3;
 }
 
 message NodePullRequest {
@@ -25,7 +25,7 @@ message NodePullRequest {
 message NodePullResponse {
     int64 after = 1;
     uint32 limit = 2;
-    repeated pb.Node node = 3;
+    repeated pb.Node nodes = 3;
 }
 
 service NodeService {

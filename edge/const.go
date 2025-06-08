@@ -44,26 +44,26 @@ func (s *ConstService) Create(ctx context.Context, in *pb.Const) (*pb.Const, err
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Name")
 		}
 
-		if !dt.ValidateType(in.GetType()) {
+		if !dt.ValidateType(in.Type) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Type")
 		}
 
-		if !dt.ValidateValue(in.GetValue(), in.GetType()) {
+		if !dt.ValidateValue(in.Value, in.Type) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Value")
 		}
 	}
 
 	// name validation
 	{
-		if len(in.GetName()) < 2 {
+		if len(in.Name) < 2 {
 			return &output, status.Error(codes.InvalidArgument, "Const.Name min 2 character")
 		}
 
-		err = s.es.GetDB().NewSelect().Model(&model.Const{}).Where("name = ?", in.GetName()).Scan(ctx)
+		err = s.es.GetDB().NewSelect().Model(&model.Const{}).Where("name = ?", in.Name).Scan(ctx)
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -74,14 +74,14 @@ func (s *ConstService) Create(ctx context.Context, in *pb.Const) (*pb.Const, err
 	}
 
 	item := model.Const{
-		ID:      in.GetId(),
-		Name:    in.GetName(),
-		Desc:    in.GetDesc(),
-		Tags:    in.GetTags(),
-		Type:    in.GetType(),
-		Value:   in.GetValue(),
-		Config:  in.GetConfig(),
-		Status:  in.GetStatus(),
+		ID:      in.Id,
+		Name:    in.Name,
+		Desc:    in.Desc,
+		Tags:    in.Tags,
+		Type:    in.Type,
+		Value:   in.Value,
+		Config:  in.Config,
+		Status:  in.Status,
 		Created: time.Now(),
 		Updated: time.Now(),
 	}
@@ -114,36 +114,36 @@ func (s *ConstService) Update(ctx context.Context, in *pb.Const) (*pb.Const, err
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Id")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Name")
 		}
 
-		if !dt.ValidateType(in.GetType()) {
+		if !dt.ValidateType(in.Type) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Type")
 		}
 
-		if !dt.ValidateValue(in.GetValue(), in.GetType()) {
+		if !dt.ValidateValue(in.Value, in.Type) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Value")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
 
 	// name validation
 	{
-		if len(in.GetName()) < 2 {
+		if len(in.Name) < 2 {
 			return &output, status.Error(codes.InvalidArgument, "Const.Name min 2 character")
 		}
 
 		modelItem := model.Const{}
-		err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.GetName()).Scan(ctx)
+		err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -155,13 +155,13 @@ func (s *ConstService) Update(ctx context.Context, in *pb.Const) (*pb.Const, err
 		}
 	}
 
-	item.Name = in.GetName()
-	item.Desc = in.GetDesc()
-	item.Tags = in.GetTags()
-	item.Type = in.GetType()
-	item.Value = in.GetValue()
-	item.Config = in.GetConfig()
-	item.Status = in.GetStatus()
+	item.Name = in.Name
+	item.Desc = in.Desc
+	item.Tags = in.Tags
+	item.Type = in.Type
+	item.Value = in.Value
+	item.Config = in.Config
+	item.Status = in.Status
 	item.Updated = time.Now()
 
 	_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
@@ -188,12 +188,12 @@ func (s *ConstService) View(ctx context.Context, in *pb.Id) (*pb.Const, error) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Id")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -213,12 +213,12 @@ func (s *ConstService) Name(ctx context.Context, in *pb.Name) (*pb.Const, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Name")
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.GetName())
+	item, err := s.ViewByName(ctx, in.Name)
 	if err != nil {
 		return &output, err
 	}
@@ -238,12 +238,12 @@ func (s *ConstService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Id")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -302,8 +302,8 @@ func (s *ConstService) List(ctx context.Context, in *edges.ConstListRequest) (*e
 		})
 	}
 
-	if in.GetTags() != "" {
-		tagsSplit := strings.Split(in.GetTags(), ",")
+	if in.Tags != "" {
+		tagsSplit := strings.Split(in.Tags, ",")
 
 		if len(tagsSplit) == 1 {
 			search := fmt.Sprintf("%%%v%%", tagsSplit[0])
@@ -341,7 +341,7 @@ func (s *ConstService) List(ctx context.Context, in *edges.ConstListRequest) (*e
 
 		s.copyModelToOutput(&item, &items[i])
 
-		output.Const = append(output.Const, &item)
+		output.Consts = append(output.Consts, &item)
 	}
 
 	return &output, nil
@@ -357,12 +357,12 @@ func (s *ConstService) Clone(ctx context.Context, in *edges.ConstCloneRequest) (
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Id")
 		}
 	}
 
-	err = s.es.getClone().const_(ctx, s.es.GetDB(), in.GetId())
+	err = s.es.getClone().const_(ctx, s.es.GetDB(), in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -462,12 +462,12 @@ func (s *ConstService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Cons
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Id")
 		}
 	}
 
-	item, err := s.viewWithDeleted(ctx, in.GetId())
+	item, err := s.viewWithDeleted(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -505,14 +505,14 @@ func (s *ConstService) Pull(ctx context.Context, in *edges.ConstPullRequest) (*e
 		}
 	}
 
-	output.After = in.GetAfter()
-	output.Limit = in.GetLimit()
+	output.After = in.After
+	output.Limit = in.Limit
 
 	items := make([]model.Const, 0, 10)
 
 	query := s.es.GetDB().NewSelect().Model(&items)
 
-	err = query.Where("updated > ?", time.UnixMicro(in.GetAfter())).WhereAllWithDeleted().Order("updated ASC").Limit(int(in.GetLimit())).Scan(ctx)
+	err = query.Where("updated > ?", time.UnixMicro(in.After)).WhereAllWithDeleted().Order("updated ASC").Limit(int(in.Limit)).Scan(ctx)
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "Query: %v", err)
 	}
@@ -522,7 +522,7 @@ func (s *ConstService) Pull(ctx context.Context, in *edges.ConstPullRequest) (*e
 
 		s.copyModelToOutput(&item, &items[i])
 
-		output.Const = append(output.Const, &item)
+		output.Consts = append(output.Consts, &item)
 	}
 
 	return &output, nil
@@ -538,15 +538,15 @@ func (s *ConstService) Sync(ctx context.Context, in *pb.Const) (*pb.MyBool, erro
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Id")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Name")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Updated")
 		}
 	}
@@ -554,7 +554,7 @@ func (s *ConstService) Sync(ctx context.Context, in *pb.Const) (*pb.MyBool, erro
 	insert := false
 	update := false
 
-	item, err := s.viewWithDeleted(ctx, in.GetId())
+	item, err := s.viewWithDeleted(ctx, in.Id)
 	if err != nil {
 		if code, ok := status.FromError(err); ok {
 			if code.Code() == codes.NotFound {
@@ -574,11 +574,11 @@ SKIP:
 	if insert {
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Const.Name min 2 character")
 			}
 
-			err = s.es.GetDB().NewSelect().Model(&model.Const{}).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.es.GetDB().NewSelect().Model(&model.Const{}).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -589,17 +589,17 @@ SKIP:
 		}
 
 		item := model.Const{
-			ID:      in.GetId(),
-			Name:    in.GetName(),
-			Desc:    in.GetDesc(),
-			Tags:    in.GetTags(),
-			Type:    in.GetType(),
-			Value:   in.GetValue(),
-			Config:  in.GetConfig(),
-			Status:  in.GetStatus(),
-			Created: time.UnixMicro(in.GetCreated()),
-			Updated: time.UnixMicro(in.GetUpdated()),
-			Deleted: time.UnixMicro(in.GetDeleted()),
+			ID:      in.Id,
+			Name:    in.Name,
+			Desc:    in.Desc,
+			Tags:    in.Tags,
+			Type:    in.Type,
+			Value:   in.Value,
+			Config:  in.Config,
+			Status:  in.Status,
+			Created: time.UnixMicro(in.Created),
+			Updated: time.UnixMicro(in.Updated),
+			Deleted: time.UnixMicro(in.Deleted),
 		}
 
 		_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -610,18 +610,18 @@ SKIP:
 
 	// update
 	if update {
-		if in.GetUpdated() <= item.Updated.UnixMicro() {
+		if in.Updated <= item.Updated.UnixMicro() {
 			return &output, nil
 		}
 
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Const.Name min 2 character")
 			}
 
 			modelItem := model.Const{}
-			err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -633,15 +633,15 @@ SKIP:
 			}
 		}
 
-		item.Name = in.GetName()
-		item.Desc = in.GetDesc()
-		item.Tags = in.GetTags()
-		item.Type = in.GetType()
-		item.Value = in.GetValue()
-		item.Config = in.GetConfig()
-		item.Status = in.GetStatus()
-		item.Updated = time.UnixMicro(in.GetUpdated())
-		item.Deleted = time.UnixMicro(in.GetDeleted())
+		item.Name = in.Name
+		item.Desc = in.Desc
+		item.Tags = in.Tags
+		item.Type = in.Type
+		item.Value = in.Value
+		item.Config = in.Config
+		item.Status = in.Status
+		item.Updated = time.UnixMicro(in.Updated)
+		item.Deleted = time.UnixMicro(in.Deleted)
 
 		_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().WhereAllWithDeleted().Exec(ctx)
 		if err != nil {
@@ -714,17 +714,17 @@ func (s *ConstService) GetValue(ctx context.Context, in *pb.Id) (*pb.ConstValue,
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Id")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
 
-	output.Id = in.GetId()
+	output.Id = in.Id
 	output.Value = item.Value
 	output.Updated = item.Updated.UnixMicro()
 
@@ -741,12 +741,12 @@ func (s *ConstService) SetValue(ctx context.Context, in *pb.ConstValue) (*pb.MyB
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.ID")
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Id")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -755,11 +755,11 @@ func (s *ConstService) SetValue(ctx context.Context, in *pb.ConstValue) (*pb.MyB
 		return &output, status.Errorf(codes.FailedPrecondition, "Const.Status != ON")
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.Type) {
+	if !dt.ValidateValue(in.Value, item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Const.Value")
 	}
 
-	item.Value = in.GetValue()
+	item.Value = in.Value
 
 	_, err = s.es.GetDB().NewUpdate().Model(&item).Column("value").WherePK().Exec(ctx)
 	if err != nil {
@@ -785,18 +785,18 @@ func (s *ConstService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.Con
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Name")
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.GetName())
+	item, err := s.ViewByName(ctx, in.Name)
 	if err != nil {
 		return &output, err
 	}
 
 	output.Id = item.ID
-	output.Name = in.GetName()
+	output.Name = in.Name
 	output.Value = item.Value
 	output.Updated = item.Updated.UnixMicro()
 
@@ -813,16 +813,16 @@ func (s *ConstService) SetValueByName(ctx context.Context, in *pb.ConstNameValue
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Name")
 		}
 
-		if len(in.GetValue()) == 0 {
+		if in.Value == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Const.Value")
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.GetName())
+	item, err := s.ViewByName(ctx, in.Name)
 	if err != nil {
 		return &output, err
 	}
@@ -831,11 +831,11 @@ func (s *ConstService) SetValueByName(ctx context.Context, in *pb.ConstNameValue
 		return &output, status.Errorf(codes.FailedPrecondition, "Const.Status != ON")
 	}
 
-	if !dt.ValidateValue(in.GetValue(), item.Type) {
+	if !dt.ValidateValue(in.Value, item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Const.Value")
 	}
 
-	item.Value = in.GetValue()
+	item.Value = in.Value
 	item.Updated = time.Now()
 
 	_, err = s.es.GetDB().NewUpdate().Model(&item).Column("value", "updated").WherePK().Exec(ctx)

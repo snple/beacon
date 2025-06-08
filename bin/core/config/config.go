@@ -99,45 +99,45 @@ func DefaultConfig() ConfigStruct {
 }
 
 func (c *ConfigStruct) Validate() error {
-	if len(c.DB.File) == 0 {
+	if c.DB.File == "" {
 		return errors.New("DB.File must be specified")
 	}
 
 	if c.CoreService.Enable {
-		if len(c.CoreService.Addr) == 0 {
+		if c.CoreService.Addr == "" {
 			return errors.New("CoreService.Addr must be specified")
 		}
 
 		if c.CoreService.TLS {
-			if len(c.CoreService.CA) == 0 {
+			if c.CoreService.CA == "" {
 				return errors.New("CoreService.CA must be specified")
 			}
 
-			if len(c.CoreService.Cert) == 0 {
+			if c.CoreService.Cert == "" {
 				return errors.New("CoreService.Cert must be specified")
 			}
 
-			if len(c.CoreService.Key) == 0 {
+			if c.CoreService.Key == "" {
 				return errors.New("CoreService.Key must be specified")
 			}
 		}
 	}
 
 	if c.NodeService.Enable {
-		if len(c.NodeService.Addr) == 0 {
+		if c.NodeService.Addr == "" {
 			return errors.New("NodeService.Addr must be specified")
 		}
 
 		if c.NodeService.TLS {
-			if len(c.NodeService.CA) == 0 {
+			if c.NodeService.CA == "" {
 				return errors.New("NodeService.CA must be specified")
 			}
 
-			if len(c.NodeService.Cert) == 0 {
+			if c.NodeService.Cert == "" {
 				return errors.New("NodeService.Cert must be specified")
 			}
 
-			if len(c.NodeService.Key) == 0 {
+			if c.NodeService.Key == "" {
 				return errors.New("NodeService.Key must be specified")
 			}
 		}

@@ -41,16 +41,16 @@ func (s *SyncGlobalService) SetUpdated(ctx context.Context, in *cores.SyncGlobal
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Name")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Updated")
 		}
 	}
 
-	err = s.setUpdated(ctx, s.cs.GetDB(), in.GetName(), time.UnixMicro(in.GetUpdated()))
+	err = s.setUpdated(ctx, s.cs.GetDB(), in.Name, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, err
 	}
@@ -70,14 +70,14 @@ func (s *SyncGlobalService) GetUpdated(ctx context.Context, in *pb.Name) (*cores
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Name")
 		}
 	}
 
-	output.Name = in.GetName()
+	output.Name = in.Name
 
-	t, err := s.getUpdated(ctx, s.cs.GetDB(), in.GetName())
+	t, err := s.getUpdated(ctx, s.cs.GetDB(), in.Name)
 	if err != nil {
 		return &output, err
 	}
@@ -230,12 +230,12 @@ func (s *SyncGlobalService) waitUpdated(in *pb.Name, stream globalWaitUpdatedStr
 			return status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return status.Error(codes.InvalidArgument, "Please supply valid Name")
 		}
 	}
 
-	notify := s.Notify(in.GetName())
+	notify := s.Notify(in.Name)
 	defer notify.Close()
 
 	for {

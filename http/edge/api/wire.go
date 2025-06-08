@@ -67,13 +67,13 @@ func (s *WireService) list(ctx *gin.Context) {
 		return
 	}
 
-	items := reply.GetWire()
+	items := reply.Wires
 
 	shiftime.Wires(items)
 
 	ctx.JSON(util.Success(gin.H{
 		"items": items,
-		"total": reply.GetCount(),
+		"total": reply.Count,
 	}))
 }
 

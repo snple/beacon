@@ -123,12 +123,12 @@ func (n *Node) nodeList(ctx context.Context, client cores.NodeServiceClient, cmd
 		return time.UnixMicro(t).Format("2006-01-02 15:04:05")
 	}
 
-	for _, node := range reply.GetNode() {
+	for _, node := range reply.Nodes {
 		t.AppendRow(table.Row{node.Id, node.Name, node.Desc, node.Tags, node.Secret, node.Status, timeformatFn(node.Created), timeformatFn(node.Updated)})
 	}
 
 	// time to take a peek
-	t.SetCaption(fmt.Sprintf("Total: %d/%d Rows.", len(reply.GetNode()), reply.GetCount()))
+	t.SetCaption(fmt.Sprintf("Total: %d/%d Rows.", len(reply.Nodes), reply.Count))
 	fmt.Println(t.Render())
 }
 
@@ -223,7 +223,7 @@ func (n *Node) nodeDelete(ctx context.Context, conn *grpc.ClientConn, _ *cobra.C
 			os.Exit(1)
 		}
 
-		for _, wire := range reply.GetWire() {
+		for _, wire := range reply.Wires {
 			fmt.Printf("wire: %s, %s\n", wire.Id, wire.Name)
 
 			n.nodeDeleteWire2(ctx, conn, wire.Id)
@@ -284,7 +284,7 @@ func (n *Node) nodeDeleteWire2(ctx context.Context, conn *grpc.ClientConn, wireI
 			os.Exit(1)
 		}
 
-		for _, pin := range reply.GetPin() {
+		for _, pin := range reply.Pins {
 			fmt.Printf("pin: %s, %s\n", pin.Id, pin.Name)
 
 			n.nodeDeletePin2(ctx, conn, pin.Id)
@@ -426,7 +426,7 @@ func (n *Node) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 		Status: reply.Status,
 	}
 
-	for _, wire := range wires.GetWire() {
+	for _, wire := range wires.Wires {
 		exportWire := &ExportWire{
 			Name:   wire.Name,
 			Desc:   wire.Desc,
@@ -446,7 +446,7 @@ func (n *Node) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 			os.Exit(1)
 		}
 
-		for _, pin := range pins.GetPin() {
+		for _, pin := range pins.Pins {
 			exportPin := ExportPin{
 				Name:   pin.Name,
 				Desc:   pin.Desc,
@@ -465,7 +465,7 @@ func (n *Node) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 		exportNode.Wires = append(exportNode.Wires, *exportWire)
 	}
 
-	for _, cons := range consts.GetConst() {
+	for _, cons := range consts.Consts {
 		exportConst := ExportConst{
 			Name:   cons.Name,
 			Desc:   cons.Desc,

@@ -44,18 +44,18 @@ func (s *NodeService) Create(ctx context.Context, in *pb.Node) (*pb.Node, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
 		}
 	}
 
 	// name validation
 	{
-		if len(in.GetName()) < 2 {
+		if len(in.Name) < 2 {
 			return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
 		}
 
-		err = s.cs.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.GetName()).Scan(ctx)
+		err = s.cs.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.Name).Scan(ctx)
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -66,13 +66,13 @@ func (s *NodeService) Create(ctx context.Context, in *pb.Node) (*pb.Node, error)
 	}
 
 	item := model.Node{
-		ID:      in.GetId(),
-		Name:    in.GetName(),
-		Desc:    in.GetDesc(),
-		Tags:    in.GetTags(),
-		Secret:  in.GetSecret(),
-		Config:  in.GetConfig(),
-		Status:  in.GetStatus(),
+		ID:      in.Id,
+		Name:    in.Name,
+		Desc:    in.Desc,
+		Tags:    in.Tags,
+		Secret:  in.Secret,
+		Config:  in.Config,
+		Status:  in.Status,
 		Created: time.Now(),
 		Updated: time.Now(),
 	}
@@ -105,28 +105,28 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
 
 	// name validation
 	{
-		if len(in.GetName()) < 2 {
+		if len(in.Name) < 2 {
 			return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
 		}
 
 		modelItem := model.Node{}
-		err = s.cs.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.GetName()).Scan(ctx)
+		err = s.cs.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
 		if err != nil {
 			if err != sql.ErrNoRows {
 				return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -138,12 +138,12 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 		}
 	}
 
-	item.Name = in.GetName()
-	item.Desc = in.GetDesc()
-	item.Tags = in.GetTags()
-	item.Secret = in.GetSecret()
-	item.Config = in.GetConfig()
-	item.Status = in.GetStatus()
+	item.Name = in.Name
+	item.Desc = in.Desc
+	item.Tags = in.Tags
+	item.Secret = in.Secret
+	item.Config = in.Config
+	item.Status = in.Status
 	item.Updated = time.Now()
 
 	_, err = s.cs.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
@@ -170,12 +170,12 @@ func (s *NodeService) View(ctx context.Context, in *pb.Id) (*pb.Node, error) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -195,12 +195,12 @@ func (s *NodeService) Name(ctx context.Context, in *pb.Name) (*pb.Node, error) {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.GetName())
+	item, err := s.ViewByName(ctx, in.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -220,12 +220,12 @@ func (s *NodeService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -284,8 +284,8 @@ func (s *NodeService) List(ctx context.Context, in *cores.NodeListRequest) (*cor
 		})
 	}
 
-	if in.GetTags() != "" {
-		tagsSplit := strings.Split(in.GetTags(), ",")
+	if in.Tags != "" {
+		tagsSplit := strings.Split(in.Tags, ",")
 
 		if len(tagsSplit) == 1 {
 			search := fmt.Sprintf("%%%v%%", tagsSplit[0])
@@ -323,7 +323,7 @@ func (s *NodeService) List(ctx context.Context, in *cores.NodeListRequest) (*cor
 
 		s.copyModelToOutput(&item, &items[i])
 
-		output.Node = append(output.Node, &item)
+		output.Nodes = append(output.Nodes, &item)
 	}
 
 	return &output, nil
@@ -340,7 +340,7 @@ func (s *NodeService) Destory(ctx context.Context, in *pb.Id) (*pb.MyBool, error
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.GetId())
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -405,7 +405,7 @@ func (s *NodeService) Clone(ctx context.Context, in *pb.Id) (*pb.MyBool, error) 
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
 		}
 	}
@@ -421,7 +421,7 @@ func (s *NodeService) Clone(ctx context.Context, in *pb.Id) (*pb.MyBool, error) 
 		}
 	}()
 
-	err = s.cs.getClone().node(ctx, tx, in.GetId())
+	err = s.cs.getClone().node(ctx, tx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -526,12 +526,12 @@ func (s *NodeService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Node,
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
 		}
 	}
 
-	item, err := s.viewWithDeleted(ctx, in.GetId())
+	item, err := s.viewWithDeleted(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -569,14 +569,14 @@ func (s *NodeService) Pull(ctx context.Context, in *cores.NodePullRequest) (*cor
 		}
 	}
 
-	output.After = in.GetAfter()
-	output.Limit = in.GetLimit()
+	output.After = in.After
+	output.Limit = in.Limit
 
 	var items []model.Node
 
 	query := s.cs.GetDB().NewSelect().Model(&items)
 
-	err = query.Where("updated > ?", time.UnixMicro(in.GetAfter())).WhereAllWithDeleted().Order("updated ASC").Limit(int(in.GetLimit())).Scan(ctx)
+	err = query.Where("updated > ?", time.UnixMicro(in.After)).WhereAllWithDeleted().Order("updated ASC").Limit(int(in.Limit)).Scan(ctx)
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "Query: %v", err)
 	}
@@ -586,7 +586,7 @@ func (s *NodeService) Pull(ctx context.Context, in *cores.NodePullRequest) (*cor
 
 		s.copyModelToOutput(&item, &items[i])
 
-		output.Node = append(output.Node, &item)
+		output.Nodes = append(output.Nodes, &item)
 	}
 
 	return &output, nil
@@ -602,15 +602,15 @@ func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error)
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 		}
 
-		if in.GetId() == "" {
+		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
 		}
 
-		if in.GetName() == "" {
+		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
 		}
 
-		if in.GetUpdated() == 0 {
+		if in.Updated == 0 {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Updated")
 		}
 	}
@@ -618,7 +618,7 @@ func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error)
 	insert := false
 	update := false
 
-	item, err := s.viewWithDeleted(ctx, in.GetId())
+	item, err := s.viewWithDeleted(ctx, in.Id)
 	if err != nil {
 		if code, ok := status.FromError(err); ok {
 			if code.Code() == codes.NotFound {
@@ -638,11 +638,11 @@ SKIP:
 	if insert {
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
 			}
 
-			err = s.cs.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.cs.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -653,16 +653,16 @@ SKIP:
 		}
 
 		item := model.Node{
-			ID:      in.GetId(),
-			Name:    in.GetName(),
-			Desc:    in.GetDesc(),
-			Tags:    in.GetTags(),
-			Secret:  in.GetSecret(),
-			Config:  in.GetConfig(),
-			Status:  in.GetStatus(),
-			Created: time.UnixMicro(in.GetCreated()),
-			Updated: time.UnixMicro(in.GetUpdated()),
-			Deleted: time.UnixMicro(in.GetDeleted()),
+			ID:      in.Id,
+			Name:    in.Name,
+			Desc:    in.Desc,
+			Tags:    in.Tags,
+			Secret:  in.Secret,
+			Config:  in.Config,
+			Status:  in.Status,
+			Created: time.UnixMicro(in.Created),
+			Updated: time.UnixMicro(in.Updated),
+			Deleted: time.UnixMicro(in.Deleted),
 		}
 
 		_, err = s.cs.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -673,18 +673,18 @@ SKIP:
 
 	// update
 	if update {
-		if in.GetUpdated() <= item.Updated.UnixMicro() {
+		if in.Updated <= item.Updated.UnixMicro() {
 			return &output, nil
 		}
 
 		// name validation
 		{
-			if len(in.GetName()) < 2 {
+			if len(in.Name) < 2 {
 				return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
 			}
 
 			modelItem := model.Node{}
-			err = s.cs.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.GetName()).Scan(ctx)
+			err = s.cs.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
 			if err != nil {
 				if err != sql.ErrNoRows {
 					return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -696,14 +696,14 @@ SKIP:
 			}
 		}
 
-		item.Name = in.GetName()
-		item.Desc = in.GetDesc()
-		item.Tags = in.GetTags()
-		item.Secret = in.GetSecret()
-		item.Config = in.GetConfig()
-		item.Status = in.GetStatus()
-		item.Updated = time.UnixMicro(in.GetUpdated())
-		item.Deleted = time.UnixMicro(in.GetDeleted())
+		item.Name = in.Name
+		item.Desc = in.Desc
+		item.Tags = in.Tags
+		item.Secret = in.Secret
+		item.Config = in.Config
+		item.Status = in.Status
+		item.Updated = time.UnixMicro(in.Updated)
+		item.Deleted = time.UnixMicro(in.Deleted)
 
 		_, err = s.cs.GetDB().NewUpdate().Model(&item).WherePK().WhereAllWithDeleted().Exec(ctx)
 		if err != nil {

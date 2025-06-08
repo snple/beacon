@@ -59,15 +59,15 @@ func (s *ConstService) Update(ctx context.Context, in *pb.Const) (*pb.Const, err
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetConst().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetConst().Update(ctx, in)
@@ -94,8 +94,8 @@ func (s *ConstService) View(ctx context.Context, in *pb.Id) (*pb.Const, error) {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -117,15 +117,15 @@ func (s *ConstService) Name(ctx context.Context, in *pb.Name) (*pb.Const, error)
 		return &output, err
 	}
 
-	request := &cores.ConstNameRequest{NodeId: nodeID, Name: in.GetName()}
+	request := &cores.ConstNameRequest{NodeId: nodeID, Name: in.Name}
 
 	reply, err := s.ns.Core().GetConst().Name(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -152,8 +152,8 @@ func (s *ConstService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetConst().Delete(ctx, in)
@@ -178,7 +178,7 @@ func (s *ConstService) List(ctx context.Context, in *nodes.ConstListRequest) (*n
 	request := &cores.ConstListRequest{
 		Page:   in.GetPage(),
 		NodeId: nodeID,
-		Tags:   in.GetTags(),
+		Tags:   in.Tags,
 	}
 
 	reply, err := s.ns.Core().GetConst().List(ctx, request)
@@ -187,8 +187,8 @@ func (s *ConstService) List(ctx context.Context, in *nodes.ConstListRequest) (*n
 	}
 
 	output.Count = reply.Count
-	output.Page = reply.GetPage()
-	output.Const = reply.GetConst()
+	output.Page = reply.Page
+	output.Consts = reply.Consts
 
 	return &output, nil
 }
@@ -209,15 +209,15 @@ func (s *ConstService) GetValue(ctx context.Context, in *pb.Id) (*pb.ConstValue,
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetConst().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetConst().GetValue(ctx, in)
@@ -239,15 +239,15 @@ func (s *ConstService) SetValue(ctx context.Context, in *pb.ConstValue) (*pb.MyB
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.GetId()}
+	request := &pb.Id{Id: in.Id}
 
 	reply, err := s.ns.Core().GetConst().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return s.ns.Core().GetConst().SetValue(ctx, in)
@@ -270,15 +270,15 @@ func (s *ConstService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.Con
 	}
 
 	reply, err := s.ns.Core().GetConst().GetValueByName(ctx,
-		&cores.ConstGetValueByNameRequest{NodeId: nodeID, Name: in.GetName()})
+		&cores.ConstGetValueByNameRequest{NodeId: nodeID, Name: in.Name})
 	if err != nil {
 		return &output, err
 	}
 
-	output.Id = reply.GetId()
-	output.Name = reply.GetName()
-	output.Value = reply.GetValue()
-	output.Updated = reply.GetUpdated()
+	output.Id = reply.Id
+	output.Name = reply.Name
+	output.Value = reply.Value
+	output.Updated = reply.Updated
 
 	return &output, nil
 }
@@ -300,7 +300,7 @@ func (s *ConstService) SetValueByName(ctx context.Context, in *pb.ConstNameValue
 	}
 
 	return s.ns.Core().GetConst().SetValueByName(ctx,
-		&cores.ConstNameValue{NodeId: nodeID, Name: in.GetName(), Value: in.GetValue()})
+		&cores.ConstNameValue{NodeId: nodeID, Name: in.Name, Value: in.Value})
 }
 
 func (s *ConstService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Const, error) {
@@ -324,8 +324,8 @@ func (s *ConstService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Cons
 		return &output, err
 	}
 
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
+	if reply.NodeId != nodeID {
+		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -342,8 +342,8 @@ func (s *ConstService) Pull(ctx context.Context, in *nodes.ConstPullRequest) (*n
 		}
 	}
 
-	output.After = in.GetAfter()
-	output.Limit = in.GetLimit()
+	output.After = in.After
+	output.Limit = in.Limit
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
@@ -351,8 +351,8 @@ func (s *ConstService) Pull(ctx context.Context, in *nodes.ConstPullRequest) (*n
 	}
 
 	request := &cores.ConstPullRequest{
-		After:  in.GetAfter(),
-		Limit:  in.GetLimit(),
+		After:  in.After,
+		Limit:  in.Limit,
 		NodeId: nodeID,
 	}
 
@@ -361,7 +361,7 @@ func (s *ConstService) Pull(ctx context.Context, in *nodes.ConstPullRequest) (*n
 		return &output, err
 	}
 
-	output.Const = reply.GetConst()
+	output.Consts = reply.Consts
 
 	return &output, nil
 }
