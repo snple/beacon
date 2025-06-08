@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
 	"github.com/snple/beacon/pb/nodes"
@@ -161,10 +160,6 @@ func (s *NodeUpService) try() {
 
 	s.es.Logger().Sugar().Info("node login success")
 
-	s.NodeLink(s.ctx)
-	s.link(true)
-	defer s.link(false)
-
 	if err := s.sync(s.ctx); err != nil {
 		s.es.Logger().Sugar().Errorf("sync: %v", err)
 		time.Sleep(time.Second * 3)
@@ -219,27 +214,12 @@ func (s *NodeUpService) try() {
 	}
 }
 
-func (s *NodeUpService) IsLinked() bool {
-	return s.es.GetStatus().GetNodeLink() == consts.ON
-}
-
-func (s *NodeUpService) link(value bool) {
-	if value {
-		s.es.GetStatus().SetNodeLink(consts.ON)
-	} else {
-		s.es.GetStatus().SetNodeLink(consts.OFF)
-	}
-}
-
 func (s *NodeUpService) ticker(ctx context.Context) {
 	s.closeWG.Add(1)
 	defer s.closeWG.Done()
 
 	tokenRefreshTicker := time.NewTicker(s.es.dopts.SyncOptions.TokenRefresh)
 	defer tokenRefreshTicker.Stop()
-
-	linkStatusTicker := time.NewTicker(s.es.dopts.SyncOptions.Link)
-	defer linkStatusTicker.Stop()
 
 	syncTicker := time.NewTicker(s.es.dopts.SyncOptions.Interval)
 	defer syncTicker.Stop()
@@ -254,14 +234,6 @@ func (s *NodeUpService) ticker(ctx context.Context) {
 			if err != nil {
 				s.es.Logger().Sugar().Errorf("node login: %v", err)
 			}
-		case <-linkStatusTicker.C:
-			err := s.NodeLink(ctx)
-			if err != nil {
-				s.es.Logger().Sugar().Errorf("link node : %v", err)
-			} else {
-				s.es.Logger().Sugar().Info("link node ticker success")
-			}
-
 		case <-syncTicker.C:
 			if err := s.sync(ctx); err != nil {
 				s.es.Logger().Sugar().Errorf("sync: %v", err)
@@ -300,18 +272,6 @@ func (s *NodeUpService) SetToken(ctx context.Context) context.Context {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	return metadata.SetToken(ctx, s.token)
-}
-
-func (s *NodeUpService) NodeLink(ctx context.Context) error {
-	ctx = metadata.SetToken(ctx, s.GetToken())
-
-	request := &nodes.NodeLinkRequest{Status: consts.ON}
-	_, err := s.NodeServiceClient().Link(ctx, request)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (s *NodeUpService) login(ctx context.Context) error {

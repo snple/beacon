@@ -27,7 +27,6 @@ const (
 	WireService_NameFull_FullMethodName        = "/cores.WireService/NameFull"
 	WireService_Delete_FullMethodName          = "/cores.WireService/Delete"
 	WireService_List_FullMethodName            = "/cores.WireService/List"
-	WireService_Link_FullMethodName            = "/cores.WireService/Link"
 	WireService_Clone_FullMethodName           = "/cores.WireService/Clone"
 	WireService_ViewWithDeleted_FullMethodName = "/cores.WireService/ViewWithDeleted"
 	WireService_Pull_FullMethodName            = "/cores.WireService/Pull"
@@ -45,7 +44,6 @@ type WireServiceClient interface {
 	NameFull(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Wire, error)
 	Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 	List(ctx context.Context, in *WireListRequest, opts ...grpc.CallOption) (*WireListResponse, error)
-	Link(ctx context.Context, in *WireLinkRequest, opts ...grpc.CallOption) (*pb.MyBool, error)
 	Clone(ctx context.Context, in *WireCloneRequest, opts ...grpc.CallOption) (*pb.MyBool, error)
 	ViewWithDeleted(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Wire, error)
 	Pull(ctx context.Context, in *WirePullRequest, opts ...grpc.CallOption) (*WirePullResponse, error)
@@ -130,16 +128,6 @@ func (c *wireServiceClient) List(ctx context.Context, in *WireListRequest, opts 
 	return out, nil
 }
 
-func (c *wireServiceClient) Link(ctx context.Context, in *WireLinkRequest, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, WireService_Link_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *wireServiceClient) Clone(ctx context.Context, in *WireCloneRequest, opts ...grpc.CallOption) (*pb.MyBool, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.MyBool)
@@ -191,7 +179,6 @@ type WireServiceServer interface {
 	NameFull(context.Context, *pb.Name) (*pb.Wire, error)
 	Delete(context.Context, *pb.Id) (*pb.MyBool, error)
 	List(context.Context, *WireListRequest) (*WireListResponse, error)
-	Link(context.Context, *WireLinkRequest) (*pb.MyBool, error)
 	Clone(context.Context, *WireCloneRequest) (*pb.MyBool, error)
 	ViewWithDeleted(context.Context, *pb.Id) (*pb.Wire, error)
 	Pull(context.Context, *WirePullRequest) (*WirePullResponse, error)
@@ -226,9 +213,6 @@ func (UnimplementedWireServiceServer) Delete(context.Context, *pb.Id) (*pb.MyBoo
 }
 func (UnimplementedWireServiceServer) List(context.Context, *WireListRequest) (*WireListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
-}
-func (UnimplementedWireServiceServer) Link(context.Context, *WireLinkRequest) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Link not implemented")
 }
 func (UnimplementedWireServiceServer) Clone(context.Context, *WireCloneRequest) (*pb.MyBool, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Clone not implemented")
@@ -389,24 +373,6 @@ func _WireService_List_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WireService_Link_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WireLinkRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WireServiceServer).Link(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WireService_Link_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireServiceServer).Link(ctx, req.(*WireLinkRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _WireService_Clone_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(WireCloneRequest)
 	if err := dec(in); err != nil {
@@ -513,10 +479,6 @@ var WireService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "List",
 			Handler:    _WireService_List_Handler,
-		},
-		{
-			MethodName: "Link",
-			Handler:    _WireService_Link_Handler,
 		},
 		{
 			MethodName: "Clone",

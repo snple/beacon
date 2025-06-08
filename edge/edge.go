@@ -19,7 +19,6 @@ import (
 type EdgeService struct {
 	db       *bun.DB
 	badger   *BadgerService
-	status   *StatusService
 	sync     *SyncService
 	node     *NodeService
 	wire     *WireService
@@ -74,7 +73,6 @@ func EdgeContext(ctx context.Context, db *bun.DB, opts ...EdgeOption) (*EdgeServ
 	}
 	es.badger = badger
 
-	es.status = newStatusService(es)
 	es.sync = newSyncService(es)
 	es.node = newNodeService(es)
 	es.wire = newWireService(es)
@@ -155,10 +153,6 @@ func (es *EdgeService) GetDB() *bun.DB {
 
 func (es *EdgeService) GetBadgerDB() *badger.DB {
 	return es.badger.GetDB()
-}
-
-func (es *EdgeService) GetStatus() *StatusService {
-	return es.status
 }
 
 func (es *EdgeService) GetSync() *SyncService {

@@ -11,7 +11,6 @@ message Wire {
     string tags = 5;
     string source = 6;
     string config = 7;
-    sint32 link = 8;
     sint32 status = 9;
     int64 created = 10;
     int64 updated = 11;

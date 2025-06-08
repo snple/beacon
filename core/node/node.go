@@ -8,7 +8,6 @@ import (
 	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/cores"
 	"github.com/snple/beacon/pb/nodes"
 	"github.com/snple/beacon/util/metadata"
 	"github.com/snple/beacon/util/token"
@@ -258,27 +257,6 @@ func (s *NodeService) View(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error
 	reply.Secret = ""
 
 	return reply, err
-}
-
-func (s *NodeService) Link(ctx context.Context, in *nodes.NodeLinkRequest) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &cores.NodeLinkRequest{Id: nodeID, Status: in.Status}
-
-	return s.Core().GetNode().Link(ctx, request)
 }
 
 func (s *NodeService) ViewWithDeleted(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error) {

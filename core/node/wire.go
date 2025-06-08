@@ -194,38 +194,6 @@ func (s *WireService) List(ctx context.Context, in *nodes.WireListRequest) (*nod
 	return &output, nil
 }
 
-func (s *WireService) Link(ctx context.Context, in *nodes.WireLinkRequest) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &pb.Id{Id: in.GetId()}
-
-	reply, err := s.ns.Core().GetWire().View(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.GetNodeId() != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.GetNodeId() != nodeID")
-	}
-
-	request2 := &cores.WireLinkRequest{Id: in.GetId(), Status: in.GetStatus()}
-
-	return s.ns.Core().GetWire().Link(ctx, request2)
-}
-
 func (s *WireService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
 	var output pb.Wire
 	var err error

@@ -398,33 +398,6 @@ func (s *WireService) List(ctx context.Context, in *cores.WireListRequest) (*cor
 	return &output, nil
 }
 
-func (s *WireService) Link(ctx context.Context, in *cores.WireLinkRequest) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
-		}
-	}
-
-	item, err := s.ViewByID(ctx, in.GetId())
-	if err != nil {
-		return &output, err
-	}
-
-	s.cs.GetStatus().SetLink(item.ID, in.GetStatus())
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *WireService) Clone(ctx context.Context, in *cores.WireCloneRequest) (*pb.MyBool, error) {
 	var err error
 	var output pb.MyBool
@@ -507,7 +480,6 @@ func (s *WireService) copyModelToOutput(output *pb.Wire, item *model.Wire) {
 	output.Tags = item.Tags
 	output.Source = item.Source
 	output.Config = item.Config
-	output.Link = s.cs.GetStatus().GetLink(item.ID)
 	output.Status = item.Status
 	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()

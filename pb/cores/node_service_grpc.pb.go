@@ -26,7 +26,6 @@ const (
 	NodeService_Name_FullMethodName            = "/cores.NodeService/Name"
 	NodeService_Delete_FullMethodName          = "/cores.NodeService/Delete"
 	NodeService_List_FullMethodName            = "/cores.NodeService/List"
-	NodeService_Link_FullMethodName            = "/cores.NodeService/Link"
 	NodeService_Destory_FullMethodName         = "/cores.NodeService/Destory"
 	NodeService_Clone_FullMethodName           = "/cores.NodeService/Clone"
 	NodeService_ViewWithDeleted_FullMethodName = "/cores.NodeService/ViewWithDeleted"
@@ -44,7 +43,6 @@ type NodeServiceClient interface {
 	Name(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Node, error)
 	Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 	List(ctx context.Context, in *NodeListRequest, opts ...grpc.CallOption) (*NodeListResponse, error)
-	Link(ctx context.Context, in *NodeLinkRequest, opts ...grpc.CallOption) (*pb.MyBool, error)
 	Destory(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 	Clone(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 	ViewWithDeleted(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Node, error)
@@ -120,16 +118,6 @@ func (c *nodeServiceClient) List(ctx context.Context, in *NodeListRequest, opts 
 	return out, nil
 }
 
-func (c *nodeServiceClient) Link(ctx context.Context, in *NodeLinkRequest, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, NodeService_Link_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *nodeServiceClient) Destory(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.MyBool)
@@ -190,7 +178,6 @@ type NodeServiceServer interface {
 	Name(context.Context, *pb.Name) (*pb.Node, error)
 	Delete(context.Context, *pb.Id) (*pb.MyBool, error)
 	List(context.Context, *NodeListRequest) (*NodeListResponse, error)
-	Link(context.Context, *NodeLinkRequest) (*pb.MyBool, error)
 	Destory(context.Context, *pb.Id) (*pb.MyBool, error)
 	Clone(context.Context, *pb.Id) (*pb.MyBool, error)
 	ViewWithDeleted(context.Context, *pb.Id) (*pb.Node, error)
@@ -223,9 +210,6 @@ func (UnimplementedNodeServiceServer) Delete(context.Context, *pb.Id) (*pb.MyBoo
 }
 func (UnimplementedNodeServiceServer) List(context.Context, *NodeListRequest) (*NodeListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
-}
-func (UnimplementedNodeServiceServer) Link(context.Context, *NodeLinkRequest) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Link not implemented")
 }
 func (UnimplementedNodeServiceServer) Destory(context.Context, *pb.Id) (*pb.MyBool, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Destory not implemented")
@@ -371,24 +355,6 @@ func _NodeService_List_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NodeService_Link_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NodeLinkRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Link(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Link_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Link(ctx, req.(*NodeLinkRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _NodeService_Destory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(pb.Id)
 	if err := dec(in); err != nil {
@@ -509,10 +475,6 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "List",
 			Handler:    _NodeService_List_Handler,
-		},
-		{
-			MethodName: "Link",
-			Handler:    _NodeService_Link_Handler,
 		},
 		{
 			MethodName: "Destory",

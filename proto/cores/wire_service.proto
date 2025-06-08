@@ -25,11 +25,6 @@ message WireNameRequest {
     string name = 2;
 }
 
-message WireLinkRequest {
-    string id = 1;
-    sint32 status = 2;
-}
-
 message WireCloneRequest {
     string id = 1;
     string node_id = 2;
@@ -56,7 +51,6 @@ service WireService {
     rpc NameFull(pb.Name) returns (pb.Wire) {}
     rpc Delete(pb.Id) returns (pb.MyBool) {}
     rpc List(WireListRequest) returns (WireListResponse) {}
-    rpc Link(WireLinkRequest) returns (pb.MyBool) {}
     rpc Clone(WireCloneRequest) returns (pb.MyBool) {}
     rpc ViewWithDeleted(pb.Id) returns (pb.Wire) {}
     rpc Pull(WirePullRequest) returns (WirePullResponse) {}

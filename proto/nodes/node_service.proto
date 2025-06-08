@@ -17,11 +17,6 @@ message NodeLoginReply {
     string token = 2;
 }
 
-message NodeLinkRequest {
-    // string id = 1;
-    sint32 status = 2;
-}
-
 message NodeKeepAliveReply {
     int32 time = 1;
 }
@@ -30,7 +25,6 @@ service NodeService {
     rpc Login(NodeLoginRequest) returns (NodeLoginReply) {}
     rpc Update(pb.Node) returns (pb.Node) {}
     rpc View(pb.MyEmpty) returns (pb.Node) {}
-    rpc Link(NodeLinkRequest) returns (pb.MyBool) {}
     rpc ViewWithDeleted(pb.MyEmpty) returns (pb.Node) {}
     rpc Sync(pb.Node) returns (pb.MyBool) {}
     rpc KeepAlive(pb.MyEmpty) returns (stream NodeKeepAliveReply) {}

@@ -10,7 +10,6 @@ import (
 	"github.com/snple/beacon/edge/model"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
-	"github.com/snple/beacon/pb/nodes"
 	"github.com/snple/beacon/util"
 	"github.com/snple/types/cache"
 	"github.com/uptrace/bun"
@@ -332,40 +331,6 @@ func (s *WireService) List(ctx context.Context, in *edges.WireListRequest) (*edg
 	return &output, nil
 }
 
-func (s *WireService) Link(ctx context.Context, in *edges.WireLinkRequest) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	item, err := s.ViewByID(ctx, in.GetId())
-	if err != nil {
-		return &output, err
-	}
-
-	s.es.GetStatus().SetLink(item.ID, in.GetStatus())
-
-	{
-		if nodeUp := s.es.GetNodeUp(); nodeUp.IsSome() {
-			ctx := nodeUp.Unwrap().SetToken(context.Background())
-			request := &nodes.WireLinkRequest{Id: in.GetId(), Status: in.GetStatus()}
-			_, err := nodeUp.Unwrap().WireServiceClient().Link(ctx, request)
-			if err != nil {
-				return &output, err
-			}
-		}
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *WireService) Clone(ctx context.Context, in *edges.WireCloneRequest) (*pb.MyBool, error) {
 	var err error
 	var output pb.MyBool
@@ -449,7 +414,6 @@ func (s *WireService) copyModelToOutput(output *pb.Wire, item *model.Wire) {
 	output.Tags = item.Tags
 	output.Source = item.Source
 	output.Config = item.Config
-	output.Link = s.es.GetStatus().GetLink(item.ID)
 	output.Status = item.Status
 	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()

@@ -16,7 +16,6 @@ import (
 type CoreService struct {
 	db *bun.DB
 
-	status      *StatusService
 	sync        *SyncService
 	sync_global *SyncGlobalService
 	node        *NodeService
@@ -59,7 +58,6 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 		opt.apply(&cs.dopts)
 	}
 
-	cs.status = newStatusService(cs)
 	cs.sync = newSyncService(cs)
 	cs.sync_global = newSyncGlobalService(cs)
 	cs.node = newNodeService(cs)
@@ -87,10 +85,6 @@ func (cs *CoreService) Stop() {
 
 func (cs *CoreService) GetDB() *bun.DB {
 	return cs.db
-}
-
-func (cs *CoreService) GetStatus() *StatusService {
-	return cs.status
 }
 
 func (cs *CoreService) GetSync() *SyncService {

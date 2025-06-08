@@ -329,33 +329,6 @@ func (s *NodeService) List(ctx context.Context, in *cores.NodeListRequest) (*cor
 	return &output, nil
 }
 
-func (s *NodeService) Link(ctx context.Context, in *cores.NodeLinkRequest) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.GetId() == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
-		}
-	}
-
-	item, err := s.ViewByID(ctx, in.GetId())
-	if err != nil {
-		return &output, err
-	}
-
-	s.cs.GetStatus().SetLink(item.ID, in.GetStatus())
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *NodeService) Destory(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
 	var err error
 	var output pb.MyBool
@@ -503,7 +476,6 @@ func (s *NodeService) copyModelToOutput(output *pb.Node, item *model.Node) {
 	output.Tags = item.Tags
 	output.Secret = item.Secret
 	output.Config = item.Config
-	output.Link = s.cs.GetStatus().GetLink(item.ID)
 	output.Status = item.Status
 	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()

@@ -98,14 +98,3 @@ func WireDelete(ctx context.Context, client edges.WireServiceClient) {
 	}
 	log.Printf("Resp received: %v", reply)
 }
-
-func WireLink(ctx context.Context, client edges.WireServiceClient) {
-	request := &edges.WireLinkRequest{Id: "01800806d7aa2d9ea7486720", Status: consts.ON}
-
-	reply, err := client.Link(ctx, request)
-
-	if err != nil {
-		log.Fatalf("Error when calling grpc service: %s", err)
-	}
-	log.Printf("Resp received: %v", reply)
-}

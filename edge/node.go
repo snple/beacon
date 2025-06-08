@@ -234,7 +234,6 @@ func (s *NodeService) copyModelToOutput(output *pb.Node, item *model.Node) {
 	output.Desc = item.Desc
 	output.Tags = item.Tags
 	output.Config = item.Config
-	output.Link = s.es.GetStatus().GetNodeLink()
 	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()
 	output.Deleted = item.Updated.UnixMicro()

@@ -29,8 +29,6 @@ func (s *WireService) register(router gin.IRouter) {
 
 	group.GET("/name/:name", s.getByName)
 	group.POST("/name", s.getByNames)
-
-	group.PATCH("/link", s.link)
 }
 
 func (s *WireService) list(ctx *gin.Context) {
@@ -153,32 +151,4 @@ func (s *WireService) getByNames(ctx *gin.Context) {
 	}
 
 	ctx.JSON(util.Success(ret))
-}
-
-func (s *WireService) link(ctx *gin.Context) {
-	var params struct {
-		Id     string `json:"id"`
-		Status int    `json:"status"`
-	}
-
-	if err := ctx.Bind(&params); err != nil {
-		ctx.JSON(util.Error(400, err.Error()))
-		return
-	}
-
-	reply, err := s.as.Edge().GetWire().Link(ctx,
-		&edges.WireLinkRequest{Id: params.Id, Status: int32(params.Status)})
-	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				ctx.JSON(util.Error(404, err.Error()))
-				return
-			}
-		}
-
-		ctx.JSON(util.Error(400, err.Error()))
-		return
-	}
-
-	ctx.JSON(util.Success(reply))
 }

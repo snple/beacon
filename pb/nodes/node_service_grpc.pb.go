@@ -23,7 +23,6 @@ const (
 	NodeService_Login_FullMethodName           = "/nodes.NodeService/Login"
 	NodeService_Update_FullMethodName          = "/nodes.NodeService/Update"
 	NodeService_View_FullMethodName            = "/nodes.NodeService/View"
-	NodeService_Link_FullMethodName            = "/nodes.NodeService/Link"
 	NodeService_ViewWithDeleted_FullMethodName = "/nodes.NodeService/ViewWithDeleted"
 	NodeService_Sync_FullMethodName            = "/nodes.NodeService/Sync"
 	NodeService_KeepAlive_FullMethodName       = "/nodes.NodeService/KeepAlive"
@@ -36,7 +35,6 @@ type NodeServiceClient interface {
 	Login(ctx context.Context, in *NodeLoginRequest, opts ...grpc.CallOption) (*NodeLoginReply, error)
 	Update(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error)
 	View(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.Node, error)
-	Link(ctx context.Context, in *NodeLinkRequest, opts ...grpc.CallOption) (*pb.MyBool, error)
 	ViewWithDeleted(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.Node, error)
 	Sync(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.MyBool, error)
 	KeepAlive(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[NodeKeepAliveReply], error)
@@ -74,16 +72,6 @@ func (c *nodeServiceClient) View(ctx context.Context, in *pb.MyEmpty, opts ...gr
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.Node)
 	err := c.cc.Invoke(ctx, NodeService_View_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) Link(ctx context.Context, in *NodeLinkRequest, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, NodeService_Link_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +124,6 @@ type NodeServiceServer interface {
 	Login(context.Context, *NodeLoginRequest) (*NodeLoginReply, error)
 	Update(context.Context, *pb.Node) (*pb.Node, error)
 	View(context.Context, *pb.MyEmpty) (*pb.Node, error)
-	Link(context.Context, *NodeLinkRequest) (*pb.MyBool, error)
 	ViewWithDeleted(context.Context, *pb.MyEmpty) (*pb.Node, error)
 	Sync(context.Context, *pb.Node) (*pb.MyBool, error)
 	KeepAlive(*pb.MyEmpty, grpc.ServerStreamingServer[NodeKeepAliveReply]) error
@@ -158,9 +145,6 @@ func (UnimplementedNodeServiceServer) Update(context.Context, *pb.Node) (*pb.Nod
 }
 func (UnimplementedNodeServiceServer) View(context.Context, *pb.MyEmpty) (*pb.Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method View not implemented")
-}
-func (UnimplementedNodeServiceServer) Link(context.Context, *NodeLinkRequest) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Link not implemented")
 }
 func (UnimplementedNodeServiceServer) ViewWithDeleted(context.Context, *pb.MyEmpty) (*pb.Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ViewWithDeleted not implemented")
@@ -246,24 +230,6 @@ func _NodeService_View_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NodeService_Link_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NodeLinkRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Link(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Link_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Link(ctx, req.(*NodeLinkRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _NodeService_ViewWithDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(pb.MyEmpty)
 	if err := dec(in); err != nil {
@@ -329,10 +295,6 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "View",
 			Handler:    _NodeService_View_Handler,
-		},
-		{
-			MethodName: "Link",
-			Handler:    _NodeService_Link_Handler,
 		},
 		{
 			MethodName: "ViewWithDeleted",

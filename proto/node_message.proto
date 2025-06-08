@@ -10,9 +10,8 @@ message Node {
     string tags = 4;
     string secret = 5;
     string config = 6;
-    sint32 link = 7;
-    sint32 status = 8;
-    int64 created = 9;
-    int64 updated = 10;
-    int64 deleted = 11;
+    sint32 status = 7;
+    int64 created = 8;
+    int64 updated = 9;
+    int64 deleted = 10;
 }
