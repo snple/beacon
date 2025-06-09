@@ -202,11 +202,9 @@ func (n *Node) nodeDelete(ctx context.Context, conn *grpc.ClientConn, _ *cobra.C
 	nodeClient := cores.NewNodeServiceClient(conn)
 	wireClient := cores.NewWireServiceClient(conn)
 
-	request := &pb.Name{
+	reply, err := nodeClient.Name(ctx, &pb.Name{
 		Name: name,
-	}
-
-	reply, err := nodeClient.Name(ctx, request)
+	})
 	if err != nil {
 		n.root.logger.Error("failed to get node", zap.Error(err))
 		os.Exit(1)
