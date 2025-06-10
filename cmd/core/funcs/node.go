@@ -48,9 +48,6 @@ func (n *Node) nodeListCmd() *cobra.Command {
 		Short: "List nodes",
 		Long:  `List nodes`,
 		Run: func(cmd *cobra.Command, args []string) {
-
-			fmt.Printf("args: %v\n", args)
-
 			ctx := context.Background()
 
 			n.nodeList(ctx, cores.NewNodeServiceClient(n.root.GetConn()), cmd)
