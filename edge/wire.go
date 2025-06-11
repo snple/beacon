@@ -20,7 +20,7 @@ import (
 type WireService struct {
 	es *EdgeService
 
-	cache *cache.Cache[model.Wire]
+	cache *cache.Cache[string, model.Wire]
 
 	edges.UnimplementedWireServiceServer
 }
@@ -28,7 +28,7 @@ type WireService struct {
 func newWireService(es *EdgeService) *WireService {
 	return &WireService{
 		es:    es,
-		cache: cache.NewCache[model.Wire](nil),
+		cache: cache.NewCache[string, model.Wire](nil),
 	}
 }
 

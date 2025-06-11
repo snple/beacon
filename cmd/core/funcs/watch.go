@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
+	"github.com/snple/types/cache"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -55,12 +57,13 @@ func (w *Watch) watchPinValueCmd() *cobra.Command {
 	return watchPinValueCmd
 }
 
-func (w *Watch) watchPinValue(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Command, name string) {
+func (w *Watch) watchPinValue(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Command, name string) {
 	nodeClient := cores.NewNodeServiceClient(conn)
+	wireClient := cores.NewWireServiceClient(conn)
 	pinServiceClient := cores.NewPinServiceClient(conn)
 	syncClient := cores.NewSyncServiceClient(conn)
 
-	reply, err := nodeClient.Name(ctx, &pb.Name{
+	nodeReply, err := nodeClient.Name(ctx, &pb.Name{
 		Name: name,
 	})
 	if err != nil {
@@ -68,15 +71,15 @@ func (w *Watch) watchPinValue(ctx context.Context, conn *grpc.ClientConn, cmd *c
 		os.Exit(1)
 	}
 
-	fmt.Printf("node: %s, %s\n", reply.Id, reply.Name)
+	fmt.Printf("node: %s, %s\n", nodeReply.Id, nodeReply.Name)
 
-	pinValueUpdated, err := syncClient.GetPinValueUpdated(ctx, &pb.Id{Id: reply.Id})
+	pinValueUpdated, err := syncClient.GetPinValueUpdated(ctx, &pb.Id{Id: nodeReply.Id})
 	if err != nil {
 		w.root.logger.Error("failed to get pin value updated", zap.Error(err))
 		os.Exit(1)
 	}
 
-	stream, err := syncClient.WaitPinValueUpdated(ctx, &pb.Id{Id: reply.Id})
+	stream, err := syncClient.WaitPinValueUpdated(ctx, &pb.Id{Id: nodeReply.Id})
 	if err != nil {
 		w.root.logger.Error("failed to watch pin value", zap.Error(err))
 		os.Exit(1)
@@ -84,6 +87,33 @@ func (w *Watch) watchPinValue(ctx context.Context, conn *grpc.ClientConn, cmd *c
 
 	after := pinValueUpdated.Updated
 	limit := uint32(100)
+
+	type pinCacheKey struct {
+		wireId string
+		pinId  string
+	}
+
+	type pinCacheValue struct {
+		wireName string
+		pinName  string
+		pinDesc  string
+	}
+
+	pinCache := cache.NewCache(func(ctx context.Context, key pinCacheKey) (pinCacheValue, time.Duration, error) {
+		wireReply, err := wireClient.View(ctx, &pb.Id{Id: key.wireId})
+		if err != nil {
+			return pinCacheValue{}, 0, err
+		}
+
+		pinReply, err := pinServiceClient.View(ctx, &pb.Id{Id: key.pinId})
+		if err != nil {
+			return pinCacheValue{}, 0, err
+		}
+
+		return pinCacheValue{wireName: wireReply.Name, pinName: pinReply.Name, pinDesc: pinReply.Desc}, time.Second * 60 * 3, nil
+	})
+
+	_ = pinCache
 
 	for {
 		_, err := stream.Recv()
@@ -99,10 +129,20 @@ func (w *Watch) watchPinValue(ctx context.Context, conn *grpc.ClientConn, cmd *c
 				os.Exit(1)
 			}
 
-			for _, remote := range remotes.Pins {
-				fmt.Printf("pin value: %s\n", remote)
+			for _, pin := range remotes.Pins {
+				after = pin.Updated
 
-				after = remote.Updated
+				option, err := pinCache.GetWithMiss(ctx, pinCacheKey{wireId: pin.WireId, pinId: pin.Id})
+				if err != nil {
+					w.root.logger.Error("failed to get pin cache", zap.Error(err))
+					os.Exit(1)
+				}
+
+				if option.IsSome() {
+					pinCacheValue := option.Unwrap()
+
+					fmt.Printf("name: %s.%s.%s, desc: %s, value: %s\n", nodeReply.Name, pinCacheValue.wireName, pinCacheValue.pinName, pinCacheValue.pinDesc, pin.Value)
+				}
 			}
 
 			if len(remotes.Pins) < int(limit) {

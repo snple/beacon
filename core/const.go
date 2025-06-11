@@ -22,7 +22,7 @@ import (
 type ConstService struct {
 	cs *CoreService
 
-	cache *cache.Cache[model.Const]
+	cache *cache.Cache[string, model.Const]
 
 	cores.UnimplementedConstServiceServer
 }
@@ -30,7 +30,7 @@ type ConstService struct {
 func newConstService(cs *CoreService) *ConstService {
 	return &ConstService{
 		cs:    cs,
-		cache: cache.NewCache[model.Const](nil),
+		cache: cache.NewCache[string, model.Const](nil),
 	}
 }
 

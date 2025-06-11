@@ -21,7 +21,7 @@ import (
 type WireService struct {
 	cs *CoreService
 
-	cache *cache.Cache[model.Wire]
+	cache *cache.Cache[string, model.Wire]
 
 	cores.UnimplementedWireServiceServer
 }
@@ -29,7 +29,7 @@ type WireService struct {
 func newWireService(cs *CoreService) *WireService {
 	return &WireService{
 		cs:    cs,
-		cache: cache.NewCache[model.Wire](nil),
+		cache: cache.NewCache[string, model.Wire](nil),
 	}
 }
 

@@ -22,7 +22,7 @@ import (
 type PinService struct {
 	cs *CoreService
 
-	cache *cache.Cache[model.Pin]
+	cache *cache.Cache[string, model.Pin]
 
 	cores.UnimplementedPinServiceServer
 }
@@ -30,7 +30,7 @@ type PinService struct {
 func newPinService(cs *CoreService) *PinService {
 	return &PinService{
 		cs:    cs,
-		cache: cache.NewCache[model.Pin](nil),
+		cache: cache.NewCache[string, model.Pin](nil),
 	}
 }
 

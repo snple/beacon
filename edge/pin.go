@@ -26,7 +26,7 @@ import (
 type PinService struct {
 	es *EdgeService
 
-	cache *cache.Cache[model.Pin]
+	cache *cache.Cache[string, model.Pin]
 
 	edges.UnimplementedPinServiceServer
 }
@@ -34,7 +34,7 @@ type PinService struct {
 func newPinService(es *EdgeService) *PinService {
 	return &PinService{
 		es:    es,
-		cache: cache.NewCache[model.Pin](nil),
+		cache: cache.NewCache[string, model.Pin](nil),
 	}
 }
 

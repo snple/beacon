@@ -20,7 +20,7 @@ import (
 type NodeService struct {
 	cs *CoreService
 
-	cache *cache.Cache[model.Node]
+	cache *cache.Cache[string, model.Node]
 
 	cores.UnimplementedNodeServiceServer
 }
@@ -28,7 +28,7 @@ type NodeService struct {
 func newNodeService(cs *CoreService) *NodeService {
 	s := &NodeService{
 		cs:    cs,
-		cache: cache.NewCache[model.Node](nil),
+		cache: cache.NewCache[string, model.Node](nil),
 	}
 
 	return s
