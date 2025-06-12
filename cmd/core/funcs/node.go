@@ -536,11 +536,9 @@ func (n *Node) nodeImport(ctx context.Context, conn *grpc.ClientConn, _ *cobra.C
 		os.Exit(1)
 	}
 
-	request := &pb.Name{
+	nodeReply, err := nodeClient.Name(ctx, &pb.Name{
 		Name: importNode.Name,
-	}
-
-	reply, err := nodeClient.Name(ctx, request)
+	})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			n.nodeImportCreateNode(ctx, conn, importNode)
@@ -549,7 +547,7 @@ func (n *Node) nodeImport(ctx context.Context, conn *grpc.ClientConn, _ *cobra.C
 			os.Exit(1)
 		}
 	} else {
-		n.nodeImportUpdateNode(ctx, conn, reply, importNode)
+		n.nodeImportUpdateNode(ctx, conn, nodeReply, importNode)
 	}
 }
 

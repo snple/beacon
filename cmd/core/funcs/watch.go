@@ -113,8 +113,6 @@ func (w *Watch) watchPinValue(ctx context.Context, conn *grpc.ClientConn, _ *cob
 		return pinCacheValue{wireName: wireReply.Name, pinName: pinReply.Name, pinDesc: pinReply.Desc}, time.Second * 60 * 3, nil
 	})
 
-	_ = pinCache
-
 	for {
 		_, err := stream.Recv()
 		if err != nil {

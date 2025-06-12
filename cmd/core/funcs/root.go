@@ -63,6 +63,7 @@ func (r *Root) init() {
 	r.rootCmd.AddCommand(r.versionCmd())
 	r.rootCmd.AddCommand(nodeCmd(r))
 	r.rootCmd.AddCommand(wireCmd(r))
+	r.rootCmd.AddCommand(pinCmd(r))
 	r.rootCmd.AddCommand(watchCmd(r))
 
 	viper.BindPFlag("debug", r.rootCmd.PersistentFlags().Lookup("debug"))
