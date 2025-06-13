@@ -27,7 +27,7 @@ func watchCmd(root *Root) *cobra.Command {
 	watchCmd := &cobra.Command{
 		Use:   "watch",
 		Short: "Watch node, wire, pin, and const",
-		Long:  `Watch node, wire, pin, and const`,
+		Long:  "Watch node, wire, pin, and const",
 	}
 
 	watchCmd.AddCommand(watch.watchPinValueCmd())
@@ -37,9 +37,9 @@ func watchCmd(root *Root) *cobra.Command {
 
 func (w *Watch) watchPinValueCmd() *cobra.Command {
 	watchPinValueCmd := &cobra.Command{
-		Use:   "pin-value",
+		Use:   "pin-value [name]",
 		Short: "Watch pin value",
-		Long:  `Watch node`,
+		Long:  "Watch pin value",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cobra.ExactArgs(1)(cmd, args) != nil {
 				return errors.New("must provide a node name")

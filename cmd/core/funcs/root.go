@@ -73,7 +73,6 @@ func (r *Root) init() {
 	viper.BindPFlag("key", r.rootCmd.PersistentFlags().Lookup("key"))
 	viper.BindPFlag("server_name", r.rootCmd.PersistentFlags().Lookup("server_name"))
 	viper.BindPFlag("insecure", r.rootCmd.PersistentFlags().Lookup("insecure"))
-
 }
 
 func (r *Root) versionCmd() *cobra.Command {

@@ -2,7 +2,6 @@ package funcs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -27,7 +26,7 @@ func wireCmd(root *Root) *cobra.Command {
 	wireCmd := &cobra.Command{
 		Use:   "wire",
 		Short: "Manage wires",
-		Long:  `Manage wires`,
+		Long:  "Manage wires",
 	}
 
 	wireCmd.AddCommand(wire.wireListCmd())
@@ -38,31 +37,27 @@ func (w *Wire) wireListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List wires",
-		Long:  `List wires`,
-		Args: func(cmd *cobra.Command, args []string) error {
-			if cobra.ExactArgs(1)(cmd, args) != nil {
-				return errors.New("must provide a node name")
-			}
-
-			return nil
-		},
+		Long:  "List wires",
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := context.Background()
 
-			w.wireList(ctx, w.root.GetConn(), cmd, args[0])
+			w.wireList(ctx, w.root.GetConn(), cmd)
 		},
 	}
 
-	cmd.PersistentFlags().Int("limit", 10, "limit")
-	cmd.PersistentFlags().Int("offset", 0, "offset")
-	cmd.PersistentFlags().String("order_by", "", "order by")
-	cmd.PersistentFlags().String("search", "", "search")
-	cmd.PersistentFlags().String("tags", "", "tags")
+	cmd.Flags().Int("limit", 10, "limit")
+	cmd.Flags().Int("offset", 0, "offset")
+	cmd.Flags().String("order_by", "", "order by")
+	cmd.Flags().String("search", "", "search")
+	cmd.Flags().String("tags", "", "tags")
+
+	cmd.Flags().StringP("node", "n", "", "node name")
+	cmd.MarkFlagRequired("node")
 
 	return cmd
 }
 
-func (w *Wire) wireList(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Command, name string) {
+func (w *Wire) wireList(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Command) {
 	limit, err := cmd.Flags().GetInt("limit")
 	if err != nil {
 		w.root.logger.Error("failed to get limit", zap.Error(err))
@@ -93,6 +88,12 @@ func (w *Wire) wireList(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.C
 		os.Exit(1)
 	}
 
+	nodeName, err := cmd.Flags().GetString("node")
+	if err != nil {
+		w.root.logger.Error("failed to get node name", zap.Error(err))
+		os.Exit(1)
+	}
+
 	page := pb.Page{
 		Limit:   uint32(limit),
 		Offset:  uint32(offset),
@@ -104,7 +105,7 @@ func (w *Wire) wireList(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.C
 	wireClient := cores.NewWireServiceClient(conn)
 
 	nodeReply, err := nodeClient.Name(ctx, &pb.Name{
-		Name: name,
+		Name: nodeName,
 	})
 	if err != nil {
 		w.root.logger.Error("failed to get node", zap.Error(err))
@@ -132,7 +133,7 @@ func (w *Wire) wireList(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.C
 	}
 
 	for _, wire := range wireReply.Wires {
-		t.AppendRow(table.Row{wire.Id, wire.Name, wire.Desc, wire.Tags, wire.Source, wire.Status, timeformatFn(wire.Created), timeformatFn(wire.Updated)})
+		t.AppendRow(table.Row{wire.Id, fmt.Sprintf("%s.%s", nodeName, wire.Name), wire.Desc, wire.Tags, wire.Source, wire.Status, timeformatFn(wire.Created), timeformatFn(wire.Updated)})
 	}
 
 	// time to take a peek

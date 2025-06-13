@@ -30,7 +30,7 @@ func nodeCmd(root *Root) *cobra.Command {
 	nodeCmd := &cobra.Command{
 		Use:   "node",
 		Short: "Manage nodes",
-		Long:  `Manage nodes`,
+		Long:  "Manage nodes",
 	}
 
 	nodeCmd.AddCommand(node.nodeListCmd())
@@ -46,7 +46,7 @@ func (n *Node) nodeListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List nodes",
-		Long:  `List nodes`,
+		Long:  "List nodes",
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := context.Background()
 
@@ -54,11 +54,11 @@ func (n *Node) nodeListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.PersistentFlags().Int("limit", 10, "limit")
-	cmd.PersistentFlags().Int("offset", 0, "offset")
-	cmd.PersistentFlags().String("order_by", "", "order by")
-	cmd.PersistentFlags().String("search", "", "search")
-	cmd.PersistentFlags().String("tags", "", "tags")
+	cmd.Flags().Int("limit", 10, "limit")
+	cmd.Flags().Int("offset", 0, "offset")
+	cmd.Flags().String("order_by", "", "order by")
+	cmd.Flags().String("search", "", "search")
+	cmd.Flags().String("tags", "", "tags")
 
 	return cmd
 }
@@ -133,7 +133,7 @@ func (n *Node) nodeDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete [name]",
 		Short: "Delete a node",
-		Long:  `Delete a node`,
+		Long:  "Delete a node",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cobra.ExactArgs(1)(cmd, args) != nil {
 				return errors.New("must provide a node name")
@@ -155,7 +155,7 @@ func (n *Node) nodeDeleteWireCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete-wire [name]",
 		Short: "Delete a wire",
-		Long:  `Delete a wire`,
+		Long:  "Delete a wire",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cobra.ExactArgs(1)(cmd, args) != nil {
 				return errors.New("must provide a wire name")
@@ -177,7 +177,7 @@ func (n *Node) nodeDeletePinCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete-pin [name]",
 		Short: "Delete a pin",
-		Long:  `Delete a pin`,
+		Long:  "Delete a pin",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cobra.ExactArgs(1)(cmd, args) != nil {
 				return errors.New("must provide a pin name")
@@ -358,7 +358,7 @@ func (n *Node) nodeExportCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export [name]",
 		Short: "Export a node",
-		Long:  `Export a node`,
+		Long:  "Export a node",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cobra.ExactArgs(1)(cmd, args) != nil {
 				return errors.New("must provide a node name")
@@ -373,8 +373,7 @@ func (n *Node) nodeExportCmd() *cobra.Command {
 		},
 	}
 
-	cmd.PersistentFlags().StringP("output", "o", "", "output")
-	cmd.PersistentFlags().Bool("ignore-id", false, "ignore id")
+	cmd.Flags().StringP("output", "o", "", "output")
 
 	return cmd
 }
@@ -501,7 +500,7 @@ func (n *Node) nodeImportCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "import [file]",
 		Short: "Import a node",
-		Long:  `Import a node`,
+		Long:  "Import a node",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cobra.ExactArgs(1)(cmd, args) != nil {
 				return errors.New("must provide a file")
