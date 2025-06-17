@@ -30,12 +30,12 @@ func watchCmd(root *Root) *cobra.Command {
 		Long:  "Watch node, wire, pin, and const",
 	}
 
-	watchCmd.AddCommand(watch.watchPinValueCmd())
+	watchCmd.AddCommand(watch.pinValueCmd())
 
 	return watchCmd
 }
 
-func (w *Watch) watchPinValueCmd() *cobra.Command {
+func (w *Watch) pinValueCmd() *cobra.Command {
 	watchPinValueCmd := &cobra.Command{
 		Use:   "pin-value [name]",
 		Short: "Watch pin value",
@@ -50,14 +50,14 @@ func (w *Watch) watchPinValueCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := context.Background()
 
-			w.watchPinValue(ctx, w.root.GetConn(), cmd, args[0])
+			w.pinValue(ctx, w.root.GetConn(), cmd, args[0])
 		},
 	}
 
 	return watchPinValueCmd
 }
 
-func (w *Watch) watchPinValue(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Command, name string) {
+func (w *Watch) pinValue(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Command, name string) {
 	nodeClient := cores.NewNodeServiceClient(conn)
 	wireClient := cores.NewWireServiceClient(conn)
 	pinServiceClient := cores.NewPinServiceClient(conn)

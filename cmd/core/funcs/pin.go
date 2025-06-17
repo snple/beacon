@@ -30,7 +30,7 @@ func pinCmd(root *Root) *cobra.Command {
 		Long:  "Pin",
 	}
 
-	pinCmd.AddCommand(pin.pinListCmd())
+	pinCmd.AddCommand(pin.listCmd())
 	pinCmd.AddCommand(pin.getValueCmd())
 	pinCmd.AddCommand(pin.setValueCmd())
 	pinCmd.AddCommand(pin.getWriteCmd())
@@ -39,7 +39,7 @@ func pinCmd(root *Root) *cobra.Command {
 	return pinCmd
 }
 
-func (p *Pin) pinListCmd() *cobra.Command {
+func (p *Pin) listCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List pins",
@@ -47,7 +47,7 @@ func (p *Pin) pinListCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := context.Background()
 
-			p.pinList(ctx, p.root.GetConn(), cmd)
+			p.list(ctx, p.root.GetConn(), cmd)
 		},
 	}
 
@@ -63,7 +63,7 @@ func (p *Pin) pinListCmd() *cobra.Command {
 	return cmd
 }
 
-func (p *Pin) pinList(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Command) {
+func (p *Pin) list(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Command) {
 	nodeClient := cores.NewNodeServiceClient(conn)
 	wireClient := cores.NewWireServiceClient(conn)
 	pinClient := cores.NewPinServiceClient(conn)
@@ -215,7 +215,7 @@ func (p *Pin) getValueCmd() *cobra.Command {
 		},
 	}
 
-	cmd.PersistentFlags().StringP("node", "n", "", "node name")
+	cmd.Flags().StringP("node", "n", "", "node name")
 
 	return cmd
 }
@@ -290,7 +290,7 @@ func (p *Pin) setValueCmd() *cobra.Command {
 		},
 	}
 
-	cmd.PersistentFlags().StringP("node", "n", "", "node name")
+	cmd.Flags().StringP("node", "n", "", "node name")
 
 	return cmd
 }
@@ -366,7 +366,7 @@ func (p *Pin) getWriteCmd() *cobra.Command {
 		},
 	}
 
-	cmd.PersistentFlags().StringP("node", "n", "", "node name")
+	cmd.Flags().StringP("node", "n", "", "node name")
 
 	return cmd
 }
@@ -441,7 +441,7 @@ func (p *Pin) setWriteCmd() *cobra.Command {
 		},
 	}
 
-	cmd.PersistentFlags().StringP("node", "n", "", "node name")
+	cmd.Flags().StringP("node", "n", "", "node name")
 
 	return cmd
 }

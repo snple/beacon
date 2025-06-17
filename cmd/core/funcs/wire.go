@@ -29,11 +29,11 @@ func wireCmd(root *Root) *cobra.Command {
 		Long:  "Manage wires",
 	}
 
-	wireCmd.AddCommand(wire.wireListCmd())
+	wireCmd.AddCommand(wire.listCmd())
 	return wireCmd
 }
 
-func (w *Wire) wireListCmd() *cobra.Command {
+func (w *Wire) listCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List wires",
