@@ -31,6 +31,7 @@ func watchCmd(root *Root) *cobra.Command {
 	}
 
 	watchCmd.AddCommand(watch.pinValueCmd())
+	watchCmd.AddCommand(watch.pinWriteCmd())
 
 	return watchCmd
 }
@@ -124,6 +125,121 @@ func (w *Watch) pinValue(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Co
 			remotes, err := pinServiceClient.PullValue(ctx, &cores.PinPullValueRequest{After: after, Limit: limit})
 			if err != nil {
 				w.root.logger.Error("failed to pull pin value", zap.Error(err))
+				os.Exit(1)
+			}
+
+			for _, pin := range remotes.Pins {
+				after = pin.Updated
+
+				option, err := pinCache.GetWithMiss(ctx, pinCacheKey{wireId: pin.WireId, pinId: pin.Id})
+				if err != nil {
+					w.root.logger.Error("failed to get pin cache", zap.Error(err))
+					os.Exit(1)
+				}
+
+				if option.IsSome() {
+					pinCacheValue := option.Unwrap()
+
+					fmt.Printf("name: %s.%s.%s, desc: %s, value: %s\n", nodeReply.Name, pinCacheValue.wireName, pinCacheValue.pinName, pinCacheValue.pinDesc, pin.Value)
+				}
+			}
+
+			if len(remotes.Pins) < int(limit) {
+				break
+			}
+		}
+	}
+}
+
+func (w *Watch) pinWriteCmd() *cobra.Command {
+	watchPinWriteCmd := &cobra.Command{
+		Use:   "pin-write [name]",
+		Short: "Watch pin write",
+		Long:  "Watch pin write",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cobra.ExactArgs(1)(cmd, args) != nil {
+				return errors.New("must provide a node name")
+			}
+
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+
+			w.pinWrite(ctx, w.root.GetConn(), cmd, args[0])
+		},
+	}
+
+	return watchPinWriteCmd
+}
+
+func (w *Watch) pinWrite(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Command, name string) {
+	nodeClient := cores.NewNodeServiceClient(conn)
+	wireClient := cores.NewWireServiceClient(conn)
+	pinServiceClient := cores.NewPinServiceClient(conn)
+	syncClient := cores.NewSyncServiceClient(conn)
+
+	nodeReply, err := nodeClient.Name(ctx, &pb.Name{
+		Name: name,
+	})
+	if err != nil {
+		w.root.logger.Error("failed to get node", zap.Error(err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("node: %s, %s\n", nodeReply.Id, nodeReply.Name)
+
+	pinWriteUpdated, err := syncClient.GetPinWriteUpdated(ctx, &pb.Id{Id: nodeReply.Id})
+	if err != nil {
+		w.root.logger.Error("failed to get pin write updated", zap.Error(err))
+		os.Exit(1)
+	}
+
+	stream, err := syncClient.WaitPinWriteUpdated(ctx, &pb.Id{Id: nodeReply.Id})
+	if err != nil {
+		w.root.logger.Error("failed to watch pin write", zap.Error(err))
+		os.Exit(1)
+	}
+
+	after := pinWriteUpdated.Updated
+	limit := uint32(100)
+
+	type pinCacheKey struct {
+		wireId string
+		pinId  string
+	}
+
+	type pinCacheValue struct {
+		wireName string
+		pinName  string
+		pinDesc  string
+	}
+
+	pinCache := cache.NewCache(func(ctx context.Context, key pinCacheKey) (pinCacheValue, time.Duration, error) {
+		wireReply, err := wireClient.View(ctx, &pb.Id{Id: key.wireId})
+		if err != nil {
+			return pinCacheValue{}, 0, err
+		}
+
+		pinReply, err := pinServiceClient.View(ctx, &pb.Id{Id: key.pinId})
+		if err != nil {
+			return pinCacheValue{}, 0, err
+		}
+
+		return pinCacheValue{wireName: wireReply.Name, pinName: pinReply.Name, pinDesc: pinReply.Desc}, time.Second * 60 * 3, nil
+	})
+
+	for {
+		_, err := stream.Recv()
+		if err != nil {
+			w.root.logger.Error("failed to receive pin write", zap.Error(err))
+			os.Exit(1)
+		}
+
+		for {
+			remotes, err := pinServiceClient.PullWrite(ctx, &cores.PinPullValueRequest{After: after, Limit: limit})
+			if err != nil {
+				w.root.logger.Error("failed to pull pin write", zap.Error(err))
 				os.Exit(1)
 			}
 
