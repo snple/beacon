@@ -117,8 +117,8 @@ func (r *Root) initConfig() {
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
-		r.logger.Error("failed to read config file", zap.Error(err))
-		os.Exit(1)
+		r.logger.Warn("failed to read config file", zap.Error(err))
+		return
 	}
 
 	r.logger.Debug("Using config file", zap.String("file", viper.ConfigFileUsed()))

@@ -27,7 +27,7 @@ func (s *PinService) register(router gin.IRouter) {
 
 	group.GET("/:id", s.getById)
 	group.GET("/:id/value", s.getValueById)
-	group.PATCH("/:id/value", s.setValueById)
+	group.PUT("/:id/value", s.setValueById)
 
 	group.GET("/name/:name", s.getByName)
 	group.POST("/names", s.getByNames)
