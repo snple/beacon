@@ -6,6 +6,7 @@ import (
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 	"github.com/snple/beacon/pb/nodes"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -115,59 +116,35 @@ func (s *WireService) List(ctx context.Context, in *nodes.WireListRequest) (*nod
 	return &output, nil
 }
 
-func (s *WireService) Pull(ctx context.Context, in *nodes.WirePullRequest) (*nodes.WirePullResponse, error) {
-	var err error
-	var output nodes.WirePullResponse
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	output.After = in.After
-	output.Limit = in.Limit
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &cores.WirePullRequest{
-		After:  in.After,
-		Limit:  in.Limit,
-		NodeId: nodeID,
-		Source: in.Source,
-	}
-
-	reply, err := s.ns.Core().GetWire().Pull(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Wires = reply.Wires
-
-	return &output, nil
+// wirePushStreamWrapper 包装 node 端的流以添加 NodeID 并转发到 Core
+type wirePushStreamWrapper struct {
+	grpc.ClientStreamingServer[pb.Wire, pb.MyBool]
+	nodeID string
 }
 
-func (s *WireService) Sync(ctx context.Context, in *pb.Wire) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+func (w *wirePushStreamWrapper) Recv() (*pb.Wire, error) {
+	in, err := w.ClientStreamingServer.Recv()
+	if err != nil {
+		return nil, err
 	}
+	in.NodeId = w.nodeID
+	return in, nil
+}
+
+func (s *WireService) Push(stream grpc.ClientStreamingServer[pb.Wire, pb.MyBool]) error {
+	ctx := stream.Context()
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
-		return &output, err
+		return err
 	}
 
-	in.NodeId = nodeID
+	// 创建包装器流，自动添加 NodeID
+	wrapper := &wirePushStreamWrapper{
+		ClientStreamingServer: stream,
+		nodeID:                nodeID,
+	}
 
-	return s.ns.Core().GetWire().Sync(ctx, in)
+	// 直接调用 Core 的 Push 方法
+	return s.ns.Core().GetWire().Push(wrapper)
 }

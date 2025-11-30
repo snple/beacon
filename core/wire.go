@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/snple/beacon/pb/cores"
 	"github.com/snple/types/cache"
 	"github.com/uptrace/bun"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -293,115 +295,39 @@ func (s *WireService) afterDelete(ctx context.Context, item *model.Wire) error {
 	return nil
 }
 
-// sync
+// Push 接收 stream 数据并插入 Wire
+func (s *WireService) Push(stream grpc.ClientStreamingServer[pb.Wire, pb.MyBool]) error {
+	ctx := stream.Context()
 
-func (s *WireService) Pull(ctx context.Context, in *cores.WirePullRequest) (*cores.WirePullResponse, error) {
-	var err error
-	var output cores.WirePullResponse
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	output.After = in.After
-	output.Limit = in.Limit
-
-	var items []model.Wire
-
-	query := s.cs.GetDB().NewSelect().Model(&items)
-
-	if in.NodeId != "" {
-		query.Where("node_id = ?", in.NodeId)
-	}
-
-	if in.Source != "" {
-		query.Where(`source = ?`, in.Source)
-	}
-
-	err = query.Where("updated > ?", time.UnixMicro(in.After)).WhereAllWithDeleted().Order("updated ASC").Limit(int(in.Limit)).Scan(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	for i := range items {
-		item := pb.Wire{}
-
-		s.copyModelToOutput(&item, &items[i])
-
-		output.Wires = append(output.Wires, &item)
-	}
-
-	return &output, nil
-}
-
-func (s *WireService) Sync(ctx context.Context, in *pb.Wire) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
+	for {
+		in, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return stream.SendAndClose(&pb.MyBool{Bool: true})
+			}
+			return err
 		}
 
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
-		}
+		// basic validation
+		{
+			if in.Id == "" {
+				return status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
+			}
 
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
-		}
+			if in.NodeId == "" {
+				return status.Error(codes.InvalidArgument, "Please supply valid Wire.NodeId")
+			}
 
-		if in.Updated == 0 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Updated")
-		}
-	}
-
-	insert := false
-	update := false
-
-	item, err := s.ViewByID(ctx, in.Id)
-	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				insert = true
-				goto SKIP
+			if in.Name == "" {
+				return status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
 			}
 		}
 
-		return &output, err
-	}
-
-	update = true
-
-SKIP:
-
-	// insert
-	if insert {
 		// node validation
 		{
 			_, err = s.cs.GetNode().ViewByID(ctx, in.NodeId)
 			if err != nil {
-				return &output, err
-			}
-		}
-
-		// name validation
-		{
-			if len(in.Name) < 2 {
-				return &output, status.Error(codes.InvalidArgument, "Wire.Name min 2 character")
-			}
-
-			err = s.cs.GetDB().NewSelect().Model(&model.Wire{}).Where("node_id = ?", in.NodeId).Where("name = ?", in.Name).Scan(ctx)
-			if err != nil {
-				if err != sql.ErrNoRows {
-					return &output, status.Errorf(codes.Internal, "Query: %v", err)
-				}
-			} else {
-				return &output, status.Error(codes.AlreadyExists, "Wire.Name must be unique")
+				return err
 			}
 		}
 
@@ -415,56 +341,9 @@ SKIP:
 
 		_, err = s.cs.GetDB().NewInsert().Model(&item).Exec(ctx)
 		if err != nil {
-			return &output, status.Errorf(codes.Internal, "Insert: %v", err)
+			return status.Errorf(codes.Internal, "Insert: %v", err)
 		}
 	}
-
-	// update
-	if update {
-		if in.NodeId != item.NodeID {
-			return &output, status.Error(codes.NotFound, "Query: in.NodeId != item.NodeID")
-		}
-
-		if in.Updated <= item.Updated.UnixMicro() {
-			return &output, nil
-		}
-
-		// name validation
-		{
-			if len(in.Name) < 2 {
-				return &output, status.Error(codes.InvalidArgument, "Wire.Name min 2 character")
-			}
-
-			modelItem := model.Wire{}
-			err = s.cs.GetDB().NewSelect().Model(&modelItem).Where("node_id = ?", item.NodeID).Where("name = ?", in.Name).Scan(ctx)
-			if err != nil {
-				if err != sql.ErrNoRows {
-					return &output, status.Errorf(codes.Internal, "Query: %v", err)
-				}
-			} else {
-				if modelItem.ID != item.ID {
-					return &output, status.Error(codes.AlreadyExists, "Wire.Name must be unique")
-				}
-			}
-		}
-
-		item.Name = in.Name
-		item.Clusters = in.Clusters
-		item.Updated = time.UnixMicro(in.Updated)
-
-		_, err = s.cs.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
-		if err != nil {
-			return &output, status.Errorf(codes.Internal, "Update: %v", err)
-		}
-	}
-
-	if err = s.afterUpdate(ctx, &item); err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
 }
 
 // cache

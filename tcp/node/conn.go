@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -14,8 +13,6 @@ import (
 	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
-	"github.com/snple/types/cache"
-	"go.uber.org/zap"
 )
 
 type Conn struct {
@@ -317,103 +314,103 @@ func NewWatchEvent(conn *Conn, notifyType core.NotifyType, pinNames nson.Array) 
 		values:     nson.Map{},
 	}
 
-	go w.watch()
+	// go w.watch()
 
 	return w
 }
 
-func (w *WatchEvent) watch() {
-	w.conn.closeWG.Add(1)
-	defer w.conn.closeWG.Done()
+// func (w *WatchEvent) watch() {
+// 	w.conn.closeWG.Add(1)
+// 	defer w.conn.closeWG.Done()
 
-	notify := w.conn.ns.Core().GetSync().Notify(w.conn.id, w.notifyType)
-	defer notify.Close()
+// 	notify := w.conn.ns.Core().GetSync().Notify(w.conn.id, w.notifyType)
+// 	defer notify.Close()
 
-	after := int64(0)
-	limit := uint32(100)
+// 	after := int64(0)
+// 	limit := uint32(100)
 
-	type pinCacheKey struct {
-		wireId string
-		pinId  string
-	}
+// 	type pinCacheKey struct {
+// 		wireId string
+// 		pinId  string
+// 	}
 
-	type pinCacheValue struct {
-		wireName string
-		pinName  string
-		pinType  string
-	}
+// 	type pinCacheValue struct {
+// 		wireName string
+// 		pinName  string
+// 		pinType  string
+// 	}
 
-	pinCache := cache.NewCache(func(ctx context.Context, key pinCacheKey) (pinCacheValue, time.Duration, error) {
-		wireReply, err := w.conn.ns.Core().GetWire().View(ctx, &pb.Id{Id: key.wireId})
-		if err != nil {
-			return pinCacheValue{}, 0, err
-		}
+// 	pinCache := cache.NewCache(func(ctx context.Context, key pinCacheKey) (pinCacheValue, time.Duration, error) {
+// 		wireReply, err := w.conn.ns.Core().GetWire().View(ctx, &pb.Id{Id: key.wireId})
+// 		if err != nil {
+// 			return pinCacheValue{}, 0, err
+// 		}
 
-		pinReply, err := w.conn.ns.Core().GetPin().View(ctx, &pb.Id{Id: key.pinId})
-		if err != nil {
-			return pinCacheValue{}, 0, err
-		}
+// 		pinReply, err := w.conn.ns.Core().GetPin().View(ctx, &pb.Id{Id: key.pinId})
+// 		if err != nil {
+// 			return pinCacheValue{}, 0, err
+// 		}
 
-		return pinCacheValue{
-			wireName: wireReply.Name,
-			pinName:  pinReply.Name,
-			pinType:  pinReply.Type,
-		}, time.Second * 60, nil
-	})
+// 		return pinCacheValue{
+// 			wireName: wireReply.Name,
+// 			pinName:  pinReply.Name,
+// 			pinType:  pinReply.Type,
+// 		}, time.Second * 60, nil
+// 	})
 
-	for {
-		select {
-		case <-w.conn.ctx.Done():
-			return
-		case <-notify.Wait():
-			var remotes *cores.PinPullValueResponse
-			var err error
+// 	for {
+// 		select {
+// 		case <-w.conn.ctx.Done():
+// 			return
+// 		case <-notify.Wait():
+// 			var remotes *cores.PinPullValueResponse
+// 			var err error
 
-			if w.notifyType == core.NOTIFY_PW {
-				remotes, err = w.conn.ns.Core().GetPin().PullWrite(w.conn.ctx, &cores.PinPullValueRequest{After: after, Limit: limit, NodeId: w.conn.id})
-			} else {
-				remotes, err = w.conn.ns.Core().GetPin().PullValue(w.conn.ctx, &cores.PinPullValueRequest{After: after, Limit: limit, NodeId: w.conn.id})
-			}
+// 			if w.notifyType == core.NOTIFY_PW {
+// 				remotes, err = w.conn.ns.Core().GetPin().PullWrite(w.conn.ctx, &cores.PinPullValueRequest{After: after, Limit: limit, NodeId: w.conn.id})
+// 			} else {
+// 				remotes, err = w.conn.ns.Core().GetPin().PullValue(w.conn.ctx, &cores.PinPullValueRequest{After: after, Limit: limit, NodeId: w.conn.id})
+// 			}
 
-			if err != nil {
-				w.conn.ns.Logger().Error("failed to pull pin write", zap.Error(err))
-				continue
-			}
+// 			if err != nil {
+// 				w.conn.ns.Logger().Error("failed to pull pin write", zap.Error(err))
+// 				continue
+// 			}
 
-			for _, pin := range remotes.Pins {
-				after = pin.Updated
+// 			for _, pin := range remotes.Pins {
+// 				after = pin.Updated
 
-				option, err := pinCache.GetWithMiss(w.conn.ctx, pinCacheKey{wireId: pin.WireId, pinId: pin.Id})
-				if err != nil {
-					w.conn.ns.Logger().Error("failed to get pin cache", zap.Error(err))
-					continue
-				}
+// 				option, err := pinCache.GetWithMiss(w.conn.ctx, pinCacheKey{wireId: pin.WireId, pinId: pin.Id})
+// 				if err != nil {
+// 					w.conn.ns.Logger().Error("failed to get pin cache", zap.Error(err))
+// 					continue
+// 				}
 
-				if option.IsSome() {
-					pinCacheValue := option.Unwrap()
+// 				if option.IsSome() {
+// 					pinCacheValue := option.Unwrap()
 
-					pinName := fmt.Sprintf("%s.%s", pinCacheValue.wireName, pinCacheValue.pinName)
-					if _, ok := w.pinNames[pinName]; !ok {
-						continue
-					}
+// 					pinName := fmt.Sprintf("%s.%s", pinCacheValue.wireName, pinCacheValue.pinName)
+// 					if _, ok := w.pinNames[pinName]; !ok {
+// 						continue
+// 					}
 
-					tag, err := dt.ParseTypeTag(pinCacheValue.pinType)
-					if err != nil {
-						w.conn.ns.Logger().Error("failed to parse pin type", zap.Error(err))
-						continue
-					}
+// 					tag, err := dt.ParseTypeTag(pinCacheValue.pinType)
+// 					if err != nil {
+// 						w.conn.ns.Logger().Error("failed to parse pin type", zap.Error(err))
+// 						continue
+// 					}
 
-					value, err := dt.DecodeNsonValue(pin.Value, tag)
-					if err != nil {
-						w.conn.ns.Logger().Error("failed to decode pin value", zap.Error(err))
-						continue
-					}
+// 					value, err := dt.DecodeNsonValue(pin.Value, tag)
+// 					if err != nil {
+// 						w.conn.ns.Logger().Error("failed to decode pin value", zap.Error(err))
+// 						continue
+// 					}
 
-					w.lock.Lock()
-					w.values[pinCacheValue.pinName] = value
-					w.lock.Unlock()
-				}
-			}
-		}
-	}
-}
+// 					w.lock.Lock()
+// 					w.values[pinCacheValue.pinName] = value
+// 					w.lock.Unlock()
+// 				}
+// 			}
+// 		}
+// 	}
+// }

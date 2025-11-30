@@ -22,6 +22,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	NodeService_Login_FullMethodName     = "/nodes.NodeService/Login"
 	NodeService_View_FullMethodName      = "/nodes.NodeService/View"
+	NodeService_Push_FullMethodName      = "/nodes.NodeService/Push"
 	NodeService_KeepAlive_FullMethodName = "/nodes.NodeService/KeepAlive"
 )
 
@@ -31,6 +32,7 @@ const (
 type NodeServiceClient interface {
 	Login(ctx context.Context, in *NodeLoginRequest, opts ...grpc.CallOption) (*NodeLoginReply, error)
 	View(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.Node, error)
+	Push(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.MyBool, error)
 	KeepAlive(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[NodeKeepAliveReply], error)
 }
 
@@ -62,6 +64,16 @@ func (c *nodeServiceClient) View(ctx context.Context, in *pb.MyEmpty, opts ...gr
 	return out, nil
 }
 
+func (c *nodeServiceClient) Push(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.MyBool, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.MyBool)
+	err := c.cc.Invoke(ctx, NodeService_Push_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *nodeServiceClient) KeepAlive(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[NodeKeepAliveReply], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &NodeService_ServiceDesc.Streams[0], NodeService_KeepAlive_FullMethodName, cOpts...)
@@ -87,6 +99,7 @@ type NodeService_KeepAliveClient = grpc.ServerStreamingClient[NodeKeepAliveReply
 type NodeServiceServer interface {
 	Login(context.Context, *NodeLoginRequest) (*NodeLoginReply, error)
 	View(context.Context, *pb.MyEmpty) (*pb.Node, error)
+	Push(context.Context, *pb.MyEmpty) (*pb.MyBool, error)
 	KeepAlive(*pb.MyEmpty, grpc.ServerStreamingServer[NodeKeepAliveReply]) error
 	mustEmbedUnimplementedNodeServiceServer()
 }
@@ -103,6 +116,9 @@ func (UnimplementedNodeServiceServer) Login(context.Context, *NodeLoginRequest) 
 }
 func (UnimplementedNodeServiceServer) View(context.Context, *pb.MyEmpty) (*pb.Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method View not implemented")
+}
+func (UnimplementedNodeServiceServer) Push(context.Context, *pb.MyEmpty) (*pb.MyBool, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Push not implemented")
 }
 func (UnimplementedNodeServiceServer) KeepAlive(*pb.MyEmpty, grpc.ServerStreamingServer[NodeKeepAliveReply]) error {
 	return status.Errorf(codes.Unimplemented, "method KeepAlive not implemented")
@@ -164,6 +180,24 @@ func _NodeService_View_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeService_Push_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.MyEmpty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).Push(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_Push_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).Push(ctx, req.(*pb.MyEmpty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _NodeService_KeepAlive_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(pb.MyEmpty)
 	if err := stream.RecvMsg(m); err != nil {
@@ -189,6 +223,10 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "View",
 			Handler:    _NodeService_View_Handler,
+		},
+		{
+			MethodName: "Push",
+			Handler:    _NodeService_Push_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

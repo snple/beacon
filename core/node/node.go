@@ -224,7 +224,7 @@ func (s *NodeService) View(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error
 	return reply, err
 }
 
-func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error) {
+func (s *NodeService) Push(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, error) {
 	var err error
 	var output pb.MyBool
 
@@ -240,21 +240,14 @@ func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error)
 		return &output, err
 	}
 
-	if in.Id != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: in.Id != nodeID")
-	}
-
 	request := &pb.Id{Id: nodeID}
 
-	reply, err := s.Core().GetNode().View(ctx, request)
+	_, err = s.Core().GetNode().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
-	in.Secret = reply.Secret
-	in.Status = reply.Status
-
-	return s.Core().GetNode().Sync(ctx, in)
+	return s.Core().GetNode().Push(ctx, request)
 }
 
 func (s *NodeService) KeepAlive(in *pb.MyEmpty, stream nodes.NodeService_KeepAliveServer) error {

@@ -23,6 +23,7 @@ const (
 	NodeService_View_FullMethodName = "/cores.NodeService/View"
 	NodeService_Name_FullMethodName = "/cores.NodeService/Name"
 	NodeService_List_FullMethodName = "/cores.NodeService/List"
+	NodeService_Push_FullMethodName = "/cores.NodeService/Push"
 )
 
 // NodeServiceClient is the client API for NodeService service.
@@ -32,6 +33,7 @@ type NodeServiceClient interface {
 	View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Node, error)
 	Name(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Node, error)
 	List(ctx context.Context, in *NodeListRequest, opts ...grpc.CallOption) (*NodeListResponse, error)
+	Push(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 }
 
 type nodeServiceClient struct {
@@ -72,6 +74,16 @@ func (c *nodeServiceClient) List(ctx context.Context, in *NodeListRequest, opts 
 	return out, nil
 }
 
+func (c *nodeServiceClient) Push(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.MyBool)
+	err := c.cc.Invoke(ctx, NodeService_Push_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServiceServer is the server API for NodeService service.
 // All implementations must embed UnimplementedNodeServiceServer
 // for forward compatibility.
@@ -79,6 +91,7 @@ type NodeServiceServer interface {
 	View(context.Context, *pb.Id) (*pb.Node, error)
 	Name(context.Context, *pb.Name) (*pb.Node, error)
 	List(context.Context, *NodeListRequest) (*NodeListResponse, error)
+	Push(context.Context, *pb.Id) (*pb.MyBool, error)
 	mustEmbedUnimplementedNodeServiceServer()
 }
 
@@ -97,6 +110,9 @@ func (UnimplementedNodeServiceServer) Name(context.Context, *pb.Name) (*pb.Node,
 }
 func (UnimplementedNodeServiceServer) List(context.Context, *NodeListRequest) (*NodeListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedNodeServiceServer) Push(context.Context, *pb.Id) (*pb.MyBool, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Push not implemented")
 }
 func (UnimplementedNodeServiceServer) mustEmbedUnimplementedNodeServiceServer() {}
 func (UnimplementedNodeServiceServer) testEmbeddedByValue()                     {}
@@ -173,6 +189,24 @@ func _NodeService_List_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeService_Push_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.Id)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).Push(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_Push_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).Push(ctx, req.(*pb.Id))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeService_ServiceDesc is the grpc.ServiceDesc for NodeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -191,6 +225,10 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "List",
 			Handler:    _NodeService_List_Handler,
+		},
+		{
+			MethodName: "Push",
+			Handler:    _NodeService_Push_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

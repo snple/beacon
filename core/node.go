@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/snple/beacon/core/model"
 	"github.com/snple/beacon/pb"
@@ -165,6 +164,71 @@ func (s *NodeService) List(ctx context.Context, in *cores.NodeListRequest) (*cor
 	return &output, nil
 }
 
+// Push 清除 Node 下所有配置数据，为接收新的 Push 数据做准备
+func (s *NodeService) Push(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
+	var err error
+	var output pb.MyBool
+
+	// basic validation
+	{
+		if in == nil {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
+		}
+
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
+		}
+	}
+
+	// 验证 Node 存在
+	item, err := s.ViewByID(ctx, in.Id)
+	if err != nil {
+		return &output, err
+	}
+
+	// 清除 Node 下所有配置数据（Wire, Pin）但保留运行数据（PinValue, PinWrite）
+	err = func() error {
+		models := []any{
+			(*model.Pin)(nil),
+			(*model.Wire)(nil),
+		}
+
+		tx, err := s.cs.GetDB().BeginTx(ctx, nil)
+		if err != nil {
+			return status.Errorf(codes.Internal, "BeginTx: %v", err)
+		}
+		var done bool
+		defer func() {
+			if !done {
+				_ = tx.Rollback()
+			}
+		}()
+
+		for _, model := range models {
+			_, err = tx.NewDelete().Model(model).Where("node_id = ?", item.ID).Exec(ctx)
+			if err != nil {
+				return status.Errorf(codes.Internal, "Delete: %v", err)
+			}
+		}
+
+		done = true
+		err = tx.Commit()
+		if err != nil {
+			return status.Errorf(codes.Internal, "Commit: %v", err)
+		}
+
+		return nil
+	}()
+
+	if err != nil {
+		return &output, err
+	}
+
+	output.Bool = true
+
+	return &output, nil
+}
+
 func (s *NodeService) Destory(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
 	var err error
 	var output pb.MyBool
@@ -268,193 +332,6 @@ func (s *NodeService) copyModelToOutput(output *pb.Node, item *model.Node) {
 	output.Secret = item.Secret
 	output.Status = item.Status
 	output.Updated = item.Updated.UnixMicro()
-}
-
-func (s *NodeService) afterUpdate(ctx context.Context, item *model.Node) error {
-	var err error
-
-	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.ID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	err = s.cs.GetSyncGlobal().setUpdated(ctx, s.cs.GetDB(), model.SYNC_GLOBAL_NODE, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "SyncGlobal.setUpdated: %v", err)
-	}
-
-	return nil
-}
-
-func (s *NodeService) afterDelete(ctx context.Context, item *model.Node) error {
-	var err error
-
-	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.ID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	err = s.cs.GetSyncGlobal().setUpdated(ctx, s.cs.GetDB(), model.SYNC_GLOBAL_NODE, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "SyncGlobal.setUpdated: %v", err)
-	}
-
-	return nil
-}
-
-// sync
-
-func (s *NodeService) Pull(ctx context.Context, in *cores.NodePullRequest) (*cores.NodePullResponse, error) {
-	var err error
-	var output cores.NodePullResponse
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	output.After = in.After
-	output.Limit = in.Limit
-
-	var items []model.Node
-
-	query := s.cs.GetDB().NewSelect().Model(&items)
-
-	err = query.Where("updated > ?", time.UnixMicro(in.After)).WhereAllWithDeleted().Order("updated ASC").Limit(int(in.Limit)).Scan(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	for i := range items {
-		item := pb.Node{}
-
-		s.copyModelToOutput(&item, &items[i])
-
-		output.Nodes = append(output.Nodes, &item)
-	}
-
-	return &output, nil
-}
-
-func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
-		}
-
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
-		}
-
-		if in.Updated == 0 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Updated")
-		}
-	}
-
-	insert := false
-	update := false
-
-	item, err := s.ViewByID(ctx, in.Id)
-	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				insert = true
-				goto SKIP
-			}
-		}
-
-		return &output, err
-	}
-
-	update = true
-
-SKIP:
-
-	//	insert
-	if insert {
-		// name validation
-		{
-			if len(in.Name) < 2 {
-				return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
-			}
-
-			err = s.cs.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.Name).Scan(ctx)
-			if err != nil {
-				if err != sql.ErrNoRows {
-					return &output, status.Errorf(codes.Internal, "Query: %v", err)
-				}
-			} else {
-				return &output, status.Error(codes.AlreadyExists, "Node.Name must be unique")
-			}
-		}
-
-		item := model.Node{
-			ID:      in.Id,
-			Name:    in.Name,
-			Secret:  in.Secret,
-			Status:  in.Status,
-			Updated: time.UnixMicro(in.Updated),
-		}
-
-		_, err = s.cs.GetDB().NewInsert().Model(&item).Exec(ctx)
-		if err != nil {
-			return &output, status.Errorf(codes.Internal, "Insert: %v", err)
-		}
-	}
-
-	// update
-	if update {
-		if in.Updated <= item.Updated.UnixMicro() {
-			return &output, nil
-		}
-
-		// name validation
-		{
-			if len(in.Name) < 2 {
-				return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
-			}
-
-			modelItem := model.Node{}
-			err = s.cs.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
-			if err != nil {
-				if err != sql.ErrNoRows {
-					return &output, status.Errorf(codes.Internal, "Query: %v", err)
-				}
-			} else {
-				if modelItem.ID != item.ID {
-					return &output, status.Error(codes.AlreadyExists, "Node.Name must be unique")
-				}
-			}
-		}
-
-		item.Name = in.Name
-		item.Secret = in.Secret
-		item.Status = in.Status
-		item.Updated = time.Now()
-
-		_, err = s.cs.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
-		if err != nil {
-			return &output, status.Errorf(codes.Internal, "Update: %v", err)
-		}
-	}
-
-	if err = s.afterUpdate(ctx, &item); err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
 }
 
 // cache

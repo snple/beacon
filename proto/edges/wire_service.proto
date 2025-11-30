@@ -20,25 +20,10 @@ message WireListResponse {
     repeated pb.Wire wires = 3;
 }
 
-message WirePullRequest {
-    int64 after = 1;
-    uint32 limit = 2;
-    // string node_id = 3;
-    string source = 4;
-}
-
-message WirePullResponse {
-    int64 after = 1;
-    uint32 limit = 2;
-    repeated pb.Wire wires = 3;
-}
-
 service WireService {
     rpc View(pb.Id) returns (pb.Wire) {}
     rpc Name(pb.Name) returns (pb.Wire) {}
     rpc List(WireListRequest) returns (WireListResponse) {}
-    rpc Pull(WirePullRequest) returns (WirePullResponse) {}
-    rpc Sync(pb.Wire) returns (pb.MyBool) {}
 }
 
 // pin
@@ -55,24 +40,6 @@ message PinListResponse {
     repeated pb.Pin pins = 3;
 }
 
-message PinCloneRequest {
-    string id = 1;
-    string wire_id = 2;
-}
-
-message PinPullRequest {
-    int64 after = 1;
-    uint32 limit = 2;
-    // string node_id = 3;
-    string wire_id = 4;
-}
-
-message PinPullResponse {
-    int64 after = 1;
-    uint32 limit = 2;
-    repeated pb.Pin pins = 3;
-}
-
 message PinPullValueRequest {
     int64 after = 1;
     uint32 limit = 2;
@@ -80,18 +47,10 @@ message PinPullValueRequest {
     string wire_id = 4;
 }
 
-message PinPullValueResponse {
-    int64 after = 1;
-    uint32 limit = 2;
-    repeated pb.PinValueUpdated pins = 3;
-}
-
 service PinService {
     rpc View(pb.Id) returns (pb.Pin) {}
     rpc Name(pb.Name) returns (pb.Pin) {}
     rpc List(PinListRequest) returns (PinListResponse) {}
-    rpc Pull(PinPullRequest) returns (PinPullResponse) {}
-    rpc Sync(pb.Pin) returns (pb.MyBool) {}
 
     rpc GetValue(pb.Id) returns (pb.PinValue) {}
     rpc SetValue(pb.PinValue) returns (pb.MyBool) {}
@@ -99,12 +58,10 @@ service PinService {
     rpc SetValueByName(pb.PinNameValue) returns (pb.MyBool) {}
     rpc ViewValue(pb.Id) returns (pb.PinValueUpdated) {}
     rpc DeleteValue(pb.Id) returns (pb.MyBool) {}
-    rpc PullValue(PinPullValueRequest) returns (PinPullValueResponse) {}
-    rpc SyncValue(pb.PinValue) returns (pb.MyBool) {}
+    rpc PullValue(PinPullValueRequest) returns (stream pb.PinValueUpdated) {}
 
     rpc GetWrite(pb.Id) returns (pb.PinValue) {}
     rpc GetWriteByName(pb.Name) returns (pb.PinNameValue) {}
     rpc ViewWrite(pb.Id) returns (pb.PinValueUpdated) {}
-    rpc PullWrite(PinPullValueRequest) returns (PinPullValueResponse) {}
-    rpc SyncWrite(pb.PinValue) returns (pb.MyBool) {}
+    rpc PushWrite(stream pb.PinValueUpdated) returns (pb.MyBool) {}
 }

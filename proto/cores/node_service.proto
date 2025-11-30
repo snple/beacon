@@ -17,19 +17,9 @@ message NodeListResponse {
     repeated pb.Node nodes = 3;
 }
 
-message NodePullRequest {
-    int64 after = 1;
-    uint32 limit = 2;
-}
-
-message NodePullResponse {
-    int64 after = 1;
-    uint32 limit = 2;
-    repeated pb.Node nodes = 3;
-}
-
 service NodeService {
     rpc View(pb.Id) returns (pb.Node) {}
     rpc Name(pb.Name) returns (pb.Node) {}
     rpc List(NodeListRequest) returns (NodeListResponse) {}
+    rpc Push(pb.Id) returns (pb.MyBool) {}
 }

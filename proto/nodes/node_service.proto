@@ -24,5 +24,6 @@ message NodeKeepAliveReply {
 service NodeService {
     rpc Login(NodeLoginRequest) returns (NodeLoginReply) {}
     rpc View(pb.MyEmpty) returns (pb.Node) {}
+    rpc Push(pb.MyEmpty) returns (pb.MyBool) {}
     rpc KeepAlive(pb.MyEmpty) returns (stream NodeKeepAliveReply) {}
 }

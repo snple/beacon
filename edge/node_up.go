@@ -411,6 +411,10 @@ func (s *NodeUpService) sync(ctx context.Context) error {
 }
 
 // syncLocalToRemote: Edge 配置数据同步到 Core (Node/Wire/Pin)
+// 新的同步流程:
+// 1. 调用 Core NodeService.Push 清除 Core 端的配置数据（Wire/Pin 等）
+// 2. 使用 WireService.Push 流式发送所有 Wire 数据
+// 3. 使用 PinService.Push 流式发送所有 Pin 数据
 func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 	nodeUpdated, err := s.es.GetSync().getNodeUpdated(ctx)
 	if err != nil {
@@ -426,55 +430,59 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 		return nil
 	}
 
-	// wire
-	{
-		after := nodeUpdated2.UnixMicro()
-		limit := uint32(10)
+	// 1. 清除 Core 端的配置数据
+	_, err = s.NodeServiceClient().Push(ctx, &pb.MyEmpty{})
+	if err != nil {
+		return err
+	}
 
-		for {
-			locals, err := s.es.GetWire().Pull(ctx, &edges.WirePullRequest{After: after, Limit: limit})
-			if err != nil {
+	// 2. 推送 Wire 数据
+	{
+		wires, err := s.es.GetWire().List(ctx, &edges.WireListRequest{
+			Page: &pb.Page{Limit: 1000},
+		})
+		if err != nil {
+			return err
+		}
+
+		stream, err := s.WireServiceClient().Push(ctx)
+		if err != nil {
+			return err
+		}
+
+		for _, wire := range wires.Wires {
+			if err := stream.Send(wire); err != nil {
 				return err
 			}
+		}
 
-			for _, local := range locals.Wires {
-				_, err = s.WireServiceClient().Sync(ctx, local)
-				if err != nil {
-					return err
-				}
-
-				after = local.Updated
-			}
-
-			if len(locals.Wires) < int(limit) {
-				break
-			}
+		if _, err := stream.CloseAndRecv(); err != nil {
+			return err
 		}
 	}
 
-	// pin
+	// 3. 推送 Pin 数据
 	{
-		after := nodeUpdated2.UnixMicro()
-		limit := uint32(10)
+		pins, err := s.es.GetPin().List(ctx, &edges.PinListRequest{
+			Page: &pb.Page{Limit: 10000},
+		})
+		if err != nil {
+			return err
+		}
 
-		for {
-			locals, err := s.es.GetPin().Pull(ctx, &edges.PinPullRequest{After: after, Limit: limit})
-			if err != nil {
+		stream, err := s.PinServiceClient().Push(ctx)
+		if err != nil {
+			return err
+		}
+
+		for _, pin := range pins.Pins {
+			if err := stream.Send(pin); err != nil {
 				return err
 			}
+		}
 
-			for _, local := range locals.Pins {
-				_, err = s.PinServiceClient().Sync(ctx, local)
-				if err != nil {
-					return err
-				}
-
-				after = local.Updated
-			}
-
-			if len(locals.Pins) < int(limit) {
-				break
-			}
+		if _, err := stream.CloseAndRecv(); err != nil {
+			return err
 		}
 	}
 
@@ -482,6 +490,7 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 }
 
 // syncPinValueToRemote: Edge PinValue 同步到 Core
+// 使用 PushValue 流式方法发送 PinValue 数据
 func (s *NodeUpService) syncPinValueToRemote(ctx context.Context) error {
 	pinValueUpdated, err := s.es.GetSync().getPinValueUpdated(ctx)
 	if err != nil {
@@ -497,40 +506,55 @@ func (s *NodeUpService) syncPinValueToRemote(ctx context.Context) error {
 		return nil
 	}
 
+	// 创建 PushValue 流
+	stream, err := s.PinServiceClient().PushValue(ctx)
+	if err != nil {
+		return err
+	}
+
 	after := pinValueUpdated2.UnixMicro()
 	limit := uint32(100)
 
-PULL:
+	// 从本地 BadgerDB 读取 PinValue 并发送
 	for {
-		locals, err := s.es.GetPin().PullValue(ctx, &edges.PinPullValueRequest{After: after, Limit: limit})
+		items, err := s.es.GetPin().listPinValues(ctx, after, limit)
 		if err != nil {
 			return err
 		}
 
-		for _, local := range locals.Pins {
-			if local.Updated > pinValueUpdated.UnixMicro() {
-				break PULL
+		for _, item := range items {
+			if item.Updated.UnixMicro() > pinValueUpdated.UnixMicro() {
+				goto DONE
 			}
 
-			_, err = s.PinServiceClient().SyncValue(ctx,
-				&pb.PinValue{Id: local.Id, Value: local.Value, Updated: local.Updated})
+			err = stream.Send(&pb.PinValue{
+				Id:      item.ID,
+				Value:   item.Value,
+				Updated: item.Updated.UnixMicro(),
+			})
 			if err != nil {
-				s.es.Logger().Sugar().Errorf("SyncValue: %v", err)
+				s.es.Logger().Sugar().Errorf("PushValue Send: %v", err)
 				return err
 			}
 
-			after = local.Updated
+			after = item.Updated.UnixMicro()
 		}
 
-		if len(locals.Pins) < int(limit) {
+		if len(items) < int(limit) {
 			break
 		}
+	}
+
+DONE:
+	if _, err := stream.CloseAndRecv(); err != nil {
+		return err
 	}
 
 	return s.es.GetSync().setPinValueToRemote(ctx, pinValueUpdated)
 }
 
 // syncPinWriteFromRemote: 从 Core 拉取 PinWrite 写命令
+// 使用 PullWrite 服务端流式方法接收 PinWrite 数据
 func (s *NodeUpService) syncPinWriteFromRemote(ctx context.Context) error {
 	pinWriteUpdated, err := s.SyncServiceClient().GetPinWriteUpdated(ctx, &pb.MyEmpty{})
 	if err != nil {
@@ -549,31 +573,48 @@ func (s *NodeUpService) syncPinWriteFromRemote(ctx context.Context) error {
 	after := pinWriteUpdated2.UnixMicro()
 	limit := uint32(100)
 
-PULL:
+	// 从 Core 拉取 PinWrite 数据
+	stream, err := s.PinServiceClient().PullWrite(ctx, &nodes.PinPullWriteRequest{
+		After: after,
+		Limit: limit,
+	})
+	if err != nil {
+		return err
+	}
+
 	for {
-		remotes, err := s.PinServiceClient().PullWrite(ctx, &nodes.PinPullValueRequest{After: after, Limit: limit})
+		remote, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
 			return err
 		}
 
-		for _, remote := range remotes.Pins {
-			if remote.Updated > pinWriteUpdated.Updated {
-				break PULL
-			}
-
-			_, err = s.es.GetPin().SyncWrite(ctx,
-				&pb.PinValue{Id: remote.Id, Value: remote.Value, Updated: remote.Updated})
-			if err != nil {
-				s.es.Logger().Sugar().Errorf("SyncWrite: %v", err)
-				return err
-			}
-
-			after = remote.Updated
-		}
-
-		if len(remotes.Pins) < int(limit) {
+		if remote.Updated > pinWriteUpdated.Updated {
 			break
 		}
+
+		// 保存到本地
+		pin, err := s.es.GetPin().ViewByID(ctx, remote.Id)
+		if err != nil {
+			s.es.Logger().Sugar().Errorf("ViewByID: %v", err)
+			continue
+		}
+
+		err = s.es.GetPin().setPinWriteUpdated(ctx, &pin, remote.Value, time.UnixMicro(remote.Updated))
+		if err != nil {
+			s.es.Logger().Sugar().Errorf("setPinWriteUpdated: %v", err)
+			return err
+		}
+
+		err = s.es.GetPin().afterUpdateWrite(ctx, &pin, remote.Value)
+		if err != nil {
+			s.es.Logger().Sugar().Errorf("afterUpdateWrite: %v", err)
+			return err
+		}
+
+		after = remote.Updated
 	}
 
 	return s.es.GetSync().setPinWriteFromRemote(ctx, time.UnixMicro(pinWriteUpdated.GetUpdated()))

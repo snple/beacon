@@ -6,6 +6,7 @@ import (
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 	"github.com/snple/beacon/pb/nodes"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -115,61 +116,37 @@ func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes
 	return &output, nil
 }
 
-func (s *PinService) Pull(ctx context.Context, in *nodes.PinPullRequest) (*nodes.PinPullResponse, error) {
-	var err error
-	var output nodes.PinPullResponse
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	output.After = in.After
-	output.Limit = in.Limit
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &cores.PinPullRequest{
-		After:  in.After,
-		Limit:  in.Limit,
-		NodeId: nodeID,
-		WireId: in.WireId,
-	}
-
-	reply, err := s.ns.Core().GetPin().Pull(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Pins = reply.Pins
-
-	return &output, nil
+// pinPushStreamWrapper 包装 node 端的流以添加 NodeID 并转发到 Core
+type pinPushStreamWrapper struct {
+	grpc.ClientStreamingServer[pb.Pin, pb.MyBool]
+	nodeID string
 }
 
-func (s *PinService) Sync(ctx context.Context, in *pb.Pin) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+func (w *pinPushStreamWrapper) Recv() (*pb.Pin, error) {
+	in, err := w.ClientStreamingServer.Recv()
+	if err != nil {
+		return nil, err
 	}
+	in.NodeId = w.nodeID
+	return in, nil
+}
+
+func (s *PinService) Push(stream grpc.ClientStreamingServer[pb.Pin, pb.MyBool]) error {
+	ctx := stream.Context()
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
-		return &output, err
+		return err
 	}
 
-	in.NodeId = nodeID
+	// 创建包装器流，自动添加 NodeID
+	wrapper := &pinPushStreamWrapper{
+		ClientStreamingServer: stream,
+		nodeID:                nodeID,
+	}
 
-	return s.ns.Core().GetPin().Sync(ctx, in)
+	// 直接调用 Core 的 Push 方法
+	return s.ns.Core().GetPin().Push(wrapper)
 }
 
 // value
@@ -338,70 +315,38 @@ func (s *PinService) DeleteValue(ctx context.Context, in *pb.Id) (*pb.MyBool, er
 	return s.ns.Core().GetPin().DeleteValue(ctx, in)
 }
 
-func (s *PinService) PullValue(ctx context.Context, in *nodes.PinPullValueRequest) (*nodes.PinPullValueResponse, error) {
-	var err error
-	var output nodes.PinPullValueResponse
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	output.After = in.After
-	output.Limit = in.Limit
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &cores.PinPullValueRequest{
-		After:  in.After,
-		Limit:  in.Limit,
-		NodeId: nodeID,
-		WireId: in.WireId,
-	}
-
-	reply, err := s.ns.Core().GetPin().PullValue(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Pins = reply.Pins
-
-	return &output, nil
+// pinPushValueStreamWrapper 包装 node 端的流以添加验证并转发到 Core
+type pinPushValueStreamWrapper struct {
+	grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]
+	nodeID string
+	ns     *NodeService
 }
 
-func (s *PinService) SyncValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+func (w *pinPushValueStreamWrapper) Recv() (*pb.PinValue, error) {
+	in, err := w.ClientStreamingServer.Recv()
+	if err != nil {
+		return nil, err
 	}
+	return in, nil
+}
+
+func (s *PinService) PushValue(stream grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]) error {
+	ctx := stream.Context()
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
-		return &output, err
+		return err
 	}
 
-	request := &pb.Id{Id: in.Id}
-
-	reply, err := s.ns.Core().GetPin().View(ctx, request)
-	if err != nil {
-		return &output, err
+	// 创建包装器流
+	wrapper := &pinPushValueStreamWrapper{
+		ClientStreamingServer: stream,
+		nodeID:                nodeID,
+		ns:                    s.ns,
 	}
 
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().SyncValue(ctx, in)
+	// 直接调用 Core 的 PushValue 方法
+	return s.ns.Core().GetPin().PushValue(wrapper)
 }
 
 // write
@@ -570,68 +515,38 @@ func (s *PinService) DeleteWrite(ctx context.Context, in *pb.Id) (*pb.MyBool, er
 	return s.ns.Core().GetPin().DeleteWrite(ctx, in)
 }
 
-func (s *PinService) PullWrite(ctx context.Context, in *nodes.PinPullValueRequest) (*nodes.PinPullValueResponse, error) {
-	var err error
-	var output nodes.PinPullValueResponse
+// pinPullWriteStreamWrapper 包装服务端流以转发 PullWrite 响应
+type pinPullWriteStreamWrapper struct {
+	grpc.ServerStreamingServer[pb.PinValueUpdated]
+	nodeID string
+}
 
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
+func (w *pinPullWriteStreamWrapper) Send(item *pb.PinValueUpdated) error {
+	return w.ServerStreamingServer.Send(item)
+}
 
-	output.After = in.After
-	output.Limit = in.Limit
+func (s *PinService) PullWrite(in *nodes.PinPullWriteRequest, stream grpc.ServerStreamingServer[pb.PinValueUpdated]) error {
+	ctx := stream.Context()
 
 	nodeID, err := validateToken(ctx)
 	if err != nil {
-		return &output, err
+		return err
 	}
 
-	request := &cores.PinPullValueRequest{
+	// 创建 Core 端的请求
+	request := &cores.PinPullWriteRequest{
 		After:  in.After,
 		Limit:  in.Limit,
 		NodeId: nodeID,
 		WireId: in.WireId,
 	}
 
-	reply, err := s.ns.Core().GetPin().PullWrite(ctx, request)
-	if err != nil {
-		return &output, err
+	// 创建包装器流
+	wrapper := &pinPullWriteStreamWrapper{
+		ServerStreamingServer: stream,
+		nodeID:                nodeID,
 	}
 
-	output.Pins = reply.Pins
-
-	return &output, nil
-}
-
-func (s *PinService) SyncWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &pb.Id{Id: in.Id}
-
-	reply, err := s.ns.Core().GetPin().View(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().SyncWrite(ctx, in)
+	// 直接调用 Core 的 PullWrite 方法
+	return s.ns.Core().GetPin().PullWrite(request, wrapper)
 }
