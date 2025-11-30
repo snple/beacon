@@ -196,38 +196,6 @@ func validateToken(ctx context.Context) (nodeID string, err error) {
 	return nodeID, nil
 }
 
-func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error) {
-	var output pb.Node
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	if in.Id != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: in.Id != nodeID")
-	}
-
-	request := &pb.Id{Id: nodeID}
-
-	reply, err := s.Core().GetNode().View(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	in.Secret = reply.Secret
-	in.Status = reply.Status
-
-	return s.Core().GetNode().Update(ctx, in)
-}
-
 func (s *NodeService) View(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error) {
 	var output pb.Node
 	var err error
@@ -247,34 +215,6 @@ func (s *NodeService) View(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error
 	request := &pb.Id{Id: nodeID}
 
 	reply, err := s.Core().GetNode().View(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	reply.Secret = ""
-
-	return reply, err
-}
-
-func (s *NodeService) ViewWithDeleted(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error) {
-	var output pb.Node
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &pb.Id{Id: nodeID}
-
-	reply, err := s.Core().GetNode().ViewWithDeleted(ctx, request)
 	if err != nil {
 		return &output, err
 	}
@@ -306,14 +246,13 @@ func (s *NodeService) Sync(ctx context.Context, in *pb.Node) (*pb.MyBool, error)
 
 	request := &pb.Id{Id: nodeID}
 
-	reply, err := s.Core().GetNode().ViewWithDeleted(ctx, request)
+	reply, err := s.Core().GetNode().View(ctx, request)
 	if err != nil {
 		return &output, err
 	}
 
 	in.Secret = reply.Secret
 	in.Status = reply.Status
-	in.Deleted = reply.Deleted
 
 	return s.Core().GetNode().Sync(ctx, in)
 }

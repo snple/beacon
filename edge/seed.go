@@ -34,7 +34,6 @@ func seed(db bun.Tx, nodeName string) error {
 			node := model.Node{
 				ID:      util.RandomID(),
 				Name:    nodeName,
-				Created: time.Now(),
 				Updated: time.Now(),
 			}
 

@@ -20,34 +20,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NodeService_Create_FullMethodName          = "/cores.NodeService/Create"
-	NodeService_Update_FullMethodName          = "/cores.NodeService/Update"
-	NodeService_View_FullMethodName            = "/cores.NodeService/View"
-	NodeService_Name_FullMethodName            = "/cores.NodeService/Name"
-	NodeService_Delete_FullMethodName          = "/cores.NodeService/Delete"
-	NodeService_List_FullMethodName            = "/cores.NodeService/List"
-	NodeService_Destory_FullMethodName         = "/cores.NodeService/Destory"
-	NodeService_Clone_FullMethodName           = "/cores.NodeService/Clone"
-	NodeService_ViewWithDeleted_FullMethodName = "/cores.NodeService/ViewWithDeleted"
-	NodeService_Pull_FullMethodName            = "/cores.NodeService/Pull"
-	NodeService_Sync_FullMethodName            = "/cores.NodeService/Sync"
+	NodeService_View_FullMethodName = "/cores.NodeService/View"
+	NodeService_Name_FullMethodName = "/cores.NodeService/Name"
+	NodeService_List_FullMethodName = "/cores.NodeService/List"
 )
 
 // NodeServiceClient is the client API for NodeService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NodeServiceClient interface {
-	Create(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error)
-	Update(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error)
 	View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Node, error)
 	Name(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Node, error)
-	Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 	List(ctx context.Context, in *NodeListRequest, opts ...grpc.CallOption) (*NodeListResponse, error)
-	Destory(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
-	Clone(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
-	ViewWithDeleted(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Node, error)
-	Pull(ctx context.Context, in *NodePullRequest, opts ...grpc.CallOption) (*NodePullResponse, error)
-	Sync(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.MyBool, error)
 }
 
 type nodeServiceClient struct {
@@ -56,26 +40,6 @@ type nodeServiceClient struct {
 
 func NewNodeServiceClient(cc grpc.ClientConnInterface) NodeServiceClient {
 	return &nodeServiceClient{cc}
-}
-
-func (c *nodeServiceClient) Create(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Node)
-	err := c.cc.Invoke(ctx, NodeService_Create_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) Update(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Node)
-	err := c.cc.Invoke(ctx, NodeService_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *nodeServiceClient) View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Node, error) {
@@ -98,16 +62,6 @@ func (c *nodeServiceClient) Name(ctx context.Context, in *pb.Name, opts ...grpc.
 	return out, nil
 }
 
-func (c *nodeServiceClient) Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, NodeService_Delete_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *nodeServiceClient) List(ctx context.Context, in *NodeListRequest, opts ...grpc.CallOption) (*NodeListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NodeListResponse)
@@ -118,71 +72,13 @@ func (c *nodeServiceClient) List(ctx context.Context, in *NodeListRequest, opts 
 	return out, nil
 }
 
-func (c *nodeServiceClient) Destory(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, NodeService_Destory_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) Clone(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, NodeService_Clone_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) ViewWithDeleted(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Node, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Node)
-	err := c.cc.Invoke(ctx, NodeService_ViewWithDeleted_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) Pull(ctx context.Context, in *NodePullRequest, opts ...grpc.CallOption) (*NodePullResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NodePullResponse)
-	err := c.cc.Invoke(ctx, NodeService_Pull_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) Sync(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, NodeService_Sync_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // NodeServiceServer is the server API for NodeService service.
 // All implementations must embed UnimplementedNodeServiceServer
 // for forward compatibility.
 type NodeServiceServer interface {
-	Create(context.Context, *pb.Node) (*pb.Node, error)
-	Update(context.Context, *pb.Node) (*pb.Node, error)
 	View(context.Context, *pb.Id) (*pb.Node, error)
 	Name(context.Context, *pb.Name) (*pb.Node, error)
-	Delete(context.Context, *pb.Id) (*pb.MyBool, error)
 	List(context.Context, *NodeListRequest) (*NodeListResponse, error)
-	Destory(context.Context, *pb.Id) (*pb.MyBool, error)
-	Clone(context.Context, *pb.Id) (*pb.MyBool, error)
-	ViewWithDeleted(context.Context, *pb.Id) (*pb.Node, error)
-	Pull(context.Context, *NodePullRequest) (*NodePullResponse, error)
-	Sync(context.Context, *pb.Node) (*pb.MyBool, error)
 	mustEmbedUnimplementedNodeServiceServer()
 }
 
@@ -193,38 +89,14 @@ type NodeServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeServiceServer struct{}
 
-func (UnimplementedNodeServiceServer) Create(context.Context, *pb.Node) (*pb.Node, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedNodeServiceServer) Update(context.Context, *pb.Node) (*pb.Node, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
-}
 func (UnimplementedNodeServiceServer) View(context.Context, *pb.Id) (*pb.Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method View not implemented")
 }
 func (UnimplementedNodeServiceServer) Name(context.Context, *pb.Name) (*pb.Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Name not implemented")
 }
-func (UnimplementedNodeServiceServer) Delete(context.Context, *pb.Id) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
 func (UnimplementedNodeServiceServer) List(context.Context, *NodeListRequest) (*NodeListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
-}
-func (UnimplementedNodeServiceServer) Destory(context.Context, *pb.Id) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Destory not implemented")
-}
-func (UnimplementedNodeServiceServer) Clone(context.Context, *pb.Id) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Clone not implemented")
-}
-func (UnimplementedNodeServiceServer) ViewWithDeleted(context.Context, *pb.Id) (*pb.Node, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ViewWithDeleted not implemented")
-}
-func (UnimplementedNodeServiceServer) Pull(context.Context, *NodePullRequest) (*NodePullResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Pull not implemented")
-}
-func (UnimplementedNodeServiceServer) Sync(context.Context, *pb.Node) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Sync not implemented")
 }
 func (UnimplementedNodeServiceServer) mustEmbedUnimplementedNodeServiceServer() {}
 func (UnimplementedNodeServiceServer) testEmbeddedByValue()                     {}
@@ -245,42 +117,6 @@ func RegisterNodeServiceServer(s grpc.ServiceRegistrar, srv NodeServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&NodeService_ServiceDesc, srv)
-}
-
-func _NodeService_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Node)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Create(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Create_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Create(ctx, req.(*pb.Node))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Node)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Update(ctx, req.(*pb.Node))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeService_View_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -319,24 +155,6 @@ func _NodeService_Name_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NodeService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Delete(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Delete_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Delete(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _NodeService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NodeListRequest)
 	if err := dec(in); err != nil {
@@ -355,96 +173,6 @@ func _NodeService_List_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NodeService_Destory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Destory(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Destory_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Destory(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_Clone_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Clone(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Clone_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Clone(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_ViewWithDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).ViewWithDeleted(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_ViewWithDeleted_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).ViewWithDeleted(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_Pull_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NodePullRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Pull(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Pull_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Pull(ctx, req.(*NodePullRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_Sync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Node)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Sync(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Sync_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Sync(ctx, req.(*pb.Node))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // NodeService_ServiceDesc is the grpc.ServiceDesc for NodeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -452,14 +180,6 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "cores.NodeService",
 	HandlerType: (*NodeServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "Create",
-			Handler:    _NodeService_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _NodeService_Update_Handler,
-		},
 		{
 			MethodName: "View",
 			Handler:    _NodeService_View_Handler,
@@ -469,32 +189,8 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _NodeService_Name_Handler,
 		},
 		{
-			MethodName: "Delete",
-			Handler:    _NodeService_Delete_Handler,
-		},
-		{
 			MethodName: "List",
 			Handler:    _NodeService_List_Handler,
-		},
-		{
-			MethodName: "Destory",
-			Handler:    _NodeService_Destory_Handler,
-		},
-		{
-			MethodName: "Clone",
-			Handler:    _NodeService_Clone_Handler,
-		},
-		{
-			MethodName: "ViewWithDeleted",
-			Handler:    _NodeService_ViewWithDeleted_Handler,
-		},
-		{
-			MethodName: "Pull",
-			Handler:    _NodeService_Pull_Handler,
-		},
-		{
-			MethodName: "Sync",
-			Handler:    _NodeService_Sync_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

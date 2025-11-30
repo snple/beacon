@@ -2,11 +2,8 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"math/rand"
 
-	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 )
@@ -16,7 +13,6 @@ func PinList(ctx context.Context, client cores.PinServiceClient) {
 		Limit:   10,
 		Offset:  0,
 		OrderBy: "name",
-		// Search:  "t",
 	}
 
 	request := &cores.PinListRequest{
@@ -57,50 +53,6 @@ func PinName(ctx context.Context, client cores.PinServiceClient) {
 	log.Printf("Resp received: %v", reply)
 }
 
-func PinCreate(ctx context.Context, client cores.PinServiceClient) {
-	request := &pb.Pin{
-		WireId: "01946a51cd5bc0cd7a776f35",
-		Name:   "pin1",
-		Addr:   "",
-		Type:   "F32",
-		Rw:     consts.WRITE,
-		Status: consts.ON,
-	}
-
-	reply, err := client.Create(ctx, request)
-
-	if err != nil {
-		log.Fatalf("Error when calling grpc service: %s", err)
-	}
-	log.Printf("Resp received: %v", reply)
-}
-
-func PinUpdate(ctx context.Context, client cores.PinServiceClient) {
-	request := &pb.Pin{
-		Id:     "01880166c70f451c041bb351",
-		Name:   "PIN",
-		Status: consts.ON,
-	}
-
-	reply, err := client.Update(ctx, request)
-
-	if err != nil {
-		log.Fatalf("Error when calling grpc service: %s", err)
-	}
-	log.Printf("Resp received: %v", reply)
-}
-
-func PinDelete(ctx context.Context, client cores.PinServiceClient) {
-	request := &pb.Id{Id: "01880166c70f451c041bb351"}
-
-	reply, err := client.Delete(ctx, request)
-
-	if err != nil {
-		log.Fatalf("Error when calling grpc service: %s", err)
-	}
-	log.Printf("Resp received: %v", reply)
-}
-
 func PinGetValue(ctx context.Context, client cores.PinServiceClient) {
 	request := &pb.Id{Id: "01880166c70f451c041bb351"}
 
@@ -112,12 +64,11 @@ func PinGetValue(ctx context.Context, client cores.PinServiceClient) {
 	log.Printf("Resp received: %v", reply)
 }
 
+/*
 func PinSetValue(ctx context.Context, client cores.PinServiceClient) {
 	request := &pb.PinValue{
-		Id: "01880166c70f451c041bb351",
-		// Value: fmt.Sprintf("%v", rand.Float64()*100),
+		Id:    "01880166c70f451c041bb351",
 		Value: fmt.Sprintf("%v", rand.Int31()),
-		// Value: "1",
 	}
 
 	reply, err := client.SetValue(ctx, request)
@@ -127,3 +78,4 @@ func PinSetValue(ctx context.Context, client cores.PinServiceClient) {
 	}
 	log.Printf("Resp received: %v", reply)
 }
+*/

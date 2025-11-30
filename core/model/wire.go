@@ -12,10 +12,7 @@ type Wire struct {
 	ID            string    `bun:"type:TEXT,pk" json:"id"`
 	NodeID        string    `bun:"node_id,type:TEXT" json:"node_id"`
 	Name          string    `bun:"name,type:TEXT" json:"name"`
-	Clusters      string    `bun:"clusters,type:TEXT" json:"clusters"` // Cluster 列表，如 "OnOff,LevelControl"
-	Status        int32     `bun:"status" json:"status"`
-	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
-	Created       time.Time `bun:"created" json:"created"`
+	Clusters      string    `bun:"clusters,type:TEXT" json:"clusters"`
 	Updated       time.Time `bun:"updated" json:"updated"`
 }
 
@@ -28,10 +25,7 @@ type Pin struct {
 	Name          string    `bun:"name,type:TEXT" json:"name"`
 	Addr          string    `bun:"addr,type:TEXT" json:"addr"`
 	Type          string    `bun:"type,type:TEXT" json:"type"`
-	Status        int32     `bun:"status" json:"status"`
 	Rw            int32     `bun:"rw" json:"rw"`
-	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
-	Created       time.Time `bun:"created" json:"created"`
 	Updated       time.Time `bun:"updated" json:"updated"`
 }
 
@@ -41,7 +35,6 @@ type PinValue struct {
 	NodeID        string    `bun:"node_id,type:TEXT" json:"node_id"`
 	WireID        string    `bun:"wire_id,type:TEXT" json:"wire_id"`
 	Value         string    `bun:"value,type:TEXT" json:"value"`
-	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
 	Updated       time.Time `bun:"updated" json:"updated"`
 }
 
@@ -51,6 +44,5 @@ type PinWrite struct {
 	NodeID        string    `bun:"node_id,type:TEXT" json:"node_id"`
 	WireID        string    `bun:"wire_id,type:TEXT" json:"wire_id"`
 	Value         string    `bun:"value,type:TEXT" json:"value"`
-	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
 	Updated       time.Time `bun:"updated" json:"updated"`
 }

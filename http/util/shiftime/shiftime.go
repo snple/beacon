@@ -6,9 +6,7 @@ import (
 
 func Node(item *pb.Node) {
 	if item != nil {
-		item.Created = item.Created / 1000
 		item.Updated = item.Updated / 1000
-		item.Deleted = item.Deleted / 1000
 	}
 }
 
@@ -20,9 +18,7 @@ func Nodes(items []*pb.Node) {
 
 func Wire(item *pb.Wire) {
 	if item != nil {
-		item.Created = item.Created / 1000
 		item.Updated = item.Updated / 1000
-		item.Deleted = item.Deleted / 1000
 	}
 }
 
@@ -34,9 +30,7 @@ func Wires(items []*pb.Wire) {
 
 func Pin(item *pb.Pin) {
 	if item != nil {
-		item.Created = item.Created / 1000
 		item.Updated = item.Updated / 1000
-		item.Deleted = item.Deleted / 1000
 	}
 }
 

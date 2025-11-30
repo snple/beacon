@@ -20,28 +20,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WireService_Create_FullMethodName          = "/nodes.WireService/Create"
-	WireService_Update_FullMethodName          = "/nodes.WireService/Update"
-	WireService_View_FullMethodName            = "/nodes.WireService/View"
-	WireService_Name_FullMethodName            = "/nodes.WireService/Name"
-	WireService_Delete_FullMethodName          = "/nodes.WireService/Delete"
-	WireService_List_FullMethodName            = "/nodes.WireService/List"
-	WireService_ViewWithDeleted_FullMethodName = "/nodes.WireService/ViewWithDeleted"
-	WireService_Pull_FullMethodName            = "/nodes.WireService/Pull"
-	WireService_Sync_FullMethodName            = "/nodes.WireService/Sync"
+	WireService_View_FullMethodName = "/nodes.WireService/View"
+	WireService_Name_FullMethodName = "/nodes.WireService/Name"
+	WireService_List_FullMethodName = "/nodes.WireService/List"
+	WireService_Pull_FullMethodName = "/nodes.WireService/Pull"
+	WireService_Sync_FullMethodName = "/nodes.WireService/Sync"
 )
 
 // WireServiceClient is the client API for WireService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WireServiceClient interface {
-	Create(ctx context.Context, in *pb.Wire, opts ...grpc.CallOption) (*pb.Wire, error)
-	Update(ctx context.Context, in *pb.Wire, opts ...grpc.CallOption) (*pb.Wire, error)
 	View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Wire, error)
 	Name(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Wire, error)
-	Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 	List(ctx context.Context, in *WireListRequest, opts ...grpc.CallOption) (*WireListResponse, error)
-	ViewWithDeleted(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Wire, error)
 	Pull(ctx context.Context, in *WirePullRequest, opts ...grpc.CallOption) (*WirePullResponse, error)
 	Sync(ctx context.Context, in *pb.Wire, opts ...grpc.CallOption) (*pb.MyBool, error)
 }
@@ -52,26 +44,6 @@ type wireServiceClient struct {
 
 func NewWireServiceClient(cc grpc.ClientConnInterface) WireServiceClient {
 	return &wireServiceClient{cc}
-}
-
-func (c *wireServiceClient) Create(ctx context.Context, in *pb.Wire, opts ...grpc.CallOption) (*pb.Wire, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Wire)
-	err := c.cc.Invoke(ctx, WireService_Create_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *wireServiceClient) Update(ctx context.Context, in *pb.Wire, opts ...grpc.CallOption) (*pb.Wire, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Wire)
-	err := c.cc.Invoke(ctx, WireService_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *wireServiceClient) View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Wire, error) {
@@ -94,30 +66,10 @@ func (c *wireServiceClient) Name(ctx context.Context, in *pb.Name, opts ...grpc.
 	return out, nil
 }
 
-func (c *wireServiceClient) Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, WireService_Delete_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *wireServiceClient) List(ctx context.Context, in *WireListRequest, opts ...grpc.CallOption) (*WireListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(WireListResponse)
 	err := c.cc.Invoke(ctx, WireService_List_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *wireServiceClient) ViewWithDeleted(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Wire, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Wire)
-	err := c.cc.Invoke(ctx, WireService_ViewWithDeleted_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -148,13 +100,9 @@ func (c *wireServiceClient) Sync(ctx context.Context, in *pb.Wire, opts ...grpc.
 // All implementations must embed UnimplementedWireServiceServer
 // for forward compatibility.
 type WireServiceServer interface {
-	Create(context.Context, *pb.Wire) (*pb.Wire, error)
-	Update(context.Context, *pb.Wire) (*pb.Wire, error)
 	View(context.Context, *pb.Id) (*pb.Wire, error)
 	Name(context.Context, *pb.Name) (*pb.Wire, error)
-	Delete(context.Context, *pb.Id) (*pb.MyBool, error)
 	List(context.Context, *WireListRequest) (*WireListResponse, error)
-	ViewWithDeleted(context.Context, *pb.Id) (*pb.Wire, error)
 	Pull(context.Context, *WirePullRequest) (*WirePullResponse, error)
 	Sync(context.Context, *pb.Wire) (*pb.MyBool, error)
 	mustEmbedUnimplementedWireServiceServer()
@@ -167,26 +115,14 @@ type WireServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWireServiceServer struct{}
 
-func (UnimplementedWireServiceServer) Create(context.Context, *pb.Wire) (*pb.Wire, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedWireServiceServer) Update(context.Context, *pb.Wire) (*pb.Wire, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
-}
 func (UnimplementedWireServiceServer) View(context.Context, *pb.Id) (*pb.Wire, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method View not implemented")
 }
 func (UnimplementedWireServiceServer) Name(context.Context, *pb.Name) (*pb.Wire, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Name not implemented")
 }
-func (UnimplementedWireServiceServer) Delete(context.Context, *pb.Id) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
 func (UnimplementedWireServiceServer) List(context.Context, *WireListRequest) (*WireListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
-}
-func (UnimplementedWireServiceServer) ViewWithDeleted(context.Context, *pb.Id) (*pb.Wire, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ViewWithDeleted not implemented")
 }
 func (UnimplementedWireServiceServer) Pull(context.Context, *WirePullRequest) (*WirePullResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Pull not implemented")
@@ -213,42 +149,6 @@ func RegisterWireServiceServer(s grpc.ServiceRegistrar, srv WireServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&WireService_ServiceDesc, srv)
-}
-
-func _WireService_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Wire)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WireServiceServer).Create(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WireService_Create_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireServiceServer).Create(ctx, req.(*pb.Wire))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WireService_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Wire)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WireServiceServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WireService_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireServiceServer).Update(ctx, req.(*pb.Wire))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _WireService_View_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -287,24 +187,6 @@ func _WireService_Name_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WireService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WireServiceServer).Delete(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WireService_Delete_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireServiceServer).Delete(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _WireService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(WireListRequest)
 	if err := dec(in); err != nil {
@@ -319,24 +201,6 @@ func _WireService_List_Handler(srv interface{}, ctx context.Context, dec func(in
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WireServiceServer).List(ctx, req.(*WireListRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WireService_ViewWithDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WireServiceServer).ViewWithDeleted(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WireService_ViewWithDeleted_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireServiceServer).ViewWithDeleted(ctx, req.(*pb.Id))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -385,14 +249,6 @@ var WireService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WireServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Create",
-			Handler:    _WireService_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _WireService_Update_Handler,
-		},
-		{
 			MethodName: "View",
 			Handler:    _WireService_View_Handler,
 		},
@@ -401,16 +257,8 @@ var WireService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WireService_Name_Handler,
 		},
 		{
-			MethodName: "Delete",
-			Handler:    _WireService_Delete_Handler,
-		},
-		{
 			MethodName: "List",
 			Handler:    _WireService_List_Handler,
-		},
-		{
-			MethodName: "ViewWithDeleted",
-			Handler:    _WireService_ViewWithDeleted_Handler,
 		},
 		{
 			MethodName: "Pull",
@@ -426,52 +274,38 @@ var WireService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	PinService_Create_FullMethodName          = "/nodes.PinService/Create"
-	PinService_Update_FullMethodName          = "/nodes.PinService/Update"
-	PinService_View_FullMethodName            = "/nodes.PinService/View"
-	PinService_Name_FullMethodName            = "/nodes.PinService/Name"
-	PinService_Delete_FullMethodName          = "/nodes.PinService/Delete"
-	PinService_List_FullMethodName            = "/nodes.PinService/List"
-	PinService_Pull_FullMethodName            = "/nodes.PinService/Pull"
-	PinService_ViewWithDeleted_FullMethodName = "/nodes.PinService/ViewWithDeleted"
-	PinService_Sync_FullMethodName            = "/nodes.PinService/Sync"
-	PinService_GetValue_FullMethodName        = "/nodes.PinService/GetValue"
-	PinService_SetValue_FullMethodName        = "/nodes.PinService/SetValue"
-	PinService_GetValueByName_FullMethodName  = "/nodes.PinService/GetValueByName"
-	PinService_SetValueByName_FullMethodName  = "/nodes.PinService/SetValueByName"
-	PinService_ViewValue_FullMethodName       = "/nodes.PinService/ViewValue"
-	PinService_DeleteValue_FullMethodName     = "/nodes.PinService/DeleteValue"
-	PinService_PullValue_FullMethodName       = "/nodes.PinService/PullValue"
-	PinService_SyncValue_FullMethodName       = "/nodes.PinService/SyncValue"
-	PinService_GetWrite_FullMethodName        = "/nodes.PinService/GetWrite"
-	PinService_SetWrite_FullMethodName        = "/nodes.PinService/SetWrite"
-	PinService_GetWriteByName_FullMethodName  = "/nodes.PinService/GetWriteByName"
-	PinService_SetWriteByName_FullMethodName  = "/nodes.PinService/SetWriteByName"
-	PinService_ViewWrite_FullMethodName       = "/nodes.PinService/ViewWrite"
-	PinService_DeleteWrite_FullMethodName     = "/nodes.PinService/DeleteWrite"
-	PinService_PullWrite_FullMethodName       = "/nodes.PinService/PullWrite"
-	PinService_SyncWrite_FullMethodName       = "/nodes.PinService/SyncWrite"
+	PinService_View_FullMethodName           = "/nodes.PinService/View"
+	PinService_Name_FullMethodName           = "/nodes.PinService/Name"
+	PinService_List_FullMethodName           = "/nodes.PinService/List"
+	PinService_Pull_FullMethodName           = "/nodes.PinService/Pull"
+	PinService_Sync_FullMethodName           = "/nodes.PinService/Sync"
+	PinService_GetValue_FullMethodName       = "/nodes.PinService/GetValue"
+	PinService_GetValueByName_FullMethodName = "/nodes.PinService/GetValueByName"
+	PinService_ViewValue_FullMethodName      = "/nodes.PinService/ViewValue"
+	PinService_PullValue_FullMethodName      = "/nodes.PinService/PullValue"
+	PinService_SyncValue_FullMethodName      = "/nodes.PinService/SyncValue"
+	PinService_GetWrite_FullMethodName       = "/nodes.PinService/GetWrite"
+	PinService_SetWrite_FullMethodName       = "/nodes.PinService/SetWrite"
+	PinService_GetWriteByName_FullMethodName = "/nodes.PinService/GetWriteByName"
+	PinService_SetWriteByName_FullMethodName = "/nodes.PinService/SetWriteByName"
+	PinService_ViewWrite_FullMethodName      = "/nodes.PinService/ViewWrite"
+	PinService_DeleteWrite_FullMethodName    = "/nodes.PinService/DeleteWrite"
+	PinService_PullWrite_FullMethodName      = "/nodes.PinService/PullWrite"
+	PinService_SyncWrite_FullMethodName      = "/nodes.PinService/SyncWrite"
 )
 
 // PinServiceClient is the client API for PinService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PinServiceClient interface {
-	Create(ctx context.Context, in *pb.Pin, opts ...grpc.CallOption) (*pb.Pin, error)
-	Update(ctx context.Context, in *pb.Pin, opts ...grpc.CallOption) (*pb.Pin, error)
 	View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Pin, error)
 	Name(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Pin, error)
-	Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 	List(ctx context.Context, in *PinListRequest, opts ...grpc.CallOption) (*PinListResponse, error)
 	Pull(ctx context.Context, in *PinPullRequest, opts ...grpc.CallOption) (*PinPullResponse, error)
-	ViewWithDeleted(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Pin, error)
 	Sync(ctx context.Context, in *pb.Pin, opts ...grpc.CallOption) (*pb.MyBool, error)
 	GetValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error)
-	SetValue(ctx context.Context, in *pb.PinValue, opts ...grpc.CallOption) (*pb.MyBool, error)
 	GetValueByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error)
-	SetValueByName(ctx context.Context, in *pb.PinNameValue, opts ...grpc.CallOption) (*pb.MyBool, error)
 	ViewValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValueUpdated, error)
-	DeleteValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
 	PullValue(ctx context.Context, in *PinPullValueRequest, opts ...grpc.CallOption) (*PinPullValueResponse, error)
 	SyncValue(ctx context.Context, in *pb.PinValue, opts ...grpc.CallOption) (*pb.MyBool, error)
 	GetWrite(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error)
@@ -492,26 +326,6 @@ func NewPinServiceClient(cc grpc.ClientConnInterface) PinServiceClient {
 	return &pinServiceClient{cc}
 }
 
-func (c *pinServiceClient) Create(ctx context.Context, in *pb.Pin, opts ...grpc.CallOption) (*pb.Pin, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Pin)
-	err := c.cc.Invoke(ctx, PinService_Create_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) Update(ctx context.Context, in *pb.Pin, opts ...grpc.CallOption) (*pb.Pin, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Pin)
-	err := c.cc.Invoke(ctx, PinService_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *pinServiceClient) View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Pin, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.Pin)
@@ -526,16 +340,6 @@ func (c *pinServiceClient) Name(ctx context.Context, in *pb.Name, opts ...grpc.C
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.Pin)
 	err := c.cc.Invoke(ctx, PinService_Name_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, PinService_Delete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -562,16 +366,6 @@ func (c *pinServiceClient) Pull(ctx context.Context, in *PinPullRequest, opts ..
 	return out, nil
 }
 
-func (c *pinServiceClient) ViewWithDeleted(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Pin, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Pin)
-	err := c.cc.Invoke(ctx, PinService_ViewWithDeleted_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *pinServiceClient) Sync(ctx context.Context, in *pb.Pin, opts ...grpc.CallOption) (*pb.MyBool, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.MyBool)
@@ -592,16 +386,6 @@ func (c *pinServiceClient) GetValue(ctx context.Context, in *pb.Id, opts ...grpc
 	return out, nil
 }
 
-func (c *pinServiceClient) SetValue(ctx context.Context, in *pb.PinValue, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, PinService_SetValue_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *pinServiceClient) GetValueByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.PinNameValue)
@@ -612,30 +396,10 @@ func (c *pinServiceClient) GetValueByName(ctx context.Context, in *pb.Name, opts
 	return out, nil
 }
 
-func (c *pinServiceClient) SetValueByName(ctx context.Context, in *pb.PinNameValue, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, PinService_SetValueByName_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *pinServiceClient) ViewValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValueUpdated, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.PinValueUpdated)
 	err := c.cc.Invoke(ctx, PinService_ViewValue_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) DeleteValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, PinService_DeleteValue_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -746,21 +510,14 @@ func (c *pinServiceClient) SyncWrite(ctx context.Context, in *pb.PinValue, opts 
 // All implementations must embed UnimplementedPinServiceServer
 // for forward compatibility.
 type PinServiceServer interface {
-	Create(context.Context, *pb.Pin) (*pb.Pin, error)
-	Update(context.Context, *pb.Pin) (*pb.Pin, error)
 	View(context.Context, *pb.Id) (*pb.Pin, error)
 	Name(context.Context, *pb.Name) (*pb.Pin, error)
-	Delete(context.Context, *pb.Id) (*pb.MyBool, error)
 	List(context.Context, *PinListRequest) (*PinListResponse, error)
 	Pull(context.Context, *PinPullRequest) (*PinPullResponse, error)
-	ViewWithDeleted(context.Context, *pb.Id) (*pb.Pin, error)
 	Sync(context.Context, *pb.Pin) (*pb.MyBool, error)
 	GetValue(context.Context, *pb.Id) (*pb.PinValue, error)
-	SetValue(context.Context, *pb.PinValue) (*pb.MyBool, error)
 	GetValueByName(context.Context, *pb.Name) (*pb.PinNameValue, error)
-	SetValueByName(context.Context, *pb.PinNameValue) (*pb.MyBool, error)
 	ViewValue(context.Context, *pb.Id) (*pb.PinValueUpdated, error)
-	DeleteValue(context.Context, *pb.Id) (*pb.MyBool, error)
 	PullValue(context.Context, *PinPullValueRequest) (*PinPullValueResponse, error)
 	SyncValue(context.Context, *pb.PinValue) (*pb.MyBool, error)
 	GetWrite(context.Context, *pb.Id) (*pb.PinValue, error)
@@ -781,20 +538,11 @@ type PinServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedPinServiceServer struct{}
 
-func (UnimplementedPinServiceServer) Create(context.Context, *pb.Pin) (*pb.Pin, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedPinServiceServer) Update(context.Context, *pb.Pin) (*pb.Pin, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
-}
 func (UnimplementedPinServiceServer) View(context.Context, *pb.Id) (*pb.Pin, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method View not implemented")
 }
 func (UnimplementedPinServiceServer) Name(context.Context, *pb.Name) (*pb.Pin, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Name not implemented")
-}
-func (UnimplementedPinServiceServer) Delete(context.Context, *pb.Id) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedPinServiceServer) List(context.Context, *PinListRequest) (*PinListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
@@ -802,29 +550,17 @@ func (UnimplementedPinServiceServer) List(context.Context, *PinListRequest) (*Pi
 func (UnimplementedPinServiceServer) Pull(context.Context, *PinPullRequest) (*PinPullResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Pull not implemented")
 }
-func (UnimplementedPinServiceServer) ViewWithDeleted(context.Context, *pb.Id) (*pb.Pin, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ViewWithDeleted not implemented")
-}
 func (UnimplementedPinServiceServer) Sync(context.Context, *pb.Pin) (*pb.MyBool, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Sync not implemented")
 }
 func (UnimplementedPinServiceServer) GetValue(context.Context, *pb.Id) (*pb.PinValue, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetValue not implemented")
 }
-func (UnimplementedPinServiceServer) SetValue(context.Context, *pb.PinValue) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetValue not implemented")
-}
 func (UnimplementedPinServiceServer) GetValueByName(context.Context, *pb.Name) (*pb.PinNameValue, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetValueByName not implemented")
 }
-func (UnimplementedPinServiceServer) SetValueByName(context.Context, *pb.PinNameValue) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetValueByName not implemented")
-}
 func (UnimplementedPinServiceServer) ViewValue(context.Context, *pb.Id) (*pb.PinValueUpdated, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ViewValue not implemented")
-}
-func (UnimplementedPinServiceServer) DeleteValue(context.Context, *pb.Id) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DeleteValue not implemented")
 }
 func (UnimplementedPinServiceServer) PullValue(context.Context, *PinPullValueRequest) (*PinPullValueResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PullValue not implemented")
@@ -877,42 +613,6 @@ func RegisterPinServiceServer(s grpc.ServiceRegistrar, srv PinServiceServer) {
 	s.RegisterService(&PinService_ServiceDesc, srv)
 }
 
-func _PinService_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Pin)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).Create(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_Create_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).Create(ctx, req.(*pb.Pin))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Pin)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).Update(ctx, req.(*pb.Pin))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _PinService_View_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(pb.Id)
 	if err := dec(in); err != nil {
@@ -945,24 +645,6 @@ func _PinService_Name_Handler(srv interface{}, ctx context.Context, dec func(int
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PinServiceServer).Name(ctx, req.(*pb.Name))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).Delete(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_Delete_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).Delete(ctx, req.(*pb.Id))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1003,24 +685,6 @@ func _PinService_Pull_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PinService_ViewWithDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).ViewWithDeleted(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_ViewWithDeleted_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).ViewWithDeleted(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _PinService_Sync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(pb.Pin)
 	if err := dec(in); err != nil {
@@ -1057,24 +721,6 @@ func _PinService_GetValue_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PinService_SetValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.PinValue)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).SetValue(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_SetValue_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).SetValue(ctx, req.(*pb.PinValue))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _PinService_GetValueByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(pb.Name)
 	if err := dec(in); err != nil {
@@ -1093,24 +739,6 @@ func _PinService_GetValueByName_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PinService_SetValueByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.PinNameValue)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).SetValueByName(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_SetValueByName_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).SetValueByName(ctx, req.(*pb.PinNameValue))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _PinService_ViewValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(pb.Id)
 	if err := dec(in); err != nil {
@@ -1125,24 +753,6 @@ func _PinService_ViewValue_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PinServiceServer).ViewValue(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_DeleteValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).DeleteValue(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_DeleteValue_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).DeleteValue(ctx, req.(*pb.Id))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1335,24 +945,12 @@ var PinService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*PinServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Create",
-			Handler:    _PinService_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _PinService_Update_Handler,
-		},
-		{
 			MethodName: "View",
 			Handler:    _PinService_View_Handler,
 		},
 		{
 			MethodName: "Name",
 			Handler:    _PinService_Name_Handler,
-		},
-		{
-			MethodName: "Delete",
-			Handler:    _PinService_Delete_Handler,
 		},
 		{
 			MethodName: "List",
@@ -1363,10 +961,6 @@ var PinService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PinService_Pull_Handler,
 		},
 		{
-			MethodName: "ViewWithDeleted",
-			Handler:    _PinService_ViewWithDeleted_Handler,
-		},
-		{
 			MethodName: "Sync",
 			Handler:    _PinService_Sync_Handler,
 		},
@@ -1375,24 +969,12 @@ var PinService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PinService_GetValue_Handler,
 		},
 		{
-			MethodName: "SetValue",
-			Handler:    _PinService_SetValue_Handler,
-		},
-		{
 			MethodName: "GetValueByName",
 			Handler:    _PinService_GetValueByName_Handler,
 		},
 		{
-			MethodName: "SetValueByName",
-			Handler:    _PinService_SetValueByName_Handler,
-		},
-		{
 			MethodName: "ViewValue",
 			Handler:    _PinService_ViewValue_Handler,
-		},
-		{
-			MethodName: "DeleteValue",
-			Handler:    _PinService_DeleteValue_Handler,
 		},
 		{
 			MethodName: "PullValue",

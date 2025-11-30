@@ -11,10 +11,7 @@ type Wire struct {
 	bun.BaseModel `bun:"wire"`
 	ID            string    `bun:"type:TEXT,pk" json:"id"`
 	Name          string    `bun:"name,type:TEXT" json:"name"`
-	Clusters      string    `bun:"clusters,type:TEXT" json:"clusters"` // Cluster 列表，如 "OnOff,LevelControl"
-	Status        int32     `bun:"status" json:"status"`
-	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
-	Created       time.Time `bun:"created" json:"created"`
+	Clusters      string    `bun:"clusters,type:TEXT" json:"clusters"`
 	Updated       time.Time `bun:"updated" json:"updated"`
 }
 
@@ -26,10 +23,7 @@ type Pin struct {
 	Name          string    `bun:"name,type:TEXT" json:"name"`
 	Addr          string    `bun:"addr,type:TEXT" json:"addr"`
 	Type          string    `bun:"type,type:TEXT" json:"type"`
-	Status        int32     `bun:"status" json:"status"`
 	Rw            int32     `bun:"rw" json:"rw"`
-	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
-	Created       time.Time `bun:"created" json:"created"`
 	Updated       time.Time `bun:"updated" json:"updated"`
 }
 

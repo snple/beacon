@@ -92,13 +92,15 @@ func (s *NodeUpService) push() error {
 
 	s.es.Logger().Sugar().Info("node login success")
 
-	s.es.GetSync().setNodeUpdatedLocalToRemote(s.ctx, time.Time{})
+	s.es.GetSync().setNodeToRemote(s.ctx, time.Time{})
 
-	if err := s.sync2(s.ctx); err != nil {
+	// 同步配置数据 Edge → Core
+	if err := s.syncLocalToRemote(s.ctx); err != nil {
 		return err
 	}
 
-	if err := s.syncPinValue2(s.ctx); err != nil {
+	// 同步运行数据 Edge → Core
+	if err := s.syncPinValueToRemote(s.ctx); err != nil {
 		return err
 	}
 
@@ -126,13 +128,10 @@ func (s *NodeUpService) pull() error {
 
 	s.es.Logger().Sugar().Info("node login success")
 
-	s.es.GetSync().setNodeUpdatedRemoteToLocal(s.ctx, time.Time{})
+	s.es.GetSync().setPinWriteFromRemote(s.ctx, time.Time{})
 
-	if err := s.sync1(s.ctx); err != nil {
-		return err
-	}
-
-	if err := s.syncPinValue1(s.ctx); err != nil {
+	// 拉取写命令 Core → Edge
+	if err := s.syncPinWriteFromRemote(s.ctx); err != nil {
 		return err
 	}
 
@@ -174,12 +173,12 @@ func (s *NodeUpService) try() {
 
 	// start realtime sync
 	if s.es.dopts.SyncOptions.Realtime {
-		go s.waitRemoteNodeUpdated(ctx)
+		// Edge → Core: 配置数据同步
 		go s.waitLocalNodeUpdated(ctx)
-		go s.waitRemotePinValueUpdated(ctx)
+		// Edge → Core: PinValue 同步
 		go s.waitLocalPinValueUpdated(ctx)
+		// Core → Edge: PinWrite 命令拉取
 		go s.waitRemotePinWriteUpdated(ctx)
-		go s.waitLocalPinWriteUpdated(ctx)
 	}
 
 	// keep alive
@@ -299,55 +298,7 @@ func (s *NodeUpService) login(ctx context.Context) error {
 	return nil
 }
 
-func (s *NodeUpService) waitRemoteNodeUpdated(ctx context.Context) {
-	s.closeWG.Add(1)
-	defer s.closeWG.Done()
-
-	for {
-		ctx := metadata.SetToken(ctx, s.GetToken())
-
-		stream, err := s.SyncServiceClient().WaitNodeUpdated(ctx, &pb.MyEmpty{})
-		if err != nil {
-			if code, ok := status.FromError(err); ok {
-				if code.Code() == codes.Canceled {
-					return
-				}
-			}
-
-			s.es.Logger().Sugar().Errorf("WaitNodeUpdated: %v", err)
-
-			// retry
-			time.Sleep(s.es.dopts.SyncOptions.Retry)
-			continue
-		}
-
-		for {
-			_, err := stream.Recv()
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-
-				if code, ok := status.FromError(err); ok {
-					if code.Code() == codes.Canceled {
-						return
-					}
-				}
-
-				s.es.Logger().Sugar().Errorf("WaitNodeUpdated.Recv(): %v", err)
-				return
-			}
-
-			ctx = metadata.SetToken(ctx, s.GetToken())
-
-			err = s.sync1(ctx)
-			if err != nil {
-				s.es.Logger().Sugar().Errorf("sync1: %v", err)
-			}
-		}
-	}
-}
-
+// waitLocalNodeUpdated: Edge 配置数据变化时同步到 Core
 func (s *NodeUpService) waitLocalNodeUpdated(ctx context.Context) {
 	s.closeWG.Add(1)
 	defer s.closeWG.Done()
@@ -362,62 +313,15 @@ func (s *NodeUpService) waitLocalNodeUpdated(ctx context.Context) {
 		case <-notify.Wait():
 			ctx = metadata.SetToken(ctx, s.GetToken())
 
-			err := s.sync2(ctx)
+			err := s.syncLocalToRemote(ctx)
 			if err != nil {
-				s.es.Logger().Sugar().Errorf("sync2: %v", err)
+				s.es.Logger().Sugar().Errorf("syncLocalToRemote: %v", err)
 			}
 		}
 	}
 }
 
-func (s *NodeUpService) waitRemotePinValueUpdated(ctx context.Context) {
-	s.closeWG.Add(1)
-	defer s.closeWG.Done()
-
-	for {
-		ctx := metadata.SetToken(ctx, s.GetToken())
-
-		stream, err := s.SyncServiceClient().WaitPinValueUpdated(ctx, &pb.MyEmpty{})
-		if err != nil {
-			if code, ok := status.FromError(err); ok {
-				if code.Code() == codes.Canceled {
-					return
-				}
-			}
-
-			s.es.Logger().Sugar().Errorf("WaitPinValueUpdated: %v", err)
-
-			// retry
-			time.Sleep(s.es.dopts.SyncOptions.Retry)
-			continue
-		}
-
-		for {
-			_, err := stream.Recv()
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				if code, ok := status.FromError(err); ok {
-					if code.Code() == codes.Canceled {
-						return
-					}
-				}
-
-				s.es.Logger().Sugar().Errorf("WaitPinValueUpdated.Recv(): %v", err)
-				return
-			}
-
-			ctx = metadata.SetToken(ctx, s.GetToken())
-
-			err = s.syncPinValue1(ctx)
-			if err != nil {
-				s.es.Logger().Sugar().Errorf("syncPinValue1: %v", err)
-			}
-		}
-	}
-}
-
+// waitLocalPinValueUpdated: Edge PinValue 变化时同步到 Core
 func (s *NodeUpService) waitLocalPinValueUpdated(ctx context.Context) {
 	s.closeWG.Add(1)
 	defer s.closeWG.Done()
@@ -432,14 +336,15 @@ func (s *NodeUpService) waitLocalPinValueUpdated(ctx context.Context) {
 		case <-notify.Wait():
 			ctx = metadata.SetToken(ctx, s.GetToken())
 
-			err := s.syncPinValue2(ctx)
+			err := s.syncPinValueToRemote(ctx)
 			if err != nil {
-				s.es.Logger().Sugar().Errorf("syncPinValue2: %v", err)
+				s.es.Logger().Sugar().Errorf("syncPinValueToRemote: %v", err)
 			}
 		}
 	}
 }
 
+// waitRemotePinWriteUpdated: 监听 Core 的 PinWrite 更新，拉取写命令
 func (s *NodeUpService) waitRemotePinWriteUpdated(ctx context.Context) {
 	s.closeWG.Add(1)
 	defer s.closeWG.Done()
@@ -480,31 +385,9 @@ func (s *NodeUpService) waitRemotePinWriteUpdated(ctx context.Context) {
 
 			ctx = metadata.SetToken(ctx, s.GetToken())
 
-			err = s.syncPinWrite1(ctx)
+			err = s.syncPinWriteFromRemote(ctx)
 			if err != nil {
-				s.es.Logger().Sugar().Errorf("syncPinWrite1: %v", err)
-			}
-		}
-	}
-}
-
-func (s *NodeUpService) waitLocalPinWriteUpdated(ctx context.Context) {
-	s.closeWG.Add(1)
-	defer s.closeWG.Done()
-
-	notify := s.es.GetSync().Notify(NOTIFY_PW)
-	defer notify.Close()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-notify.Wait():
-			ctx = metadata.SetToken(ctx, s.GetToken())
-
-			err := s.syncPinWrite2(ctx)
-			if err != nil {
-				s.es.Logger().Sugar().Errorf("syncPinWrite2: %v", err)
+				s.es.Logger().Sugar().Errorf("syncPinWriteFromRemote: %v", err)
 			}
 		}
 	}
@@ -513,162 +396,34 @@ func (s *NodeUpService) waitLocalPinWriteUpdated(ctx context.Context) {
 func (s *NodeUpService) sync(ctx context.Context) error {
 	ctx = metadata.SetToken(ctx, s.GetToken())
 
-	if err := s.sync1(ctx); err != nil {
+	// Edge → Core: 配置数据同步
+	if err := s.syncLocalToRemote(ctx); err != nil {
 		return err
 	}
 
-	if err := s.sync2(ctx); err != nil {
+	// Edge → Core: PinValue 同步
+	if err := s.syncPinValueToRemote(ctx); err != nil {
 		return err
 	}
 
-	if err := s.syncPinValue1(ctx); err != nil {
-		return err
-	}
-
-	if err := s.syncPinValue2(ctx); err != nil {
-		return err
-	}
-
-	if err := s.syncPinWrite1(ctx); err != nil {
-		return err
-	}
-
-	return s.syncPinWrite2(ctx)
+	// Core → Edge: PinWrite 命令拉取
+	return s.syncPinWriteFromRemote(ctx)
 }
 
-func (s *NodeUpService) sync1(ctx context.Context) error {
-	return s.syncRemoteToLocal(ctx)
-}
-
-func (s *NodeUpService) sync2(ctx context.Context) error {
-	return s.syncLocalToRemote(ctx)
-}
-
-func (s *NodeUpService) syncPinValue1(ctx context.Context) error {
-	return s.syncPinValueRemoteToLocal(ctx)
-}
-
-func (s *NodeUpService) syncPinValue2(ctx context.Context) error {
-	return s.syncPinValueLocalToRemote(ctx)
-}
-
-func (s *NodeUpService) syncPinWrite1(ctx context.Context) error {
-	return s.syncPinWriteRemoteToLocal(ctx)
-}
-
-func (s *NodeUpService) syncPinWrite2(ctx context.Context) error {
-	return s.syncPinWriteLocalToRemote(ctx)
-}
-
-func (s *NodeUpService) syncRemoteToLocal(ctx context.Context) error {
-	nodeUpdated, err := s.SyncServiceClient().GetNodeUpdated(ctx, &pb.MyEmpty{})
-	if err != nil {
-		return err
-	}
-
-	nodeUpdated2, err := s.es.GetSync().getNodeUpdatedRemoteToLocal(ctx)
-	if err != nil {
-		return err
-	}
-
-	if nodeUpdated.Updated <= nodeUpdated2.UnixMicro() {
-		return nil
-	}
-
-	// node
-	{
-		remote, err := s.NodeServiceClient().ViewWithDeleted(ctx, &pb.MyEmpty{})
-		if err != nil {
-			return err
-		}
-
-		_, err = s.es.GetNode().Sync(ctx, remote)
-		if err != nil {
-			return err
-		}
-	}
-
-	// wire
-	{
-		after := nodeUpdated2.UnixMicro()
-		limit := uint32(10)
-
-		for {
-			remotes, err := s.WireServiceClient().Pull(ctx, &nodes.WirePullRequest{After: after, Limit: limit})
-			if err != nil {
-				return err
-			}
-
-			for _, remote := range remotes.Wires {
-				_, err = s.es.GetWire().Sync(ctx, remote)
-				if err != nil {
-					return err
-				}
-
-				after = remote.Updated
-			}
-
-			if len(remotes.Wires) < int(limit) {
-				break
-			}
-		}
-	}
-
-	// pin
-	{
-		after := nodeUpdated2.UnixMicro()
-		limit := uint32(10)
-
-		for {
-			remotes, err := s.PinServiceClient().Pull(ctx, &nodes.PinPullRequest{After: after, Limit: limit})
-			if err != nil {
-				return err
-			}
-
-			for _, remote := range remotes.Pins {
-				_, err := s.es.GetPin().Sync(ctx, remote)
-				if err != nil {
-					return err
-				}
-
-				after = remote.Updated
-			}
-
-			if len(remotes.Pins) < int(limit) {
-				break
-			}
-		}
-	}
-
-	return s.es.GetSync().setNodeUpdatedRemoteToLocal(ctx, time.UnixMicro(nodeUpdated.GetUpdated()))
-}
-
+// syncLocalToRemote: Edge 配置数据同步到 Core (Node/Wire/Pin)
 func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 	nodeUpdated, err := s.es.GetSync().getNodeUpdated(ctx)
 	if err != nil {
 		return err
 	}
 
-	nodeUpdated2, err := s.es.GetSync().getNodeUpdatedLocalToRemote(ctx)
+	nodeUpdated2, err := s.es.GetSync().getNodeToRemote(ctx)
 	if err != nil {
 		return err
 	}
 
 	if nodeUpdated.UnixMicro() <= nodeUpdated2.UnixMicro() {
 		return nil
-	}
-
-	// node
-	{
-		local, err := s.es.GetNode().ViewWithDeleted(ctx, &pb.MyEmpty{})
-		if err != nil {
-			return err
-		}
-
-		_, err = s.NodeServiceClient().Sync(ctx, local)
-		if err != nil {
-			return err
-		}
 	}
 
 	// wire
@@ -723,64 +478,17 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 		}
 	}
 
-	return s.es.GetSync().setNodeUpdatedLocalToRemote(ctx, nodeUpdated)
+	return s.es.GetSync().setNodeToRemote(ctx, nodeUpdated)
 }
 
-func (s *NodeUpService) syncPinValueRemoteToLocal(ctx context.Context) error {
-	pinValueUpdated, err := s.SyncServiceClient().GetPinValueUpdated(ctx, &pb.MyEmpty{})
-	if err != nil {
-		return err
-	}
-
-	pinValueUpdated2, err := s.es.GetSync().getPinValueUpdatedRemoteToLocal(ctx)
-	if err != nil {
-		return err
-	}
-
-	if pinValueUpdated.Updated <= pinValueUpdated2.UnixMicro() {
-		return nil
-	}
-
-	after := pinValueUpdated2.UnixMicro()
-	limit := uint32(100)
-
-PULL:
-	for {
-		remotes, err := s.PinServiceClient().PullValue(ctx, &nodes.PinPullValueRequest{After: after, Limit: limit})
-		if err != nil {
-			return err
-		}
-
-		for _, remote := range remotes.Pins {
-			if remote.Updated > pinValueUpdated.Updated {
-				break PULL
-			}
-
-			_, err = s.es.GetPin().SyncValue(ctx,
-				&pb.PinValue{Id: remote.Id, Value: remote.Value, Updated: remote.Updated})
-			if err != nil {
-				s.es.Logger().Sugar().Errorf("SyncValue: %v", err)
-				return err
-			}
-
-			after = remote.Updated
-		}
-
-		if len(remotes.Pins) < int(limit) {
-			break
-		}
-	}
-
-	return s.es.GetSync().setPinValueUpdatedRemoteToLocal(ctx, time.UnixMicro(pinValueUpdated.GetUpdated()))
-}
-
-func (s *NodeUpService) syncPinValueLocalToRemote(ctx context.Context) error {
+// syncPinValueToRemote: Edge PinValue 同步到 Core
+func (s *NodeUpService) syncPinValueToRemote(ctx context.Context) error {
 	pinValueUpdated, err := s.es.GetSync().getPinValueUpdated(ctx)
 	if err != nil {
 		return err
 	}
 
-	pinValueUpdated2, err := s.es.GetSync().getPinValueUpdatedLocalToRemote(ctx)
+	pinValueUpdated2, err := s.es.GetSync().getPinValueToRemote(ctx)
 	if err != nil {
 		return err
 	}
@@ -819,16 +527,17 @@ PULL:
 		}
 	}
 
-	return s.es.GetSync().setPinValueUpdatedLocalToRemote(ctx, pinValueUpdated)
+	return s.es.GetSync().setPinValueToRemote(ctx, pinValueUpdated)
 }
 
-func (s *NodeUpService) syncPinWriteRemoteToLocal(ctx context.Context) error {
+// syncPinWriteFromRemote: 从 Core 拉取 PinWrite 写命令
+func (s *NodeUpService) syncPinWriteFromRemote(ctx context.Context) error {
 	pinWriteUpdated, err := s.SyncServiceClient().GetPinWriteUpdated(ctx, &pb.MyEmpty{})
 	if err != nil {
 		return err
 	}
 
-	pinWriteUpdated2, err := s.es.GetSync().getPinWriteUpdatedRemoteToLocal(ctx)
+	pinWriteUpdated2, err := s.es.GetSync().getPinWriteFromRemote(ctx)
 	if err != nil {
 		return err
 	}
@@ -867,53 +576,5 @@ PULL:
 		}
 	}
 
-	return s.es.GetSync().setPinWriteUpdatedRemoteToLocal(ctx, time.UnixMicro(pinWriteUpdated.GetUpdated()))
-}
-
-func (s *NodeUpService) syncPinWriteLocalToRemote(ctx context.Context) error {
-	pinWriteUpdated, err := s.es.GetSync().getPinWriteUpdated(ctx)
-	if err != nil {
-		return err
-	}
-
-	pinWriteUpdated2, err := s.es.GetSync().getPinWriteUpdatedLocalToRemote(ctx)
-	if err != nil {
-		return err
-	}
-
-	if pinWriteUpdated.UnixMicro() <= pinWriteUpdated2.UnixMicro() {
-		return nil
-	}
-
-	after := pinWriteUpdated2.UnixMicro()
-	limit := uint32(100)
-
-PULL:
-	for {
-		locals, err := s.es.GetPin().PullWrite(ctx, &edges.PinPullValueRequest{After: after, Limit: limit})
-		if err != nil {
-			return err
-		}
-
-		for _, local := range locals.Pins {
-			if local.Updated > pinWriteUpdated.UnixMicro() {
-				break PULL
-			}
-
-			_, err = s.PinServiceClient().SyncWrite(ctx,
-				&pb.PinValue{Id: local.Id, Value: local.Value, Updated: local.Updated})
-			if err != nil {
-				s.es.Logger().Sugar().Errorf("SyncWrite: %v", err)
-				return err
-			}
-
-			after = local.Updated
-		}
-
-		if len(locals.Pins) < int(limit) {
-			break
-		}
-	}
-
-	return s.es.GetSync().setPinWriteUpdatedLocalToRemote(ctx, pinWriteUpdated)
+	return s.es.GetSync().setPinWriteFromRemote(ctx, time.UnixMicro(pinWriteUpdated.GetUpdated()))
 }

@@ -9,7 +9,5 @@ message Node {
     string name = 2;
     string secret = 3;
     sint32 status = 4;
-    int64 created = 5;
-    int64 updated = 6;
-    int64 deleted = 7;
+    int64 updated = 5;
 }

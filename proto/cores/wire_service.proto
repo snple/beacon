@@ -25,11 +25,6 @@ message WireNameRequest {
     string name = 2;
 }
 
-message WireCloneRequest {
-    string id = 1;
-    string node_id = 2;
-}
-
 message WirePullRequest {
     int64 after = 1;
     uint32 limit = 2;
@@ -44,15 +39,10 @@ message WirePullResponse {
 }
 
 service WireService {
-    rpc Create(pb.Wire) returns (pb.Wire) {}
-    rpc Update(pb.Wire) returns (pb.Wire) {}
     rpc View(pb.Id) returns (pb.Wire) {}
     rpc Name(WireNameRequest) returns (pb.Wire) {}
     rpc NameFull(pb.Name) returns (pb.Wire) {}
-    rpc Delete(pb.Id) returns (pb.MyBool) {}
     rpc List(WireListRequest) returns (WireListResponse) {}
-    rpc Clone(WireCloneRequest) returns (pb.MyBool) {}
-    rpc ViewWithDeleted(pb.Id) returns (pb.Wire) {}
     rpc Pull(WirePullRequest) returns (WirePullResponse) {}
     rpc Sync(pb.Wire) returns (pb.MyBool) {}
 }
@@ -74,11 +64,6 @@ message PinListResponse {
 message PinNameRequest {
     string node_id = 1;
     string name = 2;
-}
-
-message PinCloneRequest {
-    string id = 1;
-    string wire_id = 2;
 }
 
 message PinGetValueByNameRequest {
@@ -121,24 +106,16 @@ message PinPullValueResponse {
 }
 
 service PinService {
-    rpc Create(pb.Pin) returns (pb.Pin) {}
-    rpc Update(pb.Pin) returns (pb.Pin) {}
     rpc View(pb.Id) returns (pb.Pin) {}
     rpc Name(PinNameRequest) returns (pb.Pin) {}
     rpc NameFull(pb.Name) returns (pb.Pin) {}
-    rpc Delete(pb.Id) returns (pb.MyBool) {}
     rpc List(PinListRequest) returns (PinListResponse) {}
-    rpc Clone(PinCloneRequest) returns (pb.MyBool) {}
-    rpc ViewWithDeleted(pb.Id) returns (pb.Pin) {}
     rpc Pull(PinPullRequest) returns (PinPullResponse) {}
     rpc Sync(pb.Pin) returns (pb.MyBool) {}
 
     rpc GetValue(pb.Id) returns (pb.PinValue) {}
-    rpc SetValue(pb.PinValue) returns (pb.MyBool) {}
     rpc GetValueByName(PinGetValueByNameRequest) returns (PinNameValue) {}
-    rpc SetValueByName(PinNameValue) returns (pb.MyBool) {}
     rpc ViewValue(pb.Id) returns (pb.PinValueUpdated) {}
-    rpc DeleteValue(pb.Id) returns (pb.MyBool) {}
     rpc PullValue(PinPullValueRequest) returns (PinPullValueResponse) {}
     rpc SyncValue(pb.PinValue) returns (pb.MyBool) {}
 

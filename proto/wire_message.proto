@@ -9,10 +9,7 @@ message Wire {
     string node_id = 2;
     string name = 3;
     string clusters = 4;
-    sint32 status = 5;
-    int64 created = 6;
-    int64 updated = 7;
-    int64 deleted = 8;
+    int64 updated = 5;
 }
 
 // Pin 属性
@@ -24,11 +21,8 @@ message Pin {
     string addr = 5;
     string value = 6;
     string type = 7;
-    sint32 status = 8;
-    sint32 rw = 9;
-    int64 created = 10;
-    int64 updated = 11;
-    int64 deleted = 12;
+    sint32 rw = 8;
+    int64 updated = 9;
 }
 
 message PinValue {

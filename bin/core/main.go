@@ -56,11 +56,6 @@ func main() {
 		log.Logger.Sugar().Fatalf("create schema: %v", err)
 	}
 
-	// the seed of core will be executed automatically, no need to execute manually
-	if err = core.Seed(bundb); err != nil {
-		log.Logger.Sugar().Fatalf("seed: %v", err)
-	}
-
 	command := flag.Arg(0)
 	switch command {
 	case "seed":

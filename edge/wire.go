@@ -10,7 +10,6 @@ import (
 	"github.com/snple/beacon/edge/model"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
-	"github.com/snple/beacon/util"
 	"github.com/snple/types/cache"
 	"github.com/uptrace/bun"
 	"google.golang.org/grpc/codes"
@@ -30,126 +29,6 @@ func newWireService(es *EdgeService) *WireService {
 		es:    es,
 		cache: cache.NewCache[string, model.Wire](nil),
 	}
-}
-
-func (s *WireService) Create(ctx context.Context, in *pb.Wire) (*pb.Wire, error) {
-	var output pb.Wire
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
-		}
-	}
-
-	item := model.Wire{
-		ID:       in.Id,
-		Name:     in.Name,
-		Clusters: in.Clusters,
-		Status:   in.Status,
-		Created:  time.Now(),
-		Updated:  time.Now(),
-	}
-
-	// name validation
-	{
-		if len(in.Name) < 2 {
-			return &output, status.Error(codes.InvalidArgument, "Wire.Name min 2 character")
-		}
-
-		err = s.es.GetDB().NewSelect().Model(&model.Wire{}).Where("name = ?", in.Name).Scan(ctx)
-		if err != nil {
-			if err != sql.ErrNoRows {
-				return &output, status.Errorf(codes.Internal, "Query: %v", err)
-			}
-		} else {
-			return &output, status.Error(codes.AlreadyExists, "Wire.Name must be unique")
-		}
-	}
-
-	if item.ID == "" {
-		item.ID = util.RandomID()
-	}
-
-	_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Insert: %v", err)
-	}
-
-	if err = s.afterUpdate(ctx, &item); err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutput(&output, &item)
-
-	return &output, nil
-}
-
-func (s *WireService) Update(ctx context.Context, in *pb.Wire) (*pb.Wire, error) {
-	var output pb.Wire
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
-		}
-
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
-		}
-	}
-
-	item, err := s.ViewByID(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	// name validation
-	{
-		if len(in.Name) < 2 {
-			return &output, status.Error(codes.InvalidArgument, "Wire.Name min 2 character")
-		}
-
-		modelItem := model.Wire{}
-		err = s.es.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
-		if err != nil {
-			if err != sql.ErrNoRows {
-				return &output, status.Errorf(codes.Internal, "Query: %v", err)
-			}
-		} else {
-			if modelItem.ID != item.ID {
-				return &output, status.Error(codes.AlreadyExists, "Wire.Name must be unique")
-			}
-		}
-	}
-
-	item.Name = in.Name
-	item.Clusters = in.Clusters
-	item.Status = in.Status
-	item.Updated = time.Now()
-
-	_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Update: %v", err)
-	}
-
-	if err = s.afterUpdate(ctx, &item); err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutput(&output, &item)
-
-	return &output, nil
 }
 
 func (s *WireService) View(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
@@ -198,43 +77,6 @@ func (s *WireService) Name(ctx context.Context, in *pb.Name) (*pb.Wire, error) {
 	}
 
 	s.copyModelToOutput(&output, &item)
-
-	return &output, nil
-}
-
-func (s *WireService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
-		}
-	}
-
-	item, err := s.ViewByID(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	item.Updated = time.Now()
-	item.Deleted = time.Now()
-
-	_, err = s.es.GetDB().NewUpdate().Model(&item).Column("updated", "deleted").WherePK().Exec(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Delete: %v", err)
-	}
-
-	if err = s.afterDelete(ctx, &item); err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
 
 	return &output, nil
 }
@@ -325,48 +167,6 @@ func (s *WireService) List(ctx context.Context, in *edges.WireListRequest) (*edg
 	return &output, nil
 }
 
-func (s *WireService) Clone(ctx context.Context, in *edges.WireCloneRequest) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
-		}
-	}
-
-	tx, err := s.es.GetDB().BeginTx(ctx, nil)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "BeginTx: %v", err)
-	}
-	var done bool
-	defer func() {
-		if !done {
-			_ = tx.Rollback()
-		}
-	}()
-
-	err = s.es.getClone().wire(ctx, tx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	done = true
-	err = tx.Commit()
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Commit: %v", err)
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *WireService) ViewByID(ctx context.Context, id string) (model.Wire, error) {
 	item := model.Wire{
 		ID: id,
@@ -405,10 +205,7 @@ func (s *WireService) copyModelToOutput(output *pb.Wire, item *model.Wire) {
 	output.Id = item.ID
 	output.Name = item.Name
 	output.Clusters = item.Clusters
-	output.Status = item.Status
-	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()
-	output.Deleted = item.Deleted.UnixMicro()
 }
 
 func (s *WireService) afterUpdate(ctx context.Context, _ *model.Wire) error {
@@ -589,10 +386,7 @@ SKIP:
 			ID:       in.Id,
 			Name:     in.Name,
 			Clusters: in.Clusters,
-			Status:   in.Status,
-			Created:  time.UnixMicro(in.Created),
 			Updated:  time.UnixMicro(in.Updated),
-			Deleted:  time.UnixMicro(in.Deleted),
 		}
 
 		_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -628,11 +422,9 @@ SKIP:
 
 		item.Name = in.Name
 		item.Clusters = in.Clusters
-		item.Status = in.Status
 		item.Updated = time.UnixMicro(in.Updated)
-		item.Deleted = time.UnixMicro(in.Deleted)
 
-		_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().WhereAllWithDeleted().Exec(ctx)
+		_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
 		if err != nil {
 			return &output, status.Errorf(codes.Internal, "Update: %v", err)
 		}

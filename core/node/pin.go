@@ -22,68 +22,6 @@ func newPinService(ns *NodeService) *PinService {
 	}
 }
 
-func (s *PinService) Create(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
-	var output pb.Pin
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	// wire validation
-	{
-		nodeID, err := validateToken(ctx)
-		if err != nil {
-			return &output, err
-		}
-
-		request := &pb.Id{Id: in.WireId}
-
-		reply, err := s.ns.Core().GetWire().View(ctx, request)
-		if err != nil {
-			return &output, err
-		}
-
-		if reply.NodeId != nodeID {
-			return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-		}
-	}
-
-	return s.ns.Core().GetPin().Create(ctx, in)
-}
-
-func (s *PinService) Update(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
-	var output pb.Pin
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &pb.Id{Id: in.Id}
-
-	reply, err := s.ns.Core().GetPin().View(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().Update(ctx, in)
-}
-
 func (s *PinService) View(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
 	var output pb.Pin
 	var err error
@@ -142,34 +80,6 @@ func (s *PinService) Name(ctx context.Context, in *pb.Name) (*pb.Pin, error) {
 	return reply, nil
 }
 
-func (s *PinService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	reply, err := s.ns.Core().GetPin().View(ctx, in)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().Delete(ctx, in)
-}
-
 func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes.PinListResponse, error) {
 	var err error
 	var output nodes.PinListResponse
@@ -203,34 +113,6 @@ func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes
 	output.Pins = reply.Pins
 
 	return &output, nil
-}
-
-func (s *PinService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
-	var output pb.Pin
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	reply, err := s.ns.Core().GetPin().ViewWithDeleted(ctx, in)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return reply, nil
 }
 
 func (s *PinService) Pull(ctx context.Context, in *nodes.PinPullRequest) (*nodes.PinPullResponse, error) {

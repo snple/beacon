@@ -7,9 +7,5 @@ import "node_message.proto";
 import "generic_message.proto";
 
 service NodeService {
-    rpc Update(pb.Node) returns (pb.Node) {}
     rpc View(pb.MyEmpty) returns (pb.Node) {}
-    rpc Destory(pb.MyEmpty) returns (pb.MyBool) {}
-    rpc ViewWithDeleted(pb.MyEmpty) returns (pb.Node) {}
-    rpc Sync(pb.Node) returns (pb.MyBool) {}
 }

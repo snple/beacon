@@ -227,9 +227,8 @@ func (s *NodeService) ViewByID(ctx context.Context) (model.Node, error) {
 func (s *NodeService) copyModelToOutput(output *pb.Node, item *model.Node) {
 	output.Id = item.ID
 	output.Name = item.Name
-	output.Created = item.Created.UnixMicro()
+	output.Secret = item.Secret
 	output.Updated = item.Updated.UnixMicro()
-	output.Deleted = item.Updated.UnixMicro()
 }
 
 func (s *NodeService) afterUpdate(ctx context.Context, _ *model.Node) error {
@@ -342,9 +341,8 @@ SKIP:
 		item := model.Node{
 			ID:      in.Id,
 			Name:    in.Name,
-			Created: time.UnixMicro(in.Created),
+			Secret:  in.Secret,
 			Updated: time.UnixMicro(in.Updated),
-			Deleted: time.UnixMicro(in.Deleted),
 		}
 
 		_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -379,10 +377,10 @@ SKIP:
 		}
 
 		item.Name = in.Name
+		item.Secret = in.Secret
 		item.Updated = time.UnixMicro(in.Updated)
-		item.Deleted = time.UnixMicro(in.Deleted)
 
-		_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().WhereAllWithDeleted().Exec(ctx)
+		_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
 		if err != nil {
 			return &output, status.Errorf(codes.Internal, "Update: %v", err)
 		}

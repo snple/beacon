@@ -343,58 +343,33 @@ func (s *SyncService) setPinWriteUpdated(ctx context.Context, updated time.Time)
 	return nil
 }
 
-// node
+// 单向同步状态跟踪方法
 
-func (s *SyncService) getNodeUpdatedRemoteToLocal(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_NODE_REMOTE_TO_LOCAL)
+// 配置数据同步状态 (Edge → Core)
+func (s *SyncService) getNodeToRemote(ctx context.Context) (time.Time, error) {
+	return s.getUpdated(ctx, model.SYNC_NODE_TO_REMOTE)
 }
 
-func (s *SyncService) setNodeUpdatedRemoteToLocal(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_NODE_REMOTE_TO_LOCAL, updated)
+func (s *SyncService) setNodeToRemote(ctx context.Context, updated time.Time) error {
+	return s.setUpdated(ctx, model.SYNC_NODE_TO_REMOTE, updated)
 }
 
-func (s *SyncService) getNodeUpdatedLocalToRemote(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_NODE_LOCAL_TO_REMOTE)
+// PinValue 同步状态 (Edge → Core)
+func (s *SyncService) getPinValueToRemote(ctx context.Context) (time.Time, error) {
+	return s.getUpdated(ctx, model.SYNC_PIN_VALUE_TO_REMOTE)
 }
 
-func (s *SyncService) setNodeUpdatedLocalToRemote(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_NODE_LOCAL_TO_REMOTE, updated)
+func (s *SyncService) setPinValueToRemote(ctx context.Context, updated time.Time) error {
+	return s.setUpdated(ctx, model.SYNC_PIN_VALUE_TO_REMOTE, updated)
 }
 
-// value
-
-func (s *SyncService) getPinValueUpdatedRemoteToLocal(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN_VALUE_REMOTE_TO_LOCAL)
+// PinWrite 同步状态 (Core → Edge)
+func (s *SyncService) getPinWriteFromRemote(ctx context.Context) (time.Time, error) {
+	return s.getUpdated(ctx, model.SYNC_PIN_WRITE_FROM_REMOTE)
 }
 
-func (s *SyncService) setPinValueUpdatedRemoteToLocal(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_PIN_VALUE_REMOTE_TO_LOCAL, updated)
-}
-
-func (s *SyncService) getPinValueUpdatedLocalToRemote(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN_VALUE_LOCAL_TO_REMOTE)
-}
-
-func (s *SyncService) setPinValueUpdatedLocalToRemote(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_PIN_VALUE_LOCAL_TO_REMOTE, updated)
-}
-
-// write
-
-func (s *SyncService) getPinWriteUpdatedRemoteToLocal(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN_WRITE_REMOTE_TO_LOCAL)
-}
-
-func (s *SyncService) setPinWriteUpdatedRemoteToLocal(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_PIN_WRITE_REMOTE_TO_LOCAL, updated)
-}
-
-func (s *SyncService) getPinWriteUpdatedLocalToRemote(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN_WRITE_LOCAL_TO_REMOTE)
-}
-
-func (s *SyncService) setPinWriteUpdatedLocalToRemote(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_PIN_WRITE_LOCAL_TO_REMOTE, updated)
+func (s *SyncService) setPinWriteFromRemote(ctx context.Context, updated time.Time) error {
+	return s.setUpdated(ctx, model.SYNC_PIN_WRITE_FROM_REMOTE, updated)
 }
 
 func (s *SyncService) getUpdated(_ context.Context, key string) (time.Time, error) {

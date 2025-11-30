@@ -22,8 +22,6 @@ type CoreService struct {
 	wire        *WireService
 	pin         *PinService
 
-	clone *cloneService
-
 	ctx     context.Context
 	cancel  func()
 	closeWG sync.WaitGroup
@@ -63,8 +61,6 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 	cs.wire = newWireService(cs)
 	cs.pin = newPinService(cs)
 
-	cs.clone = newCloneService(cs)
-
 	return cs, nil
 }
 
@@ -103,10 +99,6 @@ func (cs *CoreService) GetWire() *WireService {
 
 func (cs *CoreService) GetPin() *PinService {
 	return cs.pin
-}
-
-func (cs *CoreService) getClone() *cloneService {
-	return cs.clone
 }
 
 func (cs *CoreService) Context() context.Context {

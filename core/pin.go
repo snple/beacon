@@ -12,7 +12,6 @@ import (
 	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
-	"github.com/snple/beacon/util"
 	"github.com/snple/types/cache"
 	"github.com/uptrace/bun"
 	"google.golang.org/grpc/codes"
@@ -32,163 +31,6 @@ func newPinService(cs *CoreService) *PinService {
 		cs:    cs,
 		cache: cache.NewCache[string, model.Pin](nil),
 	}
-}
-
-func (s *PinService) Create(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
-	var output pb.Pin
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.WireId == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.WireID")
-		}
-
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
-		}
-
-		if !dt.ValidateType(in.Type) {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Type")
-		}
-	}
-
-	// name validation
-	{
-		if len(in.Name) < 2 {
-			return &output, status.Error(codes.InvalidArgument, "Pin.Name min 2 character")
-		}
-
-		err = s.cs.GetDB().NewSelect().Model(&model.Pin{}).Where("name = ?", in.Name).Where("wire_id = ?", in.WireId).Scan(ctx)
-		if err != nil {
-			if err != sql.ErrNoRows {
-				return &output, status.Errorf(codes.Internal, "Query: %v", err)
-			}
-		} else {
-			return &output, status.Error(codes.AlreadyExists, "Pin.Name must be unique")
-		}
-	}
-
-	item := model.Pin{
-		ID:      in.Id,
-		WireID:  in.WireId,
-		Name:    in.Name,
-		Type:    in.Type,
-		Addr:    in.Addr,
-		Status:  in.Status,
-		Rw:      in.Rw,
-		Created: time.Now(),
-		Updated: time.Now(),
-	}
-
-	// wire validation
-	{
-		wire, err := s.cs.GetWire().ViewByID(ctx, in.WireId)
-		if err != nil {
-			return &output, err
-		}
-
-		item.NodeID = wire.NodeID
-	}
-
-	if item.ID == "" {
-		item.ID = util.RandomID()
-	}
-
-	_, err = s.cs.GetDB().NewInsert().Model(&item).Exec(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Insert: %v", err)
-	}
-
-	if err = s.afterUpdate(ctx, &item); err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutput(&output, &item)
-
-	output.Value, err = s.getPinValue(ctx, item.ID)
-	if err != nil {
-		return &output, err
-	}
-
-	return &output, nil
-}
-
-func (s *PinService) Update(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
-	var output pb.Pin
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
-		}
-
-		if !dt.ValidateType(in.Type) {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Type")
-		}
-	}
-
-	item, err := s.ViewByID(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	// name validation
-	{
-		if len(in.Name) < 2 {
-			return &output, status.Error(codes.InvalidArgument, "Pin.Name min 2 character")
-		}
-
-		modelItem := model.Pin{}
-		err = s.cs.GetDB().NewSelect().Model(&modelItem).Where("wire_id = ?", item.WireID).Where("name = ?", in.Name).Scan(ctx)
-		if err != nil {
-			if err != sql.ErrNoRows {
-				return &output, status.Errorf(codes.Internal, "Query: %v", err)
-			}
-		} else {
-			if modelItem.ID != item.ID {
-				return &output, status.Error(codes.AlreadyExists, "Pin.Name must be unique")
-			}
-		}
-	}
-
-	item.Name = in.Name
-	item.Type = in.Type
-	item.Addr = in.Addr
-	item.Status = in.Status
-	item.Rw = in.Rw
-	item.Updated = time.Now()
-
-	_, err = s.cs.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Update: %v", err)
-	}
-
-	if err = s.afterUpdate(ctx, &item); err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutput(&output, &item)
-
-	output.Value, err = s.getPinValue(ctx, item.ID)
-	if err != nil {
-		return &output, err
-	}
-
-	return &output, nil
 }
 
 func (s *PinService) View(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
@@ -319,43 +161,6 @@ func (s *PinService) NameFull(ctx context.Context, in *pb.Name) (*pb.Pin, error)
 	return &output, nil
 }
 
-func (s *PinService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-	}
-
-	item, err := s.ViewByID(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	item.Updated = time.Now()
-	item.Deleted = time.Now()
-
-	_, err = s.cs.GetDB().NewUpdate().Model(&item).Column("updated", "deleted").WherePK().Exec(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Delete: %v", err)
-	}
-
-	if err = s.afterDelete(ctx, &item); err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *PinService) List(ctx context.Context, in *cores.PinListRequest) (*cores.PinListResponse, error) {
 	var err error
 	var output cores.PinListResponse
@@ -452,31 +257,6 @@ func (s *PinService) List(ctx context.Context, in *cores.PinListRequest) (*cores
 	return &output, nil
 }
 
-func (s *PinService) Clone(ctx context.Context, in *cores.PinCloneRequest) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-	}
-
-	err = s.cs.getClone().pin(ctx, s.cs.GetDB(), in.Id, in.WireId)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *PinService) ViewByID(ctx context.Context, id string) (model.Pin, error) {
 	item := model.Pin{
 		ID: id,
@@ -555,11 +335,8 @@ func (s *PinService) copyModelToOutput(output *pb.Pin, item *model.Pin) {
 	output.Name = item.Name
 	output.Type = item.Type
 	output.Addr = item.Addr
-	output.Status = item.Status
 	output.Rw = item.Rw
-	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()
-	output.Deleted = item.Deleted.UnixMicro()
 }
 
 func (s *PinService) afterUpdate(ctx context.Context, item *model.Pin) error {
@@ -595,48 +372,6 @@ func (s *PinService) afterDelete(ctx context.Context, item *model.Pin) error {
 }
 
 // sync
-
-func (s *PinService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
-	var output pb.Pin
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-	}
-
-	item, err := s.viewWithDeleted(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutput(&output, &item)
-
-	return &output, nil
-}
-
-func (s *PinService) viewWithDeleted(ctx context.Context, id string) (model.Pin, error) {
-	item := model.Pin{
-		ID: id,
-	}
-
-	err := s.cs.GetDB().NewSelect().Model(&item).WherePK().WhereAllWithDeleted().Scan(ctx)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v, Pin.ID: %v", err, item.ID)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	return item, nil
-}
 
 func (s *PinService) Pull(ctx context.Context, in *cores.PinPullRequest) (*cores.PinPullResponse, error) {
 	var err error
@@ -710,7 +445,7 @@ func (s *PinService) Sync(ctx context.Context, in *pb.Pin) (*pb.MyBool, error) {
 	insert := false
 	update := false
 
-	item, err := s.viewWithDeleted(ctx, in.Id)
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		if code, ok := status.FromError(err); ok {
 			if code.Code() == codes.NotFound {
@@ -730,7 +465,7 @@ SKIP:
 	if insert {
 		// node validation
 		{
-			_, err = s.cs.GetNode().viewWithDeleted(ctx, in.NodeId)
+			_, err = s.cs.GetNode().ViewByID(ctx, in.NodeId)
 			if err != nil {
 				return &output, err
 			}
@@ -738,7 +473,7 @@ SKIP:
 
 		// wire validation
 		{
-			wire, err := s.cs.GetWire().viewWithDeleted(ctx, in.WireId)
+			wire, err := s.cs.GetWire().ViewByID(ctx, in.WireId)
 			if err != nil {
 				return &output, err
 			}
@@ -771,11 +506,8 @@ SKIP:
 			Name:    in.Name,
 			Type:    in.Type,
 			Addr:    in.Addr,
-			Status:  in.Status,
 			Rw:      in.Rw,
-			Created: time.UnixMicro(in.Created),
 			Updated: time.UnixMicro(in.Updated),
-			Deleted: time.UnixMicro(in.Deleted),
 		}
 
 		_, err = s.cs.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -816,12 +548,10 @@ SKIP:
 		item.Name = in.Name
 		item.Type = in.Type
 		item.Addr = in.Addr
-		item.Status = in.Status
 		item.Rw = in.Rw
 		item.Updated = time.UnixMicro(in.Updated)
-		item.Deleted = time.UnixMicro(in.Deleted)
 
-		_, err = s.cs.GetDB().NewUpdate().Model(&item).WherePK().WhereAllWithDeleted().Exec(ctx)
+		_, err = s.cs.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
 		if err != nil {
 			return &output, status.Errorf(codes.Internal, "Update: %v", err)
 		}
@@ -985,10 +715,6 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		return &output, err
 	}
 
-	if item.Status != consts.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
-	}
-
 	if !dt.ValidateValue(in.Value, item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
 	}
@@ -1004,18 +730,6 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 
 			if node.Status != consts.ON {
 				return &output, status.Errorf(codes.FailedPrecondition, "Node.Status != ON")
-			}
-		}
-
-		// wire
-		{
-			wire, err := s.cs.GetWire().ViewFromCacheByID(ctx, item.WireID)
-			if err != nil {
-				return &output, err
-			}
-
-			if wire.Status != consts.ON {
-				return &output, status.Errorf(codes.FailedPrecondition, "Wire.Status != ON")
 			}
 		}
 	}
@@ -1131,18 +845,10 @@ func (s *PinService) SetValueByName(ctx context.Context, in *cores.PinNameValue)
 		return &output, err
 	}
 
-	if wire.Status != consts.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Wire.Status != ON")
-	}
-
 	// pin
 	item, err := s.ViewFromCacheByWireIDAndName(ctx, wire.ID, itemName)
 	if err != nil {
 		return &output, err
-	}
-
-	if item.Status != consts.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
 	}
 
 	if !dt.ValidateValue(in.Value, item.Type) {
@@ -1466,43 +1172,12 @@ func (s *PinService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		return &output, err
 	}
 
-	if item.Status != consts.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
-	}
-
 	if item.Rw != consts.WRITE {
 		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
 	}
 
 	if !dt.ValidateValue(in.Value, item.Type) {
 		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
-	}
-
-	// validation node and wire
-	{
-		// node
-		{
-			node, err := s.cs.GetNode().ViewFromCacheByID(ctx, item.NodeID)
-			if err != nil {
-				return &output, err
-			}
-
-			if node.Status != consts.ON {
-				return &output, status.Errorf(codes.FailedPrecondition, "Node.Status != ON")
-			}
-		}
-
-		// wire
-		{
-			wire, err := s.cs.GetWire().ViewFromCacheByID(ctx, item.WireID)
-			if err != nil {
-				return &output, err
-			}
-
-			if wire.Status != consts.ON {
-				return &output, status.Errorf(codes.FailedPrecondition, "Wire.Status != ON")
-			}
-		}
 	}
 
 	if err = s.setPinWriteUpdated(ctx, &item, in.Value, time.Now()); err != nil {
@@ -1616,18 +1291,10 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *cores.PinNameValue)
 		return &output, err
 	}
 
-	if wire.Status != consts.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Wire.Status != ON")
-	}
-
 	// pin
 	item, err := s.ViewFromCacheByWireIDAndName(ctx, wire.ID, itemName)
 	if err != nil {
 		return &output, err
-	}
-
-	if item.Status != consts.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
 	}
 
 	if item.Rw != consts.WRITE {
@@ -1803,10 +1470,6 @@ func (s *PinService) SyncWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool
 	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
-	}
-
-	if item.Status != consts.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Status != ON")
 	}
 
 	value, err := s.getPinWriteUpdated(ctx, in.Id)

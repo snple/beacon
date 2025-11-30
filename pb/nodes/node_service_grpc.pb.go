@@ -20,12 +20,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NodeService_Login_FullMethodName           = "/nodes.NodeService/Login"
-	NodeService_Update_FullMethodName          = "/nodes.NodeService/Update"
-	NodeService_View_FullMethodName            = "/nodes.NodeService/View"
-	NodeService_ViewWithDeleted_FullMethodName = "/nodes.NodeService/ViewWithDeleted"
-	NodeService_Sync_FullMethodName            = "/nodes.NodeService/Sync"
-	NodeService_KeepAlive_FullMethodName       = "/nodes.NodeService/KeepAlive"
+	NodeService_Login_FullMethodName     = "/nodes.NodeService/Login"
+	NodeService_View_FullMethodName      = "/nodes.NodeService/View"
+	NodeService_KeepAlive_FullMethodName = "/nodes.NodeService/KeepAlive"
 )
 
 // NodeServiceClient is the client API for NodeService service.
@@ -33,10 +30,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NodeServiceClient interface {
 	Login(ctx context.Context, in *NodeLoginRequest, opts ...grpc.CallOption) (*NodeLoginReply, error)
-	Update(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error)
 	View(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.Node, error)
-	ViewWithDeleted(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.Node, error)
-	Sync(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.MyBool, error)
 	KeepAlive(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[NodeKeepAliveReply], error)
 }
 
@@ -58,40 +52,10 @@ func (c *nodeServiceClient) Login(ctx context.Context, in *NodeLoginRequest, opt
 	return out, nil
 }
 
-func (c *nodeServiceClient) Update(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Node)
-	err := c.cc.Invoke(ctx, NodeService_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *nodeServiceClient) View(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.Node, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.Node)
 	err := c.cc.Invoke(ctx, NodeService_View_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) ViewWithDeleted(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.Node, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Node)
-	err := c.cc.Invoke(ctx, NodeService_ViewWithDeleted_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) Sync(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, NodeService_Sync_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -122,10 +86,7 @@ type NodeService_KeepAliveClient = grpc.ServerStreamingClient[NodeKeepAliveReply
 // for forward compatibility.
 type NodeServiceServer interface {
 	Login(context.Context, *NodeLoginRequest) (*NodeLoginReply, error)
-	Update(context.Context, *pb.Node) (*pb.Node, error)
 	View(context.Context, *pb.MyEmpty) (*pb.Node, error)
-	ViewWithDeleted(context.Context, *pb.MyEmpty) (*pb.Node, error)
-	Sync(context.Context, *pb.Node) (*pb.MyBool, error)
 	KeepAlive(*pb.MyEmpty, grpc.ServerStreamingServer[NodeKeepAliveReply]) error
 	mustEmbedUnimplementedNodeServiceServer()
 }
@@ -140,17 +101,8 @@ type UnimplementedNodeServiceServer struct{}
 func (UnimplementedNodeServiceServer) Login(context.Context, *NodeLoginRequest) (*NodeLoginReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Login not implemented")
 }
-func (UnimplementedNodeServiceServer) Update(context.Context, *pb.Node) (*pb.Node, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
-}
 func (UnimplementedNodeServiceServer) View(context.Context, *pb.MyEmpty) (*pb.Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method View not implemented")
-}
-func (UnimplementedNodeServiceServer) ViewWithDeleted(context.Context, *pb.MyEmpty) (*pb.Node, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ViewWithDeleted not implemented")
-}
-func (UnimplementedNodeServiceServer) Sync(context.Context, *pb.Node) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Sync not implemented")
 }
 func (UnimplementedNodeServiceServer) KeepAlive(*pb.MyEmpty, grpc.ServerStreamingServer[NodeKeepAliveReply]) error {
 	return status.Errorf(codes.Unimplemented, "method KeepAlive not implemented")
@@ -194,24 +146,6 @@ func _NodeService_Login_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NodeService_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Node)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Update(ctx, req.(*pb.Node))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _NodeService_View_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(pb.MyEmpty)
 	if err := dec(in); err != nil {
@@ -226,42 +160,6 @@ func _NodeService_View_Handler(srv interface{}, ctx context.Context, dec func(in
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(NodeServiceServer).View(ctx, req.(*pb.MyEmpty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_ViewWithDeleted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.MyEmpty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).ViewWithDeleted(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_ViewWithDeleted_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).ViewWithDeleted(ctx, req.(*pb.MyEmpty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_Sync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Node)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Sync(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Sync_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Sync(ctx, req.(*pb.Node))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -289,20 +187,8 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _NodeService_Login_Handler,
 		},
 		{
-			MethodName: "Update",
-			Handler:    _NodeService_Update_Handler,
-		},
-		{
 			MethodName: "View",
 			Handler:    _NodeService_View_Handler,
-		},
-		{
-			MethodName: "ViewWithDeleted",
-			Handler:    _NodeService_ViewWithDeleted_Handler,
-		},
-		{
-			MethodName: "Sync",
-			Handler:    _NodeService_Sync_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

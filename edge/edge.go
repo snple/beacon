@@ -17,16 +17,14 @@ import (
 )
 
 type EdgeService struct {
-	db       *bun.DB
-	badger   *BadgerService
-	sync     *SyncService
-	node     *NodeService
-	wire     *WireService
-	pin      *PinService
+	db     *bun.DB
+	badger *BadgerService
+	sync   *SyncService
+	node   *NodeService
+	wire   *WireService
+	pin    *PinService
 
 	nodeUp types.Option[*NodeUpService]
-
-	clone *cloneService
 
 	ctx     context.Context
 	cancel  func()
@@ -84,8 +82,6 @@ func EdgeContext(ctx context.Context, db *bun.DB, opts ...EdgeOption) (*EdgeServ
 		}
 		es.nodeUp = types.Some(nodeUp)
 	}
-
-	es.clone = newCloneService(es)
 
 	return es, nil
 }
@@ -171,10 +167,6 @@ func (es *EdgeService) GetPin() *PinService {
 
 func (es *EdgeService) GetNodeUp() types.Option[*NodeUpService] {
 	return es.nodeUp
-}
-
-func (es *EdgeService) getClone() *cloneService {
-	return es.clone
 }
 
 func (es *EdgeService) Context() context.Context {
