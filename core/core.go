@@ -21,7 +21,6 @@ type CoreService struct {
 	node        *NodeService
 	wire        *WireService
 	pin         *PinService
-	constant    *ConstService
 
 	clone *cloneService
 
@@ -63,7 +62,6 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 	cs.node = newNodeService(cs)
 	cs.wire = newWireService(cs)
 	cs.pin = newPinService(cs)
-	cs.constant = newConstService(cs)
 
 	cs.clone = newCloneService(cs)
 
@@ -107,10 +105,6 @@ func (cs *CoreService) GetPin() *PinService {
 	return cs.pin
 }
 
-func (cs *CoreService) GetConst() *ConstService {
-	return cs.constant
-}
-
 func (cs *CoreService) getClone() *cloneService {
 	return cs.clone
 }
@@ -141,7 +135,6 @@ func (cs *CoreService) cacheGC() {
 				cs.GetNode().GC()
 				cs.GetWire().GC()
 				cs.GetPin().GC()
-				cs.GetConst().GC()
 			}
 		}
 	}
@@ -153,7 +146,6 @@ func (cs *CoreService) Register(server *grpc.Server) {
 	cores.RegisterNodeServiceServer(server, cs.node)
 	cores.RegisterWireServiceServer(server, cs.wire)
 	cores.RegisterPinServiceServer(server, cs.pin)
-	cores.RegisterConstServiceServer(server, cs.constant)
 }
 
 func CreateSchema(db bun.IDB) error {
@@ -163,7 +155,6 @@ func CreateSchema(db bun.IDB) error {
 		(*model.Node)(nil),
 		(*model.Wire)(nil),
 		(*model.Pin)(nil),
-		(*model.Const)(nil),
 		(*model.PinValue)(nil),
 		(*model.PinWrite)(nil),
 	}

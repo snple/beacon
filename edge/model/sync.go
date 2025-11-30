@@ -12,7 +12,6 @@ const (
 	SYNC_NODE      = "sync_node"
 	SYNC_WIRE      = "sync_wire"
 	SYNC_PIN       = "sync_pin"
-	SYNC_CONST     = "sync_const"
 	SYNC_PIN_VALUE = "sync_pin_v"
 	SYNC_PIN_WRITE = "sync_pin_w"
 

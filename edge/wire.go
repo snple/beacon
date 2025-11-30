@@ -48,15 +48,12 @@ func (s *WireService) Create(ctx context.Context, in *pb.Wire) (*pb.Wire, error)
 	}
 
 	item := model.Wire{
-		ID:      in.Id,
-		Name:    in.Name,
-		Desc:    in.Desc,
-		Tags:    in.Tags,
-		Source:  in.Source,
-		Config:  in.Config,
-		Status:  in.Status,
-		Created: time.Now(),
-		Updated: time.Now(),
+		ID:       in.Id,
+		Name:     in.Name,
+		Clusters: in.Clusters,
+		Status:   in.Status,
+		Created:  time.Now(),
+		Updated:  time.Now(),
 	}
 
 	// name validation
@@ -137,10 +134,7 @@ func (s *WireService) Update(ctx context.Context, in *pb.Wire) (*pb.Wire, error)
 	}
 
 	item.Name = in.Name
-	item.Desc = in.Desc
-	item.Tags = in.Tags
-	item.Source = in.Source
-	item.Config = in.Config
+	item.Clusters = in.Clusters
 	item.Status = in.Status
 	item.Updated = time.Now()
 
@@ -410,10 +404,7 @@ func (s *WireService) ViewByName(ctx context.Context, name string) (model.Wire, 
 func (s *WireService) copyModelToOutput(output *pb.Wire, item *model.Wire) {
 	output.Id = item.ID
 	output.Name = item.Name
-	output.Desc = item.Desc
-	output.Tags = item.Tags
-	output.Source = item.Source
-	output.Config = item.Config
+	output.Clusters = item.Clusters
 	output.Status = item.Status
 	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()
@@ -595,16 +586,13 @@ SKIP:
 		}
 
 		item := model.Wire{
-			ID:      in.Id,
-			Name:    in.Name,
-			Desc:    in.Desc,
-			Tags:    in.Tags,
-			Source:  in.Source,
-			Config:  in.Config,
-			Status:  in.Status,
-			Created: time.UnixMicro(in.Created),
-			Updated: time.UnixMicro(in.Updated),
-			Deleted: time.UnixMicro(in.Deleted),
+			ID:       in.Id,
+			Name:     in.Name,
+			Clusters: in.Clusters,
+			Status:   in.Status,
+			Created:  time.UnixMicro(in.Created),
+			Updated:  time.UnixMicro(in.Updated),
+			Deleted:  time.UnixMicro(in.Deleted),
 		}
 
 		_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
@@ -639,10 +627,7 @@ SKIP:
 		}
 
 		item.Name = in.Name
-		item.Desc = in.Desc
-		item.Tags = in.Tags
-		item.Source = in.Source
-		item.Config = in.Config
+		item.Clusters = in.Clusters
 		item.Status = in.Status
 		item.Updated = time.UnixMicro(in.Updated)
 		item.Deleted = time.UnixMicro(in.Deleted)

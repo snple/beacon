@@ -63,35 +63,3 @@ func PinNameValues(items []*pb.PinNameValue) {
 		PinNameValue(item)
 	}
 }
-
-func Const(item *pb.Const) {
-	if item != nil {
-		item.Created = item.Created / 1000
-		item.Updated = item.Updated / 1000
-		item.Deleted = item.Deleted / 1000
-	}
-}
-
-func Consts(items []*pb.Const) {
-	for _, item := range items {
-		Const(item)
-	}
-}
-
-func ConstValue(item *pb.ConstValue) {
-	if item != nil {
-		item.Updated = item.Updated / 1000
-	}
-}
-
-func ConstNameValue(item *pb.ConstNameValue) {
-	if item != nil {
-		item.Updated = item.Updated / 1000
-	}
-}
-
-func ConstNameValues(items []*pb.ConstNameValue) {
-	for _, item := range items {
-		ConstNameValue(item)
-	}
-}

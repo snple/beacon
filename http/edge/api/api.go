@@ -14,10 +14,9 @@ import (
 type ApiService struct {
 	es *edge.EdgeService
 
-	node     *NodeService
-	wire     *WireService
-	pin      *PinService
-	constant *ConstService
+	node *NodeService
+	wire *WireService
+	pin  *PinService
 
 	ctx     context.Context
 	cancel  func()
@@ -47,7 +46,6 @@ func NewApiService(es *edge.EdgeService, opts ...ApiOption) (*ApiService, error)
 	s.node = newNodeService(s)
 	s.wire = newWireService(s)
 	s.pin = newPinService(s)
-	s.constant = newConstService(s)
 
 	return s, nil
 }
@@ -56,7 +54,6 @@ func (s *ApiService) Register(router gin.IRouter) {
 	s.node.register(router)
 	s.wire.register(router)
 	s.pin.register(router)
-	s.constant.register(router)
 }
 
 func (s *ApiService) Start() {

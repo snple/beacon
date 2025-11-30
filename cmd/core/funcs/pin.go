@@ -167,7 +167,7 @@ func (p *Pin) list(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Comman
 
 	t := table.NewWriter()
 
-	t.AppendHeader(table.Row{"ID", "Name", "Desc", "Tags", "Type", "Addr", "Value", "Status", "Created", "Updated"})
+	t.AppendHeader(table.Row{"ID", "Name", "Type", "Addr", "Value", "Status", "Created", "Updated"})
 
 	timeformatFn := func(t int64) string {
 		return time.UnixMicro(t).Format("2006-01-02 15:04:05")
@@ -188,7 +188,7 @@ func (p *Pin) list(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Comman
 			pinNamePrefix = fmt.Sprintf("%s.%s", nodeName, wireReply.Name)
 		}
 
-		t.AppendRow(table.Row{pin.Id, fmt.Sprintf("%s.%s", pinNamePrefix, pin.Name), pin.Desc, pin.Tags, pin.Type, pin.Addr, pin.Value, pin.Status, timeformatFn(pin.Created), timeformatFn(pin.Updated)})
+		t.AppendRow(table.Row{pin.Id, fmt.Sprintf("%s.%s", pinNamePrefix, pin.Name), pin.Type, pin.Addr, pin.Value, pin.Status, timeformatFn(pin.Created), timeformatFn(pin.Updated)})
 	}
 
 	// time to take a peek
@@ -268,7 +268,7 @@ func (p *Pin) getValue(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Co
 		os.Exit(1)
 	}
 
-	fmt.Printf("name: %s, desc: %s, value: %s\n", pinReply.Name, pinReply.Desc, pinValueReply.Value)
+	fmt.Printf("name: %s, value: %s\n", pinReply.Name, pinValueReply.Value)
 }
 
 func (p *Pin) setValueCmd() *cobra.Command {
@@ -344,7 +344,7 @@ func (p *Pin) setValue(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Co
 		os.Exit(1)
 	}
 
-	fmt.Printf("name: %s, desc: %s, value: %s\n", pinReply.Name, pinReply.Desc, value)
+	fmt.Printf("name: %s, value: %s\n", pinReply.Name, value)
 }
 
 func (p *Pin) getWriteCmd() *cobra.Command {
@@ -419,7 +419,7 @@ func (p *Pin) getWrite(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Co
 		os.Exit(1)
 	}
 
-	fmt.Printf("name: %s, desc: %s, value: %s\n", pinReply.Name, pinReply.Desc, pinWriteReply.Value)
+	fmt.Printf("name: %s, value: %s\n", pinReply.Name, pinWriteReply.Value)
 }
 
 func (p *Pin) setWriteCmd() *cobra.Command {
@@ -495,5 +495,5 @@ func (p *Pin) setWrite(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.Co
 		os.Exit(1)
 	}
 
-	fmt.Printf("name: %s, desc: %s, value: %s\n", pinReply.Name, pinReply.Desc, value)
+	fmt.Printf("name: %s, value: %s\n", pinReply.Name, value)
 }

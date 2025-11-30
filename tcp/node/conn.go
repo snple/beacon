@@ -340,7 +340,6 @@ func (w *WatchEvent) watch() {
 	type pinCacheValue struct {
 		wireName string
 		pinName  string
-		pinDesc  string
 		pinType  string
 	}
 
@@ -358,7 +357,6 @@ func (w *WatchEvent) watch() {
 		return pinCacheValue{
 			wireName: wireReply.Name,
 			pinName:  pinReply.Name,
-			pinDesc:  pinReply.Desc,
 			pinType:  pinReply.Type,
 		}, time.Second * 60, nil
 	})

@@ -24,10 +24,8 @@ func NodeUpdate(ctx context.Context, client edges.NodeServiceClient) {
 	request := &pb.Node{
 		Id:     "0187f0bb5e6cfdd553884496",
 		Name:   "node1",
-		Desc:   "hahaha",
 		Secret: "123456.",
 		Status: consts.ON,
-		Tags:   "tag1,tag2",
 	}
 
 	reply, err := client.Update(ctx, request)

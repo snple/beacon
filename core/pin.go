@@ -77,11 +77,8 @@ func (s *PinService) Create(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
 		ID:      in.Id,
 		WireID:  in.WireId,
 		Name:    in.Name,
-		Desc:    in.Desc,
-		Tags:    in.Tags,
 		Type:    in.Type,
 		Addr:    in.Addr,
-		Config:  in.Config,
 		Status:  in.Status,
 		Rw:      in.Rw,
 		Created: time.Now(),
@@ -169,11 +166,8 @@ func (s *PinService) Update(ctx context.Context, in *pb.Pin) (*pb.Pin, error) {
 	}
 
 	item.Name = in.Name
-	item.Desc = in.Desc
-	item.Tags = in.Tags
 	item.Type = in.Type
 	item.Addr = in.Addr
-	item.Config = in.Config
 	item.Status = in.Status
 	item.Rw = in.Rw
 	item.Updated = time.Now()
@@ -559,11 +553,8 @@ func (s *PinService) copyModelToOutput(output *pb.Pin, item *model.Pin) {
 	output.NodeId = item.NodeID
 	output.WireId = item.WireID
 	output.Name = item.Name
-	output.Desc = item.Desc
-	output.Tags = item.Tags
 	output.Type = item.Type
 	output.Addr = item.Addr
-	output.Config = item.Config
 	output.Status = item.Status
 	output.Rw = item.Rw
 	output.Created = item.Created.UnixMicro()
@@ -778,11 +769,8 @@ SKIP:
 			NodeID:  in.NodeId,
 			WireID:  in.WireId,
 			Name:    in.Name,
-			Desc:    in.Desc,
-			Tags:    in.Tags,
 			Type:    in.Type,
 			Addr:    in.Addr,
-			Config:  in.Config,
 			Status:  in.Status,
 			Rw:      in.Rw,
 			Created: time.UnixMicro(in.Created),
@@ -826,11 +814,8 @@ SKIP:
 		}
 
 		item.Name = in.Name
-		item.Desc = in.Desc
-		item.Tags = in.Tags
 		item.Type = in.Type
 		item.Addr = in.Addr
-		item.Config = in.Config
 		item.Status = in.Status
 		item.Rw = in.Rw
 		item.Updated = time.UnixMicro(in.Updated)

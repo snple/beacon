@@ -114,14 +114,14 @@ func (n *Node) nodeList(ctx context.Context, client cores.NodeServiceClient, cmd
 
 	t := table.NewWriter()
 
-	t.AppendHeader(table.Row{"ID", "Name", "Desc", "Tags", "Secret", "Status", "Created", "Updated"})
+	t.AppendHeader(table.Row{"ID", "Name", "Secret", "Status", "Created", "Updated"})
 
 	timeformatFn := func(t int64) string {
 		return time.UnixMicro(t).Format("2006-01-02 15:04:05")
 	}
 
 	for _, node := range reply.Nodes {
-		t.AppendRow(table.Row{node.Id, node.Name, node.Desc, node.Tags, node.Secret, node.Status, timeformatFn(node.Created), timeformatFn(node.Updated)})
+		t.AppendRow(table.Row{node.Id, node.Name, node.Secret, node.Status, timeformatFn(node.Created), timeformatFn(node.Updated)})
 	}
 
 	// time to take a peek
@@ -312,45 +312,25 @@ func (n *Node) nodeDeletePin2(ctx context.Context, conn *grpc.ClientConn, pinId 
 }
 
 type ExportNode struct {
-	Name   string        `toml:"name"`
-	Desc   string        `toml:"desc"`
-	Tags   string        `toml:"tags"`
-	Secret string        `toml:"secret"`
-	Config string        `toml:"config"`
-	Status int32         `toml:"status"`
-	Wires  []ExportWire  `toml:"wires"`
-	Consts []ExportConst `toml:"consts"`
+	Name   string       `toml:"name"`
+	Secret string       `toml:"secret"`
+	Status int32        `toml:"status"`
+	Wires  []ExportWire `toml:"wires"`
 }
 
 type ExportWire struct {
-	Name   string      `toml:"name"`
-	Desc   string      `toml:"desc"`
-	Tags   string      `toml:"tags"`
-	Source string      `toml:"source"`
-	Config string      `toml:"config"`
-	Status int32       `toml:"status"`
-	Pins   []ExportPin `toml:"pins"`
+	Name     string      `toml:"name"`
+	Clusters string      `toml:"clusters"`
+	Status   int32       `toml:"status"`
+	Pins     []ExportPin `toml:"pins"`
 }
 
 type ExportPin struct {
 	Name   string `toml:"name"`
-	Desc   string `toml:"desc"`
-	Tags   string `toml:"tags"`
 	Type   string `toml:"type"`
 	Addr   string `toml:"addr"`
 	Value  string `toml:"value"`
-	Config string `toml:"config"`
 	Rw     int32  `toml:"rw"`
-	Status int32  `toml:"status"`
-}
-
-type ExportConst struct {
-	Name   string `toml:"name"`
-	Desc   string `toml:"desc"`
-	Tags   string `toml:"tags"`
-	Type   string `toml:"type"`
-	Value  string `toml:"value"`
-	Config string `toml:"config"`
 	Status int32  `toml:"status"`
 }
 
@@ -382,7 +362,6 @@ func (n *Node) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 	nodeClient := cores.NewNodeServiceClient(conn)
 	wireClient := cores.NewWireServiceClient(conn)
 	pinClient := cores.NewPinServiceClient(conn)
-	constClient := cores.NewConstServiceClient(conn)
 
 	// query node
 	reply, err := nodeClient.Name(ctx, &pb.Name{
@@ -402,32 +381,17 @@ func (n *Node) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 		os.Exit(1)
 	}
 
-	// query consts
-	consts, err := constClient.List(ctx, &cores.ConstListRequest{
-		NodeId: reply.Id,
-	})
-	if err != nil {
-		n.root.logger.Error("failed to get consts", zap.Error(err))
-		os.Exit(1)
-	}
-
 	exportNode := &ExportNode{
 		Name:   reply.Name,
-		Desc:   reply.Desc,
-		Tags:   reply.Tags,
 		Secret: reply.Secret,
-		Config: reply.Config,
 		Status: reply.Status,
 	}
 
 	for _, wire := range wires.Wires {
 		exportWire := &ExportWire{
-			Name:   wire.Name,
-			Desc:   wire.Desc,
-			Tags:   wire.Tags,
-			Source: wire.Source,
-			Config: wire.Config,
-			Status: wire.Status,
+			Name:     wire.Name,
+			Clusters: wire.Clusters,
+			Status:   wire.Status,
 		}
 
 		queryPins := &cores.PinListRequest{
@@ -443,12 +407,9 @@ func (n *Node) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 		for _, pin := range pins.Pins {
 			exportPin := ExportPin{
 				Name:   pin.Name,
-				Desc:   pin.Desc,
-				Tags:   pin.Tags,
 				Type:   pin.Type,
 				Addr:   pin.Addr,
 				Value:  pin.Value,
-				Config: pin.Config,
 				Rw:     pin.Rw,
 				Status: pin.Status,
 			}
@@ -457,20 +418,6 @@ func (n *Node) nodeExport(ctx context.Context, conn *grpc.ClientConn, cmd *cobra
 		}
 
 		exportNode.Wires = append(exportNode.Wires, *exportWire)
-	}
-
-	for _, cons := range consts.Consts {
-		exportConst := ExportConst{
-			Name:   cons.Name,
-			Desc:   cons.Desc,
-			Tags:   cons.Tags,
-			Type:   cons.Type,
-			Value:  cons.Value,
-			Config: cons.Config,
-			Status: cons.Status,
-		}
-
-		exportNode.Consts = append(exportNode.Consts, exportConst)
 	}
 
 	export, err := toml.Marshal(exportNode)
@@ -555,10 +502,7 @@ func (n *Node) nodeImportCreateNode(ctx context.Context, conn *grpc.ClientConn, 
 
 	node := &pb.Node{
 		Name:   importNode.Name,
-		Desc:   importNode.Desc,
-		Tags:   importNode.Tags,
 		Secret: importNode.Secret,
-		Config: importNode.Config,
 		Status: importNode.Status,
 	}
 
@@ -573,22 +517,14 @@ func (n *Node) nodeImportCreateNode(ctx context.Context, conn *grpc.ClientConn, 
 	for _, wire := range importNode.Wires {
 		n.nodeImportCreateWire(ctx, conn, reply.Id, &wire)
 	}
-
-	for _, cons := range importNode.Consts {
-		n.nodeImportCreateConst(ctx, conn, reply.Id, &cons)
-	}
 }
 
 func (n *Node) nodeImportUpdateNode(ctx context.Context, conn *grpc.ClientConn, node *pb.Node, importNode *ExportNode) {
 	nodeClient := cores.NewNodeServiceClient(conn)
 	wireClient := cores.NewWireServiceClient(conn)
-	constClient := cores.NewConstServiceClient(conn)
 
 	node.Name = importNode.Name
-	node.Desc = importNode.Desc
-	node.Tags = importNode.Tags
 	node.Secret = importNode.Secret
-	node.Config = importNode.Config
 	node.Status = importNode.Status
 
 	reply, err := nodeClient.Update(ctx, node)
@@ -617,38 +553,16 @@ func (n *Node) nodeImportUpdateNode(ctx context.Context, conn *grpc.ClientConn, 
 			n.nodeImportUpdateWire(ctx, conn, reply, &wire)
 		}
 	}
-
-	for _, cons := range importNode.Consts {
-		request := &cores.ConstNameRequest{
-			NodeId: node.Id,
-			Name:   cons.Name,
-		}
-
-		reply, err := constClient.Name(ctx, request)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				n.nodeImportCreateConst(ctx, conn, node.Id, &cons)
-			} else {
-				n.root.logger.Error("failed to get const", zap.Error(err))
-				os.Exit(1)
-			}
-		} else {
-			n.nodeImportUpdateConst(ctx, conn, reply, &cons)
-		}
-	}
 }
 
 func (n *Node) nodeImportCreateWire(ctx context.Context, conn *grpc.ClientConn, nodeId string, importWire *ExportWire) {
 	wireClient := cores.NewWireServiceClient(conn)
 
 	wire := &pb.Wire{
-		NodeId: nodeId,
-		Name:   importWire.Name,
-		Desc:   importWire.Desc,
-		Tags:   importWire.Tags,
-		Source: importWire.Source,
-		Config: importWire.Config,
-		Status: importWire.Status,
+		NodeId:   nodeId,
+		Name:     importWire.Name,
+		Clusters: importWire.Clusters,
+		Status:   importWire.Status,
 	}
 
 	reply, err := wireClient.Create(ctx, wire)
@@ -669,10 +583,7 @@ func (n *Node) nodeImportUpdateWire(ctx context.Context, conn *grpc.ClientConn, 
 	pinClient := cores.NewPinServiceClient(conn)
 
 	wire.Name = importWire.Name
-	wire.Desc = importWire.Desc
-	wire.Tags = importWire.Tags
-	wire.Source = importWire.Source
-	wire.Config = importWire.Config
+	wire.Clusters = importWire.Clusters
 	wire.Status = importWire.Status
 
 	reply, err := wireClient.Update(ctx, wire)
@@ -710,12 +621,9 @@ func (n *Node) nodeImportCreatePin(ctx context.Context, conn *grpc.ClientConn, n
 		NodeId: nodeId,
 		WireId: wireId,
 		Name:   importPin.Name,
-		Desc:   importPin.Desc,
-		Tags:   importPin.Tags,
 		Type:   importPin.Type,
 		Addr:   importPin.Addr,
 		Value:  importPin.Value,
-		Config: importPin.Config,
 		Rw:     importPin.Rw,
 		Status: importPin.Status,
 	}
@@ -733,12 +641,9 @@ func (n *Node) nodeImportUpdatePin(ctx context.Context, conn *grpc.ClientConn, p
 	pinClient := cores.NewPinServiceClient(conn)
 
 	pin.Name = importPin.Name
-	pin.Desc = importPin.Desc
-	pin.Tags = importPin.Tags
 	pin.Type = importPin.Type
 	pin.Addr = importPin.Addr
 	pin.Value = importPin.Value
-	pin.Config = importPin.Config
 	pin.Rw = importPin.Rw
 	pin.Status = importPin.Status
 
@@ -749,47 +654,4 @@ func (n *Node) nodeImportUpdatePin(ctx context.Context, conn *grpc.ClientConn, p
 	}
 
 	fmt.Printf("pin updated: %s, %s\n", reply.Id, reply.Name)
-}
-
-func (n *Node) nodeImportCreateConst(ctx context.Context, conn *grpc.ClientConn, nodeId string, importConst *ExportConst) {
-	constClient := cores.NewConstServiceClient(conn)
-
-	cons := &pb.Const{
-		NodeId: nodeId,
-		Name:   importConst.Name,
-		Desc:   importConst.Desc,
-		Tags:   importConst.Tags,
-		Type:   importConst.Type,
-		Value:  importConst.Value,
-		Config: importConst.Config,
-		Status: importConst.Status,
-	}
-
-	reply, err := constClient.Create(ctx, cons)
-	if err != nil {
-		n.root.logger.Error("failed to create const", zap.Error(err))
-		os.Exit(1)
-	}
-
-	fmt.Printf("const created: %s, %s\n", reply.Id, reply.Name)
-}
-
-func (n *Node) nodeImportUpdateConst(ctx context.Context, conn *grpc.ClientConn, cons *pb.Const, importConst *ExportConst) {
-	constClient := cores.NewConstServiceClient(conn)
-
-	cons.Name = importConst.Name
-	cons.Desc = importConst.Desc
-	cons.Tags = importConst.Tags
-	cons.Type = importConst.Type
-	cons.Value = importConst.Value
-	cons.Config = importConst.Config
-	cons.Status = importConst.Status
-
-	reply, err := constClient.Update(ctx, cons)
-	if err != nil {
-		n.root.logger.Error("failed to update const", zap.Error(err))
-		os.Exit(1)
-	}
-
-	fmt.Printf("const updated: %s, %s\n", reply.Id, reply.Name)
 }

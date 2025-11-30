@@ -52,12 +52,9 @@ func WireName(ctx context.Context, client edges.WireServiceClient) {
 
 func WireCreate(ctx context.Context, client edges.WireServiceClient) {
 	request := &pb.Wire{
-		Name:   "wire1",
-		Desc:   "wire1",
-		Source: "wire",
-		Config: "config",
-		Status: consts.ON,
-		Tags:   "tag1,tag2",
+		Name:     "wire1",
+		Clusters: "",
+		Status:   consts.ON,
 	}
 
 	reply, err := client.Create(ctx, request)

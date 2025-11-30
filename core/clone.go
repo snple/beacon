@@ -103,29 +103,6 @@ func (s *cloneService) node(ctx context.Context, db bun.IDB, nodeID string) erro
 		}
 	}
 
-	// const
-	{
-		var constants []model.Const
-
-		err = db.NewSelect().Model(&constants).Where("node_id = ?", nodeID).Order("id ASC").Scan(ctx)
-		if err != nil {
-			return status.Errorf(codes.Internal, "Query: %v", err)
-		}
-
-		for _, constant := range constants {
-			constant.ID = util.RandomID()
-			constant.NodeID = node.ID
-
-			constant.Created = time.Now()
-			constant.Updated = time.Now()
-
-			_, err = db.NewInsert().Model(&constant).Exec(ctx)
-			if err != nil {
-				return status.Errorf(codes.Internal, "Insert: %v", err)
-			}
-		}
-	}
-
 	err = s.cs.GetSync().setNodeUpdated(ctx, db, node.ID, time.Now())
 	if err != nil {
 		return status.Errorf(codes.Internal, "Insert: %v", err)
@@ -244,59 +221,6 @@ func (s *cloneService) pin(ctx context.Context, db bun.IDB, pinID, wireID string
 
 		item.WireID = wire.ID
 		item.NodeID = wire.NodeID
-	}
-
-	item.ID = util.RandomID()
-	item.Name = fmt.Sprintf("%v_clone_%v", item.Name, randNameSuffix())
-
-	item.Created = time.Now()
-	item.Updated = time.Now()
-
-	_, err = db.NewInsert().Model(&item).Exec(ctx)
-	if err != nil {
-		return status.Errorf(codes.Internal, "Insert: %v", err)
-	}
-
-	err = s.cs.GetSync().setNodeUpdated(ctx, db, item.NodeID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Insert: %v", err)
-	}
-
-	return nil
-}
-
-func (s *cloneService) const_(ctx context.Context, db bun.IDB, constID, nodeID string) error {
-	var err error
-
-	item := model.Const{
-		ID: constID,
-	}
-
-	err = db.NewSelect().Model(&item).WherePK().Scan(ctx)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return status.Errorf(codes.NotFound, "Query: %v", err)
-		}
-
-		return status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	// node validation
-	if nodeID != "" {
-		node := model.Node{
-			ID: nodeID,
-		}
-
-		err = db.NewSelect().Model(&node).WherePK().Scan(ctx)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				return status.Error(codes.InvalidArgument, "Please supply valid NodeId")
-			}
-
-			return status.Errorf(codes.Internal, "Query: %v", err)
-		}
-
-		item.NodeID = node.ID
 	}
 
 	item.ID = util.RandomID()

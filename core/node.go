@@ -68,10 +68,7 @@ func (s *NodeService) Create(ctx context.Context, in *pb.Node) (*pb.Node, error)
 	item := model.Node{
 		ID:      in.Id,
 		Name:    in.Name,
-		Desc:    in.Desc,
-		Tags:    in.Tags,
 		Secret:  in.Secret,
-		Config:  in.Config,
 		Status:  in.Status,
 		Created: time.Now(),
 		Updated: time.Now(),
@@ -139,10 +136,7 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 	}
 
 	item.Name = in.Name
-	item.Desc = in.Desc
-	item.Tags = in.Tags
 	item.Secret = in.Secret
-	item.Config = in.Config
 	item.Status = in.Status
 	item.Updated = time.Now()
 
@@ -349,7 +343,6 @@ func (s *NodeService) Destory(ctx context.Context, in *pb.Id) (*pb.MyBool, error
 		models := []any{
 			(*model.Wire)(nil),
 			(*model.Pin)(nil),
-			(*model.Const)(nil),
 			(*model.PinValue)(nil),
 			(*model.PinWrite)(nil),
 		}
@@ -472,10 +465,7 @@ func (s *NodeService) ViewByName(ctx context.Context, name string) (model.Node, 
 func (s *NodeService) copyModelToOutput(output *pb.Node, item *model.Node) {
 	output.Id = item.ID
 	output.Name = item.Name
-	output.Desc = item.Desc
-	output.Tags = item.Tags
 	output.Secret = item.Secret
-	output.Config = item.Config
 	output.Status = item.Status
 	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()
@@ -655,10 +645,7 @@ SKIP:
 		item := model.Node{
 			ID:      in.Id,
 			Name:    in.Name,
-			Desc:    in.Desc,
-			Tags:    in.Tags,
 			Secret:  in.Secret,
-			Config:  in.Config,
 			Status:  in.Status,
 			Created: time.UnixMicro(in.Created),
 			Updated: time.UnixMicro(in.Updated),
@@ -697,10 +684,7 @@ SKIP:
 		}
 
 		item.Name = in.Name
-		item.Desc = in.Desc
-		item.Tags = in.Tags
 		item.Secret = in.Secret
-		item.Config = in.Config
 		item.Status = in.Status
 		item.Updated = time.UnixMicro(in.Updated)
 		item.Deleted = time.UnixMicro(in.Deleted)

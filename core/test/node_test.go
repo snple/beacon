@@ -47,7 +47,6 @@ var _ = ginkgo.Describe("Test core node API", ginkgo.Label("library"), func() {
 			{
 				request := &pb.Node{
 					Name:   "test_node1",
-					Desc:   "test",
 					Secret: "123456",
 					Status: consts.ON,
 				}
@@ -72,7 +71,6 @@ var _ = ginkgo.Describe("Test core node API", ginkgo.Label("library"), func() {
 			{
 				request := &pb.Node{
 					Name:   "test_node1",
-					Desc:   "test",
 					Secret: "123456",
 					Status: consts.ON,
 				}

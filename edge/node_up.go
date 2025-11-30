@@ -258,10 +258,6 @@ func (s *NodeUpService) PinServiceClient() nodes.PinServiceClient {
 	return nodes.NewPinServiceClient(s.NodeConn)
 }
 
-func (s *NodeUpService) ConstServiceClient() nodes.ConstServiceClient {
-	return nodes.NewConstServiceClient(s.NodeConn)
-}
-
 func (s *NodeUpService) GetToken() string {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
@@ -644,32 +640,6 @@ func (s *NodeUpService) syncRemoteToLocal(ctx context.Context) error {
 		}
 	}
 
-	// const
-	{
-		after := nodeUpdated2.UnixMicro()
-		limit := uint32(10)
-
-		for {
-			remotes, err := s.ConstServiceClient().Pull(ctx, &nodes.ConstPullRequest{After: after, Limit: limit})
-			if err != nil {
-				return err
-			}
-
-			for _, remote := range remotes.Consts {
-				_, err := s.es.GetConst().Sync(ctx, remote)
-				if err != nil {
-					return err
-				}
-
-				after = remote.Updated
-			}
-
-			if len(remotes.Consts) < int(limit) {
-				break
-			}
-		}
-	}
-
 	return s.es.GetSync().setNodeUpdatedRemoteToLocal(ctx, time.UnixMicro(nodeUpdated.GetUpdated()))
 }
 
@@ -748,32 +718,6 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 			}
 
 			if len(locals.Pins) < int(limit) {
-				break
-			}
-		}
-	}
-
-	// const
-	{
-		after := nodeUpdated2.UnixMicro()
-		limit := uint32(10)
-
-		for {
-			locals, err := s.es.GetConst().Pull(ctx, &edges.ConstPullRequest{After: after, Limit: limit})
-			if err != nil {
-				return err
-			}
-
-			for _, local := range locals.Consts {
-				_, err = s.ConstServiceClient().Sync(ctx, local)
-				if err != nil {
-					return err
-				}
-
-				after = local.GetUpdated()
-			}
-
-			if len(locals.Consts) < int(limit) {
 				break
 			}
 		}

@@ -118,9 +118,6 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 	}
 
 	item.Name = in.Name
-	item.Desc = in.Desc
-	item.Tags = in.Tags
-	item.Config = in.Config
 	item.Updated = time.Now()
 
 	_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
@@ -174,7 +171,6 @@ func (s *NodeService) Destory(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, 
 		models := []any{
 			(*model.Wire)(nil),
 			(*model.Pin)(nil),
-			(*model.Const)(nil),
 		}
 
 		tx, err := s.es.GetDB().BeginTx(ctx, nil)
@@ -231,9 +227,6 @@ func (s *NodeService) ViewByID(ctx context.Context) (model.Node, error) {
 func (s *NodeService) copyModelToOutput(output *pb.Node, item *model.Node) {
 	output.Id = item.ID
 	output.Name = item.Name
-	output.Desc = item.Desc
-	output.Tags = item.Tags
-	output.Config = item.Config
 	output.Created = item.Created.UnixMicro()
 	output.Updated = item.Updated.UnixMicro()
 	output.Deleted = item.Updated.UnixMicro()
@@ -349,9 +342,6 @@ SKIP:
 		item := model.Node{
 			ID:      in.Id,
 			Name:    in.Name,
-			Desc:    in.Desc,
-			Tags:    in.Tags,
-			Config:  in.Config,
 			Created: time.UnixMicro(in.Created),
 			Updated: time.UnixMicro(in.Updated),
 			Deleted: time.UnixMicro(in.Deleted),
@@ -389,9 +379,6 @@ SKIP:
 		}
 
 		item.Name = in.Name
-		item.Desc = in.Desc
-		item.Tags = in.Tags
-		item.Config = in.Config
 		item.Updated = time.UnixMicro(in.Updated)
 		item.Deleted = time.UnixMicro(in.Deleted)
 

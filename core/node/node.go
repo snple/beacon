@@ -20,10 +20,9 @@ import (
 type NodeService struct {
 	cs *core.CoreService
 
-	sync     *SyncService
-	wire     *WireService
-	pin      *PinService
-	constant *ConstService
+	sync *SyncService
+	wire *WireService
+	pin  *PinService
 
 	ctx     context.Context
 	cancel  func()
@@ -55,7 +54,6 @@ func Node(cs *core.CoreService, opts ...NodeOption) (*NodeService, error) {
 	ns.sync = newSyncService(ns)
 	ns.wire = newWireService(ns)
 	ns.pin = newPinService(ns)
-	ns.constant = newConstService(ns)
 
 	return ns, nil
 }
@@ -86,7 +84,6 @@ func (ns *NodeService) RegisterGrpc(server *grpc.Server) {
 	nodes.RegisterNodeServiceServer(server, ns)
 	nodes.RegisterWireServiceServer(server, ns.wire)
 	nodes.RegisterPinServiceServer(server, ns.pin)
-	nodes.RegisterConstServiceServer(server, ns.constant)
 }
 
 type nodeOptions struct {

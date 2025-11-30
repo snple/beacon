@@ -87,7 +87,6 @@ var _ = ginkgo.Describe("Test core sync API", ginkgo.Label("library"), func() {
 				request := &pb.Node{
 					Id:     id,
 					Name:   "test_node1",
-					Desc:   "test",
 					Secret: "123456",
 					Status: consts.ON,
 				}

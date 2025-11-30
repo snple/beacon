@@ -3,36 +3,32 @@ package pb;
 
 option go_package = "github.com/snple/beacon/pb;pb";
 
+// Wire 端点线缆
 message Wire {
     string id = 1;
     string node_id = 2;
     string name = 3;
-    string desc = 4;
-    string tags = 5;
-    string source = 6;
-    string config = 7;
-    sint32 status = 9;
-    int64 created = 10;
-    int64 updated = 11;
-    int64 deleted = 12;
+    string clusters = 4;
+    sint32 status = 5;
+    int64 created = 6;
+    int64 updated = 7;
+    int64 deleted = 8;
 }
 
+// Pin 属性
 message Pin {
     string id = 1;
     string node_id = 2;
     string wire_id = 3;
     string name = 4;
-    string desc = 5;
-    string tags = 6;
+    string addr = 5;
+    string value = 6;
     string type = 7;
-    string addr = 8;
-    string value = 9;
-    string config = 10;
-    sint32 status = 11;
-    sint32 rw = 12;
-    int64 created = 13;
-    int64 updated = 14;
-    int64 deleted = 15;
+    sint32 status = 8;
+    sint32 rw = 9;
+    int64 created = 10;
+    int64 updated = 11;
+    int64 deleted = 12;
 }
 
 message PinValue {

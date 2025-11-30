@@ -97,7 +97,6 @@ func (w *Watch) pinValue(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Co
 	type pinCacheValue struct {
 		wireName string
 		pinName  string
-		pinDesc  string
 	}
 
 	pinCache := cache.NewCache(func(ctx context.Context, key pinCacheKey) (pinCacheValue, time.Duration, error) {
@@ -111,7 +110,7 @@ func (w *Watch) pinValue(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Co
 			return pinCacheValue{}, 0, err
 		}
 
-		return pinCacheValue{wireName: wireReply.Name, pinName: pinReply.Name, pinDesc: pinReply.Desc}, time.Second * 60 * 3, nil
+		return pinCacheValue{wireName: wireReply.Name, pinName: pinReply.Name}, time.Second * 60 * 3, nil
 	})
 
 	for {
@@ -140,7 +139,7 @@ func (w *Watch) pinValue(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Co
 				if option.IsSome() {
 					pinCacheValue := option.Unwrap()
 
-					fmt.Printf("name: %s.%s.%s, desc: %s, value: %s\n", nodeReply.Name, pinCacheValue.wireName, pinCacheValue.pinName, pinCacheValue.pinDesc, pin.Value)
+					fmt.Printf("name: %s.%s.%s, value: %s\n", nodeReply.Name, pinCacheValue.wireName, pinCacheValue.pinName, pin.Value)
 				}
 			}
 
@@ -212,7 +211,6 @@ func (w *Watch) pinWrite(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Co
 	type pinCacheValue struct {
 		wireName string
 		pinName  string
-		pinDesc  string
 	}
 
 	pinCache := cache.NewCache(func(ctx context.Context, key pinCacheKey) (pinCacheValue, time.Duration, error) {
@@ -226,7 +224,7 @@ func (w *Watch) pinWrite(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Co
 			return pinCacheValue{}, 0, err
 		}
 
-		return pinCacheValue{wireName: wireReply.Name, pinName: pinReply.Name, pinDesc: pinReply.Desc}, time.Second * 60 * 3, nil
+		return pinCacheValue{wireName: wireReply.Name, pinName: pinReply.Name}, time.Second * 60 * 3, nil
 	})
 
 	for {
@@ -255,7 +253,7 @@ func (w *Watch) pinWrite(ctx context.Context, conn *grpc.ClientConn, _ *cobra.Co
 				if option.IsSome() {
 					pinCacheValue := option.Unwrap()
 
-					fmt.Printf("name: %s.%s.%s, desc: %s, value: %s\n", nodeReply.Name, pinCacheValue.wireName, pinCacheValue.pinName, pinCacheValue.pinDesc, pin.Value)
+					fmt.Printf("name: %s.%s.%s, value: %s\n", nodeReply.Name, pinCacheValue.wireName, pinCacheValue.pinName, pin.Value)
 				}
 			}
 

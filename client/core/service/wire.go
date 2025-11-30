@@ -55,13 +55,10 @@ func WireName(ctx context.Context, client cores.WireServiceClient) {
 
 func WireCreate(ctx context.Context, client cores.WireServiceClient) {
 	request := &pb.Wire{
-		NodeId: "01946a0cabdabc925941e98a",
-		Name:   "wire",
-		Desc:   "wire",
-		Source: "source",
-		Config: "config",
-		Status: consts.ON,
-		Tags:   "tag1,tag2",
+		NodeId:   "01946a0cabdabc925941e98a",
+		Name:     "wire",
+		Clusters: "",
+		Status:   consts.ON,
 	}
 
 	reply, err := client.Create(ctx, request)
@@ -74,13 +71,10 @@ func WireCreate(ctx context.Context, client cores.WireServiceClient) {
 
 func WireUpdate(ctx context.Context, client cores.WireServiceClient) {
 	request := &pb.Wire{
-		Id:     "01946a51cd5bc0cd7a776f35",
-		Name:   "wire",
-		Desc:   "wire",
-		Source: "source",
-		Config: "config",
-		Status: consts.ON,
-		Tags:   "tag1,tag2",
+		Id:       "01946a51cd5bc0cd7a776f35",
+		Name:     "wire",
+		Clusters: "",
+		Status:   consts.ON,
 	}
 
 	reply, err := client.Update(ctx, request)

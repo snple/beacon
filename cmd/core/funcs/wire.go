@@ -126,14 +126,14 @@ func (w *Wire) wireList(ctx context.Context, conn *grpc.ClientConn, cmd *cobra.C
 
 	t := table.NewWriter()
 
-	t.AppendHeader(table.Row{"ID", "Name", "Desc", "Tags", "Source", "Status", "Created", "Updated"})
+	t.AppendHeader(table.Row{"ID", "Name", "Clusters", "Status", "Created", "Updated"})
 
 	timeformatFn := func(t int64) string {
 		return time.UnixMicro(t).Format("2006-01-02 15:04:05")
 	}
 
 	for _, wire := range wireReply.Wires {
-		t.AppendRow(table.Row{wire.Id, fmt.Sprintf("%s.%s", nodeName, wire.Name), wire.Desc, wire.Tags, wire.Source, wire.Status, timeformatFn(wire.Created), timeformatFn(wire.Updated)})
+		t.AppendRow(table.Row{wire.Id, fmt.Sprintf("%s.%s", nodeName, wire.Name), wire.Clusters, wire.Status, timeformatFn(wire.Created), timeformatFn(wire.Updated)})
 	}
 
 	// time to take a peek

@@ -3,15 +3,13 @@ package pb;
 
 option go_package = "github.com/snple/beacon/pb;pb";
 
+// Node 设备节点
 message Node {
     string id = 1;
     string name = 2;
-    string desc = 3;
-    string tags = 4;
-    string secret = 5;
-    string config = 6;
-    sint32 status = 7;
-    int64 created = 8;
-    int64 updated = 9;
-    int64 deleted = 10;
+    string secret = 3;
+    sint32 status = 4;
+    int64 created = 5;
+    int64 updated = 6;
+    int64 deleted = 7;
 }

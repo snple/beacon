@@ -17,7 +17,6 @@ type ApiService struct {
 	node     *NodeService
 	wire     *WireService
 	pin      *PinService
-	constant *ConstService
 
 	ctx     context.Context
 	cancel  func()
@@ -47,7 +46,6 @@ func NewApiService(cs *core.CoreService, opts ...ApiOption) (*ApiService, error)
 	s.node = newNodeService(s)
 	s.wire = newWireService(s)
 	s.pin = newPinService(s)
-	s.constant = newConstService(s)
 
 	return s, nil
 }
@@ -56,7 +54,6 @@ func (s *ApiService) Register(router gin.IRouter) {
 	s.node.register(router)
 	s.wire.register(router)
 	s.pin.register(router)
-	s.constant.register(router)
 }
 
 func (s *ApiService) Start() {

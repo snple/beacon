@@ -23,7 +23,6 @@ type EdgeService struct {
 	node     *NodeService
 	wire     *WireService
 	pin      *PinService
-	constant *ConstService
 
 	nodeUp types.Option[*NodeUpService]
 
@@ -77,7 +76,6 @@ func EdgeContext(ctx context.Context, db *bun.DB, opts ...EdgeOption) (*EdgeServ
 	es.node = newNodeService(es)
 	es.wire = newWireService(es)
 	es.pin = newPinService(es)
-	es.constant = newConstService(es)
 
 	if es.dopts.NodeOptions.Enable {
 		nodeUp, err := newNodeUpService(es)
@@ -171,10 +169,6 @@ func (es *EdgeService) GetPin() *PinService {
 	return es.pin
 }
 
-func (es *EdgeService) GetConst() *ConstService {
-	return es.constant
-}
-
 func (es *EdgeService) GetNodeUp() types.Option[*NodeUpService] {
 	return es.nodeUp
 }
@@ -205,7 +199,6 @@ func (es *EdgeService) cacheGC() {
 			{
 				es.GetWire().GC()
 				es.GetPin().GC()
-				es.GetConst().GC()
 			}
 		}
 	}
@@ -216,7 +209,6 @@ func (es *EdgeService) Register(server *grpc.Server) {
 	edges.RegisterNodeServiceServer(server, es.node)
 	edges.RegisterWireServiceServer(server, es.wire)
 	edges.RegisterPinServiceServer(server, es.pin)
-	edges.RegisterConstServiceServer(server, es.constant)
 }
 
 func CreateSchema(db bun.IDB) error {
@@ -224,7 +216,6 @@ func CreateSchema(db bun.IDB) error {
 		(*model.Node)(nil),
 		(*model.Wire)(nil),
 		(*model.Pin)(nil),
-		(*model.Const)(nil),
 	}
 
 	for _, model := range models {

@@ -55,7 +55,6 @@ func NodeName(ctx context.Context, client cores.NodeServiceClient) {
 func NodeCreate(ctx context.Context, client cores.NodeServiceClient) {
 	request := &pb.Node{
 		Name:   "test_node2",
-		Desc:   "test",
 		Secret: "123456",
 		Status: consts.ON,
 	}
@@ -72,10 +71,8 @@ func NodeUpdate(ctx context.Context, client cores.NodeServiceClient) {
 	request := &pb.Node{
 		Id:     "01946a0cabdabc925941e98a",
 		Name:   "node",
-		Desc:   "hahaha",
 		Secret: "123456.",
 		Status: consts.ON,
-		Tags:   "tag1,tag2",
 	}
 
 	reply, err := client.Update(ctx, request)

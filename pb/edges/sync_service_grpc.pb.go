@@ -27,8 +27,6 @@ const (
 	SyncService_GetWireUpdated_FullMethodName      = "/edges.SyncService/GetWireUpdated"
 	SyncService_SetPinUpdated_FullMethodName       = "/edges.SyncService/SetPinUpdated"
 	SyncService_GetPinUpdated_FullMethodName       = "/edges.SyncService/GetPinUpdated"
-	SyncService_SetConstUpdated_FullMethodName     = "/edges.SyncService/SetConstUpdated"
-	SyncService_GetConstUpdated_FullMethodName     = "/edges.SyncService/GetConstUpdated"
 	SyncService_SetPinValueUpdated_FullMethodName  = "/edges.SyncService/SetPinValueUpdated"
 	SyncService_GetPinValueUpdated_FullMethodName  = "/edges.SyncService/GetPinValueUpdated"
 	SyncService_WaitPinValueUpdated_FullMethodName = "/edges.SyncService/WaitPinValueUpdated"
@@ -48,8 +46,6 @@ type SyncServiceClient interface {
 	GetWireUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error)
 	SetPinUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error)
 	GetPinUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error)
-	SetConstUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error)
-	GetConstUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error)
 	SetPinValueUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error)
 	GetPinValueUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error)
 	WaitPinValueUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[pb.MyBool], error)
@@ -145,26 +141,6 @@ func (c *syncServiceClient) GetPinUpdated(ctx context.Context, in *pb.MyEmpty, o
 	return out, nil
 }
 
-func (c *syncServiceClient) SetConstUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, SyncService_SetConstUpdated_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *syncServiceClient) GetConstUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SyncUpdated)
-	err := c.cc.Invoke(ctx, SyncService_GetConstUpdated_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *syncServiceClient) SetPinValueUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.MyBool)
@@ -254,8 +230,6 @@ type SyncServiceServer interface {
 	GetWireUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error)
 	SetPinUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error)
 	GetPinUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error)
-	SetConstUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error)
-	GetConstUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error)
 	SetPinValueUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error)
 	GetPinValueUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error)
 	WaitPinValueUpdated(*pb.MyEmpty, grpc.ServerStreamingServer[pb.MyBool]) error
@@ -292,12 +266,6 @@ func (UnimplementedSyncServiceServer) SetPinUpdated(context.Context, *SyncUpdate
 }
 func (UnimplementedSyncServiceServer) GetPinUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPinUpdated not implemented")
-}
-func (UnimplementedSyncServiceServer) SetConstUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetConstUpdated not implemented")
-}
-func (UnimplementedSyncServiceServer) GetConstUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetConstUpdated not implemented")
 }
 func (UnimplementedSyncServiceServer) SetPinValueUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetPinValueUpdated not implemented")
@@ -457,42 +425,6 @@ func _SyncService_GetPinUpdated_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SyncService_SetConstUpdated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SyncUpdated)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SyncServiceServer).SetConstUpdated(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SyncService_SetConstUpdated_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SyncServiceServer).SetConstUpdated(ctx, req.(*SyncUpdated))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _SyncService_GetConstUpdated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.MyEmpty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SyncServiceServer).GetConstUpdated(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SyncService_GetConstUpdated_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SyncServiceServer).GetConstUpdated(ctx, req.(*pb.MyEmpty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _SyncService_SetPinValueUpdated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SyncUpdated)
 	if err := dec(in); err != nil {
@@ -617,14 +549,6 @@ var SyncService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPinUpdated",
 			Handler:    _SyncService_GetPinUpdated_Handler,
-		},
-		{
-			MethodName: "SetConstUpdated",
-			Handler:    _SyncService_SetConstUpdated_Handler,
-		},
-		{
-			MethodName: "GetConstUpdated",
-			Handler:    _SyncService_GetConstUpdated_Handler,
 		},
 		{
 			MethodName: "SetPinValueUpdated",
