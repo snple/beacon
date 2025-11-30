@@ -21,11 +21,45 @@ const (
 	BINARY    = "BINARY"
 	TIMESTAMP = "TIMESTAMP"
 	ID        = "ID"
+	MAP       = "MAP"
 )
+
+func ParseTypeTag(typeName string) (uint8, error) {
+	switch typeName {
+	case I32:
+		return nson.TAG_I32, nil
+	case I64:
+		return nson.TAG_I64, nil
+	case U32:
+		return nson.TAG_U32, nil
+	case U64:
+		return nson.TAG_U64, nil
+	case F32:
+		return nson.TAG_F32, nil
+	case F64:
+		return nson.TAG_F64, nil
+	case BOOL:
+		return nson.TAG_BOOL, nil
+	case STRING:
+		return nson.TAG_STRING, nil
+	case NULL:
+		return nson.TAG_NULL, nil
+	case BINARY:
+		return nson.TAG_BINARY, nil
+	case TIMESTAMP:
+		return nson.TAG_TIMESTAMP, nil
+	case ID:
+		return nson.TAG_ID, nil
+	case MAP:
+		return nson.TAG_MAP, nil
+	default:
+		return 0, fmt.Errorf("unsupported type name: %s", typeName)
+	}
+}
 
 func ValidateType(typeName string) bool {
 	switch typeName {
-	case I32, I64, U32, U64, F32, F64, BOOL, STRING, NULL, BINARY, TIMESTAMP, ID:
+	case I32, I64, U32, U64, F32, F64, BOOL, STRING, NULL, BINARY, TIMESTAMP, ID, MAP:
 		return true
 	default:
 		return false
@@ -33,38 +67,12 @@ func ValidateType(typeName string) bool {
 }
 
 func ValidateValue(value, typeName string) bool {
-	tag := uint8(0)
-
-	switch typeName {
-	case I32:
-		tag = nson.TAG_I32
-	case I64:
-		tag = nson.TAG_I64
-	case U32:
-		tag = nson.TAG_U32
-	case U64:
-		tag = nson.TAG_U64
-	case F32:
-		tag = nson.TAG_F32
-	case F64:
-		tag = nson.TAG_F64
-	case BOOL:
-		tag = nson.TAG_BOOL
-	case STRING:
-		tag = nson.TAG_STRING
-	case NULL:
-		tag = nson.TAG_NULL
-	case BINARY:
-		tag = nson.TAG_BINARY
-	case TIMESTAMP:
-		tag = nson.TAG_TIMESTAMP
-	case ID:
-		tag = nson.TAG_ID
-	default:
+	tag, err := ParseTypeTag(typeName)
+	if err != nil {
 		return false
 	}
 
-	_, err := DecodeNsonValue(value, tag)
+	_, err = DecodeNsonValue(value, tag)
 	if err != nil {
 		return false
 	}
