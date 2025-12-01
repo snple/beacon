@@ -18,6 +18,9 @@ message NodeListResponse {
 }
 
 service NodeService {
+    rpc Create(pb.Node) returns (pb.Node) {}
+    rpc Update(pb.Node) returns (pb.Node) {}
+    rpc Delete(pb.Id) returns (pb.MyBool) {}
     rpc View(pb.Id) returns (pb.Node) {}
     rpc Name(pb.Name) returns (pb.Node) {}
     rpc List(NodeListRequest) returns (NodeListResponse) {}

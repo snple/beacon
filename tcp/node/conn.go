@@ -10,9 +10,7 @@ import (
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/core"
-	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/cores"
 )
 
 type Conn struct {
@@ -206,28 +204,28 @@ func (c *Conn) handleGetValue(_ nson.Map) error {
 }
 
 func (c *Conn) handleSetValue(req nson.Map) error {
-	values, err := req.GetMap("values")
-	if err != nil {
-		writeError(c.Conn, err)
+	// values, err := req.GetMap("values")
+	// if err != nil {
+	// 	writeError(c.Conn, err)
 
-		return nil
-	}
+	// 	return nil
+	// }
 
 	errors := nson.Map{}
 
-	for name, value := range values {
-		valueStr, err := dt.EncodeNsonValue(value)
-		if err != nil {
-			errors[name] = nson.String(err.Error())
-			continue
-		}
+	// for name, value := range values {
+	// 	valueStr, err := dt.EncodeNsonValue(value)
+	// 	if err != nil {
+	// 		errors[name] = nson.String(err.Error())
+	// 		continue
+	// 	}
 
-		_, err = c.ns.Core().GetPin().SetValueByName(c.ctx,
-			&cores.PinNameValue{NodeId: c.id, Name: name, Value: valueStr})
-		if err != nil {
-			errors[name] = nson.String(err.Error())
-		}
-	}
+	// 	_, err = c.ns.Core().GetPin().SetValueByName(c.ctx,
+	// 		&cores.PinNameValue{NodeId: c.id, Name: name, Value: valueStr})
+	// 	if err != nil {
+	// 		errors[name] = nson.String(err.Error())
+	// 	}
+	// }
 
 	if len(errors) > 0 {
 		msg := nson.Map{

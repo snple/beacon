@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/snple/beacon/core/model"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
-	"github.com/snple/types/cache"
+	"github.com/snple/beacon/util"
 	"github.com/uptrace/bun"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -18,18 +19,193 @@ import (
 type NodeService struct {
 	cs *CoreService
 
-	cache *cache.Cache[string, model.Node]
-
 	cores.UnimplementedNodeServiceServer
 }
 
 func newNodeService(cs *CoreService) *NodeService {
 	s := &NodeService{
-		cs:    cs,
-		cache: cache.NewCache[string, model.Node](nil),
+		cs: cs,
 	}
 
 	return s
+}
+
+func (s *NodeService) Create(ctx context.Context, in *pb.Node) (*pb.Node, error) {
+	var output pb.Node
+	var err error
+
+	// basic validation
+	{
+		if in == nil {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
+		}
+
+		if in.Name == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
+		}
+	}
+
+	// name validation
+	{
+		if len(in.Name) < 2 {
+			return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
+		}
+
+		err = s.cs.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.Name).Scan(ctx)
+		if err != nil {
+			if err != sql.ErrNoRows {
+				return &output, status.Errorf(codes.Internal, "Query: %v", err)
+			}
+		} else {
+			return &output, status.Error(codes.AlreadyExists, "Node.Name must be unique")
+		}
+	}
+
+	item := model.Node{
+		ID:      in.Id,
+		Name:    in.Name,
+		Secret:  in.Secret,
+		Status:  in.Status,
+		Updated: time.Now(),
+	}
+
+	if item.ID == "" {
+		item.ID = util.RandomID()
+	}
+
+	_, err = s.cs.GetDB().NewInsert().Model(&item).Exec(ctx)
+	if err != nil {
+		return &output, status.Errorf(codes.Internal, "Insert: %v", err)
+	}
+
+	if err = s.afterUpdate(ctx, &item); err != nil {
+		return &output, err
+	}
+
+	s.copyModelToOutput(&output, &item)
+
+	return &output, nil
+}
+
+func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error) {
+	var output pb.Node
+	var err error
+
+	// basic validation
+	{
+		if in == nil {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
+		}
+
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
+		}
+
+		if in.Name == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
+		}
+	}
+
+	item, err := s.ViewByID(ctx, in.Id)
+	if err != nil {
+		return &output, err
+	}
+
+	// name validation
+	{
+		if len(in.Name) < 2 {
+			return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
+		}
+
+		modelItem := model.Node{}
+		err = s.cs.GetDB().NewSelect().Model(&modelItem).Where("name = ?", in.Name).Scan(ctx)
+		if err != nil {
+			if err != sql.ErrNoRows {
+				return &output, status.Errorf(codes.Internal, "Query: %v", err)
+			}
+		} else {
+			if modelItem.ID != item.ID {
+				return &output, status.Error(codes.AlreadyExists, "Node.Name must be unique")
+			}
+		}
+	}
+
+	item.Name = in.Name
+	item.Secret = in.Secret
+	item.Status = in.Status
+	item.Updated = time.Now()
+
+	_, err = s.cs.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
+	if err != nil {
+		return &output, status.Errorf(codes.Internal, "Update: %v", err)
+	}
+
+	if err = s.afterUpdate(ctx, &item); err != nil {
+		return &output, err
+	}
+
+	s.copyModelToOutput(&output, &item)
+
+	return &output, nil
+}
+
+func (s *NodeService) Delete(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
+	var err error
+	var output pb.MyBool
+
+	// basic validation
+	{
+		if in == nil {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
+		}
+
+		if in.Id == "" {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
+		}
+	}
+
+	item, err := s.ViewByID(ctx, in.Id)
+	if err != nil {
+		return &output, err
+	}
+
+	item.Updated = time.Now()
+	item.Deleted = time.Now()
+
+	_, err = s.cs.GetDB().NewUpdate().Model(&item).Column("updated", "deleted").WherePK().Exec(ctx)
+	if err != nil {
+		return &output, status.Errorf(codes.Internal, "Delete: %v", err)
+	}
+
+	if err = s.afterDelete(ctx, &item); err != nil {
+		return &output, err
+	}
+
+	output.Bool = true
+
+	return &output, nil
+}
+
+func (s *NodeService) afterUpdate(ctx context.Context, item *model.Node) error {
+	var err error
+
+	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.ID, time.Now())
+	if err != nil {
+		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
+	}
+
+	return nil
+}
+
+func (s *NodeService) afterDelete(ctx context.Context, item *model.Node) error {
+	var err error
+
+	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.ID, time.Now())
+	if err != nil {
+		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
+	}
+
+	return nil
 }
 
 func (s *NodeService) View(ctx context.Context, in *pb.Id) (*pb.Node, error) {
@@ -332,48 +508,4 @@ func (s *NodeService) copyModelToOutput(output *pb.Node, item *model.Node) {
 	output.Secret = item.Secret
 	output.Status = item.Status
 	output.Updated = item.Updated.UnixMicro()
-}
-
-// cache
-
-func (s *NodeService) GC() {
-	s.cache.GC()
-}
-
-func (s *NodeService) ViewFromCacheByID(ctx context.Context, id string) (model.Node, error) {
-	if !s.cs.dopts.cache {
-		return s.ViewByID(ctx, id)
-	}
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByID(ctx, id)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.cs.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *NodeService) ViewFromCacheByName(ctx context.Context, name string) (model.Node, error) {
-	if !s.cs.dopts.cache {
-		return s.ViewByName(ctx, name)
-	}
-
-	if option := s.cache.Get(name); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByName(ctx, name)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(name, item, s.cs.dopts.cacheTTL)
-
-	return item, nil
 }

@@ -16,11 +16,10 @@ import (
 type CoreService struct {
 	db *bun.DB
 
-	sync        *SyncService
-	sync_global *SyncGlobalService
-	node        *NodeService
-	wire        *WireService
-	pin         *PinService
+	sync *SyncService
+	node *NodeService
+	wire *WireService
+	pin  *PinService
 
 	ctx     context.Context
 	cancel  func()
@@ -56,7 +55,6 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 	}
 
 	cs.sync = newSyncService(cs)
-	cs.sync_global = newSyncGlobalService(cs)
 	cs.node = newNodeService(cs)
 	cs.wire = newWireService(cs)
 	cs.pin = newPinService(cs)
@@ -65,9 +63,7 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 }
 
 func (cs *CoreService) Start() {
-	if cs.dopts.cache {
-		go cs.cacheGC()
-	}
+
 }
 
 func (cs *CoreService) Stop() {
@@ -83,10 +79,6 @@ func (cs *CoreService) GetDB() *bun.DB {
 
 func (cs *CoreService) GetSync() *SyncService {
 	return cs.sync
-}
-
-func (cs *CoreService) GetSyncGlobal() *SyncGlobalService {
-	return cs.sync_global
 }
 
 func (cs *CoreService) GetNode() *NodeService {
@@ -109,32 +101,8 @@ func (cs *CoreService) Logger() *zap.Logger {
 	return cs.dopts.logger
 }
 
-func (cs *CoreService) cacheGC() {
-	cs.closeWG.Add(1)
-	defer cs.closeWG.Done()
-
-	cs.Logger().Sugar().Info("cache gc started")
-
-	ticker := time.NewTicker(cs.dopts.cacheGCTTL)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-cs.ctx.Done():
-			return
-		case <-ticker.C:
-			{
-				cs.GetNode().GC()
-				cs.GetWire().GC()
-				cs.GetPin().GC()
-			}
-		}
-	}
-}
-
 func (cs *CoreService) Register(server *grpc.Server) {
 	cores.RegisterSyncServiceServer(server, cs.sync)
-	cores.RegisterSyncGlobalServiceServer(server, cs.sync_global)
 	cores.RegisterNodeServiceServer(server, cs.node)
 	cores.RegisterWireServiceServer(server, cs.wire)
 	cores.RegisterPinServiceServer(server, cs.pin)
@@ -143,7 +111,6 @@ func (cs *CoreService) Register(server *grpc.Server) {
 func CreateSchema(db bun.IDB) error {
 	models := []any{
 		(*model.Sync)(nil),
-		(*model.SyncGlobal)(nil),
 		(*model.Node)(nil),
 		(*model.Wire)(nil),
 		(*model.Pin)(nil),
@@ -161,12 +128,8 @@ func CreateSchema(db bun.IDB) error {
 }
 
 type coreOptions struct {
-	logger       *zap.Logger
-	linkTTL      time.Duration
-	cache        bool
-	cacheTTL     time.Duration
-	cacheGCTTL   time.Duration
-	saveInterval time.Duration
+	logger  *zap.Logger
+	linkTTL time.Duration
 }
 
 func defaultCoreOptions() coreOptions {
@@ -176,12 +139,8 @@ func defaultCoreOptions() coreOptions {
 	}
 
 	return coreOptions{
-		logger:       logger,
-		linkTTL:      3 * time.Minute,
-		cache:        true,
-		cacheTTL:     3 * time.Second,
-		cacheGCTTL:   3 * time.Hour,
-		saveInterval: time.Minute,
+		logger:  logger,
+		linkTTL: 3 * time.Minute,
 	}
 }
 
@@ -214,29 +173,5 @@ func WithLogger(logger *zap.Logger) CoreOption {
 func WithLinkTTL(d time.Duration) CoreOption {
 	return newFuncCoreOption(func(o *coreOptions) {
 		o.linkTTL = d
-	})
-}
-
-func WithCache(enable bool) CoreOption {
-	return newFuncCoreOption(func(o *coreOptions) {
-		o.cache = enable
-	})
-}
-
-func WithCacheTTL(d time.Duration) CoreOption {
-	return newFuncCoreOption(func(o *coreOptions) {
-		o.cacheTTL = d
-	})
-}
-
-func WithCacheGCTTL(d time.Duration) CoreOption {
-	return newFuncCoreOption(func(o *coreOptions) {
-		o.cacheGCTTL = d
-	})
-}
-
-func WithSaveInterval(d time.Duration) CoreOption {
-	return newFuncCoreOption(func(o *coreOptions) {
-		o.saveInterval = d
 	})
 }

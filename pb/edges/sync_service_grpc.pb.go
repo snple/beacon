@@ -23,10 +23,6 @@ const (
 	SyncService_SetNodeUpdated_FullMethodName      = "/edges.SyncService/SetNodeUpdated"
 	SyncService_GetNodeUpdated_FullMethodName      = "/edges.SyncService/GetNodeUpdated"
 	SyncService_WaitNodeUpdated_FullMethodName     = "/edges.SyncService/WaitNodeUpdated"
-	SyncService_SetWireUpdated_FullMethodName      = "/edges.SyncService/SetWireUpdated"
-	SyncService_GetWireUpdated_FullMethodName      = "/edges.SyncService/GetWireUpdated"
-	SyncService_SetPinUpdated_FullMethodName       = "/edges.SyncService/SetPinUpdated"
-	SyncService_GetPinUpdated_FullMethodName       = "/edges.SyncService/GetPinUpdated"
 	SyncService_SetPinValueUpdated_FullMethodName  = "/edges.SyncService/SetPinValueUpdated"
 	SyncService_GetPinValueUpdated_FullMethodName  = "/edges.SyncService/GetPinValueUpdated"
 	SyncService_WaitPinValueUpdated_FullMethodName = "/edges.SyncService/WaitPinValueUpdated"
@@ -42,10 +38,6 @@ type SyncServiceClient interface {
 	SetNodeUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error)
 	GetNodeUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error)
 	WaitNodeUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[pb.MyBool], error)
-	SetWireUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error)
-	GetWireUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error)
-	SetPinUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error)
-	GetPinUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error)
 	SetPinValueUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error)
 	GetPinValueUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error)
 	WaitPinValueUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[pb.MyBool], error)
@@ -100,46 +92,6 @@ func (c *syncServiceClient) WaitNodeUpdated(ctx context.Context, in *pb.MyEmpty,
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type SyncService_WaitNodeUpdatedClient = grpc.ServerStreamingClient[pb.MyBool]
-
-func (c *syncServiceClient) SetWireUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, SyncService_SetWireUpdated_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *syncServiceClient) GetWireUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SyncUpdated)
-	err := c.cc.Invoke(ctx, SyncService_GetWireUpdated_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *syncServiceClient) SetPinUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, SyncService_SetPinUpdated_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *syncServiceClient) GetPinUpdated(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*SyncUpdated, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SyncUpdated)
-	err := c.cc.Invoke(ctx, SyncService_GetPinUpdated_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
 
 func (c *syncServiceClient) SetPinValueUpdated(ctx context.Context, in *SyncUpdated, opts ...grpc.CallOption) (*pb.MyBool, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -226,10 +178,6 @@ type SyncServiceServer interface {
 	SetNodeUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error)
 	GetNodeUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error)
 	WaitNodeUpdated(*pb.MyEmpty, grpc.ServerStreamingServer[pb.MyBool]) error
-	SetWireUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error)
-	GetWireUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error)
-	SetPinUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error)
-	GetPinUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error)
 	SetPinValueUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error)
 	GetPinValueUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error)
 	WaitPinValueUpdated(*pb.MyEmpty, grpc.ServerStreamingServer[pb.MyBool]) error
@@ -254,18 +202,6 @@ func (UnimplementedSyncServiceServer) GetNodeUpdated(context.Context, *pb.MyEmpt
 }
 func (UnimplementedSyncServiceServer) WaitNodeUpdated(*pb.MyEmpty, grpc.ServerStreamingServer[pb.MyBool]) error {
 	return status.Errorf(codes.Unimplemented, "method WaitNodeUpdated not implemented")
-}
-func (UnimplementedSyncServiceServer) SetWireUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetWireUpdated not implemented")
-}
-func (UnimplementedSyncServiceServer) GetWireUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetWireUpdated not implemented")
-}
-func (UnimplementedSyncServiceServer) SetPinUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetPinUpdated not implemented")
-}
-func (UnimplementedSyncServiceServer) GetPinUpdated(context.Context, *pb.MyEmpty) (*SyncUpdated, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetPinUpdated not implemented")
 }
 func (UnimplementedSyncServiceServer) SetPinValueUpdated(context.Context, *SyncUpdated) (*pb.MyBool, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetPinValueUpdated not implemented")
@@ -352,78 +288,6 @@ func _SyncService_WaitNodeUpdated_Handler(srv interface{}, stream grpc.ServerStr
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type SyncService_WaitNodeUpdatedServer = grpc.ServerStreamingServer[pb.MyBool]
-
-func _SyncService_SetWireUpdated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SyncUpdated)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SyncServiceServer).SetWireUpdated(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SyncService_SetWireUpdated_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SyncServiceServer).SetWireUpdated(ctx, req.(*SyncUpdated))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _SyncService_GetWireUpdated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.MyEmpty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SyncServiceServer).GetWireUpdated(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SyncService_GetWireUpdated_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SyncServiceServer).GetWireUpdated(ctx, req.(*pb.MyEmpty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _SyncService_SetPinUpdated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SyncUpdated)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SyncServiceServer).SetPinUpdated(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SyncService_SetPinUpdated_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SyncServiceServer).SetPinUpdated(ctx, req.(*SyncUpdated))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _SyncService_GetPinUpdated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.MyEmpty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SyncServiceServer).GetPinUpdated(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SyncService_GetPinUpdated_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SyncServiceServer).GetPinUpdated(ctx, req.(*pb.MyEmpty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
 
 func _SyncService_SetPinValueUpdated_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SyncUpdated)
@@ -533,22 +397,6 @@ var SyncService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNodeUpdated",
 			Handler:    _SyncService_GetNodeUpdated_Handler,
-		},
-		{
-			MethodName: "SetWireUpdated",
-			Handler:    _SyncService_SetWireUpdated_Handler,
-		},
-		{
-			MethodName: "GetWireUpdated",
-			Handler:    _SyncService_GetWireUpdated_Handler,
-		},
-		{
-			MethodName: "SetPinUpdated",
-			Handler:    _SyncService_SetPinUpdated_Handler,
-		},
-		{
-			MethodName: "GetPinUpdated",
-			Handler:    _SyncService_GetPinUpdated_Handler,
 		},
 		{
 			MethodName: "SetPinValueUpdated",

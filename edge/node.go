@@ -241,30 +241,3 @@ func (s *NodeService) afterUpdate(ctx context.Context, _ *model.Node) error {
 
 	return nil
 }
-
-// cache
-
-func (s *NodeService) ViewFromCacheByID(ctx context.Context) (model.Node, error) {
-	if !s.es.dopts.cache {
-		return s.ViewByID(ctx)
-	}
-
-	s.lock.RLock()
-	if s.cache.Alive() {
-		s.lock.RUnlock()
-		return s.cache.Data, nil
-	}
-	s.lock.RUnlock()
-
-	item, err := s.ViewByID(ctx)
-	if err != nil {
-		return item, err
-	}
-
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	value := cache.NewValue(item, s.es.dopts.cacheTTL)
-	s.cache = &value
-
-	return item, nil
-}

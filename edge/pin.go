@@ -282,11 +282,6 @@ func (s *PinService) afterUpdate(ctx context.Context, _ *model.Pin) error {
 		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
 	}
 
-	err = s.es.GetSync().setPinUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setPinUpdated: %v", err)
-	}
-
 	return nil
 }
 
@@ -296,11 +291,6 @@ func (s *PinService) afterDelete(ctx context.Context, _ *model.Pin) error {
 	err = s.es.GetSync().setNodeUpdated(ctx, time.Now())
 	if err != nil {
 		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	err = s.es.GetSync().setPinUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setPinUpdated: %v", err)
 	}
 
 	return nil
@@ -346,92 +336,6 @@ func (s *PinService) viewWithDeleted(ctx context.Context, id string) (model.Pin,
 
 		return item, status.Errorf(codes.Internal, "Query: %v", err)
 	}
-
-	return item, nil
-}
-
-// cache
-
-func (s *PinService) GC() {
-	s.cache.GC()
-}
-
-func (s *PinService) ViewFromCacheByID(ctx context.Context, id string) (model.Pin, error) {
-	if !s.es.dopts.cache {
-		return s.ViewByID(ctx, id)
-	}
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByID(ctx, id)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.es.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *PinService) ViewFromCacheByName(ctx context.Context, name string) (model.Pin, error) {
-	if !s.es.dopts.cache {
-		return s.ViewByName(ctx, name)
-	}
-
-	if option := s.cache.Get(name); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByName(ctx, name)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(name, item, s.es.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *PinService) ViewFromCacheByWireIDAndName(ctx context.Context, wireID, name string) (model.Pin, error) {
-	if !s.es.dopts.cache {
-		return s.ViewByWireIDAndName(ctx, wireID, name)
-	}
-
-	id := wireID + name
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByWireIDAndName(ctx, wireID, name)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.es.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *PinService) ViewFromCacheByWireIDAndAddress(ctx context.Context, wireID, address string) (model.Pin, error) {
-	if !s.es.dopts.cache {
-		return s.ViewByWireIDAndAddress(ctx, wireID, address)
-	}
-
-	id := wireID + address
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByWireIDAndAddress(ctx, wireID, address)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.es.dopts.cacheTTL)
 
 	return item, nil
 }
@@ -492,7 +396,7 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 	}
 
 	// pin
-	item, err := s.ViewFromCacheByID(ctx, in.Id)
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -529,7 +433,7 @@ func (s *PinService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 		}
 	}
 
-	item, err := s.ViewFromCacheByName(ctx, in.Name)
+	item, err := s.ViewByName(ctx, in.Name)
 	if err != nil {
 		return &output, err
 	}
@@ -588,13 +492,13 @@ func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*
 	}
 
 	// wire
-	wire, err := s.es.GetWire().ViewFromCacheByName(ctx, wireName)
+	wire, err := s.es.GetWire().ViewByName(ctx, wireName)
 	if err != nil {
 		return &output, err
 	}
 
 	// pin
-	item, err := s.ViewFromCacheByWireIDAndName(ctx, wire.ID, itemName)
+	item, err := s.ViewByWireIDAndName(ctx, wire.ID, itemName)
 	if err != nil {
 		return &output, err
 	}
@@ -959,7 +863,7 @@ func (s *PinService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 	}
 
 	// pin
-	item, err := s.ViewFromCacheByID(ctx, in.Id)
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -1000,7 +904,7 @@ func (s *PinService) GetWriteByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 		}
 	}
 
-	item, err := s.ViewFromCacheByName(ctx, in.Name)
+	item, err := s.ViewByName(ctx, in.Name)
 	if err != nil {
 		return &output, err
 	}
@@ -1059,13 +963,13 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *pb.PinNameValue) (*
 	}
 
 	// wire
-	wire, err := s.es.GetWire().ViewFromCacheByName(ctx, wireName)
+	wire, err := s.es.GetWire().ViewByName(ctx, wireName)
 	if err != nil {
 		return &output, err
 	}
 
 	// pin
-	item, err := s.ViewFromCacheByWireIDAndName(ctx, wire.ID, itemName)
+	item, err := s.ViewByWireIDAndName(ctx, wire.ID, itemName)
 	if err != nil {
 		return &output, err
 	}
@@ -1089,21 +993,6 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *pb.PinNameValue) (*
 	output.Bool = true
 
 	return &output, nil
-}
-
-func (s *PinService) getPinWrite(ctx context.Context, id string) (string, error) {
-	item2, err := s.getPinWriteUpdated(ctx, id)
-	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				return "", nil
-			}
-		}
-
-		return "", err
-	}
-
-	return item2.Value, nil
 }
 
 func (s *PinService) afterUpdateWrite(ctx context.Context, _ *model.Pin, _ string) error {

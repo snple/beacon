@@ -86,98 +86,6 @@ func (s *SyncService) WaitNodeUpdated(in *pb.MyEmpty,
 	return s.waitUpdated(in, stream, NOTIFY)
 }
 
-func (s *SyncService) SetWireUpdated(ctx context.Context, in *edges.SyncUpdated) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Updated == 0 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Source.Updated")
-		}
-	}
-
-	err = s.setWireUpdated(ctx, time.UnixMicro(in.Updated))
-	if err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
-func (s *SyncService) GetWireUpdated(ctx context.Context, in *pb.MyEmpty) (*edges.SyncUpdated, error) {
-	var output edges.SyncUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	t, err := s.getWireUpdated(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Updated = t.UnixMicro()
-
-	return &output, nil
-}
-
-func (s *SyncService) SetPinUpdated(ctx context.Context, in *edges.SyncUpdated) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Updated == 0 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Updated")
-		}
-	}
-
-	err = s.setPinUpdated(ctx, time.UnixMicro(in.Updated))
-	if err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
-func (s *SyncService) GetPinUpdated(ctx context.Context, in *pb.MyEmpty) (*edges.SyncUpdated, error) {
-	var output edges.SyncUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	t, err := s.getPinUpdated(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Updated = t.UnixMicro()
-
-	return &output, nil
-}
-
 func (s *SyncService) SetPinValueUpdated(ctx context.Context, in *edges.SyncUpdated) (*pb.MyBool, error) {
 	var output pb.MyBool
 	var err error
@@ -295,22 +203,6 @@ func (s *SyncService) setNodeUpdated(ctx context.Context, updated time.Time) err
 	s.notifyUpdated(NOTIFY)
 
 	return nil
-}
-
-func (s *SyncService) getWireUpdated(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_WIRE)
-}
-
-func (s *SyncService) setWireUpdated(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_WIRE, updated)
-}
-
-func (s *SyncService) getPinUpdated(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN)
-}
-
-func (s *SyncService) setPinUpdated(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_PIN, updated)
 }
 
 func (s *SyncService) getPinValueUpdated(ctx context.Context) (time.Time, error) {

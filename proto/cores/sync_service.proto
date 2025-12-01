@@ -23,14 +23,3 @@ service SyncService {
     rpc GetPinWriteUpdated(pb.Id) returns (SyncUpdated) {}
     rpc WaitPinWriteUpdated(pb.Id) returns (stream pb.MyBool) {}
 }
-
-message SyncGlobalUpdated {
-    string name = 1;
-    int64 updated = 2;
-}
-
-service SyncGlobalService {
-    rpc SetUpdated(SyncGlobalUpdated) returns (pb.MyBool) {}
-    rpc GetUpdated(pb.Name) returns (SyncGlobalUpdated) {}
-    rpc WaitUpdated(pb.Name) returns (stream pb.MyBool) {}
-}

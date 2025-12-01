@@ -10,8 +10,6 @@ type Sync struct {
 const (
 	SYNC_PREFIX    = "sync_"
 	SYNC_NODE      = "sync_node"  // 本地配置数据最新时间戳
-	SYNC_WIRE      = "sync_wire"  // 保留但可能不再使用
-	SYNC_PIN       = "sync_pin"   // 保留但可能不再使用
 	SYNC_PIN_VALUE = "sync_pin_v" // 本地 PinValue 最新时间戳
 	SYNC_PIN_WRITE = "sync_pin_w" // 本地 PinWrite 最新时间戳（从 Core 拉取的）
 

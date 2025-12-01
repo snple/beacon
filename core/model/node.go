@@ -14,4 +14,5 @@ type Node struct {
 	Secret        string    `bun:"secret,type:TEXT" json:"secret"`
 	Status        int32     `bun:"status" json:"status"`
 	Updated       time.Time `bun:"updated" json:"updated"`
+	Deleted       time.Time `bun:"deleted,soft_delete" json:"-"`
 }

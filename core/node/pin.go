@@ -179,36 +179,6 @@ func (s *PinService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue, err
 	return s.ns.Core().GetPin().GetValue(ctx, in)
 }
 
-func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	request := &pb.Id{Id: in.Id}
-
-	reply, err := s.ns.Core().GetPin().View(ctx, request)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().SetValue(ctx, in)
-}
-
 func (s *PinService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.PinNameValue, error) {
 	var err error
 	var output pb.PinNameValue
@@ -239,26 +209,6 @@ func (s *PinService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 	return &output, nil
 }
 
-func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	return s.ns.Core().GetPin().SetValueByName(ctx,
-		&cores.PinNameValue{NodeId: nodeID, Name: in.Name, Value: in.Value})
-}
-
 func (s *PinService) ViewValue(ctx context.Context, in *pb.Id) (*pb.PinValueUpdated, error) {
 	var output pb.PinValueUpdated
 	var err error
@@ -285,34 +235,6 @@ func (s *PinService) ViewValue(ctx context.Context, in *pb.Id) (*pb.PinValueUpda
 	}
 
 	return reply, nil
-}
-
-func (s *PinService) DeleteValue(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	reply, err := s.ns.Core().GetPin().ViewValue(ctx, in)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().DeleteValue(ctx, in)
 }
 
 // pinPushValueStreamWrapper 包装 node 端的流以添加验证并转发到 Core
@@ -455,7 +377,7 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *pb.PinNameValue) (*
 		return &output, err
 	}
 
-	return s.ns.Core().GetPin().SetValueByName(ctx,
+	return s.ns.Core().GetPin().SetWriteByName(ctx,
 		&cores.PinNameValue{NodeId: nodeID, Name: in.Name, Value: in.Value})
 }
 

@@ -15,12 +15,6 @@ service SyncService {
     rpc GetNodeUpdated(pb.MyEmpty) returns (SyncUpdated) {}
     rpc WaitNodeUpdated(pb.MyEmpty) returns (stream pb.MyBool) {}
 
-    rpc SetWireUpdated(SyncUpdated) returns (pb.MyBool) {}
-    rpc GetWireUpdated(pb.MyEmpty) returns (SyncUpdated) {}
-
-    rpc SetPinUpdated(SyncUpdated) returns (pb.MyBool) {}
-    rpc GetPinUpdated(pb.MyEmpty) returns (SyncUpdated) {}
-
     rpc SetPinValueUpdated(SyncUpdated) returns (pb.MyBool) {}
     rpc GetPinValueUpdated(pb.MyEmpty) returns (SyncUpdated) {}
     rpc WaitPinValueUpdated(pb.MyEmpty) returns (stream pb.MyBool) {}

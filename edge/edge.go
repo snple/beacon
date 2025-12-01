@@ -102,15 +102,6 @@ func (es *EdgeService) Start() {
 			es.nodeUp.Unwrap().start()
 		}()
 	}
-
-	if es.dopts.cache {
-		es.closeWG.Add(1)
-		go func() {
-			defer es.closeWG.Done()
-
-			es.cacheGC()
-		}()
-	}
 }
 
 func (es *EdgeService) Stop() {
@@ -169,25 +160,6 @@ func (es *EdgeService) Logger() *zap.Logger {
 	return es.dopts.logger
 }
 
-func (es *EdgeService) cacheGC() {
-	es.Logger().Sugar().Info("cache gc started")
-
-	ticker := time.NewTicker(es.dopts.cacheGCTTL)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-es.ctx.Done():
-			return
-		case <-ticker.C:
-			{
-				es.GetWire().GC()
-				es.GetPin().GC()
-			}
-		}
-	}
-}
-
 func (es *EdgeService) Register(server *grpc.Server) {
 	edges.RegisterSyncServiceServer(server, es.sync)
 	edges.RegisterNodeServiceServer(server, es.node)
@@ -221,10 +193,7 @@ type edgeOptions struct {
 	BadgerOptions   badger.Options
 	BadgerGCOptions BadgerGCOptions
 
-	linkTTL    time.Duration
-	cache      bool
-	cacheTTL   time.Duration
-	cacheGCTTL time.Duration
+	linkTTL time.Duration
 }
 
 type NodeOptions struct {
@@ -267,10 +236,7 @@ func defaultEdgeOptions() edgeOptions {
 			GC:             time.Hour,
 			GCDiscardRatio: 0.7,
 		},
-		linkTTL:    3 * time.Minute,
-		cache:      true,
-		cacheTTL:   3 * time.Second,
-		cacheGCTTL: 3 * time.Hour,
+		linkTTL: 3 * time.Minute,
 	}
 }
 
@@ -356,23 +322,5 @@ func WithBadgerGC(options *BadgerGCOptions) EdgeOption {
 func WithLinkTTL(d time.Duration) EdgeOption {
 	return newFuncEdgeOption(func(o *edgeOptions) {
 		o.linkTTL = d
-	})
-}
-
-func WithCache(enable bool) EdgeOption {
-	return newFuncEdgeOption(func(o *edgeOptions) {
-		o.cache = enable
-	})
-}
-
-func WithCacheTTL(d time.Duration) EdgeOption {
-	return newFuncEdgeOption(func(o *edgeOptions) {
-		o.cacheTTL = d
-	})
-}
-
-func WithCacheGCTTL(d time.Duration) EdgeOption {
-	return newFuncEdgeOption(func(o *edgeOptions) {
-		o.cacheGCTTL = d
 	})
 }

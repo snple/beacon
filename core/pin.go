@@ -341,38 +341,6 @@ func (s *PinService) copyModelToOutput(output *pb.Pin, item *model.Pin) {
 	output.Updated = item.Updated.UnixMicro()
 }
 
-func (s *PinService) afterUpdate(ctx context.Context, item *model.Pin) error {
-	var err error
-
-	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.NodeID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	err = s.cs.GetSyncGlobal().setUpdated(ctx, s.cs.GetDB(), model.SYNC_GLOBAL_PIN, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "SyncGlobal.setUpdated: %v", err)
-	}
-
-	return nil
-}
-
-func (s *PinService) afterDelete(ctx context.Context, item *model.Pin) error {
-	var err error
-
-	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.NodeID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	err = s.cs.GetSyncGlobal().setUpdated(ctx, s.cs.GetDB(), model.SYNC_GLOBAL_PIN, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "SyncGlobal.setUpdated: %v", err)
-	}
-
-	return nil
-}
-
 // Push 接收 stream 数据并插入 Pin
 func (s *PinService) Push(stream grpc.ClientStreamingServer[pb.Pin, pb.MyBool]) error {
 	ctx := stream.Context()
@@ -436,95 +404,22 @@ func (s *PinService) Push(stream grpc.ClientStreamingServer[pb.Pin, pb.MyBool]) 
 		if err != nil {
 			return status.Errorf(codes.Internal, "Insert: %v", err)
 		}
+
+		if err = s.afterUpdate(ctx, &item); err != nil {
+			return err
+		}
 	}
 }
 
-// cache
+func (s *PinService) afterUpdate(ctx context.Context, item *model.Pin) error {
+	var err error
 
-func (s *PinService) GC() {
-	s.cache.GC()
-}
-
-func (s *PinService) ViewFromCacheByID(ctx context.Context, id string) (model.Pin, error) {
-	if !s.cs.dopts.cache {
-		return s.ViewByID(ctx, id)
-	}
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByID(ctx, id)
+	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.NodeID, time.Now())
 	if err != nil {
-		return item, err
+		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
 	}
 
-	s.cache.Set(id, item, s.cs.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *PinService) ViewFromCacheByNodeIDAndName(ctx context.Context, nodeID, name string) (model.Pin, error) {
-	if !s.cs.dopts.cache {
-		return s.ViewByNodeIDAndName(ctx, nodeID, name)
-	}
-
-	id := nodeID + name
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByNodeIDAndName(ctx, nodeID, name)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.cs.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *PinService) ViewFromCacheByWireIDAndName(ctx context.Context, wireID, name string) (model.Pin, error) {
-	if !s.cs.dopts.cache {
-		return s.ViewByWireIDAndName(ctx, wireID, name)
-	}
-
-	id := wireID + name
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByWireIDAndName(ctx, wireID, name)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.cs.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *PinService) ViewFromCacheByWireIDAndAddress(ctx context.Context, wireID, address string) (model.Pin, error) {
-	if !s.cs.dopts.cache {
-		return s.ViewByWireIDAndAddress(ctx, wireID, address)
-	}
-
-	id := wireID + address
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByWireIDAndAddress(ctx, wireID, address)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.cs.dopts.cacheTTL)
-
-	return item, nil
+	return nil
 }
 
 // value
@@ -563,63 +458,6 @@ func (s *PinService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue, err
 	return &output, nil
 }
 
-func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-
-		if in.Value == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value")
-		}
-	}
-
-	// pin
-	item, err := s.ViewFromCacheByID(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	if !dt.ValidateValue(in.Value, item.Type) {
-		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
-	}
-
-	// validation node and wire
-	{
-		// node
-		{
-			node, err := s.cs.GetNode().ViewFromCacheByID(ctx, item.NodeID)
-			if err != nil {
-				return &output, err
-			}
-
-			if node.Status != consts.ON {
-				return &output, status.Errorf(codes.FailedPrecondition, "Node.Status != ON")
-			}
-		}
-	}
-
-	if err = s.setPinValueUpdated(ctx, &item, in.Value, time.Now()); err != nil {
-		return &output, err
-	}
-
-	if err = s.afterUpdateValue(ctx, &item, in.Value); err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *PinService) GetValueByName(ctx context.Context, in *cores.PinGetValueByNameRequest) (*cores.PinNameValue, error) {
 	var err error
 	var output cores.PinNameValue
@@ -639,7 +477,7 @@ func (s *PinService) GetValueByName(ctx context.Context, in *cores.PinGetValueBy
 		}
 	}
 
-	item, err := s.ViewFromCacheByNodeIDAndName(ctx, in.NodeId, in.Name)
+	item, err := s.ViewByNodeIDAndName(ctx, in.NodeId, in.Name)
 	if err != nil {
 		return &output, err
 	}
@@ -665,82 +503,6 @@ func (s *PinService) GetValueByName(ctx context.Context, in *cores.PinGetValueBy
 	return &output, nil
 }
 
-func (s *PinService) SetValueByName(ctx context.Context, in *cores.PinNameValue) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.NodeId == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId")
-		}
-
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
-		}
-
-		if in.Value == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value")
-		}
-	}
-
-	// node
-	node, err := s.cs.GetNode().ViewFromCacheByID(ctx, in.NodeId)
-	if err != nil {
-		return &output, err
-	}
-
-	if node.Status != consts.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Node.Status != ON")
-	}
-
-	// name
-	wireName := consts.DEFAULT_WIRE
-	itemName := in.Name
-
-	if strings.Contains(itemName, ".") {
-		splits := strings.Split(itemName, ".")
-		if len(splits) != 2 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
-		}
-
-		wireName = splits[0]
-		itemName = splits[1]
-	}
-
-	// wire
-	wire, err := s.cs.GetWire().ViewFromCacheByNodeIDAndName(ctx, node.ID, wireName)
-	if err != nil {
-		return &output, err
-	}
-
-	// pin
-	item, err := s.ViewFromCacheByWireIDAndName(ctx, wire.ID, itemName)
-	if err != nil {
-		return &output, err
-	}
-
-	if !dt.ValidateValue(in.Value, item.Type) {
-		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
-	}
-
-	if err = s.setPinValueUpdated(ctx, &item, in.Value, time.Now()); err != nil {
-		return &output, err
-	}
-
-	if err = s.afterUpdateValue(ctx, &item, in.Value); err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *PinService) getPinValue(ctx context.Context, id string) (string, error) {
 	item, err := s.getPinValueUpdated(ctx, id)
 	if err != nil {
@@ -754,17 +516,6 @@ func (s *PinService) getPinValue(ctx context.Context, id string) (string, error)
 	}
 
 	return item.Value, nil
-}
-
-func (s *PinService) afterUpdateValue(ctx context.Context, item *model.Pin, _ string) error {
-	var err error
-
-	err = s.cs.GetSync().setPinValueUpdated(ctx, s.cs.GetDB(), item.NodeID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setPinValueUpdated: %v", err)
-	}
-
-	return nil
 }
 
 // sync value
@@ -794,36 +545,6 @@ func (s *PinService) ViewValue(ctx context.Context, in *pb.Id) (*pb.PinValueUpda
 	return &output, nil
 }
 
-func (s *PinService) DeleteValue(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-	}
-
-	item, err := s.getPinValueUpdated(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	_, err = s.cs.GetDB().NewDelete().Model(&item).WherePK().Exec(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Delete: %v", err)
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
 func (s *PinService) PushValue(stream grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]) error {
 	var output pb.MyBool
 	ctx := stream.Context()
@@ -848,18 +569,12 @@ func (s *PinService) PushValue(stream grpc.ClientStreamingServer[pb.PinValue, pb
 			return err
 		}
 
-		// insert pin value
-		item2 := model.PinValue{
-			ID:      item.ID,
-			NodeID:  item.NodeID,
-			WireID:  item.WireID,
-			Value:   in.Value,
-			Updated: time.UnixMicro(in.Updated),
+		if err = s.setPinValueUpdated(ctx, &item, in.Value, time.UnixMicro(in.Updated)); err != nil {
+			return err
 		}
 
-		_, err = s.cs.GetDB().NewInsert().Model(&item2).Exec(ctx)
-		if err != nil {
-			return status.Errorf(codes.Internal, "Insert: %v", err)
+		if err = s.afterUpdateValue(ctx, &item, in.Value); err != nil {
+			return err
 		}
 	}
 }
@@ -890,6 +605,17 @@ func (s *PinService) setPinValueUpdated(ctx context.Context, item *model.Pin, va
 		if err != nil {
 			return status.Errorf(codes.Internal, "Insert: %v", err)
 		}
+	}
+
+	return nil
+}
+
+func (s *PinService) afterUpdateValue(ctx context.Context, item *model.Pin, _ string) error {
+	var err error
+
+	err = s.cs.GetSync().setPinValueUpdated(ctx, s.cs.GetDB(), item.NodeID, time.Now())
+	if err != nil {
+		return status.Errorf(codes.Internal, "Sync.setPinValueUpdated: %v", err)
 	}
 
 	return nil
@@ -976,7 +702,7 @@ func (s *PinService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 	}
 
 	// pin
-	item, err := s.ViewFromCacheByID(ctx, in.Id)
+	item, err := s.ViewByID(ctx, in.Id)
 	if err != nil {
 		return &output, err
 	}
@@ -1021,7 +747,7 @@ func (s *PinService) GetWriteByName(ctx context.Context, in *cores.PinGetValueBy
 		}
 	}
 
-	item, err := s.ViewFromCacheByNodeIDAndName(ctx, in.NodeId, in.Name)
+	item, err := s.ViewByNodeIDAndName(ctx, in.NodeId, in.Name)
 	if err != nil {
 		return &output, err
 	}
@@ -1071,7 +797,7 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *cores.PinNameValue)
 	}
 
 	// node
-	node, err := s.cs.GetNode().ViewFromCacheByID(ctx, in.NodeId)
+	node, err := s.cs.GetNode().ViewByID(ctx, in.NodeId)
 	if err != nil {
 		return &output, err
 	}
@@ -1095,13 +821,13 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *cores.PinNameValue)
 	}
 
 	// wire
-	wire, err := s.cs.GetWire().ViewFromCacheByNodeIDAndName(ctx, node.ID, wireName)
+	wire, err := s.cs.GetWire().ViewByNodeIDAndName(ctx, node.ID, wireName)
 	if err != nil {
 		return &output, err
 	}
 
 	// pin
-	item, err := s.ViewFromCacheByWireIDAndName(ctx, wire.ID, itemName)
+	item, err := s.ViewByWireIDAndName(ctx, wire.ID, itemName)
 	if err != nil {
 		return &output, err
 	}
@@ -1125,21 +851,6 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *cores.PinNameValue)
 	output.Bool = true
 
 	return &output, nil
-}
-
-func (s *PinService) getPinWrite(ctx context.Context, id string) (string, error) {
-	item, err := s.getPinWriteUpdated(ctx, id)
-	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				return "", nil
-			}
-		}
-
-		return "", err
-	}
-
-	return item.Value, nil
 }
 
 func (s *PinService) afterUpdateWrite(ctx context.Context, item *model.Pin, _ string) error {

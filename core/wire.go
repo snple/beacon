@@ -12,7 +12,6 @@ import (
 	"github.com/snple/beacon/core/model"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
-	"github.com/snple/types/cache"
 	"github.com/uptrace/bun"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -22,15 +21,12 @@ import (
 type WireService struct {
 	cs *CoreService
 
-	cache *cache.Cache[string, model.Wire]
-
 	cores.UnimplementedWireServiceServer
 }
 
 func newWireService(cs *CoreService) *WireService {
 	return &WireService{
-		cs:    cs,
-		cache: cache.NewCache[string, model.Wire](nil),
+		cs: cs,
 	}
 }
 
@@ -263,38 +259,6 @@ func (s *WireService) copyModelToOutput(output *pb.Wire, item *model.Wire) {
 	output.Updated = item.Updated.UnixMicro()
 }
 
-func (s *WireService) afterUpdate(ctx context.Context, item *model.Wire) error {
-	var err error
-
-	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.NodeID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	err = s.cs.GetSyncGlobal().setUpdated(ctx, s.cs.GetDB(), model.SYNC_GLOBAL_WIRE, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "SyncGlobal.setUpdated: %v", err)
-	}
-
-	return nil
-}
-
-func (s *WireService) afterDelete(ctx context.Context, item *model.Wire) error {
-	var err error
-
-	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.NodeID, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	err = s.cs.GetSyncGlobal().setUpdated(ctx, s.cs.GetDB(), model.SYNC_GLOBAL_WIRE, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "SyncGlobal.setUpdated: %v", err)
-	}
-
-	return nil
-}
-
 // Push 接收 stream 数据并插入 Wire
 func (s *WireService) Push(stream grpc.ClientStreamingServer[pb.Wire, pb.MyBool]) error {
 	ctx := stream.Context()
@@ -343,51 +307,20 @@ func (s *WireService) Push(stream grpc.ClientStreamingServer[pb.Wire, pb.MyBool]
 		if err != nil {
 			return status.Errorf(codes.Internal, "Insert: %v", err)
 		}
+
+		if err = s.afterUpdate(ctx, &item); err != nil {
+			return err
+		}
 	}
 }
 
-// cache
+func (s *WireService) afterUpdate(ctx context.Context, item *model.Wire) error {
+	var err error
 
-func (s *WireService) GC() {
-	s.cache.GC()
-}
-
-func (s *WireService) ViewFromCacheByID(ctx context.Context, id string) (model.Wire, error) {
-	if !s.cs.dopts.cache {
-		return s.ViewByID(ctx, id)
-	}
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByID(ctx, id)
+	err = s.cs.GetSync().setNodeUpdated(ctx, s.cs.GetDB(), item.NodeID, time.Now())
 	if err != nil {
-		return item, err
+		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
 	}
 
-	s.cache.Set(id, item, s.cs.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *WireService) ViewFromCacheByNodeIDAndName(ctx context.Context, nodeID, name string) (model.Wire, error) {
-	if !s.cs.dopts.cache {
-		return s.ViewByNodeIDAndName(ctx, nodeID, name)
-	}
-
-	id := nodeID + name
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByNodeIDAndName(ctx, nodeID, name)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.cs.dopts.cacheTTL)
-
-	return item, nil
+	return nil
 }

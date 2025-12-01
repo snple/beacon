@@ -216,11 +216,6 @@ func (s *WireService) afterUpdate(ctx context.Context, _ *model.Wire) error {
 		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
 	}
 
-	err = s.es.GetSync().setWireUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setWireUpdated: %v", err)
-	}
-
 	return nil
 }
 
@@ -230,11 +225,6 @@ func (s *WireService) afterDelete(ctx context.Context, _ *model.Wire) error {
 	err = s.es.GetSync().setNodeUpdated(ctx, time.Now())
 	if err != nil {
 		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	err = s.es.GetSync().setWireUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setWireUpdated: %v", err)
 	}
 
 	return nil
@@ -280,50 +270,6 @@ func (s *WireService) viewWithDeleted(ctx context.Context, id string) (model.Wir
 
 		return item, status.Errorf(codes.Internal, "Query: %v", err)
 	}
-
-	return item, nil
-}
-
-// cache
-
-func (s *WireService) GC() {
-	s.cache.GC()
-}
-
-func (s *WireService) ViewFromCacheByID(ctx context.Context, id string) (model.Wire, error) {
-	if !s.es.dopts.cache {
-		return s.ViewByID(ctx, id)
-	}
-
-	if option := s.cache.Get(id); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByID(ctx, id)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(id, item, s.es.dopts.cacheTTL)
-
-	return item, nil
-}
-
-func (s *WireService) ViewFromCacheByName(ctx context.Context, name string) (model.Wire, error) {
-	if !s.es.dopts.cache {
-		return s.ViewByName(ctx, name)
-	}
-
-	if option := s.cache.Get(name); option.IsSome() {
-		return option.Unwrap(), nil
-	}
-
-	item, err := s.ViewByName(ctx, name)
-	if err != nil {
-		return item, err
-	}
-
-	s.cache.Set(name, item, s.es.dopts.cacheTTL)
 
 	return item, nil
 }
