@@ -133,14 +133,6 @@ func (es *EdgeService) Push() error {
 	return errors.New("node not enable")
 }
 
-func (es *EdgeService) Pull() error {
-	if es.nodeUp.IsSome() {
-		return es.nodeUp.Unwrap().pull()
-	}
-
-	return errors.New("node not enable")
-}
-
 func (es *EdgeService) GetDB() *bun.DB {
 	return es.db
 }

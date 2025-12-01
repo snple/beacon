@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"flag"
 	"fmt"
 	"net"
@@ -11,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	nethttp "net/http"
 	_ "net/http/pprof"
 
 	"github.com/dgraph-io/badger/v4"
@@ -21,8 +18,6 @@ import (
 	"github.com/snple/beacon/bin/edge/log"
 	"github.com/snple/beacon/db"
 	"github.com/snple/beacon/edge"
-	"github.com/snple/beacon/http"
-	"github.com/snple/beacon/http/edge/api"
 	"github.com/snple/beacon/util"
 	"github.com/snple/beacon/util/compress/zstd"
 	"github.com/uptrace/bun"
@@ -191,83 +186,6 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	if config.Config.ApiService.Enable {
-		opts := make([]http.HttpServerOption, 0)
-
-		opts = append(opts, http.WithAppName("api"))
-		opts = append(opts, http.WithAddr(config.Config.ApiService.Addr))
-		opts = append(opts, http.WithDebug(config.Config.ApiService.Debug))
-
-		if config.Config.ApiService.TLS {
-			if config.Config.ApiService.CA != "" {
-				pool := x509.NewCertPool()
-
-				ca, err := os.ReadFile(config.Config.ApiService.CA)
-				if err != nil {
-					log.Logger.Sugar().Fatal(err)
-				}
-
-				if ok := pool.AppendCertsFromPEM(ca); !ok {
-					log.Logger.Sugar().Fatal(err)
-				}
-
-				tlsConfig := &tls.Config{
-					ClientAuth: tls.RequireAndVerifyClientCert,
-					ClientCAs:  pool,
-				}
-
-				opts = append(opts, http.WithTLSConfig(tlsConfig))
-			}
-
-			opts = append(opts, http.WithTLS(config.Config.ApiService.Cert, config.Config.ApiService.Key))
-		}
-
-		hs, err := http.NewHttpServer(es.Context(), opts...)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("NewHttpServer: %v", err)
-		}
-
-		{
-			as, err := api.NewApiService(es)
-			if err != nil {
-				log.Logger.Sugar().Fatalf("NewApiService: %v", err)
-			}
-
-			as.Register(hs.Engine())
-
-			go as.Start()
-			defer as.Stop()
-		}
-
-		go hs.Start()
-		defer hs.Stop()
-	}
-
-	for _, static := range config.Config.Statics {
-		if !static.Enable {
-			continue
-		}
-
-		engine := gin.New()
-		engine.Use(gin.Recovery())
-		engine.Static("/", static.Path)
-		engine.NoRoute(func(ctx *gin.Context) {
-			ctx.File(static.Path + "/index.html")
-		})
-
-		log.Logger.Sugar().Infof("static server start： %v", static.Addr)
-
-		if static.TLS {
-			go engine.RunTLS(static.Addr, static.Cert, static.Key)
-		} else {
-			go engine.Run(static.Addr)
-		}
-	}
-
-	go func() {
-		nethttp.ListenAndServe(":6060", nil)
-	}()
-
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 	<-signalCh
@@ -323,8 +241,6 @@ func cli(command string, bundb *bun.DB) error {
 	switch command {
 	case "push":
 		return es.Push()
-	case "pull":
-		return es.Pull()
 	}
 
 	return nil

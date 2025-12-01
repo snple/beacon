@@ -109,37 +109,6 @@ func (s *NodeUpService) push() error {
 	return nil
 }
 
-func (s *NodeUpService) pull() error {
-	// login
-	operation := func() error {
-		err := s.login(s.ctx)
-		if err != nil {
-			s.es.Logger().Sugar().Errorf("node login: %v", err)
-		}
-
-		return err
-	}
-
-	err := backoff.Retry(operation, backoff.WithContext(backoff.NewExponentialBackOff(), s.ctx))
-	if err != nil {
-		s.es.Logger().Sugar().Errorf("backoff.Retry: %v", err)
-		return err
-	}
-
-	s.es.Logger().Sugar().Info("node login success")
-
-	s.es.GetSync().setPinWriteFromRemote(s.ctx, time.Time{})
-
-	// 拉取写命令 Core → Edge
-	if err := s.syncPinWriteFromRemote(s.ctx); err != nil {
-		return err
-	}
-
-	s.es.Logger().Sugar().Info("pull success")
-
-	return nil
-}
-
 func (s *NodeUpService) try() {
 	// login
 	operation := func() error {

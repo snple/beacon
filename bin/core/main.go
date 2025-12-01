@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"flag"
 	"fmt"
 	"net"
@@ -17,8 +15,6 @@ import (
 	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/core/node"
 	"github.com/snple/beacon/db"
-	"github.com/snple/beacon/http"
-	"github.com/snple/beacon/http/core/api"
 	tcp_node "github.com/snple/beacon/tcp/node"
 	"github.com/snple/beacon/util"
 	_ "github.com/snple/beacon/util/compress/zstd"
@@ -179,84 +175,6 @@ func main() {
 
 	if !config.Config.Gin.Debug {
 		gin.SetMode(gin.ReleaseMode)
-	}
-
-	if config.Config.ApiService.Enable {
-		opts := make([]http.HttpServerOption, 0)
-
-		opts = append(opts, http.WithAppName("api"))
-		opts = append(opts, http.WithAddr(config.Config.ApiService.Addr))
-		opts = append(opts, http.WithDebug(config.Config.ApiService.Debug))
-
-		if config.Config.ApiService.TLS {
-			if config.Config.ApiService.CA != "" {
-				pool := x509.NewCertPool()
-
-				ca, err := os.ReadFile(config.Config.ApiService.CA)
-				if err != nil {
-					log.Logger.Sugar().Fatal(err)
-				}
-
-				if ok := pool.AppendCertsFromPEM(ca); !ok {
-					log.Logger.Sugar().Fatal(err)
-				}
-
-				tlsConfig := &tls.Config{
-					ClientAuth: tls.RequireAndVerifyClientCert,
-					ClientCAs:  pool,
-				}
-
-				opts = append(opts, http.WithTLSConfig(tlsConfig))
-			}
-
-			opts = append(opts, http.WithTLS(config.Config.ApiService.Cert, config.Config.ApiService.Key))
-		}
-
-		hs, err := http.NewHttpServer(cs.Context(), opts...)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("NewHttpServer: %v", err)
-		}
-
-		{
-			as, err := api.NewApiService(cs)
-			if err != nil {
-				log.Logger.Sugar().Fatalf("NewApiService: %v", err)
-			}
-
-			as.Register(hs.Engine())
-
-			go as.Start()
-			defer as.Stop()
-		}
-
-		go hs.Start()
-		defer hs.Stop()
-	}
-
-	for _, static := range config.Config.Statics {
-		if !static.Enable {
-			continue
-		}
-
-		engine := gin.New()
-		engine.Use(gin.Recovery())
-
-		if config.Config.Gin.Debug {
-			engine.Use(gin.LoggerWithWriter(os.Stdout))
-		}
-
-		engine.Static("/", static.Path)
-		engine.NoRoute(func(ctx *gin.Context) {
-			ctx.File(static.Path + "/index.html")
-		})
-
-		log.Logger.Sugar().Infof("static server start: %v", static.Addr)
-
-		if static.TLS {
-			go engine.RunTLS(static.Addr, static.Cert, static.Key)
-		} else {
-			go engine.Run(static.Addr)
-		}
 	}
 
 	signalCh := make(chan os.Signal, 1)
