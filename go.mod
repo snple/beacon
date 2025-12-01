@@ -5,12 +5,11 @@ go 1.24.0
 require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/cenkalti/backoff/v4 v4.3.0
-	github.com/danclive/nson-go v0.9.0
+	github.com/danclive/nson-go v0.0.0-00010101000000-000000000000
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/klauspost/compress v1.18.0
-	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/onsi/ginkgo/v2 v2.23.4
 	github.com/onsi/gomega v1.37.0
 	github.com/snple/types v0.3.0
@@ -22,6 +21,8 @@ require (
 	google.golang.org/protobuf v1.36.6
 	modernc.org/sqlite v1.37.0
 )
+
+replace github.com/danclive/nson-go => ../../nson-go
 
 require (
 	github.com/bytedance/sonic v1.13.2 // indirect

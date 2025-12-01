@@ -7,10 +7,10 @@ import (
 	"database/sql"
 	"fmt"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func dbOpen(file string) (*sql.DB, error) {
-	return sql.Open("sqlite3",
-		fmt.Sprintf("file:%v?cache=shared&_journal_mode=WAL&_sync=1&_cache_size=16000", file))
+	return sql.Open("sqlite",
+		fmt.Sprintf("file:%v?_pragma=cache_size(16000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)", file))
 }
