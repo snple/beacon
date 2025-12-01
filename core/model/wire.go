@@ -6,17 +6,17 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Wire 端点
 type Wire struct {
 	bun.BaseModel `bun:"wire"`
 	ID            string    `bun:"type:TEXT,pk" json:"id"`
 	NodeID        string    `bun:"node_id,type:TEXT" json:"node_id"`
 	Name          string    `bun:"name,type:TEXT" json:"name"`
+	Type          string    `bun:"type,type:TEXT" json:"type"`
+	Tags          string    `bun:"tags,type:TEXT" json:"tags"`
 	Clusters      string    `bun:"clusters,type:TEXT" json:"clusters"`
 	Updated       time.Time `bun:"updated" json:"updated"`
 }
 
-// Pin 属性
 type Pin struct {
 	bun.BaseModel `bun:"pin"`
 	ID            string    `bun:"type:TEXT,pk" json:"id"`

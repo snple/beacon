@@ -157,10 +157,6 @@ func (s *WireService) List(ctx context.Context, in *cores.WireListRequest) (*cor
 		query.Where("node_id = ?", in.NodeId)
 	}
 
-	if in.Source != "" {
-		query = query.Where(`source = ?`, in.Source)
-	}
-
 	count, err := query.Offset(int(in.GetPage().GetOffset())).Limit(int(in.GetPage().GetLimit())).ScanAndCount(ctx)
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "Query: %v", err)
@@ -215,6 +211,8 @@ func (s *WireService) copyModelToOutput(output *pb.Wire, item *model.Wire) {
 	output.Id = item.ID
 	output.NodeId = item.NodeID
 	output.Name = item.Name
+	output.Type = item.Type
+	output.Tags = item.Tags
 	output.Clusters = item.Clusters
 	output.Updated = item.Updated.UnixMicro()
 }
@@ -259,6 +257,8 @@ func (s *WireService) Push(stream grpc.ClientStreamingServer[pb.Wire, pb.MyBool]
 			ID:       in.Id,
 			NodeID:   in.NodeId,
 			Name:     in.Name,
+			Type:     in.Type,
+			Tags:     in.Tags,
 			Clusters: in.Clusters,
 			Updated:  time.UnixMicro(in.Updated),
 		}

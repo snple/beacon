@@ -7,7 +7,6 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/danclive/nson-go v0.9.0
 	github.com/dgraph-io/badger/v4 v4.7.0
-	github.com/gin-contrib/cors v1.7.5
 	github.com/gin-gonic/gin v1.10.0
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/klauspost/compress v1.18.0

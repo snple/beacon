@@ -3,16 +3,16 @@ package pb;
 
 option go_package = "github.com/snple/beacon/pb;pb";
 
-// Wire 端点线缆
 message Wire {
     string id = 1;
     string node_id = 2;
     string name = 3;
-    string clusters = 4;
-    int64 updated = 5;
+    string type = 4;
+    string tags = 5;
+    string clusters = 6;
+    int64 updated = 7;
 }
 
-// Pin 属性
 message Pin {
     string id = 1;
     string node_id = 2;
