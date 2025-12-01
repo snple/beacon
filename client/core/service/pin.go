@@ -10,9 +10,8 @@ import (
 
 func PinList(ctx context.Context, client cores.PinServiceClient) {
 	page := pb.Page{
-		Limit:   10,
-		Offset:  0,
-		OrderBy: "name",
+		Limit:  10,
+		Offset: 0,
 	}
 
 	request := &cores.PinListRequest{

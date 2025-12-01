@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
 	"github.com/snple/types/cache"
-	"github.com/uptrace/bun"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -125,49 +123,10 @@ func (s *PinService) List(ctx context.Context, in *edges.PinListRequest) (*edges
 
 	items := make([]model.Pin, 0, 10)
 
-	query := s.es.GetDB().NewSelect().Model(&items)
+	query := s.es.GetDB().NewSelect().Model(&items).Order("id ASC")
 
 	if in.WireId != "" {
 		query.Where("wire_id = ?", in.WireId)
-	}
-
-	if in.GetPage().GetSearch() != "" {
-		search := fmt.Sprintf("%%%v%%", in.GetPage().GetSearch())
-
-		query.WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
-			q = q.Where(`"name" LIKE ?`, search).
-				WhereOr(`"desc" LIKE ?`, search).
-				WhereOr(`"address" LIKE ?`, search)
-
-			return q
-		})
-	}
-
-	if in.Tags != "" {
-		tagsSplit := strings.Split(in.Tags, ",")
-
-		if len(tagsSplit) == 1 {
-			search := fmt.Sprintf("%%%v%%", tagsSplit[0])
-
-			query = query.Where(`"tags" LIKE ?`, search)
-		} else {
-			query = query.WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
-				for i := 0; i < len(tagsSplit); i++ {
-					search := fmt.Sprintf("%%%v%%", tagsSplit[i])
-
-					q = q.WhereOr(`"tags" LIKE ?`, search)
-				}
-
-				return q
-			})
-		}
-	}
-
-	if in.GetPage().GetOrderBy() != "" && (in.GetPage().GetOrderBy() == "id" || in.GetPage().GetOrderBy() == "name" ||
-		in.GetPage().GetOrderBy() == "created" || in.GetPage().GetOrderBy() == "updated") {
-		query.Order(in.GetPage().GetOrderBy() + " " + in.GetPage().GetSort().String())
-	} else {
-		query.Order("id ASC")
 	}
 
 	count, err := query.Offset(int(in.GetPage().GetOffset())).Limit(int(in.GetPage().GetLimit())).ScanAndCount(ctx)
@@ -268,8 +227,9 @@ func (s *PinService) copyModelToOutput(output *pb.Pin, item *model.Pin) {
 	output.Id = item.ID
 	output.WireId = item.WireID
 	output.Name = item.Name
-	output.Type = item.Type
+	output.Tags = item.Tags
 	output.Addr = item.Addr
+	output.Type = item.Type
 	output.Rw = item.Rw
 	output.Updated = item.Updated.UnixMicro()
 }

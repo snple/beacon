@@ -1,0 +1,59 @@
+{
+  "version": "1.0.0",
+  "wires": [
+    {
+      "name": "root",
+      "clusters": ["BasicInformation"]
+    },
+    {
+      "name": "light1",
+      "clusters": ["OnOff", "LevelControl", "ColorControl"],
+      "pins": [
+        {
+          "name": "onoff",
+          "addr": "GPIO_1"
+        },
+        {
+          "name": "level",
+          "addr": "PWM_1"
+        },
+        {
+          "name": "hue",
+          "addr": "PWM_2"
+        },
+        {
+          "name": "saturation",
+          "addr": "PWM_3"
+        }
+      ]
+    },
+    {
+      "name": "light2",
+      "clusters": ["OnOff", "LevelControl"],
+      "pins": [
+        {
+          "name": "onoff",
+          "addr": "GPIO_2"
+        },
+        {
+          "name": "level",
+          "addr": "PWM_4"
+        }
+      ]
+    },
+    {
+      "name": "sensor1",
+      "clusters": ["TemperatureMeasurement", "HumidityMeasurement"],
+      "pins": [
+        {
+          "name": "temperature",
+          "addr": "I2C_0x48_TEMP"
+        },
+        {
+          "name": "humidity",
+          "addr": "I2C_0x48_HUMI"
+        }
+      ]
+    }
+  ]
+}

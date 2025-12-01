@@ -101,7 +101,6 @@ func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes
 		Page:   in.GetPage(),
 		NodeId: nodeID,
 		WireId: in.WireId,
-		Tags:   in.Tags,
 	}
 
 	reply, err := s.ns.Core().GetPin().List(ctx, request)

@@ -105,11 +105,12 @@ type Pin struct {
 	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	WireId        string                 `protobuf:"bytes,3,opt,name=wire_id,json=wireId,proto3" json:"wire_id,omitempty"`
 	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	Addr          string                 `protobuf:"bytes,5,opt,name=addr,proto3" json:"addr,omitempty"`
-	Value         string                 `protobuf:"bytes,6,opt,name=value,proto3" json:"value,omitempty"`
-	Type          string                 `protobuf:"bytes,7,opt,name=type,proto3" json:"type,omitempty"`
-	Rw            int32                  `protobuf:"zigzag32,8,opt,name=rw,proto3" json:"rw,omitempty"`
-	Updated       int64                  `protobuf:"varint,9,opt,name=updated,proto3" json:"updated,omitempty"`
+	Tags          string                 `protobuf:"bytes,5,opt,name=tags,proto3" json:"tags,omitempty"`
+	Addr          string                 `protobuf:"bytes,6,opt,name=addr,proto3" json:"addr,omitempty"`
+	Value         string                 `protobuf:"bytes,7,opt,name=value,proto3" json:"value,omitempty"`
+	Type          string                 `protobuf:"bytes,8,opt,name=type,proto3" json:"type,omitempty"`
+	Rw            int32                  `protobuf:"zigzag32,9,opt,name=rw,proto3" json:"rw,omitempty"`
+	Updated       int64                  `protobuf:"varint,10,opt,name=updated,proto3" json:"updated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -168,6 +169,13 @@ func (x *Pin) GetWireId() string {
 func (x *Pin) GetName() string {
 	if x != nil {
 		return x.Name
+	}
+	return ""
+}
+
+func (x *Pin) GetTags() string {
+	if x != nil {
+		return x.Tags
 	}
 	return ""
 }
@@ -421,17 +429,19 @@ const file_wire_message_proto_rawDesc = "" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1a\n" +
 	"\bclusters\x18\x04 \x01(\tR\bclusters\x12\x18\n" +
-	"\aupdated\x18\x05 \x01(\x03R\aupdated\"\xc3\x01\n" +
+	"\aupdated\x18\x05 \x01(\x03R\aupdated\"\xd7\x01\n" +
 	"\x03Pin\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x17\n" +
 	"\awire_id\x18\x03 \x01(\tR\x06wireId\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12\x12\n" +
-	"\x04addr\x18\x05 \x01(\tR\x04addr\x12\x14\n" +
-	"\x05value\x18\x06 \x01(\tR\x05value\x12\x12\n" +
-	"\x04type\x18\a \x01(\tR\x04type\x12\x0e\n" +
-	"\x02rw\x18\b \x01(\x11R\x02rw\x12\x18\n" +
-	"\aupdated\x18\t \x01(\x03R\aupdated\"J\n" +
+	"\x04tags\x18\x05 \x01(\tR\x04tags\x12\x12\n" +
+	"\x04addr\x18\x06 \x01(\tR\x04addr\x12\x14\n" +
+	"\x05value\x18\a \x01(\tR\x05value\x12\x12\n" +
+	"\x04type\x18\b \x01(\tR\x04type\x12\x0e\n" +
+	"\x02rw\x18\t \x01(\x11R\x02rw\x12\x18\n" +
+	"\aupdated\x18\n" +
+	" \x01(\x03R\aupdated\"J\n" +
 	"\bPinValue\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x18\n" +

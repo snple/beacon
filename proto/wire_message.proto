@@ -18,11 +18,12 @@ message Pin {
     string node_id = 2;
     string wire_id = 3;
     string name = 4;
-    string addr = 5;
-    string value = 6;
-    string type = 7;
-    sint32 rw = 8;
-    int64 updated = 9;
+    string tags = 5;
+    string addr = 6;
+    string value = 7;
+    string type = 8;
+    sint32 rw = 9;
+    int64 updated = 10;
 }
 
 message PinValue {

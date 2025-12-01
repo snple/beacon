@@ -10,9 +10,8 @@ import (
 
 func WireList(ctx context.Context, client edges.WireServiceClient) {
 	page := pb.Page{
-		Limit:   10,
-		Offset:  0,
-		OrderBy: "name",
+		Limit:  10,
+		Offset: 0,
 	}
 
 	request := &edges.WireListRequest{

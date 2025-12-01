@@ -100,8 +100,6 @@ func (s *WireService) List(ctx context.Context, in *nodes.WireListRequest) (*nod
 	request := &cores.WireListRequest{
 		Page:   in.GetPage(),
 		NodeId: nodeID,
-		Tags:   in.Tags,
-		Source: in.Source,
 	}
 
 	reply, err := s.ns.Core().GetWire().List(ctx, request)

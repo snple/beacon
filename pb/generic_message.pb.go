@@ -21,52 +21,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Page_Sort int32
-
-const (
-	Page_ASC  Page_Sort = 0
-	Page_DESC Page_Sort = 1
-)
-
-// Enum value maps for Page_Sort.
-var (
-	Page_Sort_name = map[int32]string{
-		0: "ASC",
-		1: "DESC",
-	}
-	Page_Sort_value = map[string]int32{
-		"ASC":  0,
-		"DESC": 1,
-	}
-)
-
-func (x Page_Sort) Enum() *Page_Sort {
-	p := new(Page_Sort)
-	*p = x
-	return p
-}
-
-func (x Page_Sort) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (Page_Sort) Descriptor() protoreflect.EnumDescriptor {
-	return file_generic_message_proto_enumTypes[0].Descriptor()
-}
-
-func (Page_Sort) Type() protoreflect.EnumType {
-	return &file_generic_message_proto_enumTypes[0]
-}
-
-func (x Page_Sort) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use Page_Sort.Descriptor instead.
-func (Page_Sort) EnumDescriptor() ([]byte, []int) {
-	return file_generic_message_proto_rawDescGZIP(), []int{5, 0}
-}
-
 type MyEmpty struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -283,9 +237,6 @@ type Page struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Limit         uint32                 `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
 	Offset        uint32                 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
-	Search        string                 `protobuf:"bytes,3,opt,name=search,proto3" json:"search,omitempty"`
-	OrderBy       string                 `protobuf:"bytes,4,opt,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
-	Sort          Page_Sort              `protobuf:"varint,5,opt,name=sort,proto3,enum=pb.Page_Sort" json:"sort,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -334,27 +285,6 @@ func (x *Page) GetOffset() uint32 {
 	return 0
 }
 
-func (x *Page) GetSearch() string {
-	if x != nil {
-		return x.Search
-	}
-	return ""
-}
-
-func (x *Page) GetOrderBy() string {
-	if x != nil {
-		return x.OrderBy
-	}
-	return ""
-}
-
-func (x *Page) GetSort() Page_Sort {
-	if x != nil {
-		return x.Sort
-	}
-	return Page_ASC
-}
-
 var File_generic_message_proto protoreflect.FileDescriptor
 
 const file_generic_message_proto_rawDesc = "" +
@@ -368,16 +298,10 @@ const file_generic_message_proto_rawDesc = "" +
 	"\aMessage\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\"\x1c\n" +
 	"\x06MyBool\x12\x12\n" +
-	"\x04bool\x18\x01 \x01(\bR\x04bool\"\xa5\x01\n" +
+	"\x04bool\x18\x01 \x01(\bR\x04bool\"4\n" +
 	"\x04Page\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\rR\x05limit\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\rR\x06offset\x12\x16\n" +
-	"\x06search\x18\x03 \x01(\tR\x06search\x12\x19\n" +
-	"\border_by\x18\x04 \x01(\tR\aorderBy\x12!\n" +
-	"\x04sort\x18\x05 \x01(\x0e2\r.pb.Page.SortR\x04sort\"\x19\n" +
-	"\x04Sort\x12\a\n" +
-	"\x03ASC\x10\x00\x12\b\n" +
-	"\x04DESC\x10\x01B\x1fZ\x1dgithub.com/snple/beacon/pb;pbb\x06proto3"
+	"\x06offset\x18\x02 \x01(\rR\x06offsetB\x1fZ\x1dgithub.com/snple/beacon/pb;pbb\x06proto3"
 
 var (
 	file_generic_message_proto_rawDescOnce sync.Once
@@ -391,24 +315,21 @@ func file_generic_message_proto_rawDescGZIP() []byte {
 	return file_generic_message_proto_rawDescData
 }
 
-var file_generic_message_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_generic_message_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_generic_message_proto_goTypes = []any{
-	(Page_Sort)(0),  // 0: pb.Page.Sort
-	(*MyEmpty)(nil), // 1: pb.MyEmpty
-	(*Id)(nil),      // 2: pb.Id
-	(*Name)(nil),    // 3: pb.Name
-	(*Message)(nil), // 4: pb.Message
-	(*MyBool)(nil),  // 5: pb.MyBool
-	(*Page)(nil),    // 6: pb.Page
+	(*MyEmpty)(nil), // 0: pb.MyEmpty
+	(*Id)(nil),      // 1: pb.Id
+	(*Name)(nil),    // 2: pb.Name
+	(*Message)(nil), // 3: pb.Message
+	(*MyBool)(nil),  // 4: pb.MyBool
+	(*Page)(nil),    // 5: pb.Page
 }
 var file_generic_message_proto_depIdxs = []int32{
-	0, // 0: pb.Page.sort:type_name -> pb.Page.Sort
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // [0:0] is the sub-list for method output_type
+	0, // [0:0] is the sub-list for method input_type
+	0, // [0:0] is the sub-list for extension type_name
+	0, // [0:0] is the sub-list for extension extendee
+	0, // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_generic_message_proto_init() }
@@ -421,14 +342,13 @@ func file_generic_message_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_generic_message_proto_rawDesc), len(file_generic_message_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      0,
 			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_generic_message_proto_goTypes,
 		DependencyIndexes: file_generic_message_proto_depIdxs,
-		EnumInfos:         file_generic_message_proto_enumTypes,
 		MessageInfos:      file_generic_message_proto_msgTypes,
 	}.Build()
 	File_generic_message_proto = out.File

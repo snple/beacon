@@ -10,8 +10,6 @@ import "generic_message.proto";
 message WireListRequest {
     pb.Page page = 1;
     // string node_id = 2;
-    string tags = 3;
-    string source = 4;
 }
 
 message WireListResponse {
@@ -31,7 +29,6 @@ message PinListRequest {
     pb.Page page = 1;
     // string node_id = 2;
     string wire_id = 3;
-    string tags = 4;
 }
 
 message PinListResponse {

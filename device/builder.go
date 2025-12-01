@@ -3,6 +3,8 @@ package device
 
 import (
 	"strings"
+
+	"github.com/snple/beacon/edge/model"
 )
 
 // ============================================================================
@@ -55,24 +57,24 @@ func (b *WireBuilder) WithCustomCluster(cluster *Cluster) *WireBuilder {
 
 // SimpleBuildResult 简化的构建结果
 type SimpleBuildResult struct {
-	Wire *Wire
-	Pins []*Pin
+	Wire *model.Wire
+	Pins []*model.Pin
 }
 
 // Build 构建 Wire 和 Pin（简化版，不包含冗余字段）
 func (b *WireBuilder) Build() *SimpleBuildResult {
 	result := &SimpleBuildResult{
-		Wire: &Wire{
+		Wire: &model.Wire{
 			Name:     b.name,
 			Clusters: strings.Join(b.clusterNames, ","), // 存储 Cluster 列表
 		},
-		Pins: make([]*Pin, 0),
+		Pins: make([]*model.Pin, 0),
 	}
 
 	// 收集所有 Cluster 的 Pin（只存储名称和 Rw，其他信息从注册表查）
 	for _, cluster := range b.clusters {
 		for _, pinTpl := range cluster.Pins {
-			pin := &Pin{
+			pin := &model.Pin{
 				Name: pinTpl.Name,
 				Rw:   pinTpl.Rw, // 保留 Rw 字段
 				// Addr 字段由用户在部署时设置

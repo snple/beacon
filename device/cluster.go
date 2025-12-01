@@ -34,7 +34,6 @@ type PinTemplate struct {
 	Type    string     // 数据类型: bool, i32, i64, u32, u64, f32, f64, string
 	Rw      int32      // 0: 只读, 1: 读写
 	Default nson.Value // 默认值
-	Config  string     // 额外配置（JSON）
 	Tags    string     // 标签
 }
 

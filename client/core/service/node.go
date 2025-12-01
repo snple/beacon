@@ -10,15 +10,12 @@ import (
 
 func NodeList(ctx context.Context, client cores.NodeServiceClient) {
 	page := pb.Page{
-		Limit:   10,
-		Offset:  0,
-		OrderBy: "",
-		Search:  "",
+		Limit:  10,
+		Offset: 0,
 	}
 
 	request := &cores.NodeListRequest{
 		Page: &page,
-		Tags: "",
 	}
 
 	reply, err := client.List(ctx, request)

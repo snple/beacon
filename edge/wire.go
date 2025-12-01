@@ -3,15 +3,12 @@ package edge
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/snple/beacon/edge/model"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
 	"github.com/snple/types/cache"
-	"github.com/uptrace/bun"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -105,48 +102,10 @@ func (s *WireService) List(ctx context.Context, in *edges.WireListRequest) (*edg
 
 	var items []model.Wire
 
-	query := s.es.GetDB().NewSelect().Model(&items)
-
-	if in.GetPage().GetSearch() != "" {
-		search := fmt.Sprintf("%%%v%%", in.GetPage().GetSearch())
-
-		query.WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
-			q = q.Where(`"name" LIKE ?`, search).
-				WhereOr(`"desc" LIKE ?`, search)
-
-			return q
-		})
-	}
-
-	if in.Tags != "" {
-		tagsSplit := strings.Split(in.Tags, ",")
-
-		if len(tagsSplit) == 1 {
-			search := fmt.Sprintf("%%%v%%", tagsSplit[0])
-
-			query = query.Where(`"tags" LIKE ?`, search)
-		} else {
-			query = query.WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
-				for i := 0; i < len(tagsSplit); i++ {
-					search := fmt.Sprintf("%%%v%%", tagsSplit[i])
-
-					q = q.WhereOr(`"tags" LIKE ?`, search)
-				}
-
-				return q
-			})
-		}
-	}
+	query := s.es.GetDB().NewSelect().Model(&items).Order("id ASC")
 
 	if in.Source != "" {
 		query = query.Where(`source = ?`, in.Source)
-	}
-
-	if in.GetPage().GetOrderBy() != "" && (in.GetPage().GetOrderBy() == "id" || in.GetPage().GetOrderBy() == "name" ||
-		in.GetPage().GetOrderBy() == "created" || in.GetPage().GetOrderBy() == "updated") {
-		query.Order(in.GetPage().GetOrderBy() + " " + in.GetPage().GetSort().String())
-	} else {
-		query.Order("id ASC")
 	}
 
 	count, err := query.Offset(int(in.GetPage().GetOffset())).Limit(int(in.GetPage().GetLimit())).ScanAndCount(ctx)

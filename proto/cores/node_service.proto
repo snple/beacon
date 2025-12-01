@@ -8,7 +8,6 @@ import "generic_message.proto";
 
 message NodeListRequest {
     pb.Page page = 1;
-    string tags = 2;
 }
 
 message NodeListResponse {

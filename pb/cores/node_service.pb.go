@@ -25,7 +25,6 @@ const (
 type NodeListRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Page          *pb.Page               `protobuf:"bytes,1,opt,name=page,proto3" json:"page,omitempty"`
-	Tags          string                 `protobuf:"bytes,2,opt,name=tags,proto3" json:"tags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -65,13 +64,6 @@ func (x *NodeListRequest) GetPage() *pb.Page {
 		return x.Page
 	}
 	return nil
-}
-
-func (x *NodeListRequest) GetTags() string {
-	if x != nil {
-		return x.Tags
-	}
-	return ""
 }
 
 type NodeListResponse struct {
@@ -138,10 +130,9 @@ var File_cores_node_service_proto protoreflect.FileDescriptor
 
 const file_cores_node_service_proto_rawDesc = "" +
 	"\n" +
-	"\x18cores/node_service.proto\x12\x05cores\x1a\x12node_message.proto\x1a\x15generic_message.proto\"C\n" +
+	"\x18cores/node_service.proto\x12\x05cores\x1a\x12node_message.proto\x1a\x15generic_message.proto\"/\n" +
 	"\x0fNodeListRequest\x12\x1c\n" +
-	"\x04page\x18\x01 \x01(\v2\b.pb.PageR\x04page\x12\x12\n" +
-	"\x04tags\x18\x02 \x01(\tR\x04tags\"f\n" +
+	"\x04page\x18\x01 \x01(\v2\b.pb.PageR\x04page\"f\n" +
 	"\x10NodeListResponse\x12\x1c\n" +
 	"\x04page\x18\x01 \x01(\v2\b.pb.PageR\x04page\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\rR\x05count\x12\x1e\n" +

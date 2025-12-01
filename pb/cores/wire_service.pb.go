@@ -27,8 +27,6 @@ type WireListRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Page          *pb.Page               `protobuf:"bytes,1,opt,name=page,proto3" json:"page,omitempty"`
 	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	Tags          string                 `protobuf:"bytes,3,opt,name=tags,proto3" json:"tags,omitempty"`
-	Source        string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -73,20 +71,6 @@ func (x *WireListRequest) GetPage() *pb.Page {
 func (x *WireListRequest) GetNodeId() string {
 	if x != nil {
 		return x.NodeId
-	}
-	return ""
-}
-
-func (x *WireListRequest) GetTags() string {
-	if x != nil {
-		return x.Tags
-	}
-	return ""
-}
-
-func (x *WireListRequest) GetSource() string {
-	if x != nil {
-		return x.Source
 	}
 	return ""
 }
@@ -209,7 +193,6 @@ type PinListRequest struct {
 	Page          *pb.Page               `protobuf:"bytes,1,opt,name=page,proto3" json:"page,omitempty"`
 	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	WireId        string                 `protobuf:"bytes,3,opt,name=wire_id,json=wireId,proto3" json:"wire_id,omitempty"`
-	Tags          string                 `protobuf:"bytes,4,opt,name=tags,proto3" json:"tags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -261,13 +244,6 @@ func (x *PinListRequest) GetNodeId() string {
 func (x *PinListRequest) GetWireId() string {
 	if x != nil {
 		return x.WireId
-	}
-	return ""
-}
-
-func (x *PinListRequest) GetTags() string {
-	if x != nil {
-		return x.Tags
 	}
 	return ""
 }
@@ -584,24 +560,21 @@ var File_cores_wire_service_proto protoreflect.FileDescriptor
 
 const file_cores_wire_service_proto_rawDesc = "" +
 	"\n" +
-	"\x18cores/wire_service.proto\x12\x05cores\x1a\x12wire_message.proto\x1a\x15generic_message.proto\"t\n" +
+	"\x18cores/wire_service.proto\x12\x05cores\x1a\x12wire_message.proto\x1a\x15generic_message.proto\"H\n" +
 	"\x0fWireListRequest\x12\x1c\n" +
 	"\x04page\x18\x01 \x01(\v2\b.pb.PageR\x04page\x12\x17\n" +
-	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x12\n" +
-	"\x04tags\x18\x03 \x01(\tR\x04tags\x12\x16\n" +
-	"\x06source\x18\x04 \x01(\tR\x06source\"f\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\"f\n" +
 	"\x10WireListResponse\x12\x1c\n" +
 	"\x04page\x18\x01 \x01(\v2\b.pb.PageR\x04page\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\rR\x05count\x12\x1e\n" +
 	"\x05wires\x18\x03 \x03(\v2\b.pb.WireR\x05wires\">\n" +
 	"\x0fWireNameRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"t\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"`\n" +
 	"\x0ePinListRequest\x12\x1c\n" +
 	"\x04page\x18\x01 \x01(\v2\b.pb.PageR\x04page\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x17\n" +
-	"\awire_id\x18\x03 \x01(\tR\x06wireId\x12\x12\n" +
-	"\x04tags\x18\x04 \x01(\tR\x04tags\"b\n" +
+	"\awire_id\x18\x03 \x01(\tR\x06wireId\"b\n" +
 	"\x0fPinListResponse\x12\x1c\n" +
 	"\x04page\x18\x01 \x01(\v2\b.pb.PageR\x04page\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\rR\x05count\x12\x1b\n" +

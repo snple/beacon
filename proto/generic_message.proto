@@ -10,13 +10,6 @@ message Message { string message = 1; }
 message MyBool { bool bool = 1; }
 
 message Page {
-    enum Sort {
-        ASC = 0;
-        DESC = 1;
-    }
     uint32 limit = 1;
     uint32 offset = 2;
-    string search = 3;
-    string order_by = 4;
-    Sort sort = 5;
 }
