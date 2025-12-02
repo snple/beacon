@@ -57,13 +57,13 @@ func main() {
 			log.Logger.Sugar().Fatalf("seed: node name is required")
 		}
 
-		nodeName := flag.Arg(1)
+		// nodeName := flag.Arg(1)
 
 		// the seed of edge need to be executed manually
 		// must provide the node name
-		if err := edge.Seed(db, nodeName); err != nil {
-			log.Logger.Sugar().Fatalf("seed: %v", err)
-		}
+		// if err := edge.Seed(db, nodeName); err != nil {
+		// 	log.Logger.Sugar().Fatalf("seed: %v", err)
+		// }
 
 		log.Logger.Sugar().Infof("seed: Completed")
 

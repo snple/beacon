@@ -9,29 +9,30 @@ import "nson.proto";
 message Node {
     string id = 1;
     string name = 2;
-    sint32 status = 3;
-    int64 updated = 4;
-    repeated Wire wires = 5;
+    string device = 3;  // 设备模板 ID
+    repeated string tags = 4;  // 节点标签列表
+    sint32 status = 5;
+    int64 updated = 6;
+    repeated Wire wires = 7;
 }
 
 // Wire 通道配置
 message Wire {
     string id = 1;
     string name = 2;
-    string type = 3;
-    repeated string tags = 4;
-    repeated string clusters = 5;
-    repeated Pin pins = 6;
+    repeated string tags = 3;
+    string type = 4;
+    repeated Pin pins = 5;
 }
 
 // Pin 点位配置
 message Pin {
     string id = 1;
     string name = 2;
-    string addr = 3;
-    uint32 type = 4;  // nson.DataType 类型码
-    sint32 rw = 5;
-    repeated string tags = 6;
+    repeated string tags = 3;
+    string addr = 4;
+    uint32 type = 5;  // nson.DataType 类型码
+    sint32 rw = 6;
 }
 
 // PinValue 点位值

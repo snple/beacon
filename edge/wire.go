@@ -114,7 +114,6 @@ func (s *WireService) copyModelToOutput(output *pb.Wire, wire *storage.Wire) {
 	output.Name = wire.Name
 	output.Type = wire.Type
 	output.Tags = wire.Tags
-	output.Clusters = wire.Clusters
 
 	// 复制 Pins
 	for i := range wire.Pins {

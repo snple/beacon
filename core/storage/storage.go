@@ -26,6 +26,8 @@ import (
 type Node struct {
 	ID      string    `nson:"id"`
 	Name    string    `nson:"name"`
+	Tags    []string  `nson:"tags,omitempty"`   // 节点标签列表
+	Device  string    `nson:"device,omitempty"` // 设备模板 ID（指向 device.Device.ID）
 	Status  int32     `nson:"status"`
 	Updated time.Time `nson:"updated"`
 	Wires   []Wire    `nson:"wires"`
@@ -33,22 +35,21 @@ type Node struct {
 
 // Wire 通道配置
 type Wire struct {
-	ID       string   `nson:"id"`
-	Name     string   `nson:"name"`
-	Type     string   `nson:"type"`
-	Tags     []string `nson:"tags,omitempty"`
-	Clusters []string `nson:"clusters,omitempty"`
-	Pins     []Pin    `nson:"pins"`
+	ID   string   `nson:"id"`
+	Name string   `nson:"name"`
+	Tags []string `nson:"tags,omitempty"`
+	Type string   `nson:"type"`
+	Pins []Pin    `nson:"pins"`
 }
 
 // Pin 点位配置
 type Pin struct {
 	ID   string   `nson:"id"`
 	Name string   `nson:"name"`
+	Tags []string `nson:"tags,omitempty"`
 	Addr string   `nson:"addr"`
 	Type uint32   `nson:"type"` // nson.DataType
 	Rw   int32    `nson:"rw"`
-	Tags []string `nson:"tags,omitempty"`
 }
 
 // Storage Core 端存储

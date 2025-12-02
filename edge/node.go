@@ -133,6 +133,8 @@ func (s *NodeService) ViewByID(ctx context.Context) (*storage.Node, error) {
 func (s *NodeService) copyModelToOutput(output *pb.Node, node *storage.Node) {
 	output.Id = node.ID
 	output.Name = node.Name
+	output.Device = node.Device
+	output.Tags = node.Tags
 	output.Status = node.Status
 	output.Updated = node.Updated.UnixMicro()
 
@@ -140,11 +142,10 @@ func (s *NodeService) copyModelToOutput(output *pb.Node, node *storage.Node) {
 	for i := range node.Wires {
 		wire := &node.Wires[i]
 		pbWire := &pb.Wire{
-			Id:       wire.ID,
-			Name:     wire.Name,
-			Type:     wire.Type,
-			Tags:     wire.Tags,
-			Clusters: wire.Clusters,
+			Id:   wire.ID,
+			Name: wire.Name,
+			Type: wire.Type,
+			Tags: wire.Tags,
 		}
 
 		// 复制 Pins

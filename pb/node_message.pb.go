@@ -26,9 +26,11 @@ type Node struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Status        int32                  `protobuf:"zigzag32,3,opt,name=status,proto3" json:"status,omitempty"`
-	Updated       int64                  `protobuf:"varint,4,opt,name=updated,proto3" json:"updated,omitempty"`
-	Wires         []*Wire                `protobuf:"bytes,5,rep,name=wires,proto3" json:"wires,omitempty"`
+	Device        string                 `protobuf:"bytes,3,opt,name=device,proto3" json:"device,omitempty"` // 设备模板 ID
+	Tags          []string               `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`     // 节点标签列表
+	Status        int32                  `protobuf:"zigzag32,5,opt,name=status,proto3" json:"status,omitempty"`
+	Updated       int64                  `protobuf:"varint,6,opt,name=updated,proto3" json:"updated,omitempty"`
+	Wires         []*Wire                `protobuf:"bytes,7,rep,name=wires,proto3" json:"wires,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -77,6 +79,20 @@ func (x *Node) GetName() string {
 	return ""
 }
 
+func (x *Node) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
+}
+
+func (x *Node) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
 func (x *Node) GetStatus() int32 {
 	if x != nil {
 		return x.Status
@@ -103,10 +119,9 @@ type Wire struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
-	Tags          []string               `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
-	Clusters      []string               `protobuf:"bytes,5,rep,name=clusters,proto3" json:"clusters,omitempty"`
-	Pins          []*Pin                 `protobuf:"bytes,6,rep,name=pins,proto3" json:"pins,omitempty"`
+	Tags          []string               `protobuf:"bytes,3,rep,name=tags,proto3" json:"tags,omitempty"`
+	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	Pins          []*Pin                 `protobuf:"bytes,5,rep,name=pins,proto3" json:"pins,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -155,13 +170,6 @@ func (x *Wire) GetName() string {
 	return ""
 }
 
-func (x *Wire) GetType() string {
-	if x != nil {
-		return x.Type
-	}
-	return ""
-}
-
 func (x *Wire) GetTags() []string {
 	if x != nil {
 		return x.Tags
@@ -169,11 +177,11 @@ func (x *Wire) GetTags() []string {
 	return nil
 }
 
-func (x *Wire) GetClusters() []string {
+func (x *Wire) GetType() string {
 	if x != nil {
-		return x.Clusters
+		return x.Type
 	}
-	return nil
+	return ""
 }
 
 func (x *Wire) GetPins() []*Pin {
@@ -188,10 +196,10 @@ type Pin struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Addr          string                 `protobuf:"bytes,3,opt,name=addr,proto3" json:"addr,omitempty"`
-	Type          uint32                 `protobuf:"varint,4,opt,name=type,proto3" json:"type,omitempty"` // nson.DataType 类型码
-	Rw            int32                  `protobuf:"zigzag32,5,opt,name=rw,proto3" json:"rw,omitempty"`
-	Tags          []string               `protobuf:"bytes,6,rep,name=tags,proto3" json:"tags,omitempty"`
+	Tags          []string               `protobuf:"bytes,3,rep,name=tags,proto3" json:"tags,omitempty"`
+	Addr          string                 `protobuf:"bytes,4,opt,name=addr,proto3" json:"addr,omitempty"`
+	Type          uint32                 `protobuf:"varint,5,opt,name=type,proto3" json:"type,omitempty"` // nson.DataType 类型码
+	Rw            int32                  `protobuf:"zigzag32,6,opt,name=rw,proto3" json:"rw,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -240,6 +248,13 @@ func (x *Pin) GetName() string {
 	return ""
 }
 
+func (x *Pin) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
 func (x *Pin) GetAddr() string {
 	if x != nil {
 		return x.Addr
@@ -259,13 +274,6 @@ func (x *Pin) GetRw() int32 {
 		return x.Rw
 	}
 	return 0
-}
-
-func (x *Pin) GetTags() []string {
-	if x != nil {
-		return x.Tags
-	}
-	return nil
 }
 
 // PinValue 点位值
@@ -395,27 +403,28 @@ var File_node_message_proto protoreflect.FileDescriptor
 const file_node_message_proto_rawDesc = "" +
 	"\n" +
 	"\x12node_message.proto\x12\x02pb\x1a\n" +
-	"nson.proto\"|\n" +
+	"nson.proto\"\xa8\x01\n" +
 	"\x04Node\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
-	"\x06status\x18\x03 \x01(\x11R\x06status\x12\x18\n" +
-	"\aupdated\x18\x04 \x01(\x03R\aupdated\x12\x1e\n" +
-	"\x05wires\x18\x05 \x03(\v2\b.pb.WireR\x05wires\"\x8b\x01\n" +
+	"\x06device\x18\x03 \x01(\tR\x06device\x12\x12\n" +
+	"\x04tags\x18\x04 \x03(\tR\x04tags\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\x11R\x06status\x12\x18\n" +
+	"\aupdated\x18\x06 \x01(\x03R\aupdated\x12\x1e\n" +
+	"\x05wires\x18\a \x03(\v2\b.pb.WireR\x05wires\"o\n" +
 	"\x04Wire\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
-	"\x04type\x18\x03 \x01(\tR\x04type\x12\x12\n" +
-	"\x04tags\x18\x04 \x03(\tR\x04tags\x12\x1a\n" +
-	"\bclusters\x18\x05 \x03(\tR\bclusters\x12\x1b\n" +
-	"\x04pins\x18\x06 \x03(\v2\a.pb.PinR\x04pins\"u\n" +
+	"\x04tags\x18\x03 \x03(\tR\x04tags\x12\x12\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1b\n" +
+	"\x04pins\x18\x05 \x03(\v2\a.pb.PinR\x04pins\"u\n" +
 	"\x03Pin\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
-	"\x04addr\x18\x03 \x01(\tR\x04addr\x12\x12\n" +
-	"\x04type\x18\x04 \x01(\rR\x04type\x12\x0e\n" +
-	"\x02rw\x18\x05 \x01(\x11R\x02rw\x12\x12\n" +
-	"\x04tags\x18\x06 \x03(\tR\x04tags\"Y\n" +
+	"\x04tags\x18\x03 \x03(\tR\x04tags\x12\x12\n" +
+	"\x04addr\x18\x04 \x01(\tR\x04addr\x12\x12\n" +
+	"\x04type\x18\x05 \x01(\rR\x04type\x12\x0e\n" +
+	"\x02rw\x18\x06 \x01(\x11R\x02rw\"Y\n" +
 	"\bPinValue\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05value\x18\x02 \x01(\v2\r.pb.NsonValueR\x05value\x12\x18\n" +

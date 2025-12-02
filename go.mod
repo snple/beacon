@@ -47,4 +47,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/danclive/nson-go => ../nson-go
+replace github.com/danclive/nson-go => ../../nson-go

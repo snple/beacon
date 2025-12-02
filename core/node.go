@@ -145,17 +145,18 @@ func (s *NodeService) GetSecret(ctx context.Context, in *pb.Id) (*pb.Message, er
 func (s *NodeService) copyStorageToOutput(output *pb.Node, node *storage.Node) {
 	output.Id = node.ID
 	output.Name = node.Name
+	output.Device = node.Device
+	output.Tags = node.Tags
 	output.Status = node.Status
 	output.Updated = node.Updated.UnixMicro()
 
 	for i := range node.Wires {
 		wire := &node.Wires[i]
 		pbWire := &pb.Wire{
-			Id:       wire.ID,
-			Name:     wire.Name,
-			Type:     wire.Type,
-			Tags:     wire.Tags,
-			Clusters: wire.Clusters,
+			Id:   wire.ID,
+			Name: wire.Name,
+			Type: wire.Type,
+			Tags: wire.Tags,
 		}
 
 		for j := range wire.Pins {
