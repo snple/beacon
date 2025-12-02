@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/gin-gonic/gin"
 	"github.com/snple/beacon"
 	"github.com/snple/beacon/bin/core/config"
 	"github.com/snple/beacon/bin/core/log"
@@ -169,10 +168,6 @@ func main() {
 
 		ns.Start()
 		defer ns.Stop()
-	}
-
-	if !config.Config.Gin.Debug {
-		gin.SetMode(gin.ReleaseMode)
 	}
 
 	signalCh := make(chan os.Signal, 1)

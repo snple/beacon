@@ -1,3 +1,11 @@
+// Package storage 实现 Beacon Core 端的存储抽象层。
+//
+// Storage 采用内存 + Badger 持久化的混合存储架构：
+//   - 主存储：内存中维护全部节点和配置数据
+//   - 持久化：通过 Badger 提供持久化支持
+//   - 索引缓存：采用懒构建策略，按需构建查询索引
+//
+// 并发安全：所有公共方法使用读写锁保护，支持并发访问。
 package storage
 
 import (
@@ -100,7 +108,13 @@ func (s *Storage) getPinNameIndex(nodeID string) map[string]*Pin {
 	return m
 }
 
-// New 创建存储
+// New 创建一个新的 Storage 实例。
+//
+// 参数：
+//   - db: Badger 数据库实例，用于持久化存储
+//
+// 返回：
+//   - *Storage: 初始化后的存储实例
 func New(db *badger.DB) *Storage {
 	return &Storage{
 		nodes:   make(map[string]*Node),
@@ -111,6 +125,16 @@ func New(db *badger.DB) *Storage {
 }
 
 // Load 启动时加载所有数据
+// Load 从 Badger 数据库加载所有节点配置到内存。
+//
+// 此方法会遍历数据库中的所有节点数据，解析并加载到内存中。
+// 同时会构建全局索引（节点名称、Wire ID、Pin ID）以加速查询。
+//
+// 参数：
+//   - ctx: 上下文，用于取消操作
+//
+// 返回：
+//   - error: 加载失败时返回错误
 func (s *Storage) Load(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -164,7 +188,14 @@ func (s *Storage) Load(ctx context.Context) error {
 
 // --- Node 操作 ---
 
-// GetNode 按 ID 获取节点
+// GetNode 根据节点 ID 获取节点。
+//
+// 参数：
+//   - nodeID: 节点 ID
+//
+// 返回：
+//   - *Node: 节点对象
+//   - error: 节点不存在时返回错误
 func (s *Storage) GetNode(nodeID string) (*Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

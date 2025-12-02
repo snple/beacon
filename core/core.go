@@ -9,6 +9,7 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/core/storage"
 	"github.com/snple/beacon/pb/cores"
+	bErrors "github.com/snple/beacon/util/errors"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -38,7 +39,8 @@ func CoreContext(ctx context.Context, db *badger.DB, opts ...CoreOption) (*CoreS
 	ctx, cancel := context.WithCancel(ctx)
 
 	if db == nil {
-		panic("db == nil")
+		cancel()
+		return nil, bErrors.ErrInvalidDatabase
 	}
 
 	cs := &CoreService{

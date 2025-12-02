@@ -12,7 +12,6 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/gin-gonic/gin"
 	"github.com/snple/beacon"
 	"github.com/snple/beacon/bin/edge/config"
 	"github.com/snple/beacon/bin/edge/log"
@@ -168,10 +167,6 @@ func main() {
 				log.Logger.Sugar().Fatalf("failed to serve: %v", err)
 			}
 		}()
-	}
-
-	if !config.Config.Gin.Debug {
-		gin.SetMode(gin.ReleaseMode)
 	}
 
 	signalCh := make(chan os.Signal, 1)
