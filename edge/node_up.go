@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type NodeUpService struct {
@@ -459,9 +460,19 @@ func (s *NodeUpService) syncPinValueToRemote(ctx context.Context) error {
 				goto DONE
 			}
 
+			// 反序列化 NsonValue
+			var value *pb.NsonValue
+			if len(item.Value) > 0 {
+				value = &pb.NsonValue{}
+				if err := proto.Unmarshal(item.Value, value); err != nil {
+					s.es.Logger().Sugar().Errorf("Unmarshal NsonValue: %v", err)
+					continue
+				}
+			}
+
 			err = stream.Send(&pb.PinValue{
 				Id:      item.ID,
-				Value:   item.Value,
+				Value:   value,
 				Updated: item.Updated.UnixMicro(),
 			})
 			if err != nil {

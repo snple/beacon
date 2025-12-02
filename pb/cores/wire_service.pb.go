@@ -427,7 +427,7 @@ type PinNameValueRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Value         string                 `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	Value         *pb.NsonValue          `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -476,11 +476,11 @@ func (x *PinNameValueRequest) GetName() string {
 	return ""
 }
 
-func (x *PinNameValueRequest) GetValue() string {
+func (x *PinNameValueRequest) GetValue() *pb.NsonValue {
 	if x != nil {
 		return x.Value
 	}
-	return ""
+	return nil
 }
 
 // PinPullWriteRequest 拉取写入值请求
@@ -570,11 +570,11 @@ const file_cores_wire_service_proto_rawDesc = "" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x17\n" +
 	"\awire_id\x18\x02 \x01(\tR\x06wireId\".\n" +
 	"\x0fPinListResponse\x12\x1b\n" +
-	"\x04pins\x18\x01 \x03(\v2\a.pb.PinR\x04pins\"X\n" +
+	"\x04pins\x18\x01 \x03(\v2\a.pb.PinR\x04pins\"g\n" +
 	"\x13PinNameValueRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x03 \x01(\tR\x05value\"Z\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12#\n" +
+	"\x05value\x18\x03 \x01(\v2\r.pb.NsonValueR\x05value\"Z\n" +
 	"\x13PinPullWriteRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
 	"\x05after\x18\x02 \x01(\x03R\x05after\x12\x14\n" +
@@ -636,58 +636,60 @@ var file_cores_wire_service_proto_goTypes = []any{
 	(*PinPullWriteRequest)(nil), // 9: cores.PinPullWriteRequest
 	(*pb.Wire)(nil),             // 10: pb.Wire
 	(*pb.Pin)(nil),              // 11: pb.Pin
-	(*pb.Name)(nil),             // 12: pb.Name
-	(*pb.Id)(nil),               // 13: pb.Id
-	(*pb.PinValue)(nil),         // 14: pb.PinValue
-	(*pb.MyBool)(nil),           // 15: pb.MyBool
-	(*pb.PinNameValue)(nil),     // 16: pb.PinNameValue
+	(*pb.NsonValue)(nil),        // 12: pb.NsonValue
+	(*pb.Name)(nil),             // 13: pb.Name
+	(*pb.Id)(nil),               // 14: pb.Id
+	(*pb.PinValue)(nil),         // 15: pb.PinValue
+	(*pb.MyBool)(nil),           // 16: pb.MyBool
+	(*pb.PinNameValue)(nil),     // 17: pb.PinNameValue
 }
 var file_cores_wire_service_proto_depIdxs = []int32{
 	10, // 0: cores.WireListResponse.wires:type_name -> pb.Wire
 	11, // 1: cores.PinListResponse.pins:type_name -> pb.Pin
-	0,  // 2: cores.WireService.View:input_type -> cores.WireViewRequest
-	1,  // 3: cores.WireService.Name:input_type -> cores.WireNameRequest
-	12, // 4: cores.WireService.NameFull:input_type -> pb.Name
-	2,  // 5: cores.WireService.List:input_type -> cores.WireListRequest
-	4,  // 6: cores.PinService.View:input_type -> cores.PinViewRequest
-	5,  // 7: cores.PinService.Name:input_type -> cores.PinNameRequest
-	12, // 8: cores.PinService.NameFull:input_type -> pb.Name
-	6,  // 9: cores.PinService.List:input_type -> cores.PinListRequest
-	13, // 10: cores.PinValueService.GetValue:input_type -> pb.Id
-	14, // 11: cores.PinValueService.SetValue:input_type -> pb.PinValue
-	5,  // 12: cores.PinValueService.GetValueByName:input_type -> cores.PinNameRequest
-	8,  // 13: cores.PinValueService.SetValueByName:input_type -> cores.PinNameValueRequest
-	14, // 14: cores.PinValueService.PushValue:input_type -> pb.PinValue
-	13, // 15: cores.PinWriteService.GetWrite:input_type -> pb.Id
-	14, // 16: cores.PinWriteService.SetWrite:input_type -> pb.PinValue
-	5,  // 17: cores.PinWriteService.GetWriteByName:input_type -> cores.PinNameRequest
-	8,  // 18: cores.PinWriteService.SetWriteByName:input_type -> cores.PinNameValueRequest
-	13, // 19: cores.PinWriteService.DeleteWrite:input_type -> pb.Id
-	9,  // 20: cores.PinWriteService.PullWrite:input_type -> cores.PinPullWriteRequest
-	10, // 21: cores.WireService.View:output_type -> pb.Wire
-	10, // 22: cores.WireService.Name:output_type -> pb.Wire
-	10, // 23: cores.WireService.NameFull:output_type -> pb.Wire
-	3,  // 24: cores.WireService.List:output_type -> cores.WireListResponse
-	11, // 25: cores.PinService.View:output_type -> pb.Pin
-	11, // 26: cores.PinService.Name:output_type -> pb.Pin
-	11, // 27: cores.PinService.NameFull:output_type -> pb.Pin
-	7,  // 28: cores.PinService.List:output_type -> cores.PinListResponse
-	14, // 29: cores.PinValueService.GetValue:output_type -> pb.PinValue
-	15, // 30: cores.PinValueService.SetValue:output_type -> pb.MyBool
-	16, // 31: cores.PinValueService.GetValueByName:output_type -> pb.PinNameValue
-	15, // 32: cores.PinValueService.SetValueByName:output_type -> pb.MyBool
-	15, // 33: cores.PinValueService.PushValue:output_type -> pb.MyBool
-	14, // 34: cores.PinWriteService.GetWrite:output_type -> pb.PinValue
-	15, // 35: cores.PinWriteService.SetWrite:output_type -> pb.MyBool
-	16, // 36: cores.PinWriteService.GetWriteByName:output_type -> pb.PinNameValue
-	15, // 37: cores.PinWriteService.SetWriteByName:output_type -> pb.MyBool
-	15, // 38: cores.PinWriteService.DeleteWrite:output_type -> pb.MyBool
-	14, // 39: cores.PinWriteService.PullWrite:output_type -> pb.PinValue
-	21, // [21:40] is the sub-list for method output_type
-	2,  // [2:21] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	12, // 2: cores.PinNameValueRequest.value:type_name -> pb.NsonValue
+	0,  // 3: cores.WireService.View:input_type -> cores.WireViewRequest
+	1,  // 4: cores.WireService.Name:input_type -> cores.WireNameRequest
+	13, // 5: cores.WireService.NameFull:input_type -> pb.Name
+	2,  // 6: cores.WireService.List:input_type -> cores.WireListRequest
+	4,  // 7: cores.PinService.View:input_type -> cores.PinViewRequest
+	5,  // 8: cores.PinService.Name:input_type -> cores.PinNameRequest
+	13, // 9: cores.PinService.NameFull:input_type -> pb.Name
+	6,  // 10: cores.PinService.List:input_type -> cores.PinListRequest
+	14, // 11: cores.PinValueService.GetValue:input_type -> pb.Id
+	15, // 12: cores.PinValueService.SetValue:input_type -> pb.PinValue
+	5,  // 13: cores.PinValueService.GetValueByName:input_type -> cores.PinNameRequest
+	8,  // 14: cores.PinValueService.SetValueByName:input_type -> cores.PinNameValueRequest
+	15, // 15: cores.PinValueService.PushValue:input_type -> pb.PinValue
+	14, // 16: cores.PinWriteService.GetWrite:input_type -> pb.Id
+	15, // 17: cores.PinWriteService.SetWrite:input_type -> pb.PinValue
+	5,  // 18: cores.PinWriteService.GetWriteByName:input_type -> cores.PinNameRequest
+	8,  // 19: cores.PinWriteService.SetWriteByName:input_type -> cores.PinNameValueRequest
+	14, // 20: cores.PinWriteService.DeleteWrite:input_type -> pb.Id
+	9,  // 21: cores.PinWriteService.PullWrite:input_type -> cores.PinPullWriteRequest
+	10, // 22: cores.WireService.View:output_type -> pb.Wire
+	10, // 23: cores.WireService.Name:output_type -> pb.Wire
+	10, // 24: cores.WireService.NameFull:output_type -> pb.Wire
+	3,  // 25: cores.WireService.List:output_type -> cores.WireListResponse
+	11, // 26: cores.PinService.View:output_type -> pb.Pin
+	11, // 27: cores.PinService.Name:output_type -> pb.Pin
+	11, // 28: cores.PinService.NameFull:output_type -> pb.Pin
+	7,  // 29: cores.PinService.List:output_type -> cores.PinListResponse
+	15, // 30: cores.PinValueService.GetValue:output_type -> pb.PinValue
+	16, // 31: cores.PinValueService.SetValue:output_type -> pb.MyBool
+	17, // 32: cores.PinValueService.GetValueByName:output_type -> pb.PinNameValue
+	16, // 33: cores.PinValueService.SetValueByName:output_type -> pb.MyBool
+	16, // 34: cores.PinValueService.PushValue:output_type -> pb.MyBool
+	15, // 35: cores.PinWriteService.GetWrite:output_type -> pb.PinValue
+	16, // 36: cores.PinWriteService.SetWrite:output_type -> pb.MyBool
+	17, // 37: cores.PinWriteService.GetWriteByName:output_type -> pb.PinNameValue
+	16, // 38: cores.PinWriteService.SetWriteByName:output_type -> pb.MyBool
+	16, // 39: cores.PinWriteService.DeleteWrite:output_type -> pb.MyBool
+	15, // 40: cores.PinWriteService.PullWrite:output_type -> pb.PinValue
+	22, // [22:41] is the sub-list for method output_type
+	3,  // [3:22] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_cores_wire_service_proto_init() }

@@ -27,7 +27,7 @@ func Seed(db *badger.DB, nodeName string) error {
 			// 构建 Pins
 			pins := make([]storage.Pin, 0, len(result.Pins))
 			for _, builderPin := range result.Pins {
-				// 从 Cluster 获取 Pin 的 Type
+				// 从 Cluster 获取 Pin 的 Type（已经是 uint32）
 				pinType := builderPin.Type
 				cluster := device.GetCluster("BasicInformation")
 				if cluster != nil {

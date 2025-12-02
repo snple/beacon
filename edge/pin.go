@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type PinService struct {
@@ -181,6 +182,10 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 		}
+
+		if in.Value == nil {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value")
+		}
 	}
 
 	// 验证 Pin 存在
@@ -190,7 +195,7 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 	}
 
 	// 验证值类型
-	if !dt.ValidateValue(in.Value, pin.Type) {
+	if !dt.ValidateNsonValue(in.Value, pin.Type) {
 		return &output, status.Error(codes.InvalidArgument, "Invalid value for Pin.Type")
 	}
 
@@ -259,6 +264,10 @@ func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*
 		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
 		}
+
+		if in.Value == nil {
+			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value")
+		}
 	}
 
 	// 解析名称获取 Wire 和 Pin
@@ -268,7 +277,7 @@ func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*
 	}
 
 	// 验证值类型
-	if !dt.ValidateValue(in.Value, pin.Type) {
+	if !dt.ValidateNsonValue(in.Value, pin.Type) {
 		return &output, status.Error(codes.InvalidArgument, "Invalid value for Pin.Type")
 	}
 
@@ -339,9 +348,18 @@ func (s *PinService) PullValue(in *edges.PinPullValueRequest, stream grpc.Server
 	})
 
 	for _, entry := range entries {
+		// 反序列化 NsonValue
+		var value *pb.NsonValue
+		if len(entry.Value) > 0 {
+			value = &pb.NsonValue{}
+			if err := proto.Unmarshal(entry.Value, value); err != nil {
+				return status.Errorf(codes.Internal, "Unmarshal NsonValue: %v", err)
+			}
+		}
+
 		item := pb.PinValue{
 			Id:      entry.ID,
-			Value:   entry.Value,
+			Value:   value,
 			Updated: entry.Updated.UnixMicro(),
 		}
 
@@ -466,7 +484,7 @@ func (s *PinService) PushWrite(stream grpc.ClientStreamingServer[pb.PinValue, pb
 	}
 }
 
-func (s *PinService) afterUpdateWrite(ctx context.Context, pin *storage.Pin, value string) error {
+func (s *PinService) afterUpdateWrite(ctx context.Context, pin *storage.Pin, value *pb.NsonValue) error {
 	// 可以在这里添加写入后的回调逻辑
 	// 例如：通知驱动程序执行实际写入操作
 	return nil

@@ -15,6 +15,7 @@ package device
 
 import (
 	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/dt"
 )
 
 // ============================================================================
@@ -31,7 +32,7 @@ type ClusterID uint32
 type PinTemplate struct {
 	Name    string     // Pin 名称（在 Wire 中唯一）
 	Desc    string     // 描述
-	Type    string     // 数据类型: bool, i32, i64, u32, u64, f32, f64, string
+	Type    uint32     // 数据类型: dt.TypeBool, dt.TypeI32, etc.
 	Rw      int32      // 0: 只读, 1: 读写
 	Default nson.Value // 默认值
 	Tags    string     // 标签
@@ -78,7 +79,7 @@ var OnOffCluster = Cluster{
 		{
 			Name:    "onoff",
 			Desc:    "开关状态",
-			Type:    "bool",
+			Type:    dt.TypeBool,
 			Rw:      1, // 读写
 			Default: nson.Bool(false),
 			Tags:    "cluster:OnOff",
@@ -95,7 +96,7 @@ var LevelControlCluster = Cluster{
 		{
 			Name:    "level",
 			Desc:    "当前级别 (0-254)",
-			Type:    "u32",
+			Type:    dt.TypeU32,
 			Rw:      1,
 			Default: nson.U32(0),
 			Tags:    "cluster:LevelControl",
@@ -103,7 +104,7 @@ var LevelControlCluster = Cluster{
 		{
 			Name:    "min_level",
 			Desc:    "最小级别",
-			Type:    "u32",
+			Type:    dt.TypeU32,
 			Rw:      0, // 只读
 			Default: nson.U32(0),
 			Tags:    "cluster:LevelControl",
@@ -111,7 +112,7 @@ var LevelControlCluster = Cluster{
 		{
 			Name:    "max_level",
 			Desc:    "最大级别",
-			Type:    "u32",
+			Type:    dt.TypeU32,
 			Rw:      0,
 			Default: nson.U32(254),
 			Tags:    "cluster:LevelControl",
@@ -128,7 +129,7 @@ var ColorControlCluster = Cluster{
 		{
 			Name:    "hue",
 			Desc:    "色相 (0-254)",
-			Type:    "u32",
+			Type:    dt.TypeU32,
 			Rw:      1,
 			Default: nson.U32(0),
 			Tags:    "cluster:ColorControl",
@@ -136,7 +137,7 @@ var ColorControlCluster = Cluster{
 		{
 			Name:    "saturation",
 			Desc:    "饱和度 (0-254)",
-			Type:    "u32",
+			Type:    dt.TypeU32,
 			Rw:      1,
 			Default: nson.U32(0),
 			Tags:    "cluster:ColorControl",
@@ -153,7 +154,7 @@ var TemperatureMeasurementCluster = Cluster{
 		{
 			Name:    "temperature",
 			Desc:    "当前温度 (0.01°C)",
-			Type:    "i32",
+			Type:    dt.TypeI32,
 			Rw:      0,              // 只读，传感器数据
 			Default: nson.I32(2500), // 25.00°C
 			Tags:    "cluster:TemperatureMeasurement",
@@ -161,7 +162,7 @@ var TemperatureMeasurementCluster = Cluster{
 		{
 			Name:    "temp_min",
 			Desc:    "最小可测温度",
-			Type:    "i32",
+			Type:    dt.TypeI32,
 			Rw:      0,
 			Default: nson.I32(-4000), // -40°C
 			Tags:    "cluster:TemperatureMeasurement",
@@ -169,7 +170,7 @@ var TemperatureMeasurementCluster = Cluster{
 		{
 			Name:    "temp_max",
 			Desc:    "最大可测温度",
-			Type:    "i32",
+			Type:    dt.TypeI32,
 			Rw:      0,
 			Default: nson.I32(12500), // 125°C
 			Tags:    "cluster:TemperatureMeasurement",
@@ -186,7 +187,7 @@ var HumidityMeasurementCluster = Cluster{
 		{
 			Name:    "humidity",
 			Desc:    "当前湿度 (0.01%)",
-			Type:    "u32",
+			Type:    dt.TypeU32,
 			Rw:      0,
 			Default: nson.U32(5000), // 50.00%
 			Tags:    "cluster:HumidityMeasurement",
@@ -203,7 +204,7 @@ var BasicInformationCluster = Cluster{
 		{
 			Name:    "vendor_name",
 			Desc:    "厂商名称",
-			Type:    "string",
+			Type:    dt.TypeString,
 			Rw:      0,
 			Default: nson.String(""),
 			Tags:    "cluster:BasicInformation",
@@ -211,7 +212,7 @@ var BasicInformationCluster = Cluster{
 		{
 			Name:    "product_name",
 			Desc:    "产品名称",
-			Type:    "string",
+			Type:    dt.TypeString,
 			Rw:      0,
 			Default: nson.String(""),
 			Tags:    "cluster:BasicInformation",
@@ -219,7 +220,7 @@ var BasicInformationCluster = Cluster{
 		{
 			Name:    "serial_number",
 			Desc:    "序列号",
-			Type:    "string",
+			Type:    dt.TypeString,
 			Rw:      0,
 			Default: nson.String(""),
 			Tags:    "cluster:BasicInformation",

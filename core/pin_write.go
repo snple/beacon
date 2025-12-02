@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type PinWriteService struct {
@@ -50,7 +51,7 @@ func (s *PinWriteService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.My
 	var output pb.MyBool
 
 	// basic validation
-	if in == nil || in.Id == "" || in.Value == "" {
+	if in == nil || in.Id == "" || in.Value == nil {
 		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id and Value")
 	}
 
@@ -106,7 +107,7 @@ func (s *PinWriteService) SetWriteByName(ctx context.Context, in *cores.PinNameV
 	var output pb.MyBool
 
 	// basic validation
-	if in == nil || in.NodeId == "" || in.Name == "" || in.Value == "" {
+	if in == nil || in.NodeId == "" || in.Name == "" || in.Value == nil {
 		return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId, Name and Value")
 	}
 
@@ -172,9 +173,18 @@ func (s *PinWriteService) PullWrite(in *cores.PinPullWriteRequest, stream grpc.S
 	}
 
 	for _, w := range writes {
+		// 反序列化 NsonValue
+		var value *pb.NsonValue
+		if len(w.Value) > 0 {
+			value = &pb.NsonValue{}
+			if err := proto.Unmarshal(w.Value, value); err != nil {
+				continue
+			}
+		}
+
 		item := pb.PinValue{
 			Id:      w.ID,
-			Value:   w.Value,
+			Value:   value,
 			Updated: w.Updated.UnixMicro(),
 		}
 

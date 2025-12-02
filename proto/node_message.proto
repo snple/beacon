@@ -3,6 +3,8 @@ package pb;
 
 option go_package = "github.com/snple/beacon/pb;pb";
 
+import "nson.proto";
+
 // Node 设备节点（完整配置，包含嵌套的 Wire 和 Pin）
 message Node {
     string id = 1;
@@ -27,7 +29,7 @@ message Pin {
     string id = 1;
     string name = 2;
     string addr = 3;
-    string type = 4;
+    uint32 type = 4;  // nson.DataType 类型码
     sint32 rw = 5;
     repeated string tags = 6;
 }
@@ -35,13 +37,13 @@ message Pin {
 // PinValue 点位值
 message PinValue {
     string id = 1;
-    string value = 2;
+    pb.NsonValue value = 2;
     int64 updated = 3;
 }
 
 // PinNameValue 按名称的点位值
 message PinNameValue {
     string name = 1;
-    string value = 2;
+    pb.NsonValue value = 2;
     int64 updated = 3;
 }

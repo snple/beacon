@@ -94,7 +94,7 @@ service PinValueService {
 message PinNameValueRequest {
     string node_id = 1;
     string name = 2;
-    string value = 3;
+    pb.NsonValue value = 3;
 }
 
 // PinWriteService 点位写入服务

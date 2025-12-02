@@ -189,7 +189,7 @@ type Pin struct {
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Addr          string                 `protobuf:"bytes,3,opt,name=addr,proto3" json:"addr,omitempty"`
-	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	Type          uint32                 `protobuf:"varint,4,opt,name=type,proto3" json:"type,omitempty"` // nson.DataType 类型码
 	Rw            int32                  `protobuf:"zigzag32,5,opt,name=rw,proto3" json:"rw,omitempty"`
 	Tags          []string               `protobuf:"bytes,6,rep,name=tags,proto3" json:"tags,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -247,11 +247,11 @@ func (x *Pin) GetAddr() string {
 	return ""
 }
 
-func (x *Pin) GetType() string {
+func (x *Pin) GetType() uint32 {
 	if x != nil {
 		return x.Type
 	}
-	return ""
+	return 0
 }
 
 func (x *Pin) GetRw() int32 {
@@ -272,7 +272,7 @@ func (x *Pin) GetTags() []string {
 type PinValue struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Value         *NsonValue             `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	Updated       int64                  `protobuf:"varint,3,opt,name=updated,proto3" json:"updated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -315,11 +315,11 @@ func (x *PinValue) GetId() string {
 	return ""
 }
 
-func (x *PinValue) GetValue() string {
+func (x *PinValue) GetValue() *NsonValue {
 	if x != nil {
 		return x.Value
 	}
-	return ""
+	return nil
 }
 
 func (x *PinValue) GetUpdated() int64 {
@@ -333,7 +333,7 @@ func (x *PinValue) GetUpdated() int64 {
 type PinNameValue struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Value         *NsonValue             `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	Updated       int64                  `protobuf:"varint,3,opt,name=updated,proto3" json:"updated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -376,11 +376,11 @@ func (x *PinNameValue) GetName() string {
 	return ""
 }
 
-func (x *PinNameValue) GetValue() string {
+func (x *PinNameValue) GetValue() *NsonValue {
 	if x != nil {
 		return x.Value
 	}
-	return ""
+	return nil
 }
 
 func (x *PinNameValue) GetUpdated() int64 {
@@ -394,7 +394,8 @@ var File_node_message_proto protoreflect.FileDescriptor
 
 const file_node_message_proto_rawDesc = "" +
 	"\n" +
-	"\x12node_message.proto\x12\x02pb\"|\n" +
+	"\x12node_message.proto\x12\x02pb\x1a\n" +
+	"nson.proto\"|\n" +
 	"\x04Node\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
@@ -412,16 +413,16 @@ const file_node_message_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
 	"\x04addr\x18\x03 \x01(\tR\x04addr\x12\x12\n" +
-	"\x04type\x18\x04 \x01(\tR\x04type\x12\x0e\n" +
+	"\x04type\x18\x04 \x01(\rR\x04type\x12\x0e\n" +
 	"\x02rw\x18\x05 \x01(\x11R\x02rw\x12\x12\n" +
-	"\x04tags\x18\x06 \x03(\tR\x04tags\"J\n" +
+	"\x04tags\x18\x06 \x03(\tR\x04tags\"Y\n" +
 	"\bPinValue\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\x12\x18\n" +
-	"\aupdated\x18\x03 \x01(\x03R\aupdated\"R\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
+	"\x05value\x18\x02 \x01(\v2\r.pb.NsonValueR\x05value\x12\x18\n" +
+	"\aupdated\x18\x03 \x01(\x03R\aupdated\"a\n" +
 	"\fPinNameValue\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\x12\x18\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
+	"\x05value\x18\x02 \x01(\v2\r.pb.NsonValueR\x05value\x12\x18\n" +
 	"\aupdated\x18\x03 \x01(\x03R\aupdatedB\x1fZ\x1dgithub.com/snple/beacon/pb;pbb\x06proto3"
 
 var (
@@ -443,15 +444,18 @@ var file_node_message_proto_goTypes = []any{
 	(*Pin)(nil),          // 2: pb.Pin
 	(*PinValue)(nil),     // 3: pb.PinValue
 	(*PinNameValue)(nil), // 4: pb.PinNameValue
+	(*NsonValue)(nil),    // 5: pb.NsonValue
 }
 var file_node_message_proto_depIdxs = []int32{
 	1, // 0: pb.Node.wires:type_name -> pb.Wire
 	2, // 1: pb.Wire.pins:type_name -> pb.Pin
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	5, // 2: pb.PinValue.value:type_name -> pb.NsonValue
+	5, // 3: pb.PinNameValue.value:type_name -> pb.NsonValue
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_node_message_proto_init() }
@@ -459,6 +463,7 @@ func file_node_message_proto_init() {
 	if File_node_message_proto != nil {
 		return
 	}
+	file_nson_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

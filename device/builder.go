@@ -19,7 +19,7 @@ type BuilderWire struct {
 // BuilderPin Pin 构建器结果
 type BuilderPin struct {
 	Name string
-	Type string
+	Type uint32 // nson.DataType
 	Addr string
 	Rw   int32
 }
