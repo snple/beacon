@@ -3,13 +3,12 @@ package nodes;
 
 option go_package = "github.com/snple/beacon/pb/nodes;nodes";
 
-import "wire_message.proto";
+import "node_message.proto";
 import "generic_message.proto";
 
 // wire
 message WireListRequest {
     pb.Page page = 1;
-    // string node_id = 2;
 }
 
 message WireListResponse {
@@ -18,30 +17,15 @@ message WireListResponse {
     repeated pb.Wire wires = 3;
 }
 
-message WirePullRequest {
-    int64 after = 1;
-    uint32 limit = 2;
-    // string node_id = 3;
-    string source = 4;
-}
-
-message WirePullResponse {
-    int64 after = 1;
-    uint32 limit = 2;
-    repeated pb.Wire wires = 3;
-}
-
 service WireService {
     rpc View(pb.Id) returns (pb.Wire) {}
     rpc Name(pb.Name) returns (pb.Wire) {}
     rpc List(WireListRequest) returns (WireListResponse) {}
-    rpc Push(stream pb.Wire) returns (pb.MyBool) {}
 }
 
 // pin
 message PinListRequest {
     pb.Page page = 1;
-    // string node_id = 2;
     string wire_id = 3;
 }
 
@@ -51,23 +35,9 @@ message PinListResponse {
     repeated pb.Pin pins = 3;
 }
 
-message PinPullRequest {
-    int64 after = 1;
-    uint32 limit = 2;
-    // string node_id = 3;
-    string wire_id = 4;
-}
-
-message PinPullResponse {
-    int64 after = 1;
-    uint32 limit = 2;
-    repeated pb.Pin pins = 3;
-}
-
 message PinPullWriteRequest {
     int64 after = 1;
     uint32 limit = 2;
-    // string node_id = 3;
     string wire_id = 4;
 }
 
@@ -75,18 +45,15 @@ service PinService {
     rpc View(pb.Id) returns (pb.Pin) {}
     rpc Name(pb.Name) returns (pb.Pin) {}
     rpc List(PinListRequest) returns (PinListResponse) {}
-    rpc Push(stream pb.Pin) returns (pb.MyBool) {}
 
     rpc GetValue(pb.Id) returns (pb.PinValue) {}
     rpc GetValueByName(pb.Name) returns (pb.PinNameValue) {}
-    rpc ViewValue(pb.Id) returns (pb.PinValueUpdated) {}
     rpc PushValue(stream pb.PinValue) returns (pb.MyBool) {}
 
     rpc GetWrite(pb.Id) returns (pb.PinValue) {}
     rpc SetWrite(pb.PinValue) returns (pb.MyBool) {}
     rpc GetWriteByName(pb.Name) returns (pb.PinNameValue) {}
     rpc SetWriteByName(pb.PinNameValue) returns (pb.MyBool) {}
-    rpc ViewWrite(pb.Id) returns (pb.PinValueUpdated) {}
     rpc DeleteWrite(pb.Id) returns (pb.MyBool) {}
-    rpc PullWrite(PinPullWriteRequest) returns (stream pb.PinValueUpdated) {}
+    rpc PullWrite(PinPullWriteRequest) returns (stream pb.PinValue) {}
 }

@@ -515,6 +515,198 @@ func (s *Storage) SetSecret(ctx context.Context, nodeID, secret string) error {
 	})
 }
 
+// --- PinValue 操作 ---
+
+// PinValueEntry 点位值条目
+type PinValueEntry struct {
+	ID      string
+	Value   string
+	Updated time.Time
+}
+
+// GetPinValue 获取点位值
+func (s *Storage) GetPinValue(pinID string) (string, time.Time, error) {
+	var value string
+	var updated time.Time
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte("pv:" + pinID))
+		if err != nil {
+			return err
+		}
+
+		return item.Value(func(val []byte) error {
+			buf := bytes.NewBuffer(val)
+			m, err := nson.DecodeMap(buf)
+			if err != nil {
+				return err
+			}
+
+			var entry PinValueEntry
+			if err := nson.Unmarshal(m, &entry); err != nil {
+				return err
+			}
+
+			value = entry.Value
+			updated = entry.Updated
+			return nil
+		})
+	})
+
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	return value, updated, nil
+}
+
+// SetPinValue 设置点位值
+func (s *Storage) SetPinValue(ctx context.Context, pinID, value string, updated time.Time) error {
+	entry := PinValueEntry{
+		ID:      pinID,
+		Value:   value,
+		Updated: updated,
+	}
+
+	m, err := nson.Marshal(entry)
+	if err != nil {
+		return err
+	}
+
+	buf := new(bytes.Buffer)
+	if err := nson.EncodeMap(m, buf); err != nil {
+		return err
+	}
+
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte("pv:"+pinID), buf.Bytes())
+	})
+}
+
+// --- PinWrite 操作 ---
+
+// GetPinWrite 获取点位写入值
+func (s *Storage) GetPinWrite(pinID string) (string, time.Time, error) {
+	var value string
+	var updated time.Time
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte("pw:" + pinID))
+		if err != nil {
+			return err
+		}
+
+		return item.Value(func(val []byte) error {
+			buf := bytes.NewBuffer(val)
+			m, err := nson.DecodeMap(buf)
+			if err != nil {
+				return err
+			}
+
+			var entry PinValueEntry
+			if err := nson.Unmarshal(m, &entry); err != nil {
+				return err
+			}
+
+			value = entry.Value
+			updated = entry.Updated
+			return nil
+		})
+	})
+
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	return value, updated, nil
+}
+
+// SetPinWrite 设置点位写入值
+func (s *Storage) SetPinWrite(ctx context.Context, pinID, value string, updated time.Time) error {
+	entry := PinValueEntry{
+		ID:      pinID,
+		Value:   value,
+		Updated: updated,
+	}
+
+	m, err := nson.Marshal(entry)
+	if err != nil {
+		return err
+	}
+
+	buf := new(bytes.Buffer)
+	if err := nson.EncodeMap(m, buf); err != nil {
+		return err
+	}
+
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte("pw:"+pinID), buf.Bytes())
+	})
+}
+
+// DeletePinWrite 删除点位写入值
+func (s *Storage) DeletePinWrite(ctx context.Context, pinID string) error {
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete([]byte("pw:" + pinID))
+	})
+}
+
+// ListPinWrites 列出节点的写入值
+func (s *Storage) ListPinWrites(nodeID string, after time.Time, limit int) ([]PinValueEntry, error) {
+	var result []PinValueEntry
+
+	// 获取节点的所有 Pin
+	pins, err := s.ListPinsByNode(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	err = s.db.View(func(txn *badger.Txn) error {
+		for _, pin := range pins {
+			item, err := txn.Get([]byte("pw:" + pin.ID))
+			if err != nil {
+				if err == badger.ErrKeyNotFound {
+					continue
+				}
+				return err
+			}
+
+			err = item.Value(func(val []byte) error {
+				buf := bytes.NewBuffer(val)
+				m, err := nson.DecodeMap(buf)
+				if err != nil {
+					return err
+				}
+
+				var entry PinValueEntry
+				if err := nson.Unmarshal(m, &entry); err != nil {
+					return err
+				}
+
+				if entry.Updated.After(after) {
+					result = append(result, entry)
+				}
+
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
+			if limit > 0 && len(result) >= limit {
+				break
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
 // --- 内部方法 ---
 
 // clearNodeIndexUnsafe 清除节点相关的所有索引（无锁）

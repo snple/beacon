@@ -2,21 +2,16 @@ package edge
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"io"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/danclive/nson-go"
-	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/dt"
-	"github.com/snple/beacon/edge/model"
+	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
-	"github.com/snple/types/cache"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,21 +20,21 @@ import (
 type PinService struct {
 	es *EdgeService
 
-	cache *cache.Cache[string, model.Pin]
-
 	edges.UnimplementedPinServiceServer
+	edges.UnimplementedPinValueServiceServer
+	edges.UnimplementedPinWriteServiceServer
 }
 
 func newPinService(es *EdgeService) *PinService {
 	return &PinService{
-		es:    es,
-		cache: cache.NewCache[string, model.Pin](nil),
+		es: es,
 	}
 }
 
+// --- PinService ---
+
 func (s *PinService) View(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
 	var output pb.Pin
-	var err error
 
 	// basic validation
 	{
@@ -52,24 +47,18 @@ func (s *PinService) View(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.Id)
+	pin, err := s.es.GetStorage().GetPinByID(in.Id)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	s.copyModelToOutput(&output, &item)
-
-	output.Value, err = s.getPinValue(ctx, item.ID)
-	if err != nil {
-		return &output, err
-	}
+	s.copyModelToOutput(&output, pin)
 
 	return &output, nil
 }
 
 func (s *PinService) Name(ctx context.Context, in *pb.Name) (*pb.Pin, error) {
 	var output pb.Pin
-	var err error
 
 	// basic validation
 	{
@@ -82,25 +71,18 @@ func (s *PinService) Name(ctx context.Context, in *pb.Name) (*pb.Pin, error) {
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.Name)
+	pin, err := s.es.GetStorage().GetPinByName(in.Name)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	s.copyModelToOutput(&output, &item)
-
+	s.copyModelToOutput(&output, pin)
 	output.Name = in.Name
-
-	output.Value, err = s.getPinValue(ctx, item.ID)
-	if err != nil {
-		return &output, err
-	}
 
 	return &output, nil
 }
 
 func (s *PinService) List(ctx context.Context, in *edges.PinListRequest) (*edges.PinListResponse, error) {
-	var err error
 	var output edges.PinListResponse
 
 	// basic validation
@@ -110,200 +92,58 @@ func (s *PinService) List(ctx context.Context, in *edges.PinListRequest) (*edges
 		}
 	}
 
-	defaultPage := pb.Page{
-		Limit:  10,
-		Offset: 0,
-	}
-
-	if in.GetPage() == nil {
-		in.Page = &defaultPage
-	}
-
-	output.Page = in.GetPage()
-
-	items := make([]model.Pin, 0, 10)
-
-	query := s.es.GetDB().NewSelect().Model(&items).Order("id ASC")
+	var pins []*storage.Pin
 
 	if in.WireId != "" {
-		query.Where("wire_id = ?", in.WireId)
-	}
-
-	count, err := query.Offset(int(in.GetPage().GetOffset())).Limit(int(in.GetPage().GetLimit())).ScanAndCount(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	output.Count = uint32(count)
-
-	for i := range items {
-		item := pb.Pin{}
-
-		s.copyModelToOutput(&item, &items[i])
-
-		item.Value, err = s.getPinValue(ctx, items[i].ID)
+		// 按 Wire 过滤
+		wirePins, err := s.es.GetStorage().ListPinsByWire(in.WireId)
 		if err != nil {
-			return &output, err
+			return &output, status.Errorf(codes.Internal, "ListPinsByWire: %v", err)
 		}
+		pins = wirePins
+	} else {
+		pins = s.es.GetStorage().ListPins()
+	}
 
+	for _, pin := range pins {
+		item := pb.Pin{}
+		s.copyModelToOutput(&item, pin)
 		output.Pins = append(output.Pins, &item)
 	}
 
 	return &output, nil
 }
 
-func (s *PinService) ViewByID(ctx context.Context, id string) (model.Pin, error) {
-	item := model.Pin{
-		ID: id,
-	}
-
-	err := s.es.GetDB().NewSelect().Model(&item).WherePK().Scan(ctx)
+func (s *PinService) ViewByID(ctx context.Context, id string) (*storage.Pin, error) {
+	pin, err := s.es.GetStorage().GetPinByID(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v, Pin.ID: %v", err, item.ID)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
+		return nil, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	return item, nil
+	return pin, nil
 }
 
-func (s *PinService) ViewByName(ctx context.Context, name string) (model.Pin, error) {
-	item := model.Pin{}
-
-	wireName := consts.DEFAULT_WIRE
-	itemName := name
-
-	if strings.Contains(itemName, ".") {
-		splits := strings.Split(itemName, ".")
-		if len(splits) != 2 {
-			return item, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
-		}
-
-		wireName = splits[0]
-		itemName = splits[1]
-	}
-
-	wire, err := s.es.GetWire().ViewByName(ctx, wireName)
+func (s *PinService) ViewByName(ctx context.Context, name string) (*storage.Pin, error) {
+	pin, err := s.es.GetStorage().GetPinByName(name)
 	if err != nil {
-		return item, err
+		return nil, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	return s.ViewByWireIDAndName(ctx, wire.ID, itemName)
+	return pin, nil
 }
 
-func (s *PinService) ViewByWireIDAndName(ctx context.Context, wireID, name string) (model.Pin, error) {
-	item := model.Pin{}
-
-	err := s.es.GetDB().NewSelect().Model(&item).Where("wire_id = ?", wireID).Where("name = ?", name).Scan(ctx)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v, WireID: %v, Name: %v", err, wireID, name)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	return item, nil
+func (s *PinService) copyModelToOutput(output *pb.Pin, pin *storage.Pin) {
+	output.Id = pin.ID
+	output.Name = pin.Name
+	output.Addr = pin.Addr
+	output.Type = pin.Type
+	output.Rw = pin.Rw
+	output.Tags = pin.Tags
 }
 
-func (s *PinService) ViewByWireIDAndAddress(ctx context.Context, wireID, address string) (model.Pin, error) {
-	item := model.Pin{}
-
-	err := s.es.GetDB().NewSelect().Model(&item).Where("wire_id = ?", wireID).Where("address = ?", address).Scan(ctx)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v, WireID: %v, Address: %v", err, wireID, address)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	return item, nil
-}
-
-func (s *PinService) copyModelToOutput(output *pb.Pin, item *model.Pin) {
-	output.Id = item.ID
-	output.WireId = item.WireID
-	output.Name = item.Name
-	output.Tags = item.Tags
-	output.Addr = item.Addr
-	output.Type = item.Type
-	output.Rw = item.Rw
-	output.Updated = item.Updated.UnixMicro()
-}
-
-func (s *PinService) afterUpdate(ctx context.Context, _ *model.Pin) error {
-	var err error
-
-	err = s.es.GetSync().setNodeUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	return nil
-}
-
-func (s *PinService) afterDelete(ctx context.Context, _ *model.Pin) error {
-	var err error
-
-	err = s.es.GetSync().setNodeUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	return nil
-}
-
-// sync
-
-func (s *PinService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
-	var output pb.Pin
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-	}
-
-	item, err := s.viewWithDeleted(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutput(&output, &item)
-
-	return &output, nil
-}
-
-func (s *PinService) viewWithDeleted(ctx context.Context, id string) (model.Pin, error) {
-	item := model.Pin{
-		ID: id,
-	}
-
-	err := s.es.GetDB().NewSelect().Model(&item).WherePK().WhereAllWithDeleted().Scan(ctx)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v, Pin.ID: %v", err, item.ID)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	return item, nil
-}
-
-// value
+// --- PinValueService ---
 
 func (s *PinService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue, error) {
-	var err error
 	var output pb.PinValue
 
 	// basic validation
@@ -317,27 +157,19 @@ func (s *PinService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue, err
 		}
 	}
 
-	output.Id = in.Id
-
-	item2, err := s.getPinValueUpdated(ctx, in.Id)
+	value, updated, err := s.es.GetStorage().GetPinValue(in.Id)
 	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				return &output, nil
-			}
-		}
-
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "PinValue not found: %v", err)
 	}
 
-	output.Value = item2.Value
-	output.Updated = item2.Updated.UnixMicro()
+	output.Id = in.Id
+	output.Value = value
+	output.Updated = updated.UnixMicro()
 
 	return &output, nil
 }
 
 func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var err error
 	var output pb.MyBool
 
 	// basic validation
@@ -349,28 +181,32 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		if in.Id == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 		}
-
-		if in.Value == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value")
-		}
 	}
 
-	// pin
-	item, err := s.ViewByID(ctx, in.Id)
+	// 验证 Pin 存在
+	pin, err := s.es.GetStorage().GetPinByID(in.Id)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	if !dt.ValidateValue(in.Value, item.Type) {
-		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
+	// 验证值类型
+	if !dt.ValidateValue(in.Value, pin.Type) {
+		return &output, status.Error(codes.InvalidArgument, "Invalid value for Pin.Type")
 	}
 
-	if err = s.setPinValueUpdated(ctx, &item, in.Value, time.Now()); err != nil {
-		return &output, err
+	updated := time.Now()
+	if in.Updated > 0 {
+		updated = time.UnixMicro(in.Updated)
 	}
 
-	if err = s.afterUpdateValue(ctx, &item, in.Value); err != nil {
-		return &output, err
+	err = s.es.GetStorage().SetPinValue(ctx, in.Id, in.Value, updated)
+	if err != nil {
+		return &output, status.Errorf(codes.Internal, "SetPinValue: %v", err)
+	}
+
+	// 更新同步时间戳
+	if err = s.es.GetSync().setPinValueUpdated(ctx, updated); err != nil {
+		return &output, status.Errorf(codes.Internal, "setPinValueUpdated: %v", err)
 	}
 
 	output.Bool = true
@@ -379,7 +215,6 @@ func (s *PinService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 }
 
 func (s *PinService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.PinNameValue, error) {
-	var err error
 	var output pb.PinNameValue
 
 	// basic validation
@@ -393,33 +228,26 @@ func (s *PinService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.Name)
+	pin, err := s.es.GetStorage().GetPinByName(in.Name)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	output.Id = item.ID
 	output.Name = in.Name
 
-	item2, err := s.getPinValueUpdated(ctx, item.ID)
+	value, updated, err := s.es.GetStorage().GetPinValue(pin.ID)
 	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				return &output, nil
-			}
-		}
-
-		return &output, err
+		// 没有值也返回成功
+		return &output, nil
 	}
 
-	output.Value = item2.Value
-	output.Updated = item2.Updated.UnixMicro()
+	output.Value = value
+	output.Updated = updated.UnixMicro()
 
 	return &output, nil
 }
 
 func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*pb.MyBool, error) {
-	var err error
 	var output pb.MyBool
 
 	// basic validation
@@ -431,48 +259,32 @@ func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*
 		if in.Name == "" {
 			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
 		}
-
-		if in.Value == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value")
-		}
 	}
 
-	// name
-	wireName := consts.DEFAULT_WIRE
-	itemName := in.Name
-
-	if strings.Contains(itemName, ".") {
-		splits := strings.Split(itemName, ".")
-		if len(splits) != 2 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
-		}
-
-		wireName = splits[0]
-		itemName = splits[1]
-	}
-
-	// wire
-	wire, err := s.es.GetWire().ViewByName(ctx, wireName)
+	// 解析名称获取 Wire 和 Pin
+	pin, err := s.es.GetStorage().GetPinByName(in.Name)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	// pin
-	item, err := s.ViewByWireIDAndName(ctx, wire.ID, itemName)
+	// 验证值类型
+	if !dt.ValidateValue(in.Value, pin.Type) {
+		return &output, status.Error(codes.InvalidArgument, "Invalid value for Pin.Type")
+	}
+
+	updated := time.Now()
+	if in.Updated > 0 {
+		updated = time.UnixMicro(in.Updated)
+	}
+
+	err = s.es.GetStorage().SetPinValue(ctx, pin.ID, in.Value, updated)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.Internal, "SetPinValue: %v", err)
 	}
 
-	if !dt.ValidateValue(in.Value, item.Type) {
-		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
-	}
-
-	if err = s.setPinValueUpdated(ctx, &item, in.Value, time.Now()); err != nil {
-		return &output, err
-	}
-
-	if err = s.afterUpdateValue(ctx, &item, in.Value); err != nil {
-		return &output, err
+	// 更新同步时间戳
+	if err = s.es.GetSync().setPinValueUpdated(ctx, updated); err != nil {
+		return &output, status.Errorf(codes.Internal, "setPinValueUpdated: %v", err)
 	}
 
 	output.Bool = true
@@ -480,61 +292,7 @@ func (s *PinService) SetValueByName(ctx context.Context, in *pb.PinNameValue) (*
 	return &output, nil
 }
 
-func (s *PinService) getPinValue(ctx context.Context, id string) (string, error) {
-	item2, err := s.getPinValueUpdated(ctx, id)
-	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				return "", nil
-			}
-		}
-
-		return "", err
-	}
-
-	return item2.Value, nil
-}
-
-func (s *PinService) afterUpdateValue(ctx context.Context, _ *model.Pin, _ string) error {
-	var err error
-
-	err = s.es.GetSync().setPinValueUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setPinValueUpdated: %v", err)
-	}
-
-	return nil
-}
-
-// sync value
-
-func (s *PinService) ViewValue(ctx context.Context, in *pb.Id) (*pb.PinValueUpdated, error) {
-	var output pb.PinValueUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-	}
-
-	item, err := s.getPinValueUpdated(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutputPinValue(&output, &item)
-
-	return &output, nil
-}
-
 func (s *PinService) DeleteValue(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var err error
 	var output pb.MyBool
 
 	// basic validation
@@ -548,29 +306,9 @@ func (s *PinService) DeleteValue(ctx context.Context, in *pb.Id) (*pb.MyBool, er
 		}
 	}
 
-	item, err := s.getPinValueUpdated(ctx, in.Id)
+	err := s.es.GetStorage().DeletePinValue(ctx, in.Id)
 	if err != nil {
-		return &output, err
-	}
-
-	idb, err := nson.IdFromHex(item.ID)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "IdFromHex: %v", err)
-	}
-
-	ts := uint64(time.Now().UnixMicro())
-
-	txn := s.es.GetBadgerDB().NewTransactionAt(ts, true)
-	defer txn.Discard()
-
-	err = txn.Delete(append([]byte(model.PIN_VALUE_PREFIX), idb...))
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "BadgerDB Delete: %v", err)
-	}
-
-	err = txn.CommitAt(ts, nil)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "BadgerDB CommitAt: %v", err)
+		return &output, status.Errorf(codes.Internal, "DeletePinValue: %v", err)
 	}
 
 	output.Bool = true
@@ -578,63 +316,34 @@ func (s *PinService) DeleteValue(ctx context.Context, in *pb.Id) (*pb.MyBool, er
 	return &output, nil
 }
 
-func (s *PinService) PullValue(in *edges.PinPullValueRequest, stream grpc.ServerStreamingServer[pb.PinValueUpdated]) error {
+func (s *PinService) PullValue(in *edges.PinPullValueRequest, stream grpc.ServerStreamingServer[pb.PinValue]) error {
 	// basic validation
 	if in == nil {
 		return status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
-	items := make([]model.PinValue, 0, 10)
-
-	{
-		after := time.UnixMicro(in.After)
-
-		txn := s.es.GetBadgerDB().NewTransactionAt(uint64(time.Now().UnixMicro()), false)
-		defer txn.Discard()
-
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchSize = 10
-		opts.SinceTs = uint64(in.After)
-
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		prefix := []byte(model.PIN_VALUE_PREFIX)
-
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			dbitem := it.Item()
-
-			item := model.PinValue{}
-			err := dbitem.Value(func(val []byte) error {
-				return json.Unmarshal(val, &item)
-			})
-			if err != nil {
-				return status.Errorf(codes.Internal, "BadgerDB view value: %v", err)
-			}
-
-			if !item.Updated.After(after) {
-				continue
-			}
-
-			if in.WireId != "" && in.WireId != item.WireID {
-				continue
-			}
-
-			items = append(items, item)
-		}
-
-		sort.Slice(items, func(i, j int) bool {
-			return items[i].Updated.Before(items[j].Updated)
-		})
-
-		if len(items) > int(in.Limit) {
-			items = items[0:in.Limit]
-		}
+	after := time.UnixMicro(in.After)
+	limit := int(in.Limit)
+	if limit <= 0 {
+		limit = 100
 	}
 
-	for i := range items {
-		item := pb.PinValueUpdated{}
-		s.copyModelToOutputPinValue(&item, &items[i])
+	entries, err := s.es.GetStorage().ListPinValues(after, limit)
+	if err != nil {
+		return status.Errorf(codes.Internal, "ListPinValues: %v", err)
+	}
+
+	// 按更新时间排序
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Updated.Before(entries[j].Updated)
+	})
+
+	for _, entry := range entries {
+		item := pb.PinValue{
+			Id:      entry.ID,
+			Value:   entry.Value,
+			Updated: entry.Updated.UnixMicro(),
+		}
 
 		if err := stream.Send(&item); err != nil {
 			return err
@@ -644,133 +353,9 @@ func (s *PinService) PullValue(in *edges.PinPullValueRequest, stream grpc.Server
 	return nil
 }
 
-func (s *PinService) setPinValueUpdated(_ context.Context, item *model.Pin, value string, updated time.Time) error {
-	item2 := model.PinValue{
-		ID:      item.ID,
-		WireID:  item.WireID,
-		Value:   value,
-		Updated: updated,
-	}
-
-	idb, err := nson.IdFromHex(item.ID)
-	if err != nil {
-		return status.Errorf(codes.Internal, "IdFromHex: %v", err)
-	}
-
-	data, err := json.Marshal(item2)
-	if err != nil {
-		return status.Errorf(codes.Internal, "json.Marshal: %v", err)
-	}
-
-	{
-		ts := uint64(updated.UnixMicro())
-
-		txn := s.es.GetBadgerDB().NewTransactionAt(ts, true)
-		defer txn.Discard()
-
-		err = txn.Set(append([]byte(model.PIN_VALUE_PREFIX), idb...), data)
-		if err != nil {
-			return status.Errorf(codes.Internal, "BadgerDB Set: %v", err)
-		}
-
-		err = txn.CommitAt(ts, nil)
-		if err != nil {
-			return status.Errorf(codes.Internal, "BadgerDB CommitAt: %v", err)
-		}
-	}
-
-	return nil
-}
-
-func (s *PinService) getPinValueUpdated(_ context.Context, id string) (model.PinValue, error) {
-	item := model.PinValue{
-		ID: id,
-	}
-
-	idb, err := nson.IdFromHex(item.ID)
-	if err != nil {
-		return item, status.Errorf(codes.Internal, "IdFromHex: %v", err)
-	}
-
-	txn := s.es.GetBadgerDB().NewTransactionAt(uint64(time.Now().UnixMicro()), false)
-	defer txn.Discard()
-
-	dbitem, err := txn.Get(append([]byte(model.PIN_VALUE_PREFIX), idb...))
-	if err != nil {
-		if err == badger.ErrKeyNotFound {
-			return item, status.Errorf(codes.NotFound, "Pin.ID: %v", item.ID)
-		}
-		return item, status.Errorf(codes.Internal, "BadgerDB Get: %v", err)
-	}
-
-	err = dbitem.Value(func(val []byte) error {
-		return json.Unmarshal(val, &item)
-	})
-	if err != nil {
-		return item, status.Errorf(codes.Internal, "BadgerDB Get Value: %v", err)
-	}
-
-	return item, nil
-}
-
-func (s *PinService) copyModelToOutputPinValue(output *pb.PinValueUpdated, item *model.PinValue) {
-	output.Id = item.ID
-	output.WireId = item.WireID
-	output.Value = item.Value
-	output.Updated = item.Updated.UnixMicro()
-}
-
-// listPinValues 从 BadgerDB 读取指定时间戳之后的 PinValue 数据
-func (s *PinService) listPinValues(_ context.Context, after int64, limit uint32) ([]model.PinValue, error) {
-	items := make([]model.PinValue, 0, 10)
-
-	afterTime := time.UnixMicro(after)
-
-	txn := s.es.GetBadgerDB().NewTransactionAt(uint64(time.Now().UnixMicro()), false)
-	defer txn.Discard()
-
-	opts := badger.DefaultIteratorOptions
-	opts.PrefetchSize = 10
-	opts.SinceTs = uint64(after)
-
-	it := txn.NewIterator(opts)
-	defer it.Close()
-
-	prefix := []byte(model.PIN_VALUE_PREFIX)
-
-	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-		dbitem := it.Item()
-
-		item := model.PinValue{}
-		err := dbitem.Value(func(val []byte) error {
-			return json.Unmarshal(val, &item)
-		})
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "BadgerDB view value: %v", err)
-		}
-
-		if !item.Updated.After(afterTime) {
-			continue
-		}
-
-		items = append(items, item)
-	}
-
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Updated.Before(items[j].Updated)
-	})
-
-	if len(items) > int(limit) {
-		items = items[0:limit]
-	}
-
-	return items, nil
-}
-
-// write
+// --- PinWriteService ---
 
 func (s *PinService) GetWrite(ctx context.Context, in *pb.Id) (*pb.PinValue, error) {
-	var err error
 	var output pb.PinValue
 
 	// basic validation
@@ -784,73 +369,19 @@ func (s *PinService) GetWrite(ctx context.Context, in *pb.Id) (*pb.PinValue, err
 		}
 	}
 
+	value, updated, err := s.es.GetStorage().GetPinWrite(in.Id)
+	if err != nil {
+		return &output, status.Errorf(codes.NotFound, "PinWrite not found: %v", err)
+	}
+
 	output.Id = in.Id
-
-	item2, err := s.getPinWriteUpdated(ctx, in.Id)
-	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				return &output, nil
-			}
-		}
-
-		return &output, err
-	}
-
-	output.Value = item2.Value
-	output.Updated = item2.Updated.UnixMicro()
-
-	return &output, nil
-}
-
-func (s *PinService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-
-		if in.Value == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value")
-		}
-	}
-
-	// pin
-	item, err := s.ViewByID(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	if item.Rw != consts.WRITE {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
-	}
-
-	if !dt.ValidateValue(in.Value, item.Type) {
-		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
-	}
-
-	if err = s.setPinWriteUpdated(ctx, &item, in.Value, time.Now()); err != nil {
-		return &output, err
-	}
-
-	if err = s.afterUpdateWrite(ctx, &item, in.Value); err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
+	output.Value = value
+	output.Updated = updated.UnixMicro()
 
 	return &output, nil
 }
 
 func (s *PinService) GetWriteByName(ctx context.Context, in *pb.Name) (*pb.PinNameValue, error) {
-	var err error
 	var output pb.PinNameValue
 
 	// basic validation
@@ -864,181 +395,26 @@ func (s *PinService) GetWriteByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.Name)
+	pin, err := s.es.GetStorage().GetPinByName(in.Name)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	output.Id = item.ID
 	output.Name = in.Name
 
-	item2, err := s.getPinWriteUpdated(ctx, item.ID)
+	value, updated, err := s.es.GetStorage().GetPinWrite(pin.ID)
 	if err != nil {
-		if code, ok := status.FromError(err); ok {
-			if code.Code() == codes.NotFound {
-				return &output, nil
-			}
-		}
-
-		return &output, err
+		// 没有值也返回成功
+		return &output, nil
 	}
 
-	output.Value = item2.Value
-	output.Updated = item2.Updated.UnixMicro()
+	output.Value = value
+	output.Updated = updated.UnixMicro()
 
 	return &output, nil
 }
 
-func (s *PinService) SetWriteByName(ctx context.Context, in *pb.PinNameValue) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
-		}
-
-		if in.Value == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value")
-		}
-	}
-
-	// name
-	wireName := consts.DEFAULT_WIRE
-	itemName := in.Name
-
-	if strings.Contains(itemName, ".") {
-		splits := strings.Split(itemName, ".")
-		if len(splits) != 2 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Name")
-		}
-
-		wireName = splits[0]
-		itemName = splits[1]
-	}
-
-	// wire
-	wire, err := s.es.GetWire().ViewByName(ctx, wireName)
-	if err != nil {
-		return &output, err
-	}
-
-	// pin
-	item, err := s.ViewByWireIDAndName(ctx, wire.ID, itemName)
-	if err != nil {
-		return &output, err
-	}
-
-	if item.Rw != consts.WRITE {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
-	}
-
-	if !dt.ValidateValue(in.Value, item.Type) {
-		return &output, status.Errorf(codes.InvalidArgument, "Please supply valid Pin.Value")
-	}
-
-	if err = s.setPinWriteUpdated(ctx, &item, in.Value, time.Now()); err != nil {
-		return &output, err
-	}
-
-	if err = s.afterUpdateWrite(ctx, &item, in.Value); err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
-func (s *PinService) afterUpdateWrite(ctx context.Context, _ *model.Pin, _ string) error {
-	var err error
-
-	err = s.es.GetSync().setPinWriteUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setPinWriteUpdated: %v", err)
-	}
-
-	return nil
-}
-
-// sync value
-
-func (s *PinService) ViewWrite(ctx context.Context, in *pb.Id) (*pb.PinValueUpdated, error) {
-	var output pb.PinValueUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-	}
-
-	item, err := s.getPinWriteUpdated(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutputPinValue(&output, &item)
-
-	return &output, nil
-}
-
-func (s *PinService) DeleteWrite(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var err error
-	var output pb.MyBool
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-	}
-
-	item, err := s.getPinWriteUpdated(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	idb, err := nson.IdFromHex(item.ID)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "IdFromHex: %v", err)
-	}
-
-	ts := uint64(time.Now().UnixMicro())
-
-	txn := s.es.GetBadgerDB().NewTransactionAt(ts, true)
-	defer txn.Discard()
-
-	err = txn.Delete(append([]byte(model.PIN_WRITE_PREFIX), idb...))
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "BadgerDB Delete: %v", err)
-	}
-
-	err = txn.CommitAt(ts, nil)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "BadgerDB CommitAt: %v", err)
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
-func (s *PinService) PushWrite(stream grpc.ClientStreamingServer[pb.PinValueUpdated, pb.MyBool]) error {
+func (s *PinService) PushWrite(stream grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]) error {
 	var output pb.MyBool
 	ctx := stream.Context()
 
@@ -1056,88 +432,53 @@ func (s *PinService) PushWrite(stream grpc.ClientStreamingServer[pb.PinValueUpda
 			return status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 		}
 
-		// get pin
-		item, err := s.ViewByID(ctx, in.Id)
+		// 验证 Pin 存在
+		pin, err := s.es.GetStorage().GetPinByID(in.Id)
 		if err != nil {
-			return err
+			return status.Errorf(codes.NotFound, "Pin not found: %v", err)
 		}
 
-		// set write value
-		if err = s.setPinWriteUpdated(ctx, &item, in.Value, time.UnixMicro(in.Updated)); err != nil {
-			return err
+		// 检查可写性
+		if pin.Rw&consts.WRITE == 0 {
+			return status.Error(codes.PermissionDenied, "Pin is not writable")
 		}
 
-		if err = s.afterUpdateWrite(ctx, &item, in.Value); err != nil {
+		updated := time.UnixMicro(in.Updated)
+		if in.Updated == 0 {
+			updated = time.Now()
+		}
+
+		// 设置写入值
+		err = s.es.GetStorage().SetPinWrite(ctx, in.Id, in.Value, updated)
+		if err != nil {
+			return status.Errorf(codes.Internal, "SetPinWrite: %v", err)
+		}
+
+		// 更新同步时间戳
+		if err = s.es.GetSync().setPinWriteUpdated(ctx, updated); err != nil {
+			return status.Errorf(codes.Internal, "setPinWriteUpdated: %v", err)
+		}
+
+		// 触发写入回调（如果有）
+		if err = s.afterUpdateWrite(ctx, pin, in.Value); err != nil {
 			return err
 		}
 	}
 }
 
-func (s *PinService) setPinWriteUpdated(_ context.Context, item *model.Pin, value string, updated time.Time) error {
-	item2 := model.PinValue{
-		ID:      item.ID,
-		WireID:  item.WireID,
-		Value:   value,
-		Updated: updated,
-	}
-
-	idb, err := nson.IdFromHex(item.ID)
-	if err != nil {
-		return status.Errorf(codes.Internal, "IdFromHex: %v", err)
-	}
-
-	data, err := json.Marshal(item2)
-	if err != nil {
-		return status.Errorf(codes.Internal, "json.Marshal: %v", err)
-	}
-
-	{
-		ts := uint64(updated.UnixMicro())
-
-		txn := s.es.GetBadgerDB().NewTransactionAt(ts, true)
-		defer txn.Discard()
-
-		err = txn.Set(append([]byte(model.PIN_WRITE_PREFIX), idb...), data)
-		if err != nil {
-			return status.Errorf(codes.Internal, "BadgerDB Set: %v", err)
-		}
-
-		err = txn.CommitAt(ts, nil)
-		if err != nil {
-			return status.Errorf(codes.Internal, "BadgerDB CommitAt: %v", err)
-		}
-	}
-
+func (s *PinService) afterUpdateWrite(ctx context.Context, pin *storage.Pin, value string) error {
+	// 可以在这里添加写入后的回调逻辑
+	// 例如：通知驱动程序执行实际写入操作
 	return nil
 }
 
-func (s *PinService) getPinWriteUpdated(_ context.Context, id string) (model.PinValue, error) {
-	item := model.PinValue{
-		ID: id,
+// --- 辅助方法 ---
+
+// ParsePinName 解析 Pin 名称，支持 "wire.pin" 格式
+func ParsePinName(name string) (wireName, pinName string, ok bool) {
+	parts := strings.Split(name, ".")
+	if len(parts) == 2 {
+		return parts[0], parts[1], true
 	}
-
-	idb, err := nson.IdFromHex(item.ID)
-	if err != nil {
-		return item, status.Errorf(codes.Internal, "IdFromHex: %v", err)
-	}
-
-	txn := s.es.GetBadgerDB().NewTransactionAt(uint64(time.Now().UnixMicro()), false)
-	defer txn.Discard()
-
-	dbitem, err := txn.Get(append([]byte(model.PIN_WRITE_PREFIX), idb...))
-	if err != nil {
-		if err == badger.ErrKeyNotFound {
-			return item, status.Errorf(codes.NotFound, "Pin.ID: %v", item.ID)
-		}
-		return item, status.Errorf(codes.Internal, "BadgerDB Get: %v", err)
-	}
-
-	err = dbitem.Value(func(val []byte) error {
-		return json.Unmarshal(val, &item)
-	})
-	if err != nil {
-		return item, status.Errorf(codes.Internal, "BadgerDB Get Value: %v", err)
-	}
-
-	return item, nil
+	return "", name, false
 }

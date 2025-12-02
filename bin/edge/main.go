@@ -16,11 +16,9 @@ import (
 	"github.com/snple/beacon"
 	"github.com/snple/beacon/bin/edge/config"
 	"github.com/snple/beacon/bin/edge/log"
-	"github.com/snple/beacon/db"
 	"github.com/snple/beacon/edge"
 	"github.com/snple/beacon/util"
 	"github.com/snple/beacon/util/compress/zstd"
-	"github.com/uptrace/bun"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -44,16 +42,14 @@ func main() {
 	log.Logger.Info("main: Started")
 	defer log.Logger.Info("main: Completed")
 
-	bundb, err := db.ConnectSqlite(config.Config.DB.File, config.Config.DB.Debug)
+	badgerOpts := badger.DefaultOptions(config.Config.DB.File)
+	badgerOpts.Logger = nil
+	db, err := badger.Open(badgerOpts)
 	if err != nil {
-		log.Logger.Sugar().Fatalf("connecting to db: %v", err)
+		log.Logger.Sugar().Fatalf("opening badger db: %v", err)
 	}
 
-	defer bundb.Close()
-
-	if err = edge.CreateSchema(bundb); err != nil {
-		log.Logger.Sugar().Fatalf("create schema: %v", err)
-	}
+	defer db.Close()
 
 	command := flag.Arg(0)
 	switch command {
@@ -66,7 +62,7 @@ func main() {
 
 		// the seed of edge need to be executed manually
 		// must provide the node name
-		if err := edge.Seed(bundb, nodeName); err != nil {
+		if err := edge.Seed(db, nodeName); err != nil {
 			log.Logger.Sugar().Fatalf("seed: %v", err)
 		}
 
@@ -74,7 +70,7 @@ func main() {
 
 		return
 	case "pull", "push":
-		if err := cli(command, bundb); err != nil {
+		if err := cli(command, db); err != nil {
 			log.Logger.Sugar().Errorf("error: shutting down: %s", err)
 		}
 
@@ -94,15 +90,7 @@ func main() {
 			Realtime:     config.Config.Sync.Realtime,
 		}))
 
-		badgerOptions := func() badger.Options {
-			if config.Config.BadgerDB.InMemory {
-				return badger.DefaultOptions("").WithInMemory(true)
-			}
-
-			return badger.DefaultOptions(config.Config.BadgerDB.Path)
-		}()
-
-		edgeOpts = append(edgeOpts, edge.WithBadger(badgerOptions))
+		edgeOpts = append(edgeOpts, edge.WithBadger(badgerOpts))
 	}
 
 	if config.Config.NodeClient.Enable {
@@ -141,7 +129,7 @@ func main() {
 		}))
 	}
 
-	es, err := edge.Edge(bundb, edgeOpts...)
+	es, err := edge.Edge(edgeOpts...)
 	if err != nil {
 		log.Logger.Sugar().Fatalf("NewEdgeService: %v", err)
 	}
@@ -191,12 +179,16 @@ func main() {
 	<-signalCh
 }
 
-func cli(command string, bundb *bun.DB) error {
+func cli(command string, db *badger.DB) error {
 	log.Logger.Sugar().Infof("cli %v: Started", command)
 	defer log.Logger.Sugar().Infof("cli %v : Completed", command)
 
 	edgeOpts := make([]edge.EdgeOption, 0)
 	edgeOpts = append(edgeOpts, edge.WithNodeID(config.Config.NodeID, config.Config.Secret))
+
+	badgerOpts := badger.DefaultOptions(config.Config.DB.File)
+	badgerOpts.Logger = nil
+	edgeOpts = append(edgeOpts, edge.WithBadger(badgerOpts))
 
 	{
 		kacp := keepalive.ClientParameters{
@@ -233,7 +225,7 @@ func cli(command string, bundb *bun.DB) error {
 		}))
 	}
 
-	es, err := edge.Edge(bundb, edgeOpts...)
+	es, err := edge.Edge(edgeOpts...)
 	if err != nil {
 		log.Logger.Sugar().Fatalf("NewEdgeService: %v", err)
 	}

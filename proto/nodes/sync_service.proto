@@ -11,15 +11,12 @@ message SyncUpdated {
 }
 
 service SyncService {
-    rpc SetNodeUpdated(SyncUpdated) returns (pb.MyBool) {}
     rpc GetNodeUpdated(pb.MyEmpty) returns (SyncUpdated) {}
     rpc WaitNodeUpdated(pb.MyEmpty) returns (stream pb.MyBool) {}
 
-    rpc SetPinValueUpdated(SyncUpdated) returns (pb.MyBool) {}
     rpc GetPinValueUpdated(pb.MyEmpty) returns (SyncUpdated) {}
     rpc WaitPinValueUpdated(pb.MyEmpty) returns (stream pb.MyBool) {}
 
-    rpc SetPinWriteUpdated(SyncUpdated) returns (pb.MyBool) {}
     rpc GetPinWriteUpdated(pb.MyEmpty) returns (SyncUpdated) {}
     rpc WaitPinWriteUpdated(pb.MyEmpty) returns (stream pb.MyBool) {}
 }

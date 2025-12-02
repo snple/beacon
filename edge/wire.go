@@ -2,13 +2,10 @@ package edge
 
 import (
 	"context"
-	"database/sql"
-	"time"
 
-	"github.com/snple/beacon/edge/model"
+	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
-	"github.com/snple/types/cache"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -16,21 +13,17 @@ import (
 type WireService struct {
 	es *EdgeService
 
-	cache *cache.Cache[string, model.Wire]
-
 	edges.UnimplementedWireServiceServer
 }
 
 func newWireService(es *EdgeService) *WireService {
 	return &WireService{
-		es:    es,
-		cache: cache.NewCache[string, model.Wire](nil),
+		es: es,
 	}
 }
 
 func (s *WireService) View(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
 	var output pb.Wire
-	var err error
 
 	// basic validation
 	{
@@ -43,19 +36,18 @@ func (s *WireService) View(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
 		}
 	}
 
-	item, err := s.ViewByID(ctx, in.Id)
+	wire, err := s.es.GetStorage().GetWireByID(in.Id)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Wire not found: %v", err)
 	}
 
-	s.copyModelToOutput(&output, &item)
+	s.copyModelToOutput(&output, wire)
 
 	return &output, nil
 }
 
 func (s *WireService) Name(ctx context.Context, in *pb.Name) (*pb.Wire, error) {
 	var output pb.Wire
-	var err error
 
 	// basic validation
 	{
@@ -68,18 +60,17 @@ func (s *WireService) Name(ctx context.Context, in *pb.Name) (*pb.Wire, error) {
 		}
 	}
 
-	item, err := s.ViewByName(ctx, in.Name)
+	wire, err := s.es.GetStorage().GetWireByName(in.Name)
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Wire not found: %v", err)
 	}
 
-	s.copyModelToOutput(&output, &item)
+	s.copyModelToOutput(&output, wire)
 
 	return &output, nil
 }
 
-func (s *WireService) List(ctx context.Context, in *edges.WireListRequest) (*edges.WireListResponse, error) {
-	var err error
+func (s *WireService) List(ctx context.Context, in *pb.MyEmpty) (*edges.WireListResponse, error) {
 	var output edges.WireListResponse
 
 	// basic validation
@@ -89,144 +80,52 @@ func (s *WireService) List(ctx context.Context, in *edges.WireListRequest) (*edg
 		}
 	}
 
-	defaultPage := pb.Page{
-		Limit:  10,
-		Offset: 0,
-	}
+	wires := s.es.GetStorage().ListWires()
 
-	if in.GetPage() == nil {
-		in.Page = &defaultPage
-	}
-
-	output.Page = in.GetPage()
-
-	var items []model.Wire
-
-	query := s.es.GetDB().NewSelect().Model(&items).Order("id ASC")
-
-	count, err := query.Offset(int(in.GetPage().GetOffset())).Limit(int(in.GetPage().GetLimit())).ScanAndCount(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	output.Count = uint32(count)
-
-	for i := range items {
+	for _, wire := range wires {
 		item := pb.Wire{}
-
-		s.copyModelToOutput(&item, &items[i])
-
+		s.copyModelToOutput(&item, wire)
 		output.Wires = append(output.Wires, &item)
 	}
 
 	return &output, nil
 }
 
-func (s *WireService) ViewByID(ctx context.Context, id string) (model.Wire, error) {
-	item := model.Wire{
-		ID: id,
-	}
-
-	err := s.es.GetDB().NewSelect().Model(&item).WherePK().Scan(ctx)
+func (s *WireService) ViewByID(ctx context.Context, id string) (*storage.Wire, error) {
+	wire, err := s.es.GetStorage().GetWireByID(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v, Wire.ID: %v", err, item.ID)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
+		return nil, status.Errorf(codes.NotFound, "Wire not found: %v", err)
 	}
 
-	return item, nil
+	return wire, nil
 }
 
-func (s *WireService) ViewByName(ctx context.Context, name string) (model.Wire, error) {
-	item := model.Wire{
-		Name: name,
-	}
-
-	err := s.es.GetDB().NewSelect().Model(&item).Where("name = ?", name).Scan(ctx)
+func (s *WireService) ViewByName(ctx context.Context, name string) (*storage.Wire, error) {
+	wire, err := s.es.GetStorage().GetWireByName(name)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v, Wire.Name: %v", err, name)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
+		return nil, status.Errorf(codes.NotFound, "Wire not found: %v", err)
 	}
 
-	return item, nil
+	return wire, nil
 }
 
-func (s *WireService) copyModelToOutput(output *pb.Wire, item *model.Wire) {
-	output.Id = item.ID
-	output.Name = item.Name
-	output.Type = item.Type
-	output.Tags = item.Tags
-	output.Clusters = item.Clusters
-	output.Updated = item.Updated.UnixMicro()
-}
+func (s *WireService) copyModelToOutput(output *pb.Wire, wire *storage.Wire) {
+	output.Id = wire.ID
+	output.Name = wire.Name
+	output.Type = wire.Type
+	output.Tags = wire.Tags
+	output.Clusters = wire.Clusters
 
-func (s *WireService) afterUpdate(ctx context.Context, _ *model.Wire) error {
-	var err error
-
-	err = s.es.GetSync().setNodeUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
+	// 复制 Pins
+	for i := range wire.Pins {
+		pin := &wire.Pins[i]
+		output.Pins = append(output.Pins, &pb.Pin{
+			Id:   pin.ID,
+			Name: pin.Name,
+			Addr: pin.Addr,
+			Type: pin.Type,
+			Rw:   pin.Rw,
+			Tags: pin.Tags,
+		})
 	}
-
-	return nil
-}
-
-func (s *WireService) afterDelete(ctx context.Context, _ *model.Wire) error {
-	var err error
-
-	err = s.es.GetSync().setNodeUpdated(ctx, time.Now())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
-	}
-
-	return nil
-}
-
-// sync
-
-func (s *WireService) ViewWithDeleted(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
-	var output pb.Wire
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
-		}
-	}
-
-	item, err := s.viewWithDeleted(ctx, in.Id)
-	if err != nil {
-		return &output, err
-	}
-
-	s.copyModelToOutput(&output, &item)
-
-	return &output, nil
-}
-
-func (s *WireService) viewWithDeleted(ctx context.Context, id string) (model.Wire, error) {
-	item := model.Wire{
-		ID: id,
-	}
-
-	err := s.es.GetDB().NewSelect().Model(&item).WherePK().WhereAllWithDeleted().Scan(ctx)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v, Wire.ID: %v", err, item.ID)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
-	}
-
-	return item, nil
 }

@@ -2,120 +2,118 @@ package edge
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/device"
-	"github.com/snple/beacon/edge/model"
+	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/util"
-	"github.com/uptrace/bun"
 )
 
-func Seed(db *bun.DB, nodeName string) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-
-	if err = seed(tx, nodeName); err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	return tx.Commit()
-}
-
-func seed(db bun.Tx, nodeName string) error {
-	var err error
+func Seed(db *badger.DB, nodeName string) error {
 	ctx := context.Background()
+	store := storage.New(db)
 
 	// 初始化 Node
 	{
-		seedNode := func() error {
-			node := model.Node{
-				ID:      util.RandomID(),
-				Name:    nodeName,
-				Updated: time.Now(),
-			}
-
-			_, err = db.NewInsert().Model(&node).Exec(ctx)
-			if err != nil {
-				return err
-			}
-
-			fmt.Printf("seed: the initial node created: %v\n", node.ID)
-
-			return nil
-		}
-
 		// check if node already exists
-		// if not, create it
-		err = db.NewSelect().Model(&model.Node{}).Scan(ctx)
+		_, err := store.GetNode()
 		if err != nil {
-			if err == sql.ErrNoRows {
-				if err = seedNode(); err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		}
-	}
-
-	// 初始化默认的 root Wire（使用 device.Initializer）
-	// 注意：实际项目中应该使用配置文件来定义设备
-	{
-		seedRootWire := func() error {
+			// Node not exists, create it
 			// 使用 device.BuildRootWire() 创建 root Wire
 			result := device.BuildRootWire()
 
-			result.Wire.ID = util.RandomID()
-			result.Wire.Updated = time.Now()
-
-			// 插入 Wire
-			_, err = db.NewInsert().Model(result.Wire).Exec(ctx)
-			if err != nil {
-				return err
-			}
-
-			// 插入 Pin
-			for _, pin := range result.Pins {
-				pin.ID = util.RandomID()
-				pin.WireID = result.Wire.ID
-				pin.Updated = time.Now()
-
+			// 构建 Pins
+			pins := make([]storage.Pin, 0, len(result.Pins))
+			for _, builderPin := range result.Pins {
 				// 从 Cluster 获取 Pin 的 Type
+				pinType := builderPin.Type
 				cluster := device.GetCluster("BasicInformation")
 				if cluster != nil {
-					if tpl := cluster.GetPinTemplate(pin.Name); tpl != nil {
-						pin.Type = tpl.Type
+					if tpl := cluster.GetPinTemplate(builderPin.Name); tpl != nil {
+						pinType = tpl.Type
 					}
 				}
 
-				_, err = db.NewInsert().Model(pin).Exec(ctx)
-				if err != nil {
-					return err
+				pin := storage.Pin{
+					ID:   util.RandomID(),
+					Name: builderPin.Name,
+					Addr: builderPin.Addr,
+					Type: pinType,
+					Rw:   builderPin.Rw,
 				}
+				pins = append(pins, pin)
 			}
 
-			fmt.Printf("seed: the root wire created with %d pins\n", len(result.Pins))
+			// 构建 Wire
+			wire := storage.Wire{
+				ID:       util.RandomID(),
+				Name:     result.Wire.Name,
+				Type:     result.Wire.Type,
+				Clusters: parseClusterString(result.Wire.Clusters),
+				Pins:     pins,
+			}
 
-			return nil
-		}
+			// 构建 Node
+			node := &storage.Node{
+				ID:      util.RandomID(),
+				Name:    nodeName,
+				Updated: time.Now(),
+				Wires:   []storage.Wire{wire},
+			}
 
-		// 检查 root Wire 是否已存在
-		err = db.NewSelect().Model(&model.Wire{}).Where("name = ?", "root").Scan(ctx)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				if err = seedRootWire(); err != nil {
-					return err
-				}
-			} else {
+			if err := store.SetNode(ctx, node); err != nil {
 				return err
 			}
+
+			fmt.Printf("seed: the initial node created: %v with %d wires and %d pins\n",
+				node.ID, len(node.Wires), len(pins))
 		}
 	}
 
 	return nil
+}
+
+// parseClusterString 将逗号分隔的字符串解析为数组
+func parseClusterString(s string) []string {
+	if s == "" {
+		return nil
+	}
+	result := make([]string, 0)
+	for _, part := range splitString(s, ",") {
+		part = trimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func splitString(s, sep string) []string {
+	if s == "" {
+		return nil
+	}
+	result := make([]string, 0)
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep[0] {
+			result = append(result, s[start:i])
+			start = i + 1
+		}
+	}
+	result = append(result, s[start:])
+	return result
+}
+
+func trimSpace(s string) string {
+	start := 0
+	end := len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
+		end--
+	}
+	return s[start:end]
 }

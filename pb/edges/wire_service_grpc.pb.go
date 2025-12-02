@@ -28,10 +28,15 @@ const (
 // WireServiceClient is the client API for WireService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// WireService Edge 端通道服务
 type WireServiceClient interface {
+	// View 按 ID 获取 Wire
 	View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Wire, error)
+	// Name 按名称获取 Wire
 	Name(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Wire, error)
-	List(ctx context.Context, in *WireListRequest, opts ...grpc.CallOption) (*WireListResponse, error)
+	// List 获取所有 Wire
+	List(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*WireListResponse, error)
 }
 
 type wireServiceClient struct {
@@ -62,7 +67,7 @@ func (c *wireServiceClient) Name(ctx context.Context, in *pb.Name, opts ...grpc.
 	return out, nil
 }
 
-func (c *wireServiceClient) List(ctx context.Context, in *WireListRequest, opts ...grpc.CallOption) (*WireListResponse, error) {
+func (c *wireServiceClient) List(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*WireListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(WireListResponse)
 	err := c.cc.Invoke(ctx, WireService_List_FullMethodName, in, out, cOpts...)
@@ -75,10 +80,15 @@ func (c *wireServiceClient) List(ctx context.Context, in *WireListRequest, opts 
 // WireServiceServer is the server API for WireService service.
 // All implementations must embed UnimplementedWireServiceServer
 // for forward compatibility.
+//
+// WireService Edge 端通道服务
 type WireServiceServer interface {
+	// View 按 ID 获取 Wire
 	View(context.Context, *pb.Id) (*pb.Wire, error)
+	// Name 按名称获取 Wire
 	Name(context.Context, *pb.Name) (*pb.Wire, error)
-	List(context.Context, *WireListRequest) (*WireListResponse, error)
+	// List 获取所有 Wire
+	List(context.Context, *pb.MyEmpty) (*WireListResponse, error)
 	mustEmbedUnimplementedWireServiceServer()
 }
 
@@ -95,7 +105,7 @@ func (UnimplementedWireServiceServer) View(context.Context, *pb.Id) (*pb.Wire, e
 func (UnimplementedWireServiceServer) Name(context.Context, *pb.Name) (*pb.Wire, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Name not implemented")
 }
-func (UnimplementedWireServiceServer) List(context.Context, *WireListRequest) (*WireListResponse, error) {
+func (UnimplementedWireServiceServer) List(context.Context, *pb.MyEmpty) (*WireListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
 }
 func (UnimplementedWireServiceServer) mustEmbedUnimplementedWireServiceServer() {}
@@ -156,7 +166,7 @@ func _WireService_Name_Handler(srv interface{}, ctx context.Context, dec func(in
 }
 
 func _WireService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WireListRequest)
+	in := new(pb.MyEmpty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -168,7 +178,7 @@ func _WireService_List_Handler(srv interface{}, ctx context.Context, dec func(in
 		FullMethod: WireService_List_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WireServiceServer).List(ctx, req.(*WireListRequest))
+		return srv.(WireServiceServer).List(ctx, req.(*pb.MyEmpty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -198,40 +208,23 @@ var WireService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	PinService_View_FullMethodName           = "/edges.PinService/View"
-	PinService_Name_FullMethodName           = "/edges.PinService/Name"
-	PinService_List_FullMethodName           = "/edges.PinService/List"
-	PinService_GetValue_FullMethodName       = "/edges.PinService/GetValue"
-	PinService_SetValue_FullMethodName       = "/edges.PinService/SetValue"
-	PinService_GetValueByName_FullMethodName = "/edges.PinService/GetValueByName"
-	PinService_SetValueByName_FullMethodName = "/edges.PinService/SetValueByName"
-	PinService_ViewValue_FullMethodName      = "/edges.PinService/ViewValue"
-	PinService_DeleteValue_FullMethodName    = "/edges.PinService/DeleteValue"
-	PinService_PullValue_FullMethodName      = "/edges.PinService/PullValue"
-	PinService_GetWrite_FullMethodName       = "/edges.PinService/GetWrite"
-	PinService_GetWriteByName_FullMethodName = "/edges.PinService/GetWriteByName"
-	PinService_ViewWrite_FullMethodName      = "/edges.PinService/ViewWrite"
-	PinService_PushWrite_FullMethodName      = "/edges.PinService/PushWrite"
+	PinService_View_FullMethodName = "/edges.PinService/View"
+	PinService_Name_FullMethodName = "/edges.PinService/Name"
+	PinService_List_FullMethodName = "/edges.PinService/List"
 )
 
 // PinServiceClient is the client API for PinService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PinService Edge 端点位服务
 type PinServiceClient interface {
+	// View 按 ID 获取 Pin
 	View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Pin, error)
+	// Name 按名称获取 Pin（支持 WireName.PinName）
 	Name(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Pin, error)
+	// List 获取 Pin 列表
 	List(ctx context.Context, in *PinListRequest, opts ...grpc.CallOption) (*PinListResponse, error)
-	GetValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error)
-	SetValue(ctx context.Context, in *pb.PinValue, opts ...grpc.CallOption) (*pb.MyBool, error)
-	GetValueByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error)
-	SetValueByName(ctx context.Context, in *pb.PinNameValue, opts ...grpc.CallOption) (*pb.MyBool, error)
-	ViewValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValueUpdated, error)
-	DeleteValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
-	PullValue(ctx context.Context, in *PinPullValueRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[pb.PinValueUpdated], error)
-	GetWrite(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error)
-	GetWriteByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error)
-	ViewWrite(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValueUpdated, error)
-	PushWrite(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[pb.PinValueUpdated, pb.MyBool], error)
 }
 
 type pinServiceClient struct {
@@ -272,146 +265,18 @@ func (c *pinServiceClient) List(ctx context.Context, in *PinListRequest, opts ..
 	return out, nil
 }
 
-func (c *pinServiceClient) GetValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.PinValue)
-	err := c.cc.Invoke(ctx, PinService_GetValue_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) SetValue(ctx context.Context, in *pb.PinValue, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, PinService_SetValue_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) GetValueByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.PinNameValue)
-	err := c.cc.Invoke(ctx, PinService_GetValueByName_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) SetValueByName(ctx context.Context, in *pb.PinNameValue, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, PinService_SetValueByName_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) ViewValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValueUpdated, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.PinValueUpdated)
-	err := c.cc.Invoke(ctx, PinService_ViewValue_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) DeleteValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, PinService_DeleteValue_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) PullValue(ctx context.Context, in *PinPullValueRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[pb.PinValueUpdated], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &PinService_ServiceDesc.Streams[0], PinService_PullValue_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[PinPullValueRequest, pb.PinValueUpdated]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PinService_PullValueClient = grpc.ServerStreamingClient[pb.PinValueUpdated]
-
-func (c *pinServiceClient) GetWrite(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.PinValue)
-	err := c.cc.Invoke(ctx, PinService_GetWrite_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) GetWriteByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.PinNameValue)
-	err := c.cc.Invoke(ctx, PinService_GetWriteByName_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) ViewWrite(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValueUpdated, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.PinValueUpdated)
-	err := c.cc.Invoke(ctx, PinService_ViewWrite_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pinServiceClient) PushWrite(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[pb.PinValueUpdated, pb.MyBool], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &PinService_ServiceDesc.Streams[1], PinService_PushWrite_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[pb.PinValueUpdated, pb.MyBool]{ClientStream: stream}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PinService_PushWriteClient = grpc.ClientStreamingClient[pb.PinValueUpdated, pb.MyBool]
-
 // PinServiceServer is the server API for PinService service.
 // All implementations must embed UnimplementedPinServiceServer
 // for forward compatibility.
+//
+// PinService Edge 端点位服务
 type PinServiceServer interface {
+	// View 按 ID 获取 Pin
 	View(context.Context, *pb.Id) (*pb.Pin, error)
+	// Name 按名称获取 Pin（支持 WireName.PinName）
 	Name(context.Context, *pb.Name) (*pb.Pin, error)
+	// List 获取 Pin 列表
 	List(context.Context, *PinListRequest) (*PinListResponse, error)
-	GetValue(context.Context, *pb.Id) (*pb.PinValue, error)
-	SetValue(context.Context, *pb.PinValue) (*pb.MyBool, error)
-	GetValueByName(context.Context, *pb.Name) (*pb.PinNameValue, error)
-	SetValueByName(context.Context, *pb.PinNameValue) (*pb.MyBool, error)
-	ViewValue(context.Context, *pb.Id) (*pb.PinValueUpdated, error)
-	DeleteValue(context.Context, *pb.Id) (*pb.MyBool, error)
-	PullValue(*PinPullValueRequest, grpc.ServerStreamingServer[pb.PinValueUpdated]) error
-	GetWrite(context.Context, *pb.Id) (*pb.PinValue, error)
-	GetWriteByName(context.Context, *pb.Name) (*pb.PinNameValue, error)
-	ViewWrite(context.Context, *pb.Id) (*pb.PinValueUpdated, error)
-	PushWrite(grpc.ClientStreamingServer[pb.PinValueUpdated, pb.MyBool]) error
 	mustEmbedUnimplementedPinServiceServer()
 }
 
@@ -430,39 +295,6 @@ func (UnimplementedPinServiceServer) Name(context.Context, *pb.Name) (*pb.Pin, e
 }
 func (UnimplementedPinServiceServer) List(context.Context, *PinListRequest) (*PinListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
-}
-func (UnimplementedPinServiceServer) GetValue(context.Context, *pb.Id) (*pb.PinValue, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetValue not implemented")
-}
-func (UnimplementedPinServiceServer) SetValue(context.Context, *pb.PinValue) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetValue not implemented")
-}
-func (UnimplementedPinServiceServer) GetValueByName(context.Context, *pb.Name) (*pb.PinNameValue, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetValueByName not implemented")
-}
-func (UnimplementedPinServiceServer) SetValueByName(context.Context, *pb.PinNameValue) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetValueByName not implemented")
-}
-func (UnimplementedPinServiceServer) ViewValue(context.Context, *pb.Id) (*pb.PinValueUpdated, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ViewValue not implemented")
-}
-func (UnimplementedPinServiceServer) DeleteValue(context.Context, *pb.Id) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DeleteValue not implemented")
-}
-func (UnimplementedPinServiceServer) PullValue(*PinPullValueRequest, grpc.ServerStreamingServer[pb.PinValueUpdated]) error {
-	return status.Errorf(codes.Unimplemented, "method PullValue not implemented")
-}
-func (UnimplementedPinServiceServer) GetWrite(context.Context, *pb.Id) (*pb.PinValue, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetWrite not implemented")
-}
-func (UnimplementedPinServiceServer) GetWriteByName(context.Context, *pb.Name) (*pb.PinNameValue, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetWriteByName not implemented")
-}
-func (UnimplementedPinServiceServer) ViewWrite(context.Context, *pb.Id) (*pb.PinValueUpdated, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ViewWrite not implemented")
-}
-func (UnimplementedPinServiceServer) PushWrite(grpc.ClientStreamingServer[pb.PinValueUpdated, pb.MyBool]) error {
-	return status.Errorf(codes.Unimplemented, "method PushWrite not implemented")
 }
 func (UnimplementedPinServiceServer) mustEmbedUnimplementedPinServiceServer() {}
 func (UnimplementedPinServiceServer) testEmbeddedByValue()                    {}
@@ -539,186 +371,6 @@ func _PinService_List_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PinService_GetValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).GetValue(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_GetValue_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).GetValue(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_SetValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.PinValue)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).SetValue(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_SetValue_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).SetValue(ctx, req.(*pb.PinValue))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_GetValueByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Name)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).GetValueByName(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_GetValueByName_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).GetValueByName(ctx, req.(*pb.Name))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_SetValueByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.PinNameValue)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).SetValueByName(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_SetValueByName_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).SetValueByName(ctx, req.(*pb.PinNameValue))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_ViewValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).ViewValue(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_ViewValue_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).ViewValue(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_DeleteValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).DeleteValue(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_DeleteValue_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).DeleteValue(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_PullValue_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(PinPullValueRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(PinServiceServer).PullValue(m, &grpc.GenericServerStream[PinPullValueRequest, pb.PinValueUpdated]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PinService_PullValueServer = grpc.ServerStreamingServer[pb.PinValueUpdated]
-
-func _PinService_GetWrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).GetWrite(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_GetWrite_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).GetWrite(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_GetWriteByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Name)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).GetWriteByName(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_GetWriteByName_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).GetWriteByName(ctx, req.(*pb.Name))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_ViewWrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PinServiceServer).ViewWrite(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PinService_ViewWrite_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PinServiceServer).ViewWrite(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PinService_PushWrite_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(PinServiceServer).PushWrite(&grpc.GenericServerStream[pb.PinValueUpdated, pb.MyBool]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type PinService_PushWriteServer = grpc.ClientStreamingServer[pb.PinValueUpdated, pb.MyBool]
-
 // PinService_ServiceDesc is the grpc.ServiceDesc for PinService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -738,52 +390,499 @@ var PinService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "List",
 			Handler:    _PinService_List_Handler,
 		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "edges/wire_service.proto",
+}
+
+const (
+	PinValueService_GetValue_FullMethodName       = "/edges.PinValueService/GetValue"
+	PinValueService_SetValue_FullMethodName       = "/edges.PinValueService/SetValue"
+	PinValueService_GetValueByName_FullMethodName = "/edges.PinValueService/GetValueByName"
+	PinValueService_SetValueByName_FullMethodName = "/edges.PinValueService/SetValueByName"
+	PinValueService_DeleteValue_FullMethodName    = "/edges.PinValueService/DeleteValue"
+	PinValueService_PullValue_FullMethodName      = "/edges.PinValueService/PullValue"
+)
+
+// PinValueServiceClient is the client API for PinValueService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PinValueService Edge 端点位值服务
+type PinValueServiceClient interface {
+	// GetValue 按 ID 获取点位值
+	GetValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error)
+	// SetValue 设置点位值
+	SetValue(ctx context.Context, in *pb.PinValue, opts ...grpc.CallOption) (*pb.MyBool, error)
+	// GetValueByName 按名称获取点位值
+	GetValueByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error)
+	// SetValueByName 按名称设置点位值
+	SetValueByName(ctx context.Context, in *pb.PinNameValue, opts ...grpc.CallOption) (*pb.MyBool, error)
+	// DeleteValue 删除点位值
+	DeleteValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
+	// PullValue 拉取点位值（用于 Core 同步）
+	PullValue(ctx context.Context, in *PinPullValueRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[pb.PinValue], error)
+}
+
+type pinValueServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPinValueServiceClient(cc grpc.ClientConnInterface) PinValueServiceClient {
+	return &pinValueServiceClient{cc}
+}
+
+func (c *pinValueServiceClient) GetValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.PinValue)
+	err := c.cc.Invoke(ctx, PinValueService_GetValue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pinValueServiceClient) SetValue(ctx context.Context, in *pb.PinValue, opts ...grpc.CallOption) (*pb.MyBool, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.MyBool)
+	err := c.cc.Invoke(ctx, PinValueService_SetValue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pinValueServiceClient) GetValueByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.PinNameValue)
+	err := c.cc.Invoke(ctx, PinValueService_GetValueByName_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pinValueServiceClient) SetValueByName(ctx context.Context, in *pb.PinNameValue, opts ...grpc.CallOption) (*pb.MyBool, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.MyBool)
+	err := c.cc.Invoke(ctx, PinValueService_SetValueByName_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pinValueServiceClient) DeleteValue(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.MyBool)
+	err := c.cc.Invoke(ctx, PinValueService_DeleteValue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pinValueServiceClient) PullValue(ctx context.Context, in *PinPullValueRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[pb.PinValue], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PinValueService_ServiceDesc.Streams[0], PinValueService_PullValue_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PinPullValueRequest, pb.PinValue]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PinValueService_PullValueClient = grpc.ServerStreamingClient[pb.PinValue]
+
+// PinValueServiceServer is the server API for PinValueService service.
+// All implementations must embed UnimplementedPinValueServiceServer
+// for forward compatibility.
+//
+// PinValueService Edge 端点位值服务
+type PinValueServiceServer interface {
+	// GetValue 按 ID 获取点位值
+	GetValue(context.Context, *pb.Id) (*pb.PinValue, error)
+	// SetValue 设置点位值
+	SetValue(context.Context, *pb.PinValue) (*pb.MyBool, error)
+	// GetValueByName 按名称获取点位值
+	GetValueByName(context.Context, *pb.Name) (*pb.PinNameValue, error)
+	// SetValueByName 按名称设置点位值
+	SetValueByName(context.Context, *pb.PinNameValue) (*pb.MyBool, error)
+	// DeleteValue 删除点位值
+	DeleteValue(context.Context, *pb.Id) (*pb.MyBool, error)
+	// PullValue 拉取点位值（用于 Core 同步）
+	PullValue(*PinPullValueRequest, grpc.ServerStreamingServer[pb.PinValue]) error
+	mustEmbedUnimplementedPinValueServiceServer()
+}
+
+// UnimplementedPinValueServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPinValueServiceServer struct{}
+
+func (UnimplementedPinValueServiceServer) GetValue(context.Context, *pb.Id) (*pb.PinValue, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetValue not implemented")
+}
+func (UnimplementedPinValueServiceServer) SetValue(context.Context, *pb.PinValue) (*pb.MyBool, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetValue not implemented")
+}
+func (UnimplementedPinValueServiceServer) GetValueByName(context.Context, *pb.Name) (*pb.PinNameValue, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetValueByName not implemented")
+}
+func (UnimplementedPinValueServiceServer) SetValueByName(context.Context, *pb.PinNameValue) (*pb.MyBool, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetValueByName not implemented")
+}
+func (UnimplementedPinValueServiceServer) DeleteValue(context.Context, *pb.Id) (*pb.MyBool, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteValue not implemented")
+}
+func (UnimplementedPinValueServiceServer) PullValue(*PinPullValueRequest, grpc.ServerStreamingServer[pb.PinValue]) error {
+	return status.Errorf(codes.Unimplemented, "method PullValue not implemented")
+}
+func (UnimplementedPinValueServiceServer) mustEmbedUnimplementedPinValueServiceServer() {}
+func (UnimplementedPinValueServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafePinValueServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PinValueServiceServer will
+// result in compilation errors.
+type UnsafePinValueServiceServer interface {
+	mustEmbedUnimplementedPinValueServiceServer()
+}
+
+func RegisterPinValueServiceServer(s grpc.ServiceRegistrar, srv PinValueServiceServer) {
+	// If the following call pancis, it indicates UnimplementedPinValueServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PinValueService_ServiceDesc, srv)
+}
+
+func _PinValueService_GetValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.Id)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PinValueServiceServer).GetValue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PinValueService_GetValue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PinValueServiceServer).GetValue(ctx, req.(*pb.Id))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PinValueService_SetValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.PinValue)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PinValueServiceServer).SetValue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PinValueService_SetValue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PinValueServiceServer).SetValue(ctx, req.(*pb.PinValue))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PinValueService_GetValueByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.Name)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PinValueServiceServer).GetValueByName(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PinValueService_GetValueByName_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PinValueServiceServer).GetValueByName(ctx, req.(*pb.Name))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PinValueService_SetValueByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.PinNameValue)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PinValueServiceServer).SetValueByName(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PinValueService_SetValueByName_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PinValueServiceServer).SetValueByName(ctx, req.(*pb.PinNameValue))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PinValueService_DeleteValue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.Id)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PinValueServiceServer).DeleteValue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PinValueService_DeleteValue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PinValueServiceServer).DeleteValue(ctx, req.(*pb.Id))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PinValueService_PullValue_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PinPullValueRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PinValueServiceServer).PullValue(m, &grpc.GenericServerStream[PinPullValueRequest, pb.PinValue]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PinValueService_PullValueServer = grpc.ServerStreamingServer[pb.PinValue]
+
+// PinValueService_ServiceDesc is the grpc.ServiceDesc for PinValueService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PinValueService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "edges.PinValueService",
+	HandlerType: (*PinValueServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "GetValue",
-			Handler:    _PinService_GetValue_Handler,
+			Handler:    _PinValueService_GetValue_Handler,
 		},
 		{
 			MethodName: "SetValue",
-			Handler:    _PinService_SetValue_Handler,
+			Handler:    _PinValueService_SetValue_Handler,
 		},
 		{
 			MethodName: "GetValueByName",
-			Handler:    _PinService_GetValueByName_Handler,
+			Handler:    _PinValueService_GetValueByName_Handler,
 		},
 		{
 			MethodName: "SetValueByName",
-			Handler:    _PinService_SetValueByName_Handler,
-		},
-		{
-			MethodName: "ViewValue",
-			Handler:    _PinService_ViewValue_Handler,
+			Handler:    _PinValueService_SetValueByName_Handler,
 		},
 		{
 			MethodName: "DeleteValue",
-			Handler:    _PinService_DeleteValue_Handler,
-		},
-		{
-			MethodName: "GetWrite",
-			Handler:    _PinService_GetWrite_Handler,
-		},
-		{
-			MethodName: "GetWriteByName",
-			Handler:    _PinService_GetWriteByName_Handler,
-		},
-		{
-			MethodName: "ViewWrite",
-			Handler:    _PinService_ViewWrite_Handler,
+			Handler:    _PinValueService_DeleteValue_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "PullValue",
-			Handler:       _PinService_PullValue_Handler,
+			Handler:       _PinValueService_PullValue_Handler,
 			ServerStreams: true,
 		},
+	},
+	Metadata: "edges/wire_service.proto",
+}
+
+const (
+	PinWriteService_GetWrite_FullMethodName       = "/edges.PinWriteService/GetWrite"
+	PinWriteService_GetWriteByName_FullMethodName = "/edges.PinWriteService/GetWriteByName"
+	PinWriteService_PushWrite_FullMethodName      = "/edges.PinWriteService/PushWrite"
+)
+
+// PinWriteServiceClient is the client API for PinWriteService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PinWriteService Edge 端点位写入服务
+type PinWriteServiceClient interface {
+	// GetWrite 按 ID 获取写入值
+	GetWrite(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error)
+	// GetWriteByName 按名称获取写入值
+	GetWriteByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error)
+	// PushWrite 接收写入值推送（来自 Core）
+	PushWrite(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[pb.PinValue, pb.MyBool], error)
+}
+
+type pinWriteServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPinWriteServiceClient(cc grpc.ClientConnInterface) PinWriteServiceClient {
+	return &pinWriteServiceClient{cc}
+}
+
+func (c *pinWriteServiceClient) GetWrite(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.PinValue, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.PinValue)
+	err := c.cc.Invoke(ctx, PinWriteService_GetWrite_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pinWriteServiceClient) GetWriteByName(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.PinNameValue, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.PinNameValue)
+	err := c.cc.Invoke(ctx, PinWriteService_GetWriteByName_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pinWriteServiceClient) PushWrite(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[pb.PinValue, pb.MyBool], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PinWriteService_ServiceDesc.Streams[0], PinWriteService_PushWrite_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[pb.PinValue, pb.MyBool]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PinWriteService_PushWriteClient = grpc.ClientStreamingClient[pb.PinValue, pb.MyBool]
+
+// PinWriteServiceServer is the server API for PinWriteService service.
+// All implementations must embed UnimplementedPinWriteServiceServer
+// for forward compatibility.
+//
+// PinWriteService Edge 端点位写入服务
+type PinWriteServiceServer interface {
+	// GetWrite 按 ID 获取写入值
+	GetWrite(context.Context, *pb.Id) (*pb.PinValue, error)
+	// GetWriteByName 按名称获取写入值
+	GetWriteByName(context.Context, *pb.Name) (*pb.PinNameValue, error)
+	// PushWrite 接收写入值推送（来自 Core）
+	PushWrite(grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]) error
+	mustEmbedUnimplementedPinWriteServiceServer()
+}
+
+// UnimplementedPinWriteServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPinWriteServiceServer struct{}
+
+func (UnimplementedPinWriteServiceServer) GetWrite(context.Context, *pb.Id) (*pb.PinValue, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetWrite not implemented")
+}
+func (UnimplementedPinWriteServiceServer) GetWriteByName(context.Context, *pb.Name) (*pb.PinNameValue, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetWriteByName not implemented")
+}
+func (UnimplementedPinWriteServiceServer) PushWrite(grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]) error {
+	return status.Errorf(codes.Unimplemented, "method PushWrite not implemented")
+}
+func (UnimplementedPinWriteServiceServer) mustEmbedUnimplementedPinWriteServiceServer() {}
+func (UnimplementedPinWriteServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafePinWriteServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PinWriteServiceServer will
+// result in compilation errors.
+type UnsafePinWriteServiceServer interface {
+	mustEmbedUnimplementedPinWriteServiceServer()
+}
+
+func RegisterPinWriteServiceServer(s grpc.ServiceRegistrar, srv PinWriteServiceServer) {
+	// If the following call pancis, it indicates UnimplementedPinWriteServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PinWriteService_ServiceDesc, srv)
+}
+
+func _PinWriteService_GetWrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.Id)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PinWriteServiceServer).GetWrite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PinWriteService_GetWrite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PinWriteServiceServer).GetWrite(ctx, req.(*pb.Id))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PinWriteService_GetWriteByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.Name)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PinWriteServiceServer).GetWriteByName(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PinWriteService_GetWriteByName_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PinWriteServiceServer).GetWriteByName(ctx, req.(*pb.Name))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PinWriteService_PushWrite_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(PinWriteServiceServer).PushWrite(&grpc.GenericServerStream[pb.PinValue, pb.MyBool]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PinWriteService_PushWriteServer = grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]
+
+// PinWriteService_ServiceDesc is the grpc.ServiceDesc for PinWriteService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PinWriteService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "edges.PinWriteService",
+	HandlerType: (*PinWriteServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetWrite",
+			Handler:    _PinWriteService_GetWrite_Handler,
+		},
+		{
+			MethodName: "GetWriteByName",
+			Handler:    _PinWriteService_GetWriteByName_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "PushWrite",
-			Handler:       _PinService_PushWrite_Handler,
+			Handler:       _PinWriteService_PushWrite_Handler,
 			ClientStreams: true,
 		},
 	},

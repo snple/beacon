@@ -17,6 +17,12 @@ message NodeLoginReply {
     string token = 2;
 }
 
+// NodePushRequest 节点配置推送请求
+message NodePushRequest {
+    // string id = 1;
+    bytes nson = 2;
+}
+
 message NodeKeepAliveReply {
     int32 time = 1;
 }
@@ -24,6 +30,6 @@ message NodeKeepAliveReply {
 service NodeService {
     rpc Login(NodeLoginRequest) returns (NodeLoginReply) {}
     rpc View(pb.MyEmpty) returns (pb.Node) {}
-    rpc Push(pb.MyEmpty) returns (pb.MyBool) {}
+    rpc Push(NodePushRequest) returns (pb.MyBool) {}
     rpc KeepAlive(pb.MyEmpty) returns (stream NodeKeepAliveReply) {}
 }

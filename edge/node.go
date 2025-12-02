@@ -2,23 +2,17 @@ package edge
 
 import (
 	"context"
-	"database/sql"
-	"sync"
 	"time"
 
-	"github.com/snple/beacon/edge/model"
+	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
-	"github.com/snple/types/cache"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type NodeService struct {
 	es *EdgeService
-
-	cache *cache.Value[model.Node]
-	lock  sync.RWMutex
 
 	edges.UnimplementedNodeServiceServer
 }
@@ -28,67 +22,6 @@ func newNodeService(es *EdgeService) *NodeService {
 		es: es,
 	}
 }
-
-/*
-	func (s *NodeService) Create(ctx context.Context, in *pb.Node) (*pb.Node, error) {
-		var output pb.Node
-		var err error
-
-		// basic validation
-		{
-			if in == nil {
-				return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-			}
-
-			if in.Name == "" {
-				return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
-			}
-		}
-
-		// name validation
-		{
-			if len(in.Name) < 2 {
-				return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
-			}
-
-			err = s.es.GetDB().NewSelect().Model(&model.Node{}).Where("name = ?", in.Name).Scan(ctx)
-			if err != nil {
-				if err != sql.ErrNoRows {
-					return &output, status.Errorf(codes.Internal, "Query: %v", err)
-				}
-			} else {
-				return &output, status.Error(codes.AlreadyExists, "Node.Name must be unique")
-			}
-		}
-
-		item := model.Node{
-			ID:      in.Id,
-			Name:    in.Name,
-			Desc:    in.Desc,
-			Tags:    in.Tags,
-			Config:  in.Config,
-			Created: time.Now(),
-			Updated: time.Now(),
-		}
-
-		if item.ID == "" {
-			item.ID = util.RandomID()
-		}
-
-		_, err = s.es.GetDB().NewInsert().Model(&item).Exec(ctx)
-		if err != nil {
-			return &output, status.Errorf(codes.Internal, "Insert: %v", err)
-		}
-
-		if err = s.afterUpdate(ctx, &item); err != nil {
-			return &output, err
-		}
-
-		s.copyModelToOutput(&output, &item)
-
-		return &output, nil
-	}
-*/
 
 func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error) {
 	var output pb.Node
@@ -112,39 +45,36 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 		}
 	}
 
-	item, err := s.ViewByID(ctx)
+	node, err := s.es.GetStorage().GetNode()
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
 	}
 
-	item.Name = in.Name
-	item.Updated = time.Now()
-
-	_, err = s.es.GetDB().NewUpdate().Model(&item).WherePK().Exec(ctx)
-	if err != nil {
-		return &output, status.Errorf(codes.Internal, "Update: %v", err)
-	}
-
-	// update node id
-	if len(in.Id) > 0 && in.Id != item.ID {
-		_, err = s.es.GetDB().NewUpdate().Model(&item).Set("id = ?", in.Id).WherePK().Exec(ctx)
+	// 更新名称
+	if in.Name != node.Name {
+		err = s.es.GetStorage().UpdateNodeName(ctx, in.Name)
 		if err != nil {
-			return &output, status.Errorf(codes.Internal, "Update: %v", err)
+			return &output, status.Errorf(codes.Internal, "UpdateNodeName: %v", err)
 		}
 	}
 
-	if err = s.afterUpdate(ctx, &item); err != nil {
+	// 重新获取更新后的节点
+	node, err = s.es.GetStorage().GetNode()
+	if err != nil {
+		return &output, status.Errorf(codes.Internal, "GetNode: %v", err)
+	}
+
+	if err = s.afterUpdate(ctx); err != nil {
 		return &output, err
 	}
 
-	s.copyModelToOutput(&output, &item)
+	s.copyModelToOutput(&output, node)
 
 	return &output, nil
 }
 
 func (s *NodeService) View(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error) {
 	var output pb.Node
-	var err error
 
 	// basic validation
 	{
@@ -153,55 +83,37 @@ func (s *NodeService) View(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error
 		}
 	}
 
-	item, err := s.ViewByID(ctx)
+	node, err := s.es.GetStorage().GetNode()
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
 	}
 
-	s.copyModelToOutput(&output, &item)
+	s.copyModelToOutput(&output, node)
 
 	return &output, nil
 }
 
 func (s *NodeService) Destory(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, error) {
-	var err error
 	var output pb.MyBool
 
-	err = func() error {
-		models := []any{
-			(*model.Wire)(nil),
-			(*model.Pin)(nil),
-		}
-
-		tx, err := s.es.GetDB().BeginTx(ctx, nil)
-		if err != nil {
-			return status.Errorf(codes.Internal, "BeginTx: %v", err)
-		}
-		var done bool
-		defer func() {
-			if !done {
-				_ = tx.Rollback()
-			}
-		}()
-
-		for _, model := range models {
-			_, err = tx.NewDelete().Model(model).Where("1 = 1").ForceDelete().Exec(ctx)
-			if err != nil {
-				return status.Errorf(codes.Internal, "Delete: %v", err)
-			}
-		}
-
-		done = true
-		err = tx.Commit()
-		if err != nil {
-			return status.Errorf(codes.Internal, "Commit: %v", err)
-		}
-
-		return nil
-	}()
-
+	// 重置节点配置（清空 Wires）
+	node, err := s.es.GetStorage().GetNode()
 	if err != nil {
-		return &output, err
+		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
+	}
+
+	// 保留节点基本信息，清空 Wires
+	newNode := &storage.Node{
+		ID:      node.ID,
+		Name:    node.Name,
+		Status:  node.Status,
+		Updated: time.Now(),
+		Wires:   nil,
+	}
+
+	err = s.es.GetStorage().SetNode(ctx, newNode)
+	if err != nil {
+		return &output, status.Errorf(codes.Internal, "SetNode: %v", err)
 	}
 
 	output.Bool = true
@@ -209,29 +121,50 @@ func (s *NodeService) Destory(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, 
 	return &output, nil
 }
 
-func (s *NodeService) ViewByID(ctx context.Context) (model.Node, error) {
-	item := model.Node{}
-
-	err := s.es.GetDB().NewSelect().Model(&item).Scan(ctx)
+func (s *NodeService) ViewByID(ctx context.Context) (*storage.Node, error) {
+	node, err := s.es.GetStorage().GetNode()
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return item, status.Errorf(codes.NotFound, "Query: %v", err)
-		}
-
-		return item, status.Errorf(codes.Internal, "Query: %v", err)
+		return nil, status.Errorf(codes.NotFound, "Node not found: %v", err)
 	}
 
-	return item, nil
+	return node, nil
 }
 
-func (s *NodeService) copyModelToOutput(output *pb.Node, item *model.Node) {
-	output.Id = item.ID
-	output.Name = item.Name
-	output.Secret = item.Secret
-	output.Updated = item.Updated.UnixMicro()
+func (s *NodeService) copyModelToOutput(output *pb.Node, node *storage.Node) {
+	output.Id = node.ID
+	output.Name = node.Name
+	output.Status = node.Status
+	output.Updated = node.Updated.UnixMicro()
+
+	// 复制 Wires
+	for i := range node.Wires {
+		wire := &node.Wires[i]
+		pbWire := &pb.Wire{
+			Id:       wire.ID,
+			Name:     wire.Name,
+			Type:     wire.Type,
+			Tags:     wire.Tags,
+			Clusters: wire.Clusters,
+		}
+
+		// 复制 Pins
+		for j := range wire.Pins {
+			pin := &wire.Pins[j]
+			pbWire.Pins = append(pbWire.Pins, &pb.Pin{
+				Id:   pin.ID,
+				Name: pin.Name,
+				Addr: pin.Addr,
+				Type: pin.Type,
+				Rw:   pin.Rw,
+				Tags: pin.Tags,
+			})
+		}
+
+		output.Wires = append(output.Wires, pbWire)
+	}
 }
 
-func (s *NodeService) afterUpdate(ctx context.Context, _ *model.Node) error {
+func (s *NodeService) afterUpdate(ctx context.Context) error {
 	var err error
 
 	err = s.es.GetSync().setNodeUpdated(ctx, time.Now())

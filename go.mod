@@ -22,7 +22,7 @@ require (
 	modernc.org/sqlite v1.37.0
 )
 
-replace github.com/danclive/nson-go => ../../nson-go
+replace github.com/danclive/nson-go => ../nson-go
 
 require (
 	github.com/bytedance/sonic v1.13.2 // indirect

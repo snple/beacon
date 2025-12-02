@@ -6,20 +6,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/snple/beacon/core/model"
+	"github.com/dgraph-io/badger/v4"
+	"github.com/snple/beacon/core/storage"
 	"github.com/snple/beacon/pb/cores"
-	"github.com/uptrace/bun"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
 type CoreService struct {
-	db *bun.DB
+	storage *storage.Storage
 
-	sync *SyncService
-	node *NodeService
-	wire *WireService
-	pin  *PinService
+	sync     *SyncService
+	node     *NodeService
+	wire     *WireService
+	pin      *PinService
+	pinValue *PinValueService
+	pinWrite *PinWriteService
 
 	ctx     context.Context
 	cancel  func()
@@ -28,11 +30,11 @@ type CoreService struct {
 	dopts coreOptions
 }
 
-func Core(db *bun.DB, opts ...CoreOption) (*CoreService, error) {
+func Core(db *badger.DB, opts ...CoreOption) (*CoreService, error) {
 	return CoreContext(context.Background(), db, opts...)
 }
 
-func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreService, error) {
+func CoreContext(ctx context.Context, db *badger.DB, opts ...CoreOption) (*CoreService, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	if db == nil {
@@ -40,10 +42,10 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 	}
 
 	cs := &CoreService{
-		db:     db,
-		ctx:    ctx,
-		cancel: cancel,
-		dopts:  defaultCoreOptions(),
+		storage: storage.New(db),
+		ctx:     ctx,
+		cancel:  cancel,
+		dopts:   defaultCoreOptions(),
 	}
 
 	for _, opt := range extraCoreOptions {
@@ -58,12 +60,15 @@ func CoreContext(ctx context.Context, db *bun.DB, opts ...CoreOption) (*CoreServ
 	cs.node = newNodeService(cs)
 	cs.wire = newWireService(cs)
 	cs.pin = newPinService(cs)
+	cs.pinValue = newPinValueService(cs)
+	cs.pinWrite = newPinWriteService(cs)
 
 	return cs, nil
 }
 
-func (cs *CoreService) Start() {
-
+func (cs *CoreService) Start() error {
+	// 加载存储数据
+	return cs.storage.Load(cs.ctx)
 }
 
 func (cs *CoreService) Stop() {
@@ -73,8 +78,8 @@ func (cs *CoreService) Stop() {
 	cs.dopts.logger.Sync()
 }
 
-func (cs *CoreService) GetDB() *bun.DB {
-	return cs.db
+func (cs *CoreService) GetStorage() *storage.Storage {
+	return cs.storage
 }
 
 func (cs *CoreService) GetSync() *SyncService {
@@ -93,6 +98,14 @@ func (cs *CoreService) GetPin() *PinService {
 	return cs.pin
 }
 
+func (cs *CoreService) GetPinValue() *PinValueService {
+	return cs.pinValue
+}
+
+func (cs *CoreService) GetPinWrite() *PinWriteService {
+	return cs.pinWrite
+}
+
 func (cs *CoreService) Context() context.Context {
 	return cs.ctx
 }
@@ -106,25 +119,8 @@ func (cs *CoreService) Register(server *grpc.Server) {
 	cores.RegisterNodeServiceServer(server, cs.node)
 	cores.RegisterWireServiceServer(server, cs.wire)
 	cores.RegisterPinServiceServer(server, cs.pin)
-}
-
-func CreateSchema(db bun.IDB) error {
-	models := []any{
-		(*model.Sync)(nil),
-		(*model.Node)(nil),
-		(*model.Wire)(nil),
-		(*model.Pin)(nil),
-		(*model.PinValue)(nil),
-		(*model.PinWrite)(nil),
-	}
-
-	for _, model := range models {
-		_, err := db.NewCreateTable().Model(model).IfNotExists().Exec(context.Background())
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	cores.RegisterPinValueServiceServer(server, cs.pinValue)
+	cores.RegisterPinWriteServiceServer(server, cs.pinWrite)
 }
 
 type coreOptions struct {

@@ -24,34 +24,34 @@ const (
 	MAP       = "MAP"
 )
 
-func ParseTypeTag(typeName string) (uint8, error) {
+func ParseTypeTag(typeName string) (nson.DataType, error) {
 	switch typeName {
 	case I32:
-		return nson.TAG_I32, nil
+		return nson.DataTypeI32, nil
 	case I64:
-		return nson.TAG_I64, nil
+		return nson.DataTypeI64, nil
 	case U32:
-		return nson.TAG_U32, nil
+		return nson.DataTypeU32, nil
 	case U64:
-		return nson.TAG_U64, nil
+		return nson.DataTypeU64, nil
 	case F32:
-		return nson.TAG_F32, nil
+		return nson.DataTypeF32, nil
 	case F64:
-		return nson.TAG_F64, nil
+		return nson.DataTypeF64, nil
 	case BOOL:
-		return nson.TAG_BOOL, nil
+		return nson.DataTypeBOOL, nil
 	case STRING:
-		return nson.TAG_STRING, nil
+		return nson.DataTypeSTRING, nil
 	case NULL:
-		return nson.TAG_NULL, nil
+		return nson.DataTypeNULL, nil
 	case BINARY:
-		return nson.TAG_BINARY, nil
+		return nson.DataTypeBINARY, nil
 	case TIMESTAMP:
-		return nson.TAG_TIMESTAMP, nil
+		return nson.DataTypeTIMESTAMP, nil
 	case ID:
-		return nson.TAG_ID, nil
+		return nson.DataTypeID, nil
 	case MAP:
-		return nson.TAG_MAP, nil
+		return nson.DataTypeMAP, nil
 	default:
 		return 0, fmt.Errorf("unsupported type name: %s", typeName)
 	}
@@ -87,107 +87,107 @@ func EncodeNsonValue(value nson.Value) (string, error) {
 		return v, errors.New("value is nil")
 	}
 
-	switch value.Tag() {
-	case nson.TAG_I32:
+	switch value.DataType() {
+	case nson.DataTypeI32:
 		v = fmt.Sprintf("%d", int32(value.(nson.I32)))
-	case nson.TAG_I64:
+	case nson.DataTypeI64:
 		v = fmt.Sprintf("%d", int64(value.(nson.I64)))
-	case nson.TAG_U32:
+	case nson.DataTypeU32:
 		v = fmt.Sprintf("%d", uint32(value.(nson.U32)))
-	case nson.TAG_U64:
+	case nson.DataTypeU64:
 		v = fmt.Sprintf("%d", uint64(value.(nson.U64)))
-	case nson.TAG_F32:
+	case nson.DataTypeF32:
 		v = fmt.Sprintf("%f", float32(value.(nson.F32)))
-	case nson.TAG_F64:
+	case nson.DataTypeF64:
 		v = fmt.Sprintf("%f", float64(value.(nson.F64)))
-	case nson.TAG_BOOL:
+	case nson.DataTypeBOOL:
 		v = fmt.Sprintf("%t", bool(value.(nson.Bool)))
-	case nson.TAG_STRING:
+	case nson.DataTypeSTRING:
 		v = string(value.(nson.String))
-	case nson.TAG_NULL:
+	case nson.DataTypeNULL:
 		v = ""
-	case nson.TAG_BINARY:
+	case nson.DataTypeBINARY:
 		v = value.(nson.Binary).Hex()
-	case nson.TAG_TIMESTAMP:
+	case nson.DataTypeTIMESTAMP:
 		v = fmt.Sprintf("%d", value.(nson.Timestamp))
-	case nson.TAG_ID:
+	case nson.DataTypeID:
 		v = value.(nson.Id).Hex()
 	default:
-		return v, fmt.Errorf("unsupported value type: %v", value.Tag())
+		return v, fmt.Errorf("unsupported value type: %v", value.DataType())
 	}
 
 	return v, nil
 }
 
-func DecodeNsonValue(value string, tag uint8) (nson.Value, error) {
+func DecodeNsonValue(value string, tag nson.DataType) (nson.Value, error) {
 	var nsonValue nson.Value
 
 	switch tag {
-	case nson.TAG_I32:
+	case nson.DataTypeI32:
 		value, err := strconv.ParseInt(value, 10, 32)
 		if err != nil {
 			return nsonValue, err
 		}
 
 		nsonValue = nson.I32(value)
-	case nson.TAG_I64:
+	case nson.DataTypeI64:
 		value, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return nsonValue, err
 		}
 
 		nsonValue = nson.I64(value)
-	case nson.TAG_U32:
+	case nson.DataTypeU32:
 		value, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
 			return nsonValue, err
 		}
 
 		nsonValue = nson.U32(value)
-	case nson.TAG_U64:
+	case nson.DataTypeU64:
 		value, err := strconv.ParseUint(value, 10, 64)
 		if err != nil {
 			return nsonValue, err
 		}
 
 		nsonValue = nson.U64(value)
-	case nson.TAG_F32:
+	case nson.DataTypeF32:
 		value, err := strconv.ParseFloat(value, 32)
 		if err != nil {
 			return nsonValue, err
 		}
 
 		nsonValue = nson.F32(value)
-	case nson.TAG_F64:
+	case nson.DataTypeF64:
 		value, err := strconv.ParseFloat(value, 64)
 		if err != nil {
 			return nsonValue, err
 		}
 
 		nsonValue = nson.F64(value)
-	case nson.TAG_BOOL:
+	case nson.DataTypeBOOL:
 		if value == "true" || value == "1" {
 			nsonValue = nson.Bool(true)
 		} else {
 			nsonValue = nson.Bool(false)
 		}
-	case nson.TAG_STRING:
+	case nson.DataTypeSTRING:
 		nsonValue = nson.String(value)
-	case nson.TAG_NULL:
+	case nson.DataTypeNULL:
 		nsonValue = nson.Null{}
-	case nson.TAG_BINARY:
+	case nson.DataTypeBINARY:
 		binary, err := nson.BinaryFromHex(value)
 		if err != nil {
 			return nsonValue, err
 		}
 		nsonValue = nson.Binary(binary)
-	case nson.TAG_TIMESTAMP:
+	case nson.DataTypeTIMESTAMP:
 		value, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return nsonValue, err
 		}
 		nsonValue = nson.Timestamp(value)
-	case nson.TAG_ID:
+	case nson.DataTypeID:
 		id, err := nson.IdFromHex(value)
 		if err != nil {
 			return nsonValue, err

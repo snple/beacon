@@ -4,18 +4,12 @@ import (
 	"context"
 	"log"
 
-	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 )
 
 func WireList(ctx context.Context, client cores.WireServiceClient) {
-	page := pb.Page{
-		Limit:  10,
-		Offset: 0,
-	}
-
 	request := &cores.WireListRequest{
-		Page: &page,
+		NodeId: "01946a0cabdabc925941e98a",
 	}
 
 	reply, err := client.List(ctx, request)
@@ -27,7 +21,10 @@ func WireList(ctx context.Context, client cores.WireServiceClient) {
 }
 
 func WireView(ctx context.Context, client cores.WireServiceClient) {
-	request := &pb.Id{Id: "01946a0cabdabc925941e98a"}
+	request := &cores.WireViewRequest{
+		NodeId: "01946a0cabdabc925941e98a",
+		WireId: "01946a0cabdabc925941e98b",
+	}
 
 	reply, err := client.View(ctx, request)
 

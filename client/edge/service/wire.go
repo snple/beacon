@@ -9,14 +9,7 @@ import (
 )
 
 func WireList(ctx context.Context, client edges.WireServiceClient) {
-	page := pb.Page{
-		Limit:  10,
-		Offset: 0,
-	}
-
-	request := &edges.WireListRequest{
-		Page: &page,
-	}
+	request := &pb.MyEmpty{}
 
 	reply, err := client.List(ctx, request)
 

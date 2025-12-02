@@ -9,7 +9,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/edges"
 	"github.com/snple/beacon/pb/nodes"
 	"github.com/snple/beacon/util/metadata"
 	"google.golang.org/grpc"
@@ -399,60 +398,24 @@ func (s *NodeUpService) syncLocalToRemote(ctx context.Context) error {
 		return nil
 	}
 
-	// 1. 清除 Core 端的配置数据
-	_, err = s.NodeServiceClient().Push(ctx, &pb.MyEmpty{})
+	// 获取节点配置并导出为 NSON
+	_, err = s.es.GetStorage().GetNode()
 	if err != nil {
 		return err
 	}
 
-	// 2. 推送 Wire 数据
-	{
-		wires, err := s.es.GetWire().List(ctx, &edges.WireListRequest{
-			Page: &pb.Page{Limit: 1000},
-		})
-		if err != nil {
-			return err
-		}
-
-		stream, err := s.WireServiceClient().Push(ctx)
-		if err != nil {
-			return err
-		}
-
-		for _, wire := range wires.Wires {
-			if err := stream.Send(wire); err != nil {
-				return err
-			}
-		}
-
-		if _, err := stream.CloseAndRecv(); err != nil {
-			return err
-		}
+	// 导出配置为 NSON 字节
+	data, err := s.es.GetStorage().ExportConfig()
+	if err != nil {
+		return err
 	}
 
-	// 3. 推送 Pin 数据
-	{
-		pins, err := s.es.GetPin().List(ctx, &edges.PinListRequest{
-			Page: &pb.Page{Limit: 10000},
-		})
-		if err != nil {
-			return err
-		}
-
-		stream, err := s.PinServiceClient().Push(ctx)
-		if err != nil {
-			return err
-		}
-
-		for _, pin := range pins.Pins {
-			if err := stream.Send(pin); err != nil {
-				return err
-			}
-		}
-
-		if _, err := stream.CloseAndRecv(); err != nil {
-			return err
-		}
+	// 推送节点配置到 Core
+	_, err = s.NodeServiceClient().Push(ctx, &nodes.NodePushRequest{
+		Nson: data,
+	})
+	if err != nil {
+		return err
 	}
 
 	return s.es.GetSync().setNodeToRemote(ctx, nodeUpdated)
@@ -481,18 +444,18 @@ func (s *NodeUpService) syncPinValueToRemote(ctx context.Context) error {
 		return err
 	}
 
-	after := pinValueUpdated2.UnixMicro()
-	limit := uint32(100)
+	after := pinValueUpdated2
+	limit := 100
 
-	// 从本地 BadgerDB 读取 PinValue 并发送
+	// 从本地存储读取 PinValue 并发送
 	for {
-		items, err := s.es.GetPin().listPinValues(ctx, after, limit)
+		items, err := s.es.GetStorage().ListPinValues(after, limit)
 		if err != nil {
 			return err
 		}
 
 		for _, item := range items {
-			if item.Updated.UnixMicro() > pinValueUpdated.UnixMicro() {
+			if item.Updated.After(pinValueUpdated) {
 				goto DONE
 			}
 
@@ -506,10 +469,10 @@ func (s *NodeUpService) syncPinValueToRemote(ctx context.Context) error {
 				return err
 			}
 
-			after = item.Updated.UnixMicro()
+			after = item.Updated
 		}
 
-		if len(items) < int(limit) {
+		if len(items) < limit {
 			break
 		}
 	}
@@ -564,20 +527,20 @@ func (s *NodeUpService) syncPinWriteFromRemote(ctx context.Context) error {
 			break
 		}
 
-		// 保存到本地
-		pin, err := s.es.GetPin().ViewByID(ctx, remote.Id)
+		// 保存到本地存储
+		pin, err := s.es.GetStorage().GetPinByID(remote.Id)
 		if err != nil {
-			s.es.Logger().Sugar().Errorf("ViewByID: %v", err)
+			s.es.Logger().Sugar().Errorf("GetPinByID: %v", err)
 			continue
 		}
 
-		err = s.es.GetPin().setPinWriteUpdated(ctx, &pin, remote.Value, time.UnixMicro(remote.Updated))
+		err = s.es.GetStorage().SetPinWrite(ctx, remote.Id, remote.Value, time.UnixMicro(remote.Updated))
 		if err != nil {
-			s.es.Logger().Sugar().Errorf("setPinWriteUpdated: %v", err)
+			s.es.Logger().Sugar().Errorf("SetPinWrite: %v", err)
 			return err
 		}
 
-		err = s.es.GetPin().afterUpdateWrite(ctx, &pin, remote.Value)
+		err = s.es.GetPin().afterUpdateWrite(ctx, pin, remote.Value)
 		if err != nil {
 			s.es.Logger().Sugar().Errorf("afterUpdateWrite: %v", err)
 			return err

@@ -3,11 +3,45 @@ package pb;
 
 option go_package = "github.com/snple/beacon/pb;pb";
 
-// Node 设备节点
+// Node 设备节点（完整配置，包含嵌套的 Wire 和 Pin）
 message Node {
     string id = 1;
     string name = 2;
-    string secret = 3;
-    sint32 status = 4;
-    int64 updated = 5;
+    sint32 status = 3;
+    int64 updated = 4;
+    repeated Wire wires = 5;
+}
+
+// Wire 通道配置
+message Wire {
+    string id = 1;
+    string name = 2;
+    string type = 3;
+    repeated string tags = 4;
+    repeated string clusters = 5;
+    repeated Pin pins = 6;
+}
+
+// Pin 点位配置
+message Pin {
+    string id = 1;
+    string name = 2;
+    string addr = 3;
+    string type = 4;
+    sint32 rw = 5;
+    repeated string tags = 6;
+}
+
+// PinValue 点位值
+message PinValue {
+    string id = 1;
+    string value = 2;
+    int64 updated = 3;
+}
+
+// PinNameValue 按名称的点位值
+message PinNameValue {
+    string name = 1;
+    string value = 2;
+    int64 updated = 3;
 }

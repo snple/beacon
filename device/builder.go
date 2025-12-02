@@ -3,9 +3,32 @@ package device
 
 import (
 	"strings"
-
-	"github.com/snple/beacon/edge/model"
 )
+
+// ============================================================================
+// 简化的 Wire/Pin 结构（本地定义，避免循环依赖）
+// ============================================================================
+
+// BuilderWire Wire 构建器结果
+type BuilderWire struct {
+	Name     string
+	Type     string
+	Clusters string
+}
+
+// BuilderPin Pin 构建器结果
+type BuilderPin struct {
+	Name string
+	Type string
+	Addr string
+	Rw   int32
+}
+
+// SimpleBuildResult 简化的构建结果
+type SimpleBuildResult struct {
+	Wire *BuilderWire
+	Pins []*BuilderPin
+}
 
 // ============================================================================
 // WireBuilder - 从 Cluster 构建 Wire 及其 Pin（简化版）
@@ -51,31 +74,22 @@ func (b *WireBuilder) WithCustomCluster(cluster *Cluster) *WireBuilder {
 	return b
 }
 
-// ============================================================================
-// 简化的构建结果（与简化模型对应）
-// ============================================================================
-
-// SimpleBuildResult 简化的构建结果
-type SimpleBuildResult struct {
-	Wire *model.Wire
-	Pins []*model.Pin
-}
-
 // Build 构建 Wire 和 Pin（简化版，不包含冗余字段）
 func (b *WireBuilder) Build() *SimpleBuildResult {
 	result := &SimpleBuildResult{
-		Wire: &model.Wire{
+		Wire: &BuilderWire{
 			Name:     b.name,
 			Clusters: strings.Join(b.clusterNames, ","), // 存储 Cluster 列表
 		},
-		Pins: make([]*model.Pin, 0),
+		Pins: make([]*BuilderPin, 0),
 	}
 
 	// 收集所有 Cluster 的 Pin（只存储名称和 Rw，其他信息从注册表查）
 	for _, cluster := range b.clusters {
 		for _, pinTpl := range cluster.Pins {
-			pin := &model.Pin{
+			pin := &BuilderPin{
 				Name: pinTpl.Name,
+				Type: pinTpl.Type,
 				Rw:   pinTpl.Rw, // 保留 Rw 字段
 				// Addr 字段由用户在部署时设置
 			}

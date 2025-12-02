@@ -6,22 +6,37 @@ option go_package = "github.com/snple/beacon/pb/cores;cores";
 import "node_message.proto";
 import "generic_message.proto";
 
-message NodeListRequest {
-    pb.Page page = 1;
-}
-
+// NodeListResponse 节点列表响应
 message NodeListResponse {
-    pb.Page page = 1;
-    uint32 count = 2;
-    repeated pb.Node nodes = 3;
+    repeated pb.Node nodes = 1;
 }
 
+// NodePushRequest 节点配置推送请求
+message NodePushRequest {
+    string id = 1;
+    bytes nson = 2;
+}
+
+// NodeSecretRequest 设置节点密钥请求
+message NodeSecretRequest {
+    string id = 1;
+    string secret = 2;
+}
+
+// NodeService 节点服务
 service NodeService {
-    rpc Create(pb.Node) returns (pb.Node) {}
-    rpc Update(pb.Node) returns (pb.Node) {}
-    rpc Delete(pb.Id) returns (pb.MyBool) {}
+    // View 按 ID 获取节点
     rpc View(pb.Id) returns (pb.Node) {}
+    // Name 按名称获取节点
     rpc Name(pb.Name) returns (pb.Node) {}
-    rpc List(NodeListRequest) returns (NodeListResponse) {}
-    rpc Push(pb.Id) returns (pb.MyBool) {}
+    // List 获取所有节点
+    rpc List(pb.MyEmpty) returns (NodeListResponse) {}
+    // Push 接收节点配置推送（NSON 格式）
+    rpc Push(NodePushRequest) returns (pb.MyBool) {}
+    // Delete 删除节点
+    rpc Delete(pb.Id) returns (pb.MyBool) {}
+    // SetSecret 设置节点密钥
+    rpc SetSecret(NodeSecretRequest) returns (pb.MyBool) {}
+    // GetSecret 获取节点密钥
+    rpc GetSecret(pb.Id) returns (pb.Message) {}
 }

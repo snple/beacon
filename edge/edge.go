@@ -8,21 +8,20 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/snple/beacon/edge/model"
+	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/pb/edges"
 	"github.com/snple/types"
-	"github.com/uptrace/bun"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
 type EdgeService struct {
-	db     *bun.DB
-	badger *BadgerService
-	sync   *SyncService
-	node   *NodeService
-	wire   *WireService
-	pin    *PinService
+	badger  *BadgerService
+	storage *storage.Storage
+	sync    *SyncService
+	node    *NodeService
+	wire    *WireService
+	pin     *PinService
 
 	nodeUp types.Option[*NodeUpService]
 
@@ -33,20 +32,15 @@ type EdgeService struct {
 	dopts edgeOptions
 }
 
-func Edge(db *bun.DB, opts ...EdgeOption) (*EdgeService, error) {
+func Edge(opts ...EdgeOption) (*EdgeService, error) {
 	ctx := context.Background()
-	return EdgeContext(ctx, db, opts...)
+	return EdgeContext(ctx, opts...)
 }
 
-func EdgeContext(ctx context.Context, db *bun.DB, opts ...EdgeOption) (*EdgeService, error) {
+func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	if db == nil {
-		panic("db == nil")
-	}
-
 	es := &EdgeService{
-		db:     db,
 		ctx:    ctx,
 		cancel: cancel,
 		dopts:  defaultEdgeOptions(),
@@ -64,11 +58,19 @@ func EdgeContext(ctx context.Context, db *bun.DB, opts ...EdgeOption) (*EdgeServ
 		return nil, err
 	}
 
-	badger, err := newBadgerService(es)
+	badgerSvc, err := newBadgerService(es)
 	if err != nil {
 		return nil, err
 	}
-	es.badger = badger
+	es.badger = badgerSvc
+
+	// 创建存储
+	es.storage = storage.New(badgerSvc.GetDB())
+
+	// 加载数据
+	if err := es.storage.Load(ctx); err != nil {
+		return nil, err
+	}
 
 	es.sync = newSyncService(es)
 	es.node = newNodeService(es)
@@ -124,8 +126,8 @@ func (es *EdgeService) Push() error {
 	return errors.New("node not enable")
 }
 
-func (es *EdgeService) GetDB() *bun.DB {
-	return es.db
+func (es *EdgeService) GetStorage() *storage.Storage {
+	return es.storage
 }
 
 func (es *EdgeService) GetBadgerDB() *badger.DB {
@@ -165,22 +167,6 @@ func (es *EdgeService) Register(server *grpc.Server) {
 	edges.RegisterNodeServiceServer(server, es.node)
 	edges.RegisterWireServiceServer(server, es.wire)
 	edges.RegisterPinServiceServer(server, es.pin)
-}
-
-func CreateSchema(db bun.IDB) error {
-	models := []any{
-		(*model.Node)(nil),
-		(*model.Wire)(nil),
-		(*model.Pin)(nil),
-	}
-
-	for _, model := range models {
-		_, err := db.NewCreateTable().Model(model).IfNotExists().Exec(context.Background())
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 type edgeOptions struct {

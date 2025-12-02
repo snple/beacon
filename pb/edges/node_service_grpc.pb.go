@@ -26,7 +26,10 @@ const (
 // NodeServiceClient is the client API for NodeService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// NodeService Edge 端节点服务
 type NodeServiceClient interface {
+	// View 获取当前节点
 	View(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*pb.Node, error)
 }
 
@@ -51,7 +54,10 @@ func (c *nodeServiceClient) View(ctx context.Context, in *pb.MyEmpty, opts ...gr
 // NodeServiceServer is the server API for NodeService service.
 // All implementations must embed UnimplementedNodeServiceServer
 // for forward compatibility.
+//
+// NodeService Edge 端节点服务
 type NodeServiceServer interface {
+	// View 获取当前节点
 	View(context.Context, *pb.MyEmpty) (*pb.Node, error)
 	mustEmbedUnimplementedNodeServiceServer()
 }

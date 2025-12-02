@@ -20,26 +20,35 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NodeService_Create_FullMethodName = "/cores.NodeService/Create"
-	NodeService_Update_FullMethodName = "/cores.NodeService/Update"
-	NodeService_Delete_FullMethodName = "/cores.NodeService/Delete"
-	NodeService_View_FullMethodName   = "/cores.NodeService/View"
-	NodeService_Name_FullMethodName   = "/cores.NodeService/Name"
-	NodeService_List_FullMethodName   = "/cores.NodeService/List"
-	NodeService_Push_FullMethodName   = "/cores.NodeService/Push"
+	NodeService_View_FullMethodName      = "/cores.NodeService/View"
+	NodeService_Name_FullMethodName      = "/cores.NodeService/Name"
+	NodeService_List_FullMethodName      = "/cores.NodeService/List"
+	NodeService_Push_FullMethodName      = "/cores.NodeService/Push"
+	NodeService_Delete_FullMethodName    = "/cores.NodeService/Delete"
+	NodeService_SetSecret_FullMethodName = "/cores.NodeService/SetSecret"
+	NodeService_GetSecret_FullMethodName = "/cores.NodeService/GetSecret"
 )
 
 // NodeServiceClient is the client API for NodeService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// NodeService 节点服务
 type NodeServiceClient interface {
-	Create(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error)
-	Update(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error)
-	Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
+	// View 按 ID 获取节点
 	View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Node, error)
+	// Name 按名称获取节点
 	Name(ctx context.Context, in *pb.Name, opts ...grpc.CallOption) (*pb.Node, error)
-	List(ctx context.Context, in *NodeListRequest, opts ...grpc.CallOption) (*NodeListResponse, error)
-	Push(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
+	// List 获取所有节点
+	List(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*NodeListResponse, error)
+	// Push 接收节点配置推送（NSON 格式）
+	Push(ctx context.Context, in *NodePushRequest, opts ...grpc.CallOption) (*pb.MyBool, error)
+	// Delete 删除节点
+	Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error)
+	// SetSecret 设置节点密钥
+	SetSecret(ctx context.Context, in *NodeSecretRequest, opts ...grpc.CallOption) (*pb.MyBool, error)
+	// GetSecret 获取节点密钥
+	GetSecret(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Message, error)
 }
 
 type nodeServiceClient struct {
@@ -48,36 +57,6 @@ type nodeServiceClient struct {
 
 func NewNodeServiceClient(cc grpc.ClientConnInterface) NodeServiceClient {
 	return &nodeServiceClient{cc}
-}
-
-func (c *nodeServiceClient) Create(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Node)
-	err := c.cc.Invoke(ctx, NodeService_Create_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) Update(ctx context.Context, in *pb.Node, opts ...grpc.CallOption) (*pb.Node, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.Node)
-	err := c.cc.Invoke(ctx, NodeService_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *nodeServiceClient) Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(pb.MyBool)
-	err := c.cc.Invoke(ctx, NodeService_Delete_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *nodeServiceClient) View(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Node, error) {
@@ -100,7 +79,7 @@ func (c *nodeServiceClient) Name(ctx context.Context, in *pb.Name, opts ...grpc.
 	return out, nil
 }
 
-func (c *nodeServiceClient) List(ctx context.Context, in *NodeListRequest, opts ...grpc.CallOption) (*NodeListResponse, error) {
+func (c *nodeServiceClient) List(ctx context.Context, in *pb.MyEmpty, opts ...grpc.CallOption) (*NodeListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NodeListResponse)
 	err := c.cc.Invoke(ctx, NodeService_List_FullMethodName, in, out, cOpts...)
@@ -110,7 +89,7 @@ func (c *nodeServiceClient) List(ctx context.Context, in *NodeListRequest, opts 
 	return out, nil
 }
 
-func (c *nodeServiceClient) Push(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
+func (c *nodeServiceClient) Push(ctx context.Context, in *NodePushRequest, opts ...grpc.CallOption) (*pb.MyBool, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(pb.MyBool)
 	err := c.cc.Invoke(ctx, NodeService_Push_FullMethodName, in, out, cOpts...)
@@ -120,17 +99,56 @@ func (c *nodeServiceClient) Push(ctx context.Context, in *pb.Id, opts ...grpc.Ca
 	return out, nil
 }
 
+func (c *nodeServiceClient) Delete(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.MyBool, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.MyBool)
+	err := c.cc.Invoke(ctx, NodeService_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeServiceClient) SetSecret(ctx context.Context, in *NodeSecretRequest, opts ...grpc.CallOption) (*pb.MyBool, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.MyBool)
+	err := c.cc.Invoke(ctx, NodeService_SetSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeServiceClient) GetSecret(ctx context.Context, in *pb.Id, opts ...grpc.CallOption) (*pb.Message, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(pb.Message)
+	err := c.cc.Invoke(ctx, NodeService_GetSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServiceServer is the server API for NodeService service.
 // All implementations must embed UnimplementedNodeServiceServer
 // for forward compatibility.
+//
+// NodeService 节点服务
 type NodeServiceServer interface {
-	Create(context.Context, *pb.Node) (*pb.Node, error)
-	Update(context.Context, *pb.Node) (*pb.Node, error)
-	Delete(context.Context, *pb.Id) (*pb.MyBool, error)
+	// View 按 ID 获取节点
 	View(context.Context, *pb.Id) (*pb.Node, error)
+	// Name 按名称获取节点
 	Name(context.Context, *pb.Name) (*pb.Node, error)
-	List(context.Context, *NodeListRequest) (*NodeListResponse, error)
-	Push(context.Context, *pb.Id) (*pb.MyBool, error)
+	// List 获取所有节点
+	List(context.Context, *pb.MyEmpty) (*NodeListResponse, error)
+	// Push 接收节点配置推送（NSON 格式）
+	Push(context.Context, *NodePushRequest) (*pb.MyBool, error)
+	// Delete 删除节点
+	Delete(context.Context, *pb.Id) (*pb.MyBool, error)
+	// SetSecret 设置节点密钥
+	SetSecret(context.Context, *NodeSecretRequest) (*pb.MyBool, error)
+	// GetSecret 获取节点密钥
+	GetSecret(context.Context, *pb.Id) (*pb.Message, error)
 	mustEmbedUnimplementedNodeServiceServer()
 }
 
@@ -141,26 +159,26 @@ type NodeServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeServiceServer struct{}
 
-func (UnimplementedNodeServiceServer) Create(context.Context, *pb.Node) (*pb.Node, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedNodeServiceServer) Update(context.Context, *pb.Node) (*pb.Node, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
-}
-func (UnimplementedNodeServiceServer) Delete(context.Context, *pb.Id) (*pb.MyBool, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
 func (UnimplementedNodeServiceServer) View(context.Context, *pb.Id) (*pb.Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method View not implemented")
 }
 func (UnimplementedNodeServiceServer) Name(context.Context, *pb.Name) (*pb.Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Name not implemented")
 }
-func (UnimplementedNodeServiceServer) List(context.Context, *NodeListRequest) (*NodeListResponse, error) {
+func (UnimplementedNodeServiceServer) List(context.Context, *pb.MyEmpty) (*NodeListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
 }
-func (UnimplementedNodeServiceServer) Push(context.Context, *pb.Id) (*pb.MyBool, error) {
+func (UnimplementedNodeServiceServer) Push(context.Context, *NodePushRequest) (*pb.MyBool, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Push not implemented")
+}
+func (UnimplementedNodeServiceServer) Delete(context.Context, *pb.Id) (*pb.MyBool, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedNodeServiceServer) SetSecret(context.Context, *NodeSecretRequest) (*pb.MyBool, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetSecret not implemented")
+}
+func (UnimplementedNodeServiceServer) GetSecret(context.Context, *pb.Id) (*pb.Message, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSecret not implemented")
 }
 func (UnimplementedNodeServiceServer) mustEmbedUnimplementedNodeServiceServer() {}
 func (UnimplementedNodeServiceServer) testEmbeddedByValue()                     {}
@@ -181,60 +199,6 @@ func RegisterNodeServiceServer(s grpc.ServiceRegistrar, srv NodeServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&NodeService_ServiceDesc, srv)
-}
-
-func _NodeService_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Node)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Create(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Create_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Create(ctx, req.(*pb.Node))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Node)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Update(ctx, req.(*pb.Node))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _NodeService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NodeServiceServer).Delete(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NodeService_Delete_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Delete(ctx, req.(*pb.Id))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeService_View_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -274,7 +238,7 @@ func _NodeService_Name_Handler(srv interface{}, ctx context.Context, dec func(in
 }
 
 func _NodeService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NodeListRequest)
+	in := new(pb.MyEmpty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -286,13 +250,13 @@ func _NodeService_List_Handler(srv interface{}, ctx context.Context, dec func(in
 		FullMethod: NodeService_List_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).List(ctx, req.(*NodeListRequest))
+		return srv.(NodeServiceServer).List(ctx, req.(*pb.MyEmpty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeService_Push_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(pb.Id)
+	in := new(NodePushRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -304,7 +268,61 @@ func _NodeService_Push_Handler(srv interface{}, ctx context.Context, dec func(in
 		FullMethod: NodeService_Push_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServiceServer).Push(ctx, req.(*pb.Id))
+		return srv.(NodeServiceServer).Push(ctx, req.(*NodePushRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.Id)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).Delete(ctx, req.(*pb.Id))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeService_SetSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NodeSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).SetSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_SetSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).SetSecret(ctx, req.(*NodeSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeService_GetSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(pb.Id)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).GetSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_GetSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).GetSecret(ctx, req.(*pb.Id))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -316,18 +334,6 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "cores.NodeService",
 	HandlerType: (*NodeServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "Create",
-			Handler:    _NodeService_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _NodeService_Update_Handler,
-		},
-		{
-			MethodName: "Delete",
-			Handler:    _NodeService_Delete_Handler,
-		},
 		{
 			MethodName: "View",
 			Handler:    _NodeService_View_Handler,
@@ -343,6 +349,18 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Push",
 			Handler:    _NodeService_Push_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _NodeService_Delete_Handler,
+		},
+		{
+			MethodName: "SetSecret",
+			Handler:    _NodeService_SetSecret_Handler,
+		},
+		{
+			MethodName: "GetSecret",
+			Handler:    _NodeService_GetSecret_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

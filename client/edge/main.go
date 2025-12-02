@@ -77,7 +77,7 @@ func main() {
 	// for i := 0; i < 10000; i++ {
 	// service.PinSetValue(ctx, pin)
 	// service.PinGetValue(ctx, pin)
-	service.PinGetWrite(ctx, pin)
+	service.PinView(ctx, pin)
 	// }
 	// t2 := time.Now()
 	// fmt.Println("t2-t1", t2.Sub(t1))

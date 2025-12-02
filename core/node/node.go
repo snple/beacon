@@ -8,6 +8,7 @@ import (
 	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/pb"
+	"github.com/snple/beacon/pb/cores"
 	"github.com/snple/beacon/pb/nodes"
 	"github.com/snple/beacon/util/metadata"
 	"github.com/snple/beacon/util/token"
@@ -161,7 +162,13 @@ func (s *NodeService) Login(ctx context.Context, in *nodes.NodeLoginRequest) (*n
 		return &output, status.Error(codes.FailedPrecondition, "The node is not enable")
 	}
 
-	if node.Secret != in.Secret {
+	// 通过 GetSecret API 获取密钥并验证
+	secretReply, err := s.Core().GetNode().GetSecret(ctx, &pb.Id{Id: node.Id})
+	if err != nil {
+		return &output, status.Errorf(codes.Internal, "GetSecret failed: %v", err)
+	}
+
+	if secretReply.Message != in.Secret {
 		s.Logger().Sugar().Errorf("node connect error: node secret is not valid, id: %v, ip: %v",
 			in.Id, metadata.GetPeerAddr(ctx))
 		return &output, status.Error(codes.Unauthenticated, "Please supply valid secret")
@@ -173,8 +180,6 @@ func (s *NodeService) Login(ctx context.Context, in *nodes.NodeLoginRequest) (*n
 	}
 
 	s.Logger().Sugar().Infof("node connect success, id: %v, ip: %v", node.Id, metadata.GetPeerAddr(ctx))
-
-	node.Secret = ""
 
 	output.Node = node
 	output.Token = token
@@ -219,20 +224,16 @@ func (s *NodeService) View(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error
 		return &output, err
 	}
 
-	reply.Secret = ""
-
 	return reply, err
 }
 
-func (s *NodeService) Push(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, error) {
+func (s *NodeService) Push(ctx context.Context, in *nodes.NodePushRequest) (*pb.MyBool, error) {
 	var err error
 	var output pb.MyBool
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil || len(in.Nson) == 0 {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid NSON data")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -240,11 +241,10 @@ func (s *NodeService) Push(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, err
 		return &output, err
 	}
 
-	request := &pb.Id{Id: nodeID}
-
-	_, err = s.Core().GetNode().View(ctx, request)
-	if err != nil {
-		return &output, err
+	// 转发到 Core
+	request := &cores.NodePushRequest{
+		Id:   nodeID,
+		Nson: in.Nson,
 	}
 
 	return s.Core().GetNode().Push(ctx, request)

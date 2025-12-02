@@ -5,21 +5,26 @@ option go_package = "github.com/snple/beacon/pb/cores;cores";
 
 import "generic_message.proto";
 
+// SyncUpdated 同步更新时间戳
 message SyncUpdated {
-    string id = 1;
+    string node_id = 1;
     int64 updated = 2;
 }
 
+// SyncService 同步服务
 service SyncService {
-    rpc SetNodeUpdated(SyncUpdated) returns (pb.MyBool) {}
+    // GetNodeUpdated 获取节点配置更新时间
     rpc GetNodeUpdated(pb.Id) returns (SyncUpdated) {}
+    // WaitNodeUpdated 等待节点配置更新通知
     rpc WaitNodeUpdated(pb.Id) returns (stream pb.MyBool) {}
 
-    rpc SetPinValueUpdated(SyncUpdated) returns (pb.MyBool) {}
+    // GetPinValueUpdated 获取点位值更新时间
     rpc GetPinValueUpdated(pb.Id) returns (SyncUpdated) {}
+    // WaitPinValueUpdated 等待点位值更新通知
     rpc WaitPinValueUpdated(pb.Id) returns (stream pb.MyBool) {}
 
-    rpc SetPinWriteUpdated(SyncUpdated) returns (pb.MyBool) {}
+    // GetPinWriteUpdated 获取点位写入更新时间
     rpc GetPinWriteUpdated(pb.Id) returns (SyncUpdated) {}
+    // WaitPinWriteUpdated 等待点位写入更新通知
     rpc WaitPinWriteUpdated(pb.Id) returns (stream pb.MyBool) {}
 }

@@ -5,8 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
-	"github.com/snple/beacon/edge/model"
+	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/edges"
 	"google.golang.org/grpc"
@@ -191,11 +190,11 @@ func (s *SyncService) WaitPinWriteUpdated(in *pb.MyEmpty,
 }
 
 func (s *SyncService) getNodeUpdated(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_NODE)
+	return s.es.GetStorage().GetSyncTime(storage.SYNC_NODE)
 }
 
 func (s *SyncService) setNodeUpdated(ctx context.Context, updated time.Time) error {
-	err := s.setUpdated(ctx, model.SYNC_NODE, updated)
+	err := s.es.GetStorage().SetSyncTime(storage.SYNC_NODE, updated)
 	if err != nil {
 		return err
 	}
@@ -206,11 +205,11 @@ func (s *SyncService) setNodeUpdated(ctx context.Context, updated time.Time) err
 }
 
 func (s *SyncService) getPinValueUpdated(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN_VALUE)
+	return s.es.GetStorage().GetSyncTime(storage.SYNC_PIN_VALUE)
 }
 
 func (s *SyncService) setPinValueUpdated(ctx context.Context, updated time.Time) error {
-	err := s.setUpdated(ctx, model.SYNC_PIN_VALUE, updated)
+	err := s.es.GetStorage().SetSyncTime(storage.SYNC_PIN_VALUE, updated)
 	if err != nil {
 		return err
 	}
@@ -221,11 +220,11 @@ func (s *SyncService) setPinValueUpdated(ctx context.Context, updated time.Time)
 }
 
 func (s *SyncService) getPinWriteUpdated(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN_WRITE)
+	return s.es.GetStorage().GetSyncTime(storage.SYNC_PIN_WRITE)
 }
 
 func (s *SyncService) setPinWriteUpdated(ctx context.Context, updated time.Time) error {
-	err := s.setUpdated(ctx, model.SYNC_PIN_WRITE, updated)
+	err := s.es.GetStorage().SetSyncTime(storage.SYNC_PIN_WRITE, updated)
 	if err != nil {
 		return err
 	}
@@ -239,63 +238,29 @@ func (s *SyncService) setPinWriteUpdated(ctx context.Context, updated time.Time)
 
 // 配置数据同步状态 (Edge → Core)
 func (s *SyncService) getNodeToRemote(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_NODE_TO_REMOTE)
+	return s.es.GetStorage().GetSyncTime(storage.SYNC_NODE_TO_REMOTE)
 }
 
 func (s *SyncService) setNodeToRemote(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_NODE_TO_REMOTE, updated)
+	return s.es.GetStorage().SetSyncTime(storage.SYNC_NODE_TO_REMOTE, updated)
 }
 
 // PinValue 同步状态 (Edge → Core)
 func (s *SyncService) getPinValueToRemote(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN_VALUE_TO_REMOTE)
+	return s.es.GetStorage().GetSyncTime(storage.SYNC_PIN_VALUE_TO_REMOTE)
 }
 
 func (s *SyncService) setPinValueToRemote(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_PIN_VALUE_TO_REMOTE, updated)
+	return s.es.GetStorage().SetSyncTime(storage.SYNC_PIN_VALUE_TO_REMOTE, updated)
 }
 
 // PinWrite 同步状态 (Core → Edge)
 func (s *SyncService) getPinWriteFromRemote(ctx context.Context) (time.Time, error) {
-	return s.getUpdated(ctx, model.SYNC_PIN_WRITE_FROM_REMOTE)
+	return s.es.GetStorage().GetSyncTime(storage.SYNC_PIN_WRITE_FROM_REMOTE)
 }
 
 func (s *SyncService) setPinWriteFromRemote(ctx context.Context, updated time.Time) error {
-	return s.setUpdated(ctx, model.SYNC_PIN_WRITE_FROM_REMOTE, updated)
-}
-
-func (s *SyncService) getUpdated(_ context.Context, key string) (time.Time, error) {
-	txn := s.es.GetBadgerDB().NewTransactionAt(uint64(time.Now().UnixMicro()), false)
-	defer txn.Discard()
-
-	dbitem, err := txn.Get([]byte(key))
-	if err != nil {
-		if err == badger.ErrKeyNotFound {
-			return time.Time{}, nil
-		}
-		return time.Time{}, status.Errorf(codes.Internal, "BadgerDB Get: %v", err)
-	}
-
-	return time.UnixMicro(int64(dbitem.Version())), nil
-}
-
-func (s *SyncService) setUpdated(_ context.Context, key string, updated time.Time) error {
-	ts := uint64(updated.UnixMicro())
-
-	txn := s.es.GetBadgerDB().NewTransactionAt(ts, true)
-	defer txn.Discard()
-
-	err := txn.Set([]byte(key), []byte{})
-	if err != nil {
-		return status.Errorf(codes.Internal, "BadgerDB Set: %v", err)
-	}
-
-	err = txn.CommitAt(ts, nil)
-	if err != nil {
-		return status.Errorf(codes.Internal, "BadgerDB CommitAt: %v", err)
-	}
-
-	return nil
+	return s.es.GetStorage().SetSyncTime(storage.SYNC_PIN_WRITE_FROM_REMOTE, updated)
 }
 
 type NotifyType int

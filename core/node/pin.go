@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"io"
 
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
@@ -25,13 +26,10 @@ func newPinService(ns *NodeService) *PinService {
 
 func (s *PinService) View(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
 	var output pb.Pin
-	var err error
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -39,13 +37,10 @@ func (s *PinService) View(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
 		return &output, err
 	}
 
-	reply, err := s.ns.Core().GetPin().View(ctx, in)
+	request := &cores.PinViewRequest{NodeId: nodeID, PinId: in.Id}
+	reply, err := s.ns.Core().GetPin().View(ctx, request)
 	if err != nil {
 		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
@@ -53,13 +48,10 @@ func (s *PinService) View(ctx context.Context, in *pb.Id) (*pb.Pin, error) {
 
 func (s *PinService) Name(ctx context.Context, in *pb.Name) (*pb.Pin, error) {
 	var output pb.Pin
-	var err error
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -68,28 +60,20 @@ func (s *PinService) Name(ctx context.Context, in *pb.Name) (*pb.Pin, error) {
 	}
 
 	request := &cores.PinNameRequest{NodeId: nodeID, Name: in.Name}
-
 	reply, err := s.ns.Core().GetPin().Name(ctx, request)
 	if err != nil {
 		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
 	}
 
 	return reply, nil
 }
 
 func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes.PinListResponse, error) {
-	var err error
 	var output nodes.PinListResponse
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -98,7 +82,6 @@ func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes
 	}
 
 	request := &cores.PinListRequest{
-		Page:   in.GetPage(),
 		NodeId: nodeID,
 		WireId: in.WireId,
 	}
@@ -108,57 +91,19 @@ func (s *PinService) List(ctx context.Context, in *nodes.PinListRequest) (*nodes
 		return &output, err
 	}
 
-	output.Count = reply.Count
-	output.Page = reply.Page
 	output.Pins = reply.Pins
 
 	return &output, nil
 }
 
-// pinPushStreamWrapper 包装 node 端的流以添加 NodeID 并转发到 Core
-type pinPushStreamWrapper struct {
-	grpc.ClientStreamingServer[pb.Pin, pb.MyBool]
-	nodeID string
-}
-
-func (w *pinPushStreamWrapper) Recv() (*pb.Pin, error) {
-	in, err := w.ClientStreamingServer.Recv()
-	if err != nil {
-		return nil, err
-	}
-	in.NodeId = w.nodeID
-	return in, nil
-}
-
-func (s *PinService) Push(stream grpc.ClientStreamingServer[pb.Pin, pb.MyBool]) error {
-	ctx := stream.Context()
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return err
-	}
-
-	// 创建包装器流，自动添加 NodeID
-	wrapper := &pinPushStreamWrapper{
-		ClientStreamingServer: stream,
-		nodeID:                nodeID,
-	}
-
-	// 直接调用 Core 的 Push 方法
-	return s.ns.Core().GetPin().Push(wrapper)
-}
-
 // value
 
 func (s *PinService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue, error) {
-	var err error
 	var output pb.PinValue
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -166,27 +111,22 @@ func (s *PinService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue, err
 		return &output, err
 	}
 
-	reply, err := s.ns.Core().GetPin().View(ctx, in)
+	// 验证 Pin 属于当前节点
+	pinRequest := &cores.PinViewRequest{NodeId: nodeID, PinId: in.Id}
+	_, err = s.ns.Core().GetPin().View(ctx, pinRequest)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().GetValue(ctx, in)
+	return s.ns.Core().GetPinValue().GetValue(ctx, in)
 }
 
 func (s *PinService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.PinNameValue, error) {
-	var err error
 	var output pb.PinNameValue
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -194,61 +134,8 @@ func (s *PinService) GetValueByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 		return &output, err
 	}
 
-	reply, err := s.ns.Core().GetPin().GetValueByName(ctx,
-		&cores.PinGetValueByNameRequest{NodeId: nodeID, Name: in.Name})
-	if err != nil {
-		return &output, err
-	}
-
-	output.Id = reply.Id
-	output.Name = reply.Name
-	output.Value = reply.Value
-	output.Updated = reply.Updated
-
-	return &output, nil
-}
-
-func (s *PinService) ViewValue(ctx context.Context, in *pb.Id) (*pb.PinValueUpdated, error) {
-	var output pb.PinValueUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	reply, err := s.ns.Core().GetPin().ViewValue(ctx, in)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return reply, nil
-}
-
-// pinPushValueStreamWrapper 包装 node 端的流以添加验证并转发到 Core
-type pinPushValueStreamWrapper struct {
-	grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]
-	nodeID string
-	ns     *NodeService
-}
-
-func (w *pinPushValueStreamWrapper) Recv() (*pb.PinValue, error) {
-	in, err := w.ClientStreamingServer.Recv()
-	if err != nil {
-		return nil, err
-	}
-	return in, nil
+	request := &cores.PinNameRequest{NodeId: nodeID, Name: in.Name}
+	return s.ns.Core().GetPinValue().GetValueByName(ctx, request)
 }
 
 func (s *PinService) PushValue(stream grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]) error {
@@ -259,28 +146,40 @@ func (s *PinService) PushValue(stream grpc.ClientStreamingServer[pb.PinValue, pb
 		return err
 	}
 
-	// 创建包装器流
-	wrapper := &pinPushValueStreamWrapper{
-		ClientStreamingServer: stream,
-		nodeID:                nodeID,
-		ns:                    s.ns,
-	}
+	var output pb.MyBool
 
-	// 直接调用 Core 的 PushValue 方法
-	return s.ns.Core().GetPin().PushValue(wrapper)
+	for {
+		in, err := stream.Recv()
+		if err == io.EOF {
+			return stream.SendAndClose(&output)
+		}
+		if err != nil {
+			return err
+		}
+
+		// 验证 Pin 属于当前节点
+		pinRequest := &cores.PinViewRequest{NodeId: nodeID, PinId: in.Id}
+		_, err = s.ns.Core().GetPin().View(ctx, pinRequest)
+		if err != nil {
+			return err
+		}
+
+		// 设置值
+		_, err = s.ns.Core().GetPinValue().SetValue(ctx, in)
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // write
 
 func (s *PinService) GetWrite(ctx context.Context, in *pb.Id) (*pb.PinValue, error) {
-	var err error
 	var output pb.PinValue
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -288,27 +187,22 @@ func (s *PinService) GetWrite(ctx context.Context, in *pb.Id) (*pb.PinValue, err
 		return &output, err
 	}
 
-	reply, err := s.ns.Core().GetPin().View(ctx, in)
+	// 验证 Pin 属于当前节点
+	pinRequest := &cores.PinViewRequest{NodeId: nodeID, PinId: in.Id}
+	_, err = s.ns.Core().GetPin().View(ctx, pinRequest)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().GetWrite(ctx, in)
+	return s.ns.Core().GetPinWrite().GetWrite(ctx, in)
 }
 
 func (s *PinService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var err error
 	var output pb.MyBool
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -316,29 +210,22 @@ func (s *PinService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool,
 		return &output, err
 	}
 
-	request := &pb.Id{Id: in.Id}
-
-	reply, err := s.ns.Core().GetPin().View(ctx, request)
+	// 验证 Pin 属于当前节点
+	pinRequest := &cores.PinViewRequest{NodeId: nodeID, PinId: in.Id}
+	_, err = s.ns.Core().GetPin().View(ctx, pinRequest)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().SetWrite(ctx, in)
+	return s.ns.Core().GetPinWrite().SetWrite(ctx, in)
 }
 
 func (s *PinService) GetWriteByName(ctx context.Context, in *pb.Name) (*pb.PinNameValue, error) {
-	var err error
 	var output pb.PinNameValue
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -346,29 +233,16 @@ func (s *PinService) GetWriteByName(ctx context.Context, in *pb.Name) (*pb.PinNa
 		return &output, err
 	}
 
-	reply, err := s.ns.Core().GetPin().GetWriteByName(ctx,
-		&cores.PinGetValueByNameRequest{NodeId: nodeID, Name: in.Name})
-	if err != nil {
-		return &output, err
-	}
-
-	output.Id = reply.Id
-	output.Name = reply.Name
-	output.Value = reply.Value
-	output.Updated = reply.Updated
-
-	return &output, nil
+	request := &cores.PinNameRequest{NodeId: nodeID, Name: in.Name}
+	return s.ns.Core().GetPinWrite().GetWriteByName(ctx, request)
 }
 
 func (s *PinService) SetWriteByName(ctx context.Context, in *pb.PinNameValue) (*pb.MyBool, error) {
-	var err error
 	var output pb.MyBool
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -376,47 +250,16 @@ func (s *PinService) SetWriteByName(ctx context.Context, in *pb.PinNameValue) (*
 		return &output, err
 	}
 
-	return s.ns.Core().GetPin().SetWriteByName(ctx,
-		&cores.PinNameValue{NodeId: nodeID, Name: in.Name, Value: in.Value})
-}
-
-func (s *PinService) ViewWrite(ctx context.Context, in *pb.Id) (*pb.PinValueUpdated, error) {
-	var output pb.PinValueUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	nodeID, err := validateToken(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	reply, err := s.ns.Core().GetPin().ViewWrite(ctx, in)
-	if err != nil {
-		return &output, err
-	}
-
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return reply, nil
+	request := &cores.PinNameValueRequest{NodeId: nodeID, Name: in.Name, Value: in.Value}
+	return s.ns.Core().GetPinWrite().SetWriteByName(ctx, request)
 }
 
 func (s *PinService) DeleteWrite(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var err error
 	var output pb.MyBool
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
 	}
 
 	nodeID, err := validateToken(ctx)
@@ -424,29 +267,17 @@ func (s *PinService) DeleteWrite(ctx context.Context, in *pb.Id) (*pb.MyBool, er
 		return &output, err
 	}
 
-	reply, err := s.ns.Core().GetPin().ViewWrite(ctx, in)
+	// 验证 Pin 属于当前节点
+	pinRequest := &cores.PinViewRequest{NodeId: nodeID, PinId: in.Id}
+	_, err = s.ns.Core().GetPin().View(ctx, pinRequest)
 	if err != nil {
 		return &output, err
 	}
 
-	if reply.NodeId != nodeID {
-		return &output, status.Error(codes.NotFound, "Query: reply.NodeId != nodeID")
-	}
-
-	return s.ns.Core().GetPin().DeleteWrite(ctx, in)
+	return s.ns.Core().GetPinWrite().DeleteWrite(ctx, in)
 }
 
-// pinPullWriteStreamWrapper 包装服务端流以转发 PullWrite 响应
-type pinPullWriteStreamWrapper struct {
-	grpc.ServerStreamingServer[pb.PinValueUpdated]
-	nodeID string
-}
-
-func (w *pinPullWriteStreamWrapper) Send(item *pb.PinValueUpdated) error {
-	return w.ServerStreamingServer.Send(item)
-}
-
-func (s *PinService) PullWrite(in *nodes.PinPullWriteRequest, stream grpc.ServerStreamingServer[pb.PinValueUpdated]) error {
+func (s *PinService) PullWrite(in *nodes.PinPullWriteRequest, stream grpc.ServerStreamingServer[pb.PinValue]) error {
 	ctx := stream.Context()
 
 	nodeID, err := validateToken(ctx)
@@ -459,15 +290,22 @@ func (s *PinService) PullWrite(in *nodes.PinPullWriteRequest, stream grpc.Server
 		After:  in.After,
 		Limit:  in.Limit,
 		NodeId: nodeID,
-		WireId: in.WireId,
 	}
 
 	// 创建包装器流
 	wrapper := &pinPullWriteStreamWrapper{
 		ServerStreamingServer: stream,
-		nodeID:                nodeID,
 	}
 
 	// 直接调用 Core 的 PullWrite 方法
-	return s.ns.Core().GetPin().PullWrite(request, wrapper)
+	return s.ns.Core().GetPinWrite().PullWrite(request, wrapper)
+}
+
+// pinPullWriteStreamWrapper 包装服务端流以转发 PullWrite 响应
+type pinPullWriteStreamWrapper struct {
+	grpc.ServerStreamingServer[pb.PinValue]
+}
+
+func (w *pinPullWriteStreamWrapper) Send(item *pb.PinValue) error {
+	return w.ServerStreamingServer.Send(item)
 }

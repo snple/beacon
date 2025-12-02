@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/gin-gonic/gin"
 	"github.com/snple/beacon"
 	"github.com/snple/beacon/bin/core/config"
 	"github.com/snple/beacon/bin/core/log"
 	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/core/node"
-	"github.com/snple/beacon/db"
 	tcp_node "github.com/snple/beacon/tcp/node"
 	"github.com/snple/beacon/util"
 	_ "github.com/snple/beacon/util/compress/zstd"
@@ -41,16 +41,14 @@ func main() {
 	log.Logger.Info("main: Started")
 	defer log.Logger.Info("main: Completed")
 
-	bundb, err := db.ConnectSqlite(config.Config.DB.File, config.Config.DB.Debug)
+	badgerOpts := badger.DefaultOptions(config.Config.DB.File)
+	badgerOpts.Logger = nil
+	db, err := badger.Open(badgerOpts)
 	if err != nil {
-		log.Logger.Sugar().Fatalf("connecting to db: %v", err)
+		log.Logger.Sugar().Fatalf("opening badger db: %v", err)
 	}
 
-	defer bundb.Close()
-
-	if err = core.CreateSchema(bundb); err != nil {
-		log.Logger.Sugar().Fatalf("create schema: %v", err)
-	}
+	defer db.Close()
 
 	command := flag.Arg(0)
 	switch command {
@@ -61,7 +59,7 @@ func main() {
 
 	coreOpts := make([]core.CoreOption, 0)
 
-	cs, err := core.Core(bundb, coreOpts...)
+	cs, err := core.Core(db, coreOpts...)
 	if err != nil {
 		log.Logger.Sugar().Fatalf("NewCoreService: %v", err)
 	}

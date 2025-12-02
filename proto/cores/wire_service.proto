@@ -3,89 +3,119 @@ package cores;
 
 option go_package = "github.com/snple/beacon/pb/cores;cores";
 
-import "wire_message.proto";
+import "node_message.proto";
 import "generic_message.proto";
+import "nson.proto";
 
-// wire
-message WireListRequest {
-    pb.Page page = 1;
-    string node_id = 2;
+// WireViewRequest 获取 Wire 请求
+message WireViewRequest {
+    string node_id = 1;
+    string wire_id = 2;
 }
 
-message WireListResponse {
-    pb.Page page = 1;
-    uint32 count = 2;
-    repeated pb.Wire wires = 3;
-}
-
+// WireNameRequest 按名称获取 Wire 请求
 message WireNameRequest {
     string node_id = 1;
     string name = 2;
 }
 
+// WireListRequest 获取 Wire 列表请求
+message WireListRequest {
+    string node_id = 1;
+}
+
+// WireListResponse Wire 列表响应
+message WireListResponse {
+    repeated pb.Wire wires = 1;
+}
+
+// WireService 通道服务
 service WireService {
-    rpc View(pb.Id) returns (pb.Wire) {}
+    // View 按 ID 获取 Wire
+    rpc View(WireViewRequest) returns (pb.Wire) {}
+    // Name 按名称获取 Wire
     rpc Name(WireNameRequest) returns (pb.Wire) {}
+    // NameFull 按全名获取 Wire（NodeName.WireName）
     rpc NameFull(pb.Name) returns (pb.Wire) {}
+    // List 获取节点的所有 Wire
     rpc List(WireListRequest) returns (WireListResponse) {}
-    rpc Push(stream pb.Wire) returns (pb.MyBool) {}
 }
 
-// pin
-message PinListRequest {
-    pb.Page page = 1;
-    string node_id = 2;
-    string wire_id = 3;
+// PinViewRequest 获取 Pin 请求
+message PinViewRequest {
+    string node_id = 1;
+    string pin_id = 2;
 }
 
-message PinListResponse {
-    pb.Page page = 1;
-    uint32 count = 2;
-    repeated pb.Pin pins = 3;
-}
-
+// PinNameRequest 按名称获取 Pin 请求
 message PinNameRequest {
     string node_id = 1;
     string name = 2;
 }
 
-message PinGetValueByNameRequest {
+// PinListRequest 获取 Pin 列表请求
+message PinListRequest {
+    string node_id = 1;
+    string wire_id = 2;  // 可选，如果为空则获取节点的所有 Pin
+}
+
+// PinListResponse Pin 列表响应
+message PinListResponse {
+    repeated pb.Pin pins = 1;
+}
+
+// PinService 点位服务
+service PinService {
+    // View 按 ID 获取 Pin
+    rpc View(PinViewRequest) returns (pb.Pin) {}
+    // Name 按名称获取 Pin（支持 WireName.PinName）
+    rpc Name(PinNameRequest) returns (pb.Pin) {}
+    // NameFull 按全名获取 Pin（NodeName.WireName.PinName）
+    rpc NameFull(pb.Name) returns (pb.Pin) {}
+    // List 获取 Pin 列表
+    rpc List(PinListRequest) returns (PinListResponse) {}
+}
+
+// PinValueService 点位值服务
+service PinValueService {
+    // GetValue 按 ID 获取点位值
+    rpc GetValue(pb.Id) returns (pb.PinValue) {}
+    // SetValue 设置点位值
+    rpc SetValue(pb.PinValue) returns (pb.MyBool) {}
+    // GetValueByName 按名称获取点位值
+    rpc GetValueByName(PinNameRequest) returns (pb.PinNameValue) {}
+    // SetValueByName 按名称设置点位值
+    rpc SetValueByName(PinNameValueRequest) returns (pb.MyBool) {}
+    // PushValue 批量推送点位值
+    rpc PushValue(stream pb.PinValue) returns (pb.MyBool) {}
+}
+
+// PinNameValueRequest 按名称设置点位值请求
+message PinNameValueRequest {
     string node_id = 1;
     string name = 2;
+    string value = 3;
 }
 
-message PinNameValue {
-    string node_id = 1;
-    string id = 2;
-    string name = 3;
-    string value = 4;
-    int64 updated = 5;
-}
-
-message PinPullWriteRequest {
-    int64 after = 1;
-    uint32 limit = 2;
-    string node_id = 3;
-    string wire_id = 4;
-}
-
-service PinService {
-    rpc View(pb.Id) returns (pb.Pin) {}
-    rpc Name(PinNameRequest) returns (pb.Pin) {}
-    rpc NameFull(pb.Name) returns (pb.Pin) {}
-    rpc List(PinListRequest) returns (PinListResponse) {}
-    rpc Push(stream pb.Pin) returns (pb.MyBool) {}
-
-    rpc GetValue(pb.Id) returns (pb.PinValue) {}
-    rpc GetValueByName(PinGetValueByNameRequest) returns (PinNameValue) {}
-    rpc ViewValue(pb.Id) returns (pb.PinValueUpdated) {}
-    rpc PushValue(stream pb.PinValue) returns (pb.MyBool) {}
-
+// PinWriteService 点位写入服务
+service PinWriteService {
+    // GetWrite 按 ID 获取写入值
     rpc GetWrite(pb.Id) returns (pb.PinValue) {}
+    // SetWrite 设置写入值
     rpc SetWrite(pb.PinValue) returns (pb.MyBool) {}
-    rpc GetWriteByName(PinGetValueByNameRequest) returns (PinNameValue) {}
-    rpc SetWriteByName(PinNameValue) returns (pb.MyBool) {}
-    rpc ViewWrite(pb.Id) returns (pb.PinValueUpdated) {}
+    // GetWriteByName 按名称获取写入值
+    rpc GetWriteByName(PinNameRequest) returns (pb.PinNameValue) {}
+    // SetWriteByName 按名称设置写入值
+    rpc SetWriteByName(PinNameValueRequest) returns (pb.MyBool) {}
+    // DeleteWrite 删除写入值
     rpc DeleteWrite(pb.Id) returns (pb.MyBool) {}
-    rpc PullWrite(PinPullWriteRequest) returns (stream pb.PinValueUpdated) {}
+    // PullWrite 拉取写入值（用于 Edge 同步）
+    rpc PullWrite(PinPullWriteRequest) returns (stream pb.PinValue) {}
+}
+
+// PinPullWriteRequest 拉取写入值请求
+message PinPullWriteRequest {
+    string node_id = 1;
+    int64 after = 2;
+    uint32 limit = 3;
 }

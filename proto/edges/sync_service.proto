@@ -5,21 +5,25 @@ option go_package = "github.com/snple/beacon/pb/edges;edges";
 
 import "generic_message.proto";
 
+// SyncUpdated 同步更新时间戳
 message SyncUpdated {
-    // string id = 1;
-    int64 updated = 2;
+    int64 updated = 1;
 }
 
+// SyncService Edge 端同步服务
 service SyncService {
-    rpc SetNodeUpdated(SyncUpdated) returns (pb.MyBool) {}
+    // GetNodeUpdated 获取节点配置更新时间
     rpc GetNodeUpdated(pb.MyEmpty) returns (SyncUpdated) {}
+    // WaitNodeUpdated 等待节点配置更新通知
     rpc WaitNodeUpdated(pb.MyEmpty) returns (stream pb.MyBool) {}
 
-    rpc SetPinValueUpdated(SyncUpdated) returns (pb.MyBool) {}
+    // GetPinValueUpdated 获取点位值更新时间
     rpc GetPinValueUpdated(pb.MyEmpty) returns (SyncUpdated) {}
+    // WaitPinValueUpdated 等待点位值更新通知
     rpc WaitPinValueUpdated(pb.MyEmpty) returns (stream pb.MyBool) {}
 
-    rpc SetPinWriteUpdated(SyncUpdated) returns (pb.MyBool) {}
+    // GetPinWriteUpdated 获取点位写入更新时间
     rpc GetPinWriteUpdated(pb.MyEmpty) returns (SyncUpdated) {}
+    // WaitPinWriteUpdated 等待点位写入更新通知
     rpc WaitPinWriteUpdated(pb.MyEmpty) returns (stream pb.MyBool) {}
 }
