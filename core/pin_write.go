@@ -5,12 +5,12 @@ import (
 	"time"
 
 	"github.com/snple/beacon/consts"
+	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 type PinWriteService struct {
@@ -35,7 +35,13 @@ func (s *PinWriteService) GetWrite(ctx context.Context, in *pb.Id) (*pb.PinValue
 
 	output.Id = in.Id
 
-	value, updated, err := s.cs.GetStorage().GetPinWrite(in.Id)
+	// 获取 Pin 所属的 Node ID
+	nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
+	if err != nil {
+		return &output, nil
+	}
+
+	value, updated, err := s.cs.GetStorage().GetPinWrite(nodeID, in.Id)
 	if err != nil {
 		// 如果未找到值，返回空值而不是错误
 		return &output, nil
@@ -55,6 +61,12 @@ func (s *PinWriteService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.My
 		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id and Value")
 	}
 
+	// 获取 Pin 所属的 Node ID
+	nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
+	if err != nil {
+		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
+	}
+
 	// 验证 Pin 存在且可写
 	pin, err := s.cs.GetStorage().GetPinByID(in.Id)
 	if err != nil {
@@ -65,7 +77,7 @@ func (s *PinWriteService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.My
 		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
 	}
 
-	err = s.cs.GetStorage().SetPinWrite(ctx, in.Id, in.Value, time.Now())
+	err = s.cs.GetStorage().SetPinWrite(ctx, nodeID, in.Id, in.Value, time.Now())
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "SetPinWrite failed: %v", err)
 	}
@@ -91,7 +103,7 @@ func (s *PinWriteService) GetWriteByName(ctx context.Context, in *cores.PinNameR
 
 	output.Name = in.Name
 
-	value, updated, err := s.cs.GetStorage().GetPinWrite(pin.ID)
+	value, updated, err := s.cs.GetStorage().GetPinWrite(in.NodeId, pin.ID)
 	if err != nil {
 		// 如果未找到值，返回空值而不是错误
 		return &output, nil
@@ -131,7 +143,7 @@ func (s *PinWriteService) SetWriteByName(ctx context.Context, in *cores.PinNameV
 		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
 	}
 
-	err = s.cs.GetStorage().SetPinWrite(ctx, pin.ID, in.Value, time.Now())
+	err = s.cs.GetStorage().SetPinWrite(ctx, in.NodeId, pin.ID, in.Value, time.Now())
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "SetPinWrite failed: %v", err)
 	}
@@ -150,7 +162,15 @@ func (s *PinWriteService) DeleteWrite(ctx context.Context, in *pb.Id) (*pb.MyBoo
 		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 	}
 
-	err := s.cs.GetStorage().DeletePinWrite(ctx, in.Id)
+	// 获取 Pin 所属的 Node ID
+	nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
+	if err != nil {
+		// Pin 不存在，返回成功
+		output.Bool = true
+		return &output, nil
+	}
+
+	err = s.cs.GetStorage().DeletePinWrite(ctx, nodeID, in.Id)
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "DeletePinWrite failed: %v", err)
 	}
@@ -173,11 +193,12 @@ func (s *PinWriteService) PullWrite(in *cores.PinPullWriteRequest, stream grpc.S
 	}
 
 	for _, w := range writes {
-		// 反序列化 NsonValue
+		// 使用 dt.DecodeNsonValue 反序列化
 		var value *pb.NsonValue
 		if len(w.Value) > 0 {
-			value = &pb.NsonValue{}
-			if err := proto.Unmarshal(w.Value, value); err != nil {
+			var err error
+			value, err = dt.DecodeNsonValue(w.Value)
+			if err != nil {
 				continue
 			}
 		}

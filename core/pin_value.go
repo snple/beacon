@@ -34,7 +34,13 @@ func (s *PinValueService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue
 
 	output.Id = in.Id
 
-	value, updated, err := s.cs.GetStorage().GetPinValue(in.Id)
+	// 获取 Pin 所属的 Node ID
+	nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
+	if err != nil {
+		return &output, nil
+	}
+
+	value, updated, err := s.cs.GetStorage().GetPinValue(nodeID, in.Id)
 	if err != nil {
 		// 如果未找到值，返回空值而不是错误
 		return &output, nil
@@ -54,13 +60,13 @@ func (s *PinValueService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.My
 		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 	}
 
-	// 验证 Pin 存在
-	_, err := s.cs.GetStorage().GetPinByID(in.Id)
+	// 验证 Pin 存在并获取 nodeID
+	nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
 	if err != nil {
 		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	err = s.cs.GetStorage().SetPinValue(ctx, in.Id, in.Value, time.UnixMicro(in.Updated))
+	err = s.cs.GetStorage().SetPinValue(ctx, nodeID, in.Id, in.Value, time.UnixMicro(in.Updated))
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "SetPinValue failed: %v", err)
 	}
@@ -86,7 +92,7 @@ func (s *PinValueService) GetValueByName(ctx context.Context, in *cores.PinNameR
 
 	output.Name = in.Name
 
-	value, updated, err := s.cs.GetStorage().GetPinValue(pin.ID)
+	value, updated, err := s.cs.GetStorage().GetPinValue(in.NodeId, pin.ID)
 	if err != nil {
 		// 如果未找到值，返回空值而不是错误
 		return &output, nil
@@ -111,7 +117,7 @@ func (s *PinValueService) SetValueByName(ctx context.Context, in *cores.PinNameV
 		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	err = s.cs.GetStorage().SetPinValue(ctx, pin.ID, in.Value, time.Now())
+	err = s.cs.GetStorage().SetPinValue(ctx, in.NodeId, pin.ID, in.Value, time.Now())
 	if err != nil {
 		return &output, status.Errorf(codes.Internal, "SetPinValue failed: %v", err)
 	}
@@ -140,13 +146,13 @@ func (s *PinValueService) PushValue(stream grpc.ClientStreamingServer[pb.PinValu
 			return status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
 		}
 
-		// 验证 Pin 存在
-		_, err = s.cs.GetStorage().GetPinByID(in.Id)
+		// 验证 Pin 存在并获取 nodeID
+		nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
 		if err != nil {
 			return status.Errorf(codes.NotFound, "Pin not found: %v", err)
 		}
 
-		err = s.cs.GetStorage().SetPinValue(ctx, in.Id, in.Value, time.UnixMicro(in.Updated))
+		err = s.cs.GetStorage().SetPinValue(ctx, nodeID, in.Id, in.Value, time.UnixMicro(in.Updated))
 		if err != nil {
 			return status.Errorf(codes.Internal, "SetPinValue failed: %v", err)
 		}

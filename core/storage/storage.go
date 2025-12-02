@@ -349,6 +349,24 @@ func (s *Storage) GetPinByID(pinID string) (*Pin, error) {
 	return nil, fmt.Errorf("pin not found: %s", pinID)
 }
 
+// GetPinNodeID 获取 Pin 所属的 Node ID
+func (s *Storage) GetPinNodeID(pinID string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, node := range s.nodes {
+		for i := range node.Wires {
+			for j := range node.Wires[i].Pins {
+				if node.Wires[i].Pins[j].ID == pinID {
+					return node.ID, nil
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("pin not found: %s", pinID)
+}
+
 // GetPinByName 按名称获取 Pin（支持 "wire.pin"）
 func (s *Storage) GetPinByName(nodeID, pinName string) (*Pin, error) {
 	s.mu.RLock()
@@ -521,18 +539,23 @@ func (s *Storage) SetSecret(ctx context.Context, nodeID, secret string) error {
 
 // PinValueEntry 点位值条目
 type PinValueEntry struct {
-	ID      string
-	Value   []byte // protobuf 序列化的 pb.NsonValue
-	Updated time.Time
+	ID      string    `nson:"id"`
+	Value   []byte    `nson:"value"` // NSON 序列化的 pb.NsonValue
+	Updated time.Time `nson:"updated"`
 }
 
+const (
+	PIN_VALUE_PREFIX = "pv:" // pv:{nodeID}:{pinID}
+	PIN_WRITE_PREFIX = "pw:" // pw:{nodeID}:{pinID}
+)
+
 // GetPinValue 获取点位值
-func (s *Storage) GetPinValue(pinID string) (*pb.NsonValue, time.Time, error) {
+func (s *Storage) GetPinValue(nodeID, pinID string) (*pb.NsonValue, time.Time, error) {
 	var value *pb.NsonValue
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte("pv:" + pinID))
+		item, err := txn.Get([]byte(PIN_VALUE_PREFIX + nodeID + ":" + pinID))
 		if err != nil {
 			return err
 		}
@@ -569,7 +592,7 @@ func (s *Storage) GetPinValue(pinID string) (*pb.NsonValue, time.Time, error) {
 }
 
 // SetPinValue 设置点位值
-func (s *Storage) SetPinValue(ctx context.Context, pinID string, value *pb.NsonValue, updated time.Time) error {
+func (s *Storage) SetPinValue(ctx context.Context, nodeID, pinID string, value *pb.NsonValue, updated time.Time) error {
 	// 使用 dt.EncodeNsonValue 序列化
 	valueBytes, err := dt.EncodeNsonValue(value)
 	if err != nil {
@@ -593,19 +616,66 @@ func (s *Storage) SetPinValue(ctx context.Context, pinID string, value *pb.NsonV
 	}
 
 	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte("pv:"+pinID), buf.Bytes())
+		return txn.Set([]byte(PIN_VALUE_PREFIX+nodeID+":"+pinID), buf.Bytes())
 	})
+}
+
+// ListPinValues 列出节点的点位值（使用前缀迭代器）
+func (s *Storage) ListPinValues(nodeID string, after time.Time, limit int) ([]PinValueEntry, error) {
+	var result []PinValueEntry
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+
+		// 使用 pv:{nodeID}: 前缀扫描
+		prefix := []byte(PIN_VALUE_PREFIX + nodeID + ":")
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
+				buf := bytes.NewBuffer(val)
+				m, err := nson.DecodeMap(buf)
+				if err != nil {
+					return err
+				}
+
+				var entry PinValueEntry
+				if err := nson.Unmarshal(m, &entry); err != nil {
+					return err
+				}
+
+				if entry.Updated.After(after) {
+					result = append(result, entry)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
+			if limit > 0 && len(result) >= limit {
+				break
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // --- PinWrite 操作 ---
 
 // GetPinWrite 获取点位写入值
-func (s *Storage) GetPinWrite(pinID string) (*pb.NsonValue, time.Time, error) {
+func (s *Storage) GetPinWrite(nodeID, pinID string) (*pb.NsonValue, time.Time, error) {
 	var value *pb.NsonValue
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte("pw:" + pinID))
+		item, err := txn.Get([]byte(PIN_WRITE_PREFIX + nodeID + ":" + pinID))
 		if err != nil {
 			return err
 		}
@@ -642,7 +712,7 @@ func (s *Storage) GetPinWrite(pinID string) (*pb.NsonValue, time.Time, error) {
 }
 
 // SetPinWrite 设置点位写入值
-func (s *Storage) SetPinWrite(ctx context.Context, pinID string, value *pb.NsonValue, updated time.Time) error {
+func (s *Storage) SetPinWrite(ctx context.Context, nodeID, pinID string, value *pb.NsonValue, updated time.Time) error {
 	// 使用 dt.EncodeNsonValue 序列化
 	valueBytes, err := dt.EncodeNsonValue(value)
 	if err != nil {
@@ -666,38 +736,30 @@ func (s *Storage) SetPinWrite(ctx context.Context, pinID string, value *pb.NsonV
 	}
 
 	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte("pw:"+pinID), buf.Bytes())
+		return txn.Set([]byte(PIN_WRITE_PREFIX+nodeID+":"+pinID), buf.Bytes())
 	})
 }
 
 // DeletePinWrite 删除点位写入值
-func (s *Storage) DeletePinWrite(ctx context.Context, pinID string) error {
+func (s *Storage) DeletePinWrite(ctx context.Context, nodeID, pinID string) error {
 	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete([]byte("pw:" + pinID))
+		return txn.Delete([]byte(PIN_WRITE_PREFIX + nodeID + ":" + pinID))
 	})
 }
 
-// ListPinWrites 列出节点的写入值
+// ListPinWrites 列出节点的写入值（使用前缀迭代器，避免扫描所有 Pin）
 func (s *Storage) ListPinWrites(nodeID string, after time.Time, limit int) ([]PinValueEntry, error) {
 	var result []PinValueEntry
 
-	// 获取节点的所有 Pin
-	pins, err := s.ListPinsByNode(nodeID)
-	if err != nil {
-		return nil, err
-	}
+	err := s.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
 
-	err = s.db.View(func(txn *badger.Txn) error {
-		for _, pin := range pins {
-			item, err := txn.Get([]byte("pw:" + pin.ID))
-			if err != nil {
-				if err == badger.ErrKeyNotFound {
-					continue
-				}
-				return err
-			}
-
-			err = item.Value(func(val []byte) error {
+		// 使用 pw:{nodeID}: 前缀扫描
+		prefix := []byte(PIN_WRITE_PREFIX + nodeID + ":")
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
 				buf := bytes.NewBuffer(val)
 				m, err := nson.DecodeMap(buf)
 				if err != nil {
@@ -712,7 +774,6 @@ func (s *Storage) ListPinWrites(nodeID string, after time.Time, limit int) ([]Pi
 				if entry.Updated.After(after) {
 					result = append(result, entry)
 				}
-
 				return nil
 			})
 			if err != nil {

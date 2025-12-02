@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/nodes"
 	"github.com/snple/beacon/util/metadata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 type NodeUpService struct {
@@ -460,12 +460,13 @@ func (s *NodeUpService) syncPinValueToRemote(ctx context.Context) error {
 				goto DONE
 			}
 
-			// 反序列化 NsonValue
+			// 使用 dt.DecodeNsonValue 反序列化
 			var value *pb.NsonValue
 			if len(item.Value) > 0 {
-				value = &pb.NsonValue{}
-				if err := proto.Unmarshal(item.Value, value); err != nil {
-					s.es.Logger().Sugar().Errorf("Unmarshal NsonValue: %v", err)
+				var err error
+				value, err = dt.DecodeNsonValue(item.Value)
+				if err != nil {
+					s.es.Logger().Sugar().Errorf("DecodeNsonValue: %v", err)
 					continue
 				}
 			}
