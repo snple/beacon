@@ -15,7 +15,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 type PinService struct {
@@ -348,12 +347,13 @@ func (s *PinService) PullValue(in *edges.PinPullValueRequest, stream grpc.Server
 	})
 
 	for _, entry := range entries {
-		// 反序列化 NsonValue
+		// 使用 dt.DecodeNsonValue 反序列化
 		var value *pb.NsonValue
 		if len(entry.Value) > 0 {
-			value = &pb.NsonValue{}
-			if err := proto.Unmarshal(entry.Value, value); err != nil {
-				return status.Errorf(codes.Internal, "Unmarshal NsonValue: %v", err)
+			var err error
+			value, err = dt.DecodeNsonValue(entry.Value)
+			if err != nil {
+				return status.Errorf(codes.Internal, "DecodeNsonValue: %v", err)
 			}
 		}
 
