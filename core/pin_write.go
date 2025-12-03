@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/snple/beacon/consts"
+	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
@@ -73,8 +73,8 @@ func (s *PinWriteService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.My
 		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	if pin.Rw != consts.WRITE {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
+	if pin.Rw == device.RO {
+		return &output, status.Errorf(codes.FailedPrecondition, "Pin is not writable")
 	}
 
 	err = s.cs.GetStorage().SetPinWrite(ctx, nodeID, in.Id, in.Value, time.Now())
@@ -129,7 +129,7 @@ func (s *PinWriteService) SetWriteByName(ctx context.Context, in *cores.PinNameV
 		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
 	}
 
-	if node.Status != consts.ON {
+	if node.Status != device.ON {
 		return &output, status.Errorf(codes.FailedPrecondition, "Node.Status != ON")
 	}
 
@@ -139,8 +139,8 @@ func (s *PinWriteService) SetWriteByName(ctx context.Context, in *cores.PinNameV
 		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
 	}
 
-	if pin.Rw != consts.WRITE {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin.Rw != WRITE")
+	if pin.Rw == device.RO {
+		return &output, status.Errorf(codes.FailedPrecondition, "Pin is not writable")
 	}
 
 	err = s.cs.GetStorage().SetPinWrite(ctx, in.NodeId, pin.ID, in.Value, time.Now())

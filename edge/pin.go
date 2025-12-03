@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/snple/beacon/consts"
+	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/pb"
@@ -457,7 +457,7 @@ func (s *PinService) PushWrite(stream grpc.ClientStreamingServer[pb.PinValue, pb
 		}
 
 		// 检查可写性
-		if pin.Rw&consts.WRITE == 0 {
+		if pin.Rw == device.RO {
 			return status.Error(codes.PermissionDenied, "Pin is not writable")
 		}
 

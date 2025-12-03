@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/danclive/nson-go"
-	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/core"
+	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/pb"
 )
 
@@ -122,7 +122,7 @@ func (c *Conn) auth() error {
 		return errors.New("invalid request")
 	}
 
-	if node.Status != consts.ON {
+	if node.Status != device.ON {
 		writeError(c.Conn, errors.New("invalid request, node is not enable"))
 
 		return errors.New("invalid request")

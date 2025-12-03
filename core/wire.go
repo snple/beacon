@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/core/storage"
+	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 	"google.golang.org/grpc/codes"
@@ -68,7 +68,7 @@ func (s *WireService) NameFull(ctx context.Context, in *pb.Name) (*pb.Wire, erro
 		return &output, status.Error(codes.InvalidArgument, "Please supply valid Name")
 	}
 
-	nodeName := consts.DEFAULT_NODE
+	nodeName := device.DEFAULT_NODE
 	wireName := in.Name
 
 	if strings.Contains(wireName, ".") {

@@ -178,11 +178,24 @@ func (b *DeviceBuilder) saveCurrentWire() {
 	}
 }
 
-// ============================================================================
-// 常量定义（简化使用）
-// ============================================================================
-
+// 读写权限
 const (
-	RO = 0 // 只读
-	RW = 1 // 读写
+	RO = 0 // 只读（Read Only）
+	WO = 1 // 只写（Write Only）
+	RW = 2 // 读写（Read Write）
+	IW = 3 // 内部可写（Internal Write）
+)
+
+// 开关状态
+const (
+	ON  = 1
+	OFF = 0
+)
+
+// 默认名称
+const (
+	DEFAULT_NODE  = "node"
+	DEFAULT_WIRE  = "wire"
+	DEFAULT_TAG   = "tag"
+	DEFAULT_CONST = "const"
 )

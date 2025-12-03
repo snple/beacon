@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/snple/beacon/consts"
 	"github.com/snple/beacon/core"
+	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 	"github.com/snple/beacon/pb/nodes"
@@ -156,7 +156,7 @@ func (s *NodeService) Login(ctx context.Context, in *nodes.NodeLoginRequest) (*n
 		return &output, err
 	}
 
-	if node.Status != consts.ON {
+	if node.Status != device.ON {
 		s.Logger().Sugar().Errorf("node connect error: node is not enable, id: %v, ip: %v",
 			in.Id, metadata.GetPeerAddr(ctx))
 		return &output, status.Error(codes.FailedPrecondition, "The node is not enable")
