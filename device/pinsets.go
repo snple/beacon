@@ -6,92 +6,333 @@ import (
 )
 
 // ============================================================================
-// 预定义的 Pin 集合（可复用）
+// 常用 Pin 定义
 // ============================================================================
 
-// PinSet Pin 集合构建器
-type PinSet struct {
-	pins []Pin
-}
+// --- 基础控制 ---
 
-// NewPinSet 创建 Pin 集合
-func NewPinSet() *PinSet {
-	return &PinSet{pins: make([]Pin, 0)}
-}
+// OnOffPin 开关控制
+var OnOffPin = PinBuilder("on", dt.TypeBool, RW).
+	Desc("开关").
+	Default(nson.Bool(false)).
+	Build()
 
-// Add 添加 Pin
-func (ps *PinSet) Add(name, desc string, typ uint32, rw int32, def nson.Value, tags []string) *PinSet {
-	if tags == nil {
-		tags = []string{}
-	}
-	ps.pins = append(ps.pins, Pin{
-		Name:    name,
-		Desc:    desc,
-		Type:    typ,
-		Rw:      rw,
-		Default: def,
-		Tags:    tags,
-	})
-	return ps
-}
+// DimPin 调光控制
+var DimPin = PinBuilder("dim", dt.TypeU8, RW).
+	Desc("亮度").
+	Default(nson.U8(100)).
+	Range(nson.U8(0), nson.U8(100)).
+	Step(nson.U8(1)).
+	Unit("%").
+	Build()
 
-// Pins 获取所有 Pin
-func (ps *PinSet) Pins() []Pin {
-	return ps.pins
-}
+// CCTPin 色温控制
+var CCTPin = PinBuilder("cct", dt.TypeU16, RW).
+	Desc("色温").
+	Default(nson.U16(4000)).
+	Range(nson.U16(2700), nson.U16(6500)).
+	Step(nson.U16(100)).
+	Unit("K").
+	Build()
 
-// ============================================================================
-// 标准 Pin 集合（对应原来的 Cluster 概念）
-// ============================================================================
+// RGBPin RGB颜色控制
+var RGBPin = PinBuilder("rgb", dt.TypeU32, RW).
+	Desc("RGB颜色 0xRRGGBB").
+	Default(nson.U32(0xFFFFFF)).
+	Range(nson.U32(0x000000), nson.U32(0xFFFFFF)).
+	Build()
 
-var (
-	// OnOffPins 开关控制
-	OnOffPins = NewPinSet().
-			Add("onoff", "开关状态", dt.TypeBool, RW, nson.Bool(false), []string{"control"}).
-			Pins()
+// HuePin 色相
+var HuePin = PinBuilder("hue", dt.TypeU16, RW).
+	Desc("色相").
+	Default(nson.U16(0)).
+	Range(nson.U16(0), nson.U16(360)).
+	Step(nson.U16(1)).
+	Unit("°").
+	Build()
 
-	// LevelControlPins 级别控制
-	LevelControlPins = NewPinSet().
-				Add("level", "当前级别(0-254)", dt.TypeU32, RW, nson.U32(0), []string{"control"}).
-				Add("min_level", "最小级别", dt.TypeU32, RO, nson.U32(0), []string{"range"}).
-				Add("max_level", "最大级别", dt.TypeU32, RO, nson.U32(254), []string{"range"}).
-				Pins()
+// SatPin 饱和度
+var SatPin = PinBuilder("sat", dt.TypeU8, RW).
+	Desc("饱和度").
+	Default(nson.U8(100)).
+	Range(nson.U8(0), nson.U8(100)).
+	Step(nson.U8(1)).
+	Unit("%").
+	Build()
 
-	// ColorControlPins 颜色控制
-	ColorControlPins = NewPinSet().
-				Add("hue", "色相(0-254)", dt.TypeU32, RW, nson.U32(0), []string{"color"}).
-				Add("saturation", "饱和度(0-254)", dt.TypeU32, RW, nson.U32(0), []string{"color"}).
-				Pins()
+// ModePin 模式控制
+var ModePin = PinBuilder("mode", dt.TypeU8, RW).
+	Desc("工作模式").
+	Default(nson.U8(0)).
+	Build()
 
-	// TemperaturePins 温度测量
-	TemperaturePins = NewPinSet().
-			Add("temperature", "当前温度(0.01°C)", dt.TypeI32, RO, nson.I32(2500), []string{"sensor"}).
-			Add("temp_min", "最小可测温度", dt.TypeI32, RO, nson.I32(-4000), []string{"range"}).
-			Add("temp_max", "最大可测温度", dt.TypeI32, RO, nson.I32(12500), []string{"range"}).
-			Pins()
+// --- 温湿度 ---
 
-	// HumidityPins 湿度测量
-	HumidityPins = NewPinSet().
-			Add("humidity", "当前湿度(0.01%)", dt.TypeU32, RO, nson.U32(5000), []string{"sensor"}).
-			Pins()
+// TempPin 温度（0.1°C）
+var TempPin = PinBuilder("temp", dt.TypeI16, RO).
+	Desc("温度").
+	Default(nson.I16(250)).
+	Range(nson.I16(-400), nson.I16(800)). // -40°C ~ 80°C
+	Step(nson.I16(1)).
+	Precision(1).
+	Unit("°C").
+	Build()
 
-	// BasicInfoPins 基本信息
-	BasicInfoPins = NewPinSet().
-			Add("vendor_name", "厂商名称", dt.TypeString, RO, nson.String(""), []string{"meta"}).
-			Add("product_name", "产品名称", dt.TypeString, RO, nson.String(""), []string{"meta"}).
-			Add("serial_number", "序列号", dt.TypeString, RO, nson.String(""), []string{"meta"}).
-			Pins()
-)
+// HumiPin 湿度
+var HumiPin = PinBuilder("humi", dt.TypeU8, RO).
+	Desc("湿度").
+	Default(nson.U8(50)).
+	Range(nson.U8(0), nson.U8(100)).
+	Step(nson.U8(1)).
+	Unit("%").
+	Build()
 
-// ============================================================================
-// Wire 扩展：批量添加 Pin
-// ============================================================================
+// TgtTempPin 目标温度
+var TgtTempPin = PinBuilder("tgt", dt.TypeI16, RW).
+	Desc("目标温度").
+	Default(nson.I16(250)).
+	Range(nson.I16(160), nson.I16(320)). // 16°C ~ 32°C
+	Step(nson.I16(5)).
+	Precision(1).
+	Unit("°C").
+	Build()
 
-// Pins 批量添加预定义的 Pin 集合
-func (b *DeviceBuilder) Pins(pins []Pin) *DeviceBuilder {
-	if b.currentWire == nil {
-		panic("must call Wire() before Pins()")
-	}
-	b.currentWire.Pins = append(b.currentWire.Pins, pins...)
-	return b
-}
+// --- 电量统计 ---
+
+// PwrPin 实时功率
+var PwrPin = PinBuilder("pwr", dt.TypeF32, RO).
+	Desc("实时功率").
+	Default(nson.F32(0)).
+	Precision(1).
+	Unit("W").
+	Build()
+
+// VoltPin 电压
+var VoltPin = PinBuilder("v", dt.TypeF32, RO).
+	Desc("电压").
+	Default(nson.F32(220)).
+	Precision(1).
+	Unit("V").
+	Build()
+
+// CurrPin 电流
+var CurrPin = PinBuilder("i", dt.TypeF32, RO).
+	Desc("电流").
+	Default(nson.F32(0)).
+	Precision(2).
+	Unit("A").
+	Build()
+
+// KwhPin 累计电量
+var KwhPin = PinBuilder("kwh", dt.TypeF32, RO).
+	Desc("累计电量").
+	Default(nson.F32(0)).
+	Precision(2).
+	Unit("kWh").
+	Build()
+
+// --- 电池 ---
+
+// BattPin 电池电量
+var BattPin = PinBuilder("batt", dt.TypeU8, RO).
+	Desc("电量").
+	Default(nson.U8(100)).
+	Range(nson.U8(0), nson.U8(100)).
+	Unit("%").
+	Build()
+
+// --- 状态 ---
+
+// OnlinePin 在线状态
+var OnlinePin = PinBuilder("online", dt.TypeBool, RO).
+	Desc("在线状态").
+	Default(nson.Bool(false)).
+	Build()
+
+// AlarmPin 报警状态
+var AlarmPin = PinBuilder("alarm", dt.TypeBool, RO).
+	Desc("报警状态").
+	Default(nson.Bool(false)).
+	Build()
+
+// RunningPin 运行状态
+var RunningPin = PinBuilder("run", dt.TypeBool, RO).
+	Desc("运行中").
+	Default(nson.Bool(false)).
+	Build()
+
+// StatePin 状态码
+var StatePin = PinBuilder("state", dt.TypeU8, RO).
+	Desc("状态").
+	Default(nson.U8(0)).
+	Build()
+
+// ErrPin 故障码
+var ErrPin = PinBuilder("err", dt.TypeU8, RO).
+	Desc("故障码").
+	Default(nson.U8(0)).
+	Build()
+
+// --- 时间戳 ---
+
+// LastPin 最后触发时间
+var LastPin = PinBuilder("last", dt.TypeTimestamp, RO).
+	Desc("最后触发时间").
+	Build()
+
+// --- 设备信息 ---
+
+// VerPin 固件版本
+var VerPin = PinBuilder("ver", dt.TypeString, RO).
+	Desc("固件版本").
+	Default(nson.String("")).
+	Build()
+
+// MacPin MAC地址
+var MacPin = PinBuilder("mac", dt.TypeString, RO).
+	Desc("MAC地址").
+	Default(nson.String("")).
+	Build()
+
+// IpPin IP地址
+var IpPin = PinBuilder("ip", dt.TypeString, RO).
+	Desc("IP地址").
+	Default(nson.String("")).
+	Build()
+
+// UptimePin 运行时长
+var UptimePin = PinBuilder("uptime", dt.TypeU32, RO).
+	Desc("运行时长").
+	Default(nson.U32(0)).
+	Unit("s").
+	Build()
+
+// --- 光照 ---
+
+// LuxPin 光照度
+var LuxPin = PinBuilder("lux", dt.TypeU16, RO).
+	Desc("光照度").
+	Default(nson.U16(0)).
+	Unit("lux").
+	Build()
+
+// --- 空气质量 ---
+
+// PM25Pin PM2.5
+var PM25Pin = PinBuilder("pm25", dt.TypeU16, RO).
+	Desc("PM2.5").
+	Default(nson.U16(0)).
+	Unit("μg/m³").
+	Build()
+
+// PM10Pin PM10
+var PM10Pin = PinBuilder("pm10", dt.TypeU16, RO).
+	Desc("PM10").
+	Default(nson.U16(0)).
+	Unit("μg/m³").
+	Build()
+
+// CO2Pin CO2浓度
+var CO2Pin = PinBuilder("co2", dt.TypeU16, RO).
+	Desc("CO2").
+	Default(nson.U16(400)).
+	Unit("ppm").
+	Build()
+
+// TVOCPin TVOC
+var TVOCPin = PinBuilder("tvoc", dt.TypeU16, RO).
+	Desc("TVOC").
+	Default(nson.U16(0)).
+	Unit("ppb").
+	Build()
+
+// AQIPin AQI指数
+var AQIPin = PinBuilder("aqi", dt.TypeU16, RO).
+	Desc("AQI指数").
+	Default(nson.U16(0)).
+	Build()
+
+// HCHOPin 甲醛
+var HCHOPin = PinBuilder("hcho", dt.TypeU16, RO).
+	Desc("甲醛").
+	Default(nson.U16(0)).
+	Unit("ppb").
+	Build()
+
+// --- 位置/进度 ---
+
+// PosPin 位置 0-100%
+var PosPin = PinBuilder("pos", dt.TypeU8, RW).
+	Desc("位置").
+	Default(nson.U8(0)).
+	Range(nson.U8(0), nson.U8(100)).
+	Step(nson.U8(1)).
+	Unit("%").
+	Build()
+
+// RemainPin 剩余时间
+var RemainPin = PinBuilder("remain", dt.TypeU16, RO).
+	Desc("剩余时间").
+	Default(nson.U16(0)).
+	Unit("min").
+	Build()
+
+// --- 命令 ---
+
+// CmdPin 命令
+var CmdPin = PinBuilder("cmd", dt.TypeU8, WO).
+	Desc("命令").
+	Build()
+
+// --- 风扇/风速 ---
+
+// FanPin 风速
+var FanPin = PinBuilder("fan", dt.TypeU8, RW).
+	Desc("风速").
+	Default(nson.U8(0)).
+	Range(nson.U8(0), nson.U8(100)).
+	Step(nson.U8(1)).
+	Unit("%").
+	Build()
+
+// SwingPin 摆风
+var SwingPin = PinBuilder("swing", dt.TypeU8, RW).
+	Desc("摆风").
+	Default(nson.U8(0)).
+	Enum(
+		Enum(nson.U8(0), "关闭"),
+		Enum(nson.U8(1), "上下"),
+		Enum(nson.U8(2), "左右"),
+		Enum(nson.U8(3), "全向"),
+	).
+	Build()
+
+// --- 门/锁 ---
+
+// DoorPin 门状态
+var DoorPin = PinBuilder("door", dt.TypeBool, RO).
+	Desc("门状态").
+	Default(nson.Bool(false)).
+	Build()
+
+// LockPin 锁状态
+var LockPin = PinBuilder("lock", dt.TypeBool, RW).
+	Desc("锁定/解锁").
+	Default(nson.Bool(true)).
+	Build()
+
+// OpenPin 开合状态
+var OpenPin = PinBuilder("open", dt.TypeBool, RO).
+	Desc("开/合状态").
+	Default(nson.Bool(false)).
+	Build()
+
+// --- 滤芯/耗材 ---
+
+// FilterPin 滤芯寿命
+var FilterPin = PinBuilder("filter", dt.TypeU8, RO).
+	Desc("滤芯寿命").
+	Default(nson.U8(100)).
+	Range(nson.U8(0), nson.U8(100)).
+	Unit("%").
+	Build()

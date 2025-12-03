@@ -1,15 +1,3 @@
-// Package device 提供标准设备定义注册表
-//
-// 设计理念：Builder 链式 API，声明式设备定义
-//
-// 使用示例：
-//
-//	var SmartBulb = New("smart_bulb", "智能灯泡").
-//	    Category("lighting").
-//	    Wire("light").
-//	        Pin("onoff", Bool, RW).
-//	        Pin("level", U32, RW).
-//	    Done()
 package device
 
 import "github.com/danclive/nson-go"
@@ -38,145 +26,232 @@ type Wire struct {
 
 // Pin 属性模板定义（对应 storage.Pin）
 type Pin struct {
-	Name    string     // Pin 名称
-	Tags    []string   // 标签列表（用于分类和查询）
-	Desc    string     // Pin 描述
-	Type    uint32     // 数据类型（nson.DataType）
-	Rw      int32      // 读写权限：0=只读，1=读写
-	Default nson.Value // 默认值（可选）
+	Name      string     // Pin 名称
+	Tags      []string   // 标签列表（用于分类和查询）
+	Desc      string     // Pin 描述
+	Type      uint32     // 数据类型（nson.DataType）
+	Rw        int32      // 读写权限：0=只读，1=只写，2=读写，3=内部可写
+	Default   nson.Value // 默认值（可选）
+	Min       nson.Value // 最小值（可选，用于数值类型）
+	Max       nson.Value // 最大值（可选，用于数值类型）
+	Step      nson.Value // 步进值（可选，用于数值类型，如 0.5, 1, 10）
+	Precision int        // 精度/小数位数（可选，用于浮点类型）
+	Unit      string     // 单位（可选，如 "°C", "%", "W", "lux"）
+	Enum      []EnumItem // 枚举值列表（可选，用于限定取值范围）
+}
 
+// EnumItem 枚举项
+type EnumItem struct {
+	Value nson.Value // 值
+	Label string     // 显示名称
+}
+
+// Enum 创建枚举项
+func Enum(value nson.Value, label string) EnumItem {
+	return EnumItem{Value: value, Label: label}
 }
 
 // ============================================================================
-// Builder API
+// Pin Builder
 // ============================================================================
 
-// DeviceBuilder 设备构建器
-type DeviceBuilder struct {
-	device      Device
-	currentWire *Wire
+// PinBuilderT Pin 构建器
+type PinBuilderT struct {
+	pin Pin
 }
 
-// New 创建设备构建器
-func New(id, name string) *DeviceBuilder {
-	return &DeviceBuilder{
-		device: Device{
-			ID:    id,
-			Name:  name,
-			Wires: make([]Wire, 0),
+// PinBuilder 创建 Pin 构建器
+func PinBuilder(name string, typ uint32, rw int32) *PinBuilderT {
+	return &PinBuilderT{
+		pin: Pin{
+			Name: name,
+			Type: typ,
+			Rw:   rw,
+			Tags: []string{},
 		},
 	}
 }
 
 // Desc 设置描述
-func (b *DeviceBuilder) Desc(desc string) *DeviceBuilder {
-	b.device.Desc = desc
-	return b
+func (p *PinBuilderT) Desc(desc string) *PinBuilderT {
+	p.pin.Desc = desc
+	return p
 }
 
 // Tags 设置标签
-func (b *DeviceBuilder) Tags(tags ...string) *DeviceBuilder {
-	b.device.Tags = tags
-	return b
+func (p *PinBuilderT) Tags(tags ...string) *PinBuilderT {
+	p.pin.Tags = tags
+	return p
 }
 
-// Wire 创建新的 Wire
-func (b *DeviceBuilder) Wire(name string) *DeviceBuilder {
-	b.saveCurrentWire()
-	b.currentWire = &Wire{
-		Name: name,
-		Pins: make([]Pin, 0),
-	}
-	return b
+// Default 设置默认值
+func (p *PinBuilderT) Default(def nson.Value) *PinBuilderT {
+	p.pin.Default = def
+	return p
 }
 
-// WireType 设置当前 Wire 的类型
-func (b *DeviceBuilder) WireType(typ string) *DeviceBuilder {
-	if b.currentWire == nil {
-		panic("must call Wire() before WireType()")
-	}
-	b.currentWire.Type = typ
-	return b
+// Min 设置最小值
+func (p *PinBuilderT) Min(min nson.Value) *PinBuilderT {
+	p.pin.Min = min
+	return p
 }
 
-// WireDesc 设置当前 Wire 的描述
-func (b *DeviceBuilder) WireDesc(desc string) *DeviceBuilder {
-	if b.currentWire == nil {
-		panic("must call Wire() before WireDesc()")
-	}
-	b.currentWire.Desc = desc
-	return b
+// Max 设置最大值
+func (p *PinBuilderT) Max(max nson.Value) *PinBuilderT {
+	p.pin.Max = max
+	return p
 }
 
-// WireTags 设置当前 Wire 的标签列表
-func (b *DeviceBuilder) WireTags(tags ...string) *DeviceBuilder {
-	if b.currentWire == nil {
-		panic("must call Wire() before WireTags()")
-	}
-	b.currentWire.Tags = tags
-	return b
+// Range 同时设置最小值和最大值
+func (p *PinBuilderT) Range(min, max nson.Value) *PinBuilderT {
+	p.pin.Min = min
+	p.pin.Max = max
+	return p
 }
 
-// Pin 添加 Pin 到当前 Wire
-func (b *DeviceBuilder) Pin(name string, typ uint32, rw int32) *DeviceBuilder {
-	if b.currentWire == nil {
-		panic("must call Wire() before Pin()")
-	}
-	b.currentWire.Pins = append(b.currentWire.Pins, Pin{
-		Name: name,
-		Type: typ,
-		Rw:   rw,
-		Tags: []string{},
-	})
-	return b
+// Step 设置步进值
+func (p *PinBuilderT) Step(step nson.Value) *PinBuilderT {
+	p.pin.Step = step
+	return p
 }
 
-// PinWithDesc 添加带描述的 Pin
-func (b *DeviceBuilder) PinWithDesc(name, desc string, typ uint32, rw int32) *DeviceBuilder {
-	if b.currentWire == nil {
-		panic("must call Wire() before Pin()")
-	}
-	b.currentWire.Pins = append(b.currentWire.Pins, Pin{
-		Name: name,
-		Desc: desc,
-		Type: typ,
-		Rw:   rw,
-		Tags: []string{},
-	})
-	return b
+// Precision 设置精度（小数位数）
+func (p *PinBuilderT) Precision(precision int) *PinBuilderT {
+	p.pin.Precision = precision
+	return p
 }
 
-// PinFull 添加完整配置的 Pin
-func (b *DeviceBuilder) PinFull(name, desc string, typ uint32, rw int32, def nson.Value, tags []string) *DeviceBuilder {
-	if b.currentWire == nil {
-		panic("must call Wire() before Pin()")
+// Unit 设置单位
+func (p *PinBuilderT) Unit(unit string) *PinBuilderT {
+	p.pin.Unit = unit
+	return p
+}
+
+// Enum 设置枚举值（带标签）
+func (p *PinBuilderT) Enum(items ...EnumItem) *PinBuilderT {
+	p.pin.Enum = items
+	return p
+}
+
+// EnumValues 设置枚举值（简化版，无标签）
+func (p *PinBuilderT) EnumValues(values ...nson.Value) *PinBuilderT {
+	p.pin.Enum = make([]EnumItem, len(values))
+	for i, v := range values {
+		p.pin.Enum[i] = EnumItem{Value: v}
 	}
-	if tags == nil {
-		tags = []string{}
+	return p
+}
+
+// Build 构建 Pin
+func (p *PinBuilderT) Build() Pin {
+	return p.pin
+}
+
+// ============================================================================
+// Wire Builder
+// ============================================================================
+
+// WireBuilderT Wire 构建器
+type WireBuilderT struct {
+	wire Wire
+}
+
+// WireBuilder 创建 Wire 构建器
+func WireBuilder(name string) *WireBuilderT {
+	return &WireBuilderT{
+		wire: Wire{
+			Name: name,
+			Pins: []Pin{},
+			Tags: []string{},
+		},
 	}
-	b.currentWire.Pins = append(b.currentWire.Pins, Pin{
-		Name:    name,
-		Desc:    desc,
-		Type:    typ,
-		Rw:      rw,
-		Default: def,
-		Tags:    tags,
-	})
-	return b
+}
+
+// Desc 设置描述
+func (w *WireBuilderT) Desc(desc string) *WireBuilderT {
+	w.wire.Desc = desc
+	return w
+}
+
+// Tags 设置标签
+func (w *WireBuilderT) Tags(tags ...string) *WireBuilderT {
+	w.wire.Tags = tags
+	return w
+}
+
+// Type 设置类型
+func (w *WireBuilderT) Type(typ string) *WireBuilderT {
+	w.wire.Type = typ
+	return w
+}
+
+// Pin 添加 Pin
+func (w *WireBuilderT) Pin(p Pin) *WireBuilderT {
+	w.wire.Pins = append(w.wire.Pins, p)
+	return w
+}
+
+// Build 构建 Wire（可选，用于显式构建）
+func (w *WireBuilderT) Build() Wire {
+	return w.wire
+}
+
+// ============================================================================
+// Device Builder
+// ============================================================================
+
+// DeviceBuilderT 设备构建器
+type DeviceBuilderT struct {
+	device Device
+}
+
+// DeviceBuilder 创建设备构建器
+func DeviceBuilder(id, name string) *DeviceBuilderT {
+	return &DeviceBuilderT{
+		device: Device{
+			ID:    id,
+			Name:  name,
+			Wires: []Wire{},
+			Tags:  []string{},
+		},
+	}
+}
+
+// Desc 设置描述
+func (d *DeviceBuilderT) Desc(desc string) *DeviceBuilderT {
+	d.device.Desc = desc
+	return d
+}
+
+// Tags 设置标签
+func (d *DeviceBuilderT) Tags(tags ...string) *DeviceBuilderT {
+	d.device.Tags = tags
+	return d
+}
+
+// Wire 添加 Wire
+func (d *DeviceBuilderT) Wire(w *WireBuilderT) *DeviceBuilderT {
+	d.device.Wires = append(d.device.Wires, w.wire)
+	return d
 }
 
 // Done 完成构建
-func (b *DeviceBuilder) Done() Device {
-	b.saveCurrentWire()
-	return b.device
+func (d *DeviceBuilderT) Done() Device {
+	return d.device
 }
 
-func (b *DeviceBuilder) saveCurrentWire() {
-	if b.currentWire != nil {
-		b.device.Wires = append(b.device.Wires, *b.currentWire)
-		b.currentWire = nil
-	}
+// ============================================================================
+// 兼容旧 API（可选，逐步迁移后删除）
+// ============================================================================
+
+// New 创建设备构建器（兼容旧 API）
+func New(id, name string) *DeviceBuilderT {
+	return DeviceBuilder(id, name)
 }
+
+// ============================================================================
+// 常量定义
+// ============================================================================
 
 // 读写权限
 const (

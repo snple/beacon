@@ -12,13 +12,60 @@ var (
 )
 
 func init() {
-	// 自动注册标准设备
-	Register(SmartBulbOnOff)
-	Register(SmartBulbDimmable)
-	Register(SmartBulbColor)
+	// 自动注册标准设备 - 照明
+	Register(SmartBulb)
+	Register(ColorBulb)
+	Register(LightStrip)
+
+	// 开关插座
+	Register(SmartSwitch)
+	Register(SmartSwitch2)
+	Register(SmartSwitch3)
+	Register(SmartPlug)
+	Register(PowerStrip)
+
+	// 传感器
 	Register(TempHumiSensor)
-	Register(Switch2Gang)
-	Register(SmartSocket)
+	Register(MotionSensor)
+	Register(DoorSensor)
+	Register(WaterLeakSensor)
+	Register(SmokeSensor)
+	Register(GasSensor)
+	Register(AirQualitySensor)
+
+	// 窗帘
+	Register(Curtain)
+	Register(Blind)
+
+	// 空调暖通
+	Register(AC)
+	Register(Thermostat)
+	Register(FloorHeating)
+	Register(Fan)
+
+	// 安防
+	Register(DoorLock)
+	Register(Camera)
+	Register(Alarm)
+
+	// 家电
+	Register(WaterHeater)
+	Register(Humidifier)
+	Register(Dehumidifier)
+	Register(AirPurifier)
+	Register(RobotVacuum)
+	Register(WashingMachine)
+	Register(Dishwasher)
+
+	// 厨房
+	Register(SmartOven)
+	Register(Refrigerator)
+	Register(CoffeeMaker)
+
+	// 网关控制器
+	Register(Gateway)
+	Register(IRRemote)
+	Register(SceneController)
 }
 
 // Register 注册设备
