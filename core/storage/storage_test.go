@@ -395,7 +395,7 @@ func TestStorage_ListPinsByNode(t *testing.T) {
 			{
 				ID:   "wire-002",
 				Name: "Wire2",
-				Type: "mqtt",
+				Type: "",
 				Pins: []Pin{
 					{ID: "pin-003", Name: "Pin3", Addr: "topic/test", Type: 1, Rw: 3},
 				},

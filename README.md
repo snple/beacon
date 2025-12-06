@@ -124,9 +124,7 @@ func main() {
 ### Wire (通道/端点)
 
 代表设备的一个功能端点，例如：
-- Modbus RTU 通道
 - GPIO 端口组
-- MQTT 连接
 
 ### Pin (数据点)
 
