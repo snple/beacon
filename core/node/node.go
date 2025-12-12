@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	queen "snple.com/queen/core"
 )
 
 type NodeService struct {
@@ -24,6 +26,9 @@ type NodeService struct {
 	sync *SyncService
 	wire *WireService
 	pin  *PinService
+
+	// queen broker for edge device communication
+	broker *queen.Broker
 
 	ctx     context.Context
 	cancel  func()
@@ -56,14 +61,36 @@ func Node(cs *core.CoreService, opts ...NodeOption) (*NodeService, error) {
 	ns.wire = newWireService(ns)
 	ns.pin = newPinService(ns)
 
+	// 初始化 queen broker
+	if ns.dopts.brokerEnable {
+		if err := ns.initBroker(); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
+
 	return ns, nil
 }
 
 func (ns *NodeService) Start() {
-
+	// 启动 queen broker
+	if ns.broker != nil {
+		if err := ns.broker.Start(); err != nil {
+			ns.Logger().Sugar().Errorf("Failed to start queen broker: %v", err)
+		} else {
+			ns.Logger().Sugar().Infof("Queen broker started on %s", ns.dopts.brokerAddr)
+		}
+	}
 }
 
 func (ns *NodeService) Stop() {
+	// 停止 queen broker
+	if ns.broker != nil {
+		if err := ns.broker.Stop(); err != nil {
+			ns.Logger().Sugar().Errorf("Failed to stop queen broker: %v", err)
+		}
+	}
+
 	ns.cancel()
 	ns.closeWG.Wait()
 }
@@ -89,11 +116,18 @@ func (ns *NodeService) RegisterGrpc(server *grpc.Server) {
 
 type nodeOptions struct {
 	keepAlive time.Duration
+
+	// queen broker options
+	brokerEnable    bool
+	brokerAddr      string
+	brokerTLSConfig *tls.Config
 }
 
 func defaultNodeOptions() nodeOptions {
 	return nodeOptions{
-		keepAlive: 10 * time.Second,
+		keepAlive:    10 * time.Second,
+		brokerEnable: false,
+		brokerAddr:   ":3883",
 	}
 }
 
@@ -121,6 +155,111 @@ func WithKeepAlive(d time.Duration) NodeOption {
 	return newFuncNodeOption(func(o *nodeOptions) {
 		o.keepAlive = d
 	})
+}
+
+// WithBrokerEnable 启用 queen broker
+func WithBrokerEnable(enable bool) NodeOption {
+	return newFuncNodeOption(func(o *nodeOptions) {
+		o.brokerEnable = enable
+	})
+}
+
+// WithBrokerAddr 设置 queen broker 监听地址
+func WithBrokerAddr(addr string) NodeOption {
+	return newFuncNodeOption(func(o *nodeOptions) {
+		o.brokerAddr = addr
+	})
+}
+
+// WithBrokerTLS 设置 queen broker TLS 配置
+func WithBrokerTLS(tlsConfig *tls.Config) NodeOption {
+	return newFuncNodeOption(func(o *nodeOptions) {
+		o.brokerTLSConfig = tlsConfig
+	})
+}
+
+// initBroker 初始化 queen broker
+func (ns *NodeService) initBroker() error {
+	brokerOpts := []queen.BrokerOption{
+		queen.WithAddress(ns.dopts.brokerAddr),
+	}
+
+	if ns.dopts.brokerTLSConfig != nil {
+		brokerOpts = append(brokerOpts, queen.WithTLS(ns.dopts.brokerTLSConfig))
+	}
+
+	// 设置认证器，使用 beacon 的 node 认证
+	brokerOpts = append(brokerOpts, queen.WithAuthFunc(func(info *queen.AuthInfo) error {
+		return ns.authenticateBrokerClient(info)
+	}))
+
+	// 设置消息处理钩子
+	brokerOpts = append(brokerOpts, queen.WithMessageHandler(&queen.MessageHandlerFunc{
+		PublishFunc: func(ctx *queen.PublishContext) error {
+			return ns.handleQueenMessage(ctx)
+		},
+	}))
+
+	broker, err := queen.New(brokerOpts...)
+	if err != nil {
+		return err
+	}
+
+	ns.broker = broker
+	return nil
+}
+
+// authenticateBrokerClient 认证 broker 客户端
+func (ns *NodeService) authenticateBrokerClient(info *queen.AuthInfo) error {
+	ctx := context.Background()
+
+	// ClientID 作为 Node ID 或 Name
+	clientID := info.ClientID
+	if clientID == "" {
+		return status.Error(codes.InvalidArgument, "ClientID is required")
+	}
+
+	// AuthData 作为 Secret
+	secret := string(info.AuthData)
+	if secret == "" {
+		return status.Error(codes.InvalidArgument, "Secret is required")
+	}
+
+	// 尝试通过 ID 或 Name 获取 Node
+	var node *pb.Node
+	var err error
+
+	node, err = ns.Core().GetNode().View(ctx, &pb.Id{Id: clientID})
+	if err != nil {
+		// 尝试通过 Name 获取
+		node, err = ns.Core().GetNode().Name(ctx, &pb.Name{Name: clientID})
+		if err != nil {
+			return status.Errorf(codes.NotFound, "Node not found: %s", clientID)
+		}
+	}
+
+	if node.Status != device.ON {
+		return status.Error(codes.FailedPrecondition, "Node is not enabled")
+	}
+
+	// 验证密钥
+	secretReply, err := ns.Core().GetNode().GetSecret(ctx, &pb.Id{Id: node.Id})
+	if err != nil {
+		return status.Errorf(codes.Internal, "GetSecret failed: %v", err)
+	}
+
+	if secretReply.Message != secret {
+		return status.Error(codes.Unauthenticated, "Invalid secret")
+	}
+
+	ns.Logger().Sugar().Infof("Queen broker client authenticated: %s, remote: %s", node.Id, info.RemoteAddr)
+
+	return nil
+}
+
+// GetBroker 获取 queen broker 实例
+func (ns *NodeService) GetBroker() *queen.Broker {
+	return ns.broker
 }
 
 func (s *NodeService) Login(ctx context.Context, in *nodes.NodeLoginRequest) (*nodes.NodeLoginReply, error) {
