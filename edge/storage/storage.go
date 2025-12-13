@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -447,59 +448,81 @@ func (s *Storage) SetPinValue(ctx context.Context, pinID string, value *pb.NsonV
 		return err
 	}
 
-	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(PIN_VALUE_PREFIX+pinID), buf.Bytes())
-	})
+	// 使用 NewTransactionAt + CommitAt 写入
+	commitTs := uint64(updated.UnixMicro())
+	txn := s.db.NewTransactionAt(commitTs, true)
+	defer txn.Discard()
+
+	if err := txn.Set([]byte(PIN_VALUE_PREFIX+pinID), buf.Bytes()); err != nil {
+		return err
+	}
+
+	return txn.CommitAt(commitTs, nil)
 }
 
 // DeletePinValue 删除点位值
 func (s *Storage) DeletePinValue(ctx context.Context, pinID string) error {
-	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete([]byte(PIN_VALUE_PREFIX + pinID))
-	})
+	// 使用 NewTransactionAt + CommitAt 删除
+	commitTs := uint64(time.Now().UnixMicro())
+	txn := s.db.NewTransactionAt(commitTs, true)
+	defer txn.Discard()
+
+	if err := txn.Delete([]byte(PIN_VALUE_PREFIX + pinID)); err != nil {
+		return err
+	}
+
+	return txn.CommitAt(commitTs, nil)
 }
 
-// ListPinValues 列出点位值
+// ListPinValues 列出点位值（使用 SinceTs 优化查询）
 func (s *Storage) ListPinValues(after time.Time, limit int) ([]PinValueEntry, error) {
 	var result []PinValueEntry
 
-	err := s.db.View(func(txn *badger.Txn) error {
-		it := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer it.Close()
+	// 将 after 转换为微秒时间戳作为 SinceTs
+	sinceTs := uint64(after.UnixMicro())
+	// 使用足够大的 readTs 读取所有当前数据
+	readTs := uint64(time.Now().Add(time.Hour).UnixMicro())
 
-		prefix := []byte(PIN_VALUE_PREFIX)
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-			err := item.Value(func(val []byte) error {
-				buf := bytes.NewBuffer(val)
-				m, err := nson.DecodeMap(buf)
-				if err != nil {
-					return err
-				}
+	txn := s.db.NewTransactionAt(readTs, false)
+	defer txn.Discard()
 
-				var entry PinValueEntry
-				if err := nson.Unmarshal(m, &entry); err != nil {
-					return err
-				}
+	opts := badger.DefaultIteratorOptions
+	opts.SinceTs = sinceTs // 只读取 version > sinceTs 的数据
+	it := txn.NewIterator(opts)
+	defer it.Close()
 
-				if entry.Updated.After(after) {
-					result = append(result, entry)
-				}
-				return nil
-			})
+	prefix := []byte(PIN_VALUE_PREFIX)
+	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+		item := it.Item()
+		err := item.Value(func(val []byte) error {
+			buf := bytes.NewBuffer(val)
+			m, err := nson.DecodeMap(buf)
 			if err != nil {
 				return err
 			}
 
-			if limit > 0 && len(result) >= limit {
-				break
+			var entry PinValueEntry
+			if err := nson.Unmarshal(m, &entry); err != nil {
+				return err
 			}
+
+			result = append(result, entry)
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		return nil
+
+	}
+
+	// 按 Updated 时间排序
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Updated.Before(result[j].Updated)
 	})
 
-	if err != nil {
-		return nil, err
+	// 应用 limit
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
 	}
 
 	return result, nil
@@ -573,59 +596,76 @@ func (s *Storage) SetPinWrite(ctx context.Context, pinID string, value *pb.NsonV
 		return err
 	}
 
-	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(PIN_WRITE_PREFIX+pinID), buf.Bytes())
-	})
+	// 使用 NewTransactionAt + CommitAt 写入
+	commitTs := uint64(updated.UnixMicro())
+	txn := s.db.NewTransactionAt(commitTs, true)
+	defer txn.Discard()
+
+	if err := txn.Set([]byte(PIN_WRITE_PREFIX+pinID), buf.Bytes()); err != nil {
+		return err
+	}
+
+	return txn.CommitAt(commitTs, nil)
 }
 
 // DeletePinWrite 删除点位写入值
 func (s *Storage) DeletePinWrite(ctx context.Context, pinID string) error {
-	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete([]byte(PIN_WRITE_PREFIX + pinID))
-	})
+	// 使用 NewTransactionAt + CommitAt 删除
+	commitTs := uint64(time.Now().UnixMicro())
+	txn := s.db.NewTransactionAt(commitTs, true)
+	defer txn.Discard()
+
+	if err := txn.Delete([]byte(PIN_WRITE_PREFIX + pinID)); err != nil {
+		return err
+	}
+
+	return txn.CommitAt(commitTs, nil)
 }
 
-// ListPinWrites 列出点位写入值
+// ListPinWrites 列出点位写入值（使用 SinceTs 优化查询）
 func (s *Storage) ListPinWrites(after time.Time, limit int) ([]PinValueEntry, error) {
 	var result []PinValueEntry
 
-	err := s.db.View(func(txn *badger.Txn) error {
-		it := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer it.Close()
+	txn := s.db.NewTransactionAt(uint64(time.Now().UnixMicro()), false)
+	defer txn.Discard()
 
-		prefix := []byte(PIN_WRITE_PREFIX)
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-			err := item.Value(func(val []byte) error {
-				buf := bytes.NewBuffer(val)
-				m, err := nson.DecodeMap(buf)
-				if err != nil {
-					return err
-				}
+	opts := badger.DefaultIteratorOptions
+	opts.SinceTs = uint64(after.UnixMicro()) // 只读取 version > sinceTs 的数据
+	it := txn.NewIterator(opts)
+	defer it.Close()
 
-				var entry PinValueEntry
-				if err := nson.Unmarshal(m, &entry); err != nil {
-					return err
-				}
-
-				if entry.Updated.After(after) {
-					result = append(result, entry)
-				}
-				return nil
-			})
+	prefix := []byte(PIN_WRITE_PREFIX)
+	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+		item := it.Item()
+		err := item.Value(func(val []byte) error {
+			buf := bytes.NewBuffer(val)
+			m, err := nson.DecodeMap(buf)
 			if err != nil {
 				return err
 			}
 
-			if limit > 0 && len(result) >= limit {
-				break
+			var entry PinValueEntry
+			if err := nson.Unmarshal(m, &entry); err != nil {
+				return err
 			}
+
+			result = append(result, entry)
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		return nil
+
+	}
+
+	// 按 Updated 时间排序
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Updated.Before(result[j].Updated)
 	})
 
-	if err != nil {
-		return nil, err
+	// 应用 limit
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
 	}
 
 	return result, nil

@@ -43,12 +43,6 @@ func main() {
 
 	badgerOpts := badger.DefaultOptions(config.Config.DB.File)
 	badgerOpts.Logger = nil
-	db, err := badger.Open(badgerOpts)
-	if err != nil {
-		log.Logger.Sugar().Fatalf("opening badger db: %v", err)
-	}
-
-	defer db.Close()
 
 	command := flag.Arg(0)
 	switch command {
@@ -69,7 +63,7 @@ func main() {
 
 		return
 	case "pull", "push":
-		if err := cli(command, db); err != nil {
+		if err := cli(command); err != nil {
 			log.Logger.Sugar().Errorf("error: shutting down: %s", err)
 		}
 
@@ -174,7 +168,7 @@ func main() {
 	<-signalCh
 }
 
-func cli(command string, db *badger.DB) error {
+func cli(command string) error {
 	log.Logger.Sugar().Infof("cli %v: Started", command)
 	defer log.Logger.Sugar().Infof("cli %v : Completed", command)
 

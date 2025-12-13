@@ -42,12 +42,6 @@ func main() {
 
 	badgerOpts := badger.DefaultOptions(config.Config.DB.File)
 	badgerOpts.Logger = nil
-	db, err := badger.Open(badgerOpts)
-	if err != nil {
-		log.Logger.Sugar().Fatalf("opening badger db: %v", err)
-	}
-
-	defer db.Close()
 
 	command := flag.Arg(0)
 	switch command {
@@ -56,9 +50,11 @@ func main() {
 		return
 	}
 
-	coreOpts := make([]core.CoreOption, 0)
+	coreOpts := []core.CoreOption{
+		core.WithBadger(badgerOpts),
+	}
 
-	cs, err := core.Core(db, coreOpts...)
+	cs, err := core.Core(coreOpts...)
 	if err != nil {
 		log.Logger.Sugar().Fatalf("NewCoreService: %v", err)
 	}

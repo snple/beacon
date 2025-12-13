@@ -9,12 +9,12 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/core/storage"
 	"github.com/snple/beacon/pb/cores"
-	bErrors "github.com/snple/beacon/util/errors"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
 type CoreService struct {
+	badger  *BadgerService
 	storage *storage.Storage
 
 	sync     *SyncService
@@ -31,23 +31,17 @@ type CoreService struct {
 	dopts coreOptions
 }
 
-func Core(db *badger.DB, opts ...CoreOption) (*CoreService, error) {
-	return CoreContext(context.Background(), db, opts...)
+func Core(opts ...CoreOption) (*CoreService, error) {
+	return CoreContext(context.Background(), opts...)
 }
 
-func CoreContext(ctx context.Context, db *badger.DB, opts ...CoreOption) (*CoreService, error) {
+func CoreContext(ctx context.Context, opts ...CoreOption) (*CoreService, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	if db == nil {
-		cancel()
-		return nil, bErrors.ErrInvalidDatabase
-	}
-
 	cs := &CoreService{
-		storage: storage.New(db),
-		ctx:     ctx,
-		cancel:  cancel,
-		dopts:   defaultCoreOptions(),
+		ctx:    ctx,
+		cancel: cancel,
+		dopts:  defaultCoreOptions(),
 	}
 
 	for _, opt := range extraCoreOptions {
@@ -57,6 +51,21 @@ func CoreContext(ctx context.Context, db *badger.DB, opts ...CoreOption) (*CoreS
 	for _, opt := range opts {
 		opt.apply(&cs.dopts)
 	}
+
+	if err := cs.dopts.check(); err != nil {
+		cancel()
+		return nil, err
+	}
+
+	badgerSvc, err := newBadgerService(cs)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	cs.badger = badgerSvc
+
+	// 创建存储
+	cs.storage = storage.New(badgerSvc.GetDB())
 
 	cs.sync = newSyncService(cs)
 	cs.node = newNodeService(cs)
@@ -68,16 +77,30 @@ func CoreContext(ctx context.Context, db *badger.DB, opts ...CoreOption) (*CoreS
 	return cs, nil
 }
 
-func (cs *CoreService) Start() error {
+func (cs *CoreService) Start() {
 	// 加载存储数据
-	return cs.storage.Load(cs.ctx)
+	if err := cs.storage.Load(cs.ctx); err != nil {
+		cs.Logger().Sugar().Errorf("load storage: %v", err)
+	}
+
+	cs.closeWG.Add(1)
+	go func() {
+		defer cs.closeWG.Done()
+
+		cs.badger.start()
+	}()
 }
 
 func (cs *CoreService) Stop() {
-	cs.cancel()
+	cs.badger.stop()
 
+	cs.cancel()
 	cs.closeWG.Wait()
 	cs.dopts.logger.Sync()
+}
+
+func (cs *CoreService) GetBadgerDB() *badger.DB {
+	return cs.badger.GetDB()
 }
 
 func (cs *CoreService) GetStorage() *storage.Storage {
@@ -126,8 +149,15 @@ func (cs *CoreService) Register(server *grpc.Server) {
 }
 
 type coreOptions struct {
-	logger  *zap.Logger
-	linkTTL time.Duration
+	logger          *zap.Logger
+	linkTTL         time.Duration
+	BadgerOptions   badger.Options
+	BadgerGCOptions BadgerGCOptions
+}
+
+type BadgerGCOptions struct {
+	GC             time.Duration
+	GCDiscardRatio float64
 }
 
 func defaultCoreOptions() coreOptions {
@@ -137,9 +167,18 @@ func defaultCoreOptions() coreOptions {
 	}
 
 	return coreOptions{
-		logger:  logger,
-		linkTTL: 3 * time.Minute,
+		logger:        logger,
+		linkTTL:       3 * time.Minute,
+		BadgerOptions: badger.DefaultOptions("").WithInMemory(true),
+		BadgerGCOptions: BadgerGCOptions{
+			GC:             time.Hour,
+			GCDiscardRatio: 0.7,
+		},
 	}
+}
+
+func (o *coreOptions) check() error {
+	return nil
 }
 
 type CoreOption interface {
@@ -171,5 +210,23 @@ func WithLogger(logger *zap.Logger) CoreOption {
 func WithLinkTTL(d time.Duration) CoreOption {
 	return newFuncCoreOption(func(o *coreOptions) {
 		o.linkTTL = d
+	})
+}
+
+func WithBadger(options badger.Options) CoreOption {
+	return newFuncCoreOption(func(o *coreOptions) {
+		o.BadgerOptions = options
+	})
+}
+
+func WithBadgerGC(options *BadgerGCOptions) CoreOption {
+	return newFuncCoreOption(func(o *coreOptions) {
+		if options.GC > 0 {
+			o.BadgerGCOptions.GC = options.GC
+		}
+
+		if options.GCDiscardRatio > 0 {
+			o.BadgerGCOptions.GCDiscardRatio = options.GCDiscardRatio
+		}
 	})
 }
