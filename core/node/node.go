@@ -29,6 +29,8 @@ type NodeService struct {
 
 	// queen broker for edge device communication
 	broker *queen.Broker
+	// internal client for request/response and action handlers
+	internalClient *queen.InternalClient
 
 	ctx     context.Context
 	cancel  func()
@@ -81,9 +83,20 @@ func (ns *NodeService) Start() {
 			ns.Logger().Sugar().Infof("Queen broker started on %s", ns.dopts.brokerAddr)
 		}
 	}
+
+	// 启动消息处理协程
+	if ns.internalClient != nil {
+		ns.closeWG.Add(1)
+		go ns.processMessages()
+	}
 }
 
 func (ns *NodeService) Stop() {
+	// 关闭内部客户端
+	if ns.internalClient != nil {
+		ns.internalClient.Close()
+	}
+
 	// 停止 queen broker
 	if ns.broker != nil {
 		if err := ns.broker.Stop(); err != nil {
@@ -193,19 +206,32 @@ func (ns *NodeService) initBroker() error {
 		return ns.authenticateBrokerClient(info)
 	}))
 
-	// 设置消息处理钩子
-	brokerOpts = append(brokerOpts, queen.WithMessageHandler(&queen.MessageHandlerFunc{
-		PublishFunc: func(ctx *queen.PublishContext) error {
-			return ns.handleQueenMessage(ctx)
-		},
-	}))
-
 	broker, err := queen.New(brokerOpts...)
 	if err != nil {
 		return err
 	}
 
 	ns.broker = broker
+
+	// 创建内部客户端并注册必要的 action 处理器（非致命）
+	icCfg := queen.InternalClientConfig{ClientID: "beacon-core", BufferSize: 200}
+	ic, err := ns.broker.NewInternalClient(icCfg)
+	if err != nil {
+		ns.Logger().Sugar().Warnf("Failed to create internal client: %v", err)
+		// 仍然返回 broker 可用，但不阻塞服务启动
+		return nil
+	}
+	ns.internalClient = ic
+	// 注册内部 action 处理器由 queen.go 中实现
+	if err := ns.registerInternalHandlers(); err != nil {
+		ns.Logger().Sugar().Warnf("Failed to register internal handlers: %v", err)
+	}
+
+	// 订阅所有 beacon 主题
+	if err := ns.subscribeTopics(); err != nil {
+		ns.Logger().Sugar().Warnf("Failed to subscribe topics: %v", err)
+	}
+
 	return nil
 }
 

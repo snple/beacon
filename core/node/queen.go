@@ -3,12 +3,14 @@ package node
 import (
 	"bytes"
 	"context"
-	"strings"
+	"fmt"
 
 	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 	queen "snple.com/queen/core"
+	"snple.com/queen/pkg/protocol"
 )
 
 // Queen 协议主题定义
@@ -31,46 +33,86 @@ const (
 
 // PinValueMessage Pin 值消息
 type PinValueMessage struct {
-	Id    string        `nson:"id,omitempty"`    // Pin ID
-	Name  string        `nson:"name,omitempty"`  // Pin 名称 (wire.pin 格式)
-	Value *pb.NsonValue `nson:"value,omitempty"` // NsonValue 格式值
+	Id    string     `nson:"id,omitempty"`    // Pin ID
+	Name  string     `nson:"name,omitempty"`  // Pin 名称 (wire.pin 格式)
+	Value nson.Value `nson:"value,omitempty"` // NSON 值
 }
 
 // PinWriteMessage Pin 写入消息
 type PinWriteMessage struct {
-	Id    string        `nson:"id,omitempty"`    // Pin ID
-	Name  string        `nson:"name,omitempty"`  // Pin 名称
-	Value *pb.NsonValue `nson:"value,omitempty"` // NsonValue 格式值
+	Id    string     `nson:"id,omitempty"`    // Pin ID
+	Name  string     `nson:"name,omitempty"`  // Pin 名称
+	Value nson.Value `nson:"value,omitempty"` // NSON 值
 }
 
-// handleQueenMessage 处理 queen 协议消息
-func (ns *NodeService) handleQueenMessage(ctx *queen.PublishContext) error {
-	topic := ctx.Message.Topic
-	clientID := ctx.ClientID // clientID 即 nodeID
-
-	ns.Logger().Sugar().Debugf("Queen message received: topic=%s, clientID=%s, payload_len=%d",
-		topic, clientID, len(ctx.Message.Payload))
-
-	// 根据主题路由消息
-	switch topic {
-	case TopicPush:
-		return ns.handlePush(clientID, ctx.Message.Payload)
-
-	case TopicPinValue:
-		return ns.handlePinValueBatch(clientID, ctx.Message.Payload)
-
-	case TopicPinValueSet:
-		return ns.handlePinValueSet(clientID, ctx.Message.Payload)
-
-	case TopicPinWritePull:
-		return ns.handlePinWritePull(clientID, ctx.Message.Payload)
-
-	default:
-		// 未知主题，忽略
-		ns.Logger().Sugar().Debugf("Unknown queen topic: %s", topic)
+// subscribeTopics 订阅所有 beacon 主题
+func (ns *NodeService) subscribeTopics() error {
+	if ns.internalClient == nil {
+		return fmt.Errorf("internal client not initialized")
 	}
 
+	// 订阅所有 beacon 相关主题
+	topics := []string{
+		TopicPush,
+		TopicPinValue,
+		TopicPinValueSet,
+		TopicPinWritePull,
+	}
+
+	for _, topic := range topics {
+		if err := ns.internalClient.Subscribe(topic, protocol.QoS1); err != nil {
+			return fmt.Errorf("failed to subscribe to %s: %w", topic, err)
+		}
+	}
+
+	ns.Logger().Sugar().Infof("Internal client subscribed to beacon topics")
 	return nil
+}
+
+// processMessages 处理内部客户端消息的后台协程
+func (ns *NodeService) processMessages() {
+	defer ns.closeWG.Done()
+
+	for {
+		msg, err := ns.internalClient.Receive()
+		if err != nil {
+			// 内部客户端关闭
+			return
+		}
+
+		// 从消息中提取 clientID（即 nodeID）
+		clientID := msg.SourceClientID
+		topic := msg.Topic
+		payload := msg.Payload
+
+		ns.Logger().Sugar().Debugf("Processing message: topic=%s, clientID=%s, payload_len=%d",
+			topic, clientID, len(payload))
+
+		// 根据主题路由消息
+		var err2 error
+		switch topic {
+		case TopicPush:
+			err2 = ns.handlePush(clientID, payload)
+
+		case TopicPinValue:
+			err2 = ns.handlePinValueBatch(clientID, payload)
+
+		case TopicPinValueSet:
+			err2 = ns.handlePinValueSet(clientID, payload)
+
+		case TopicPinWritePull:
+			err2 = ns.handlePinWritePull(clientID, payload)
+
+		default:
+			// 未知主题，忽略
+			ns.Logger().Sugar().Debugf("Unknown topic: %s", topic)
+		}
+
+		if err2 != nil {
+			ns.Logger().Sugar().Errorf("Failed to handle message: topic=%s, clientID=%s, error=%v",
+				topic, clientID, err2)
+		}
+	}
 }
 
 // handlePush 处理 NSON 数据推送
@@ -158,12 +200,18 @@ func (ns *NodeService) handlePinValueSet(nodeID string, payload []byte) error {
 
 // setPinValue 设置 Pin 值
 func (ns *NodeService) setPinValue(ctx context.Context, nodeID string, v *PinValueMessage) error {
+	// 将 nson.Value 转换为 pb.NsonValue
+	pbValue, err := dt.NsonToProto(v.Value)
+	if err != nil {
+		return fmt.Errorf("failed to convert value: %w", err)
+	}
+
 	if v.Name != "" {
 		// 通过名称设置
 		request := &cores.PinNameValueRequest{
 			NodeId: nodeID,
 			Name:   v.Name,
-			Value:  v.Value,
+			Value:  pbValue,
 		}
 		_, err := ns.Core().GetPinValue().SetValueByName(ctx, request)
 		return err
@@ -180,7 +228,7 @@ func (ns *NodeService) setPinValue(ctx context.Context, nodeID string, v *PinVal
 
 		pinValue := &pb.PinValue{
 			Id:    v.Id,
-			Value: v.Value,
+			Value: pbValue,
 		}
 		_, err = ns.Core().GetPinValue().SetValue(ctx, pinValue)
 		return err
@@ -190,9 +238,18 @@ func (ns *NodeService) setPinValue(ctx context.Context, nodeID string, v *PinVal
 }
 
 // handlePinWritePull 处理 Pin 写入拉取请求
-func (ns *NodeService) handlePinWritePull(nodeID string, payload []byte) error {
+func (ns *NodeService) handlePinWritePull(nodeID string, _ []byte) error {
 	// 可以实现增量拉取逻辑
 	// 简化实现：发送所有待写入的 Pin 值
+	// 如果有内部客户端，作为 REQUEST 的响应应返回 payload
+	if ns.internalClient != nil {
+		// 构建 payload 并返回给调用者（internal handler 会返回这些 bytes）
+		_, err := ns.buildPinWritesPayload(nodeID)
+		if err != nil {
+			return err
+		}
+		// For publish-based flow keep existing behavior
+	}
 	return ns.pushPinWritesToClient(nodeID)
 }
 
@@ -222,10 +279,16 @@ func (ns *NodeService) pushPinWritesToClient(nodeID string) error {
 			continue
 		}
 
+		// 转换 pb.NsonValue 到 nson.Value
+		nsonVal, err := dt.ProtoToNson(writeValue.Value)
+		if err != nil {
+			continue
+		}
+
 		writes = append(writes, PinWriteMessage{
 			Id:    pin.Id,
 			Name:  pin.Name,
-			Value: writeValue.Value,
+			Value: nsonVal,
 		})
 	}
 
@@ -254,6 +317,112 @@ func (ns *NodeService) pushPinWritesToClient(nodeID string) error {
 	})
 }
 
+// buildPinWritesPayload 构建 pin write 列表的 NSON bytes（供内部请求返回）
+func (ns *NodeService) buildPinWritesPayload(nodeID string) ([]byte, error) {
+	if ns.Core() == nil {
+		return nil, fmt.Errorf("core service not available")
+	}
+
+	ctx := context.Background()
+
+	// 获取节点的所有 Pin
+	pinsRequest := &cores.PinListRequest{NodeId: nodeID}
+	pinsReply, err := ns.Core().GetPin().List(ctx, pinsRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	// 收集有写入值的 Pin
+	var writes []PinWriteMessage
+	for _, pin := range pinsReply.Pins {
+		writeValue, err := ns.Core().GetPinWrite().GetWrite(ctx, &pb.Id{Id: pin.Id})
+		if err != nil {
+			continue // 忽略没有写入值的 Pin
+		}
+		if writeValue.Value == nil {
+			continue
+		}
+
+		// 转换 pb.NsonValue 到 nson.Value
+		nsonVal, err := dt.ProtoToNson(writeValue.Value)
+		if err != nil {
+			continue
+		}
+
+		writes = append(writes, PinWriteMessage{
+			Id:    pin.Id,
+			Name:  pin.Name,
+			Value: nsonVal,
+		})
+	}
+
+	if len(writes) == 0 {
+		return nil, nil
+	}
+
+	// 序列化为 NSON Array
+	arr := make(nson.Array, 0, len(writes))
+	for _, w := range writes {
+		m, err := nson.Marshal(w)
+		if err != nil {
+			continue
+		}
+		arr = append(arr, m)
+	}
+
+	buf := new(bytes.Buffer)
+	if err := nson.EncodeArray(arr, buf); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// registerInternalHandlers 注册内部 action 处理器
+func (ns *NodeService) registerInternalHandlers() error {
+	if ns.internalClient == nil {
+		return fmt.Errorf("internal client not initialized")
+	}
+
+	// beacon.push
+	_ = ns.internalClient.RegisterHandler("beacon.push", func(req *queen.InternalRequest) ([]byte, protocol.ReasonCode, error) {
+		if err := ns.handlePush(req.SourceClientID, req.Payload); err != nil {
+			return nil, protocol.ReasonImplementationError, err
+		}
+		return nil, protocol.ReasonSuccess, nil
+	}, 20)
+
+	// beacon.pin.value (batch)
+	_ = ns.internalClient.RegisterHandler("beacon.pin.value", func(req *queen.InternalRequest) ([]byte, protocol.ReasonCode, error) {
+		if err := ns.handlePinValueBatch(req.SourceClientID, req.Payload); err != nil {
+			return nil, protocol.ReasonImplementationError, err
+		}
+		return nil, protocol.ReasonSuccess, nil
+	}, 20)
+
+	// beacon.pin.value.set (single)
+	_ = ns.internalClient.RegisterHandler("beacon.pin.value.set", func(req *queen.InternalRequest) ([]byte, protocol.ReasonCode, error) {
+		if err := ns.handlePinValueSet(req.SourceClientID, req.Payload); err != nil {
+			return nil, protocol.ReasonImplementationError, err
+		}
+		return nil, protocol.ReasonSuccess, nil
+	}, 10)
+
+	// beacon.pin.write.pull -> 返回待写入的 pin writes（NSON Array）
+	_ = ns.internalClient.RegisterHandler("beacon.pin.write.pull", func(req *queen.InternalRequest) ([]byte, protocol.ReasonCode, error) {
+		data, err := ns.buildPinWritesPayload(req.SourceClientID)
+		if err != nil {
+			return nil, protocol.ReasonImplementationError, err
+		}
+		if data == nil {
+			return nil, protocol.ReasonSuccess, nil
+		}
+		return data, protocol.ReasonSuccess, nil
+	}, 2)
+
+	return nil
+}
+
 // NotifyPinWrite 通知节点有新的 Pin 写入
 // 当上层设置 Pin 写入值时调用此方法
 func (ns *NodeService) NotifyPinWrite(nodeID string, pinID string, pinName string, value *pb.NsonValue) error {
@@ -267,10 +436,16 @@ func (ns *NodeService) NotifyPinWrite(nodeID string, pinID string, pinName strin
 		return nil
 	}
 
+	// 转换 pb.NsonValue 到 nson.Value
+	nsonVal, err := dt.ProtoToNson(value)
+	if err != nil {
+		return fmt.Errorf("failed to convert value: %w", err)
+	}
+
 	msg := PinWriteMessage{
 		Id:    pinID,
 		Name:  pinName,
-		Value: value,
+		Value: nsonVal,
 	}
 
 	// 序列化为 NSON
@@ -326,14 +501,4 @@ func (ns *NodeService) NotifyNodeUpdate(nodeID string) error {
 	return ns.broker.PublishToClient(nodeID, "beacon/node/update", buf.Bytes(), queen.PublishOptions{
 		QoS: 1,
 	})
-}
-
-// parseNodeIDFromTopic 从主题中解析节点 ID (如果需要)
-func parseNodeIDFromTopic(topic string) string {
-	// 主题格式: beacon/{nodeID}/...
-	parts := strings.Split(topic, "/")
-	if len(parts) >= 2 {
-		return parts[1]
-	}
-	return ""
 }
