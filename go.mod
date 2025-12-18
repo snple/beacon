@@ -39,6 +39,6 @@ require (
 )
 
 replace (
-	github.com/danclive/nson-go => ../../nson-go
+	github.com/danclive/nson-go => ../nson-go
 	snple.com/queen => ../queen
 )

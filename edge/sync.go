@@ -6,11 +6,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/edge/storage"
-	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/edges"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type SyncService struct {
@@ -20,8 +15,6 @@ type SyncService struct {
 	waits   map[chan struct{}]struct{}
 	waitsPV map[chan struct{}]struct{}
 	waitsPW map[chan struct{}]struct{}
-
-	edges.UnimplementedSyncServiceServer
 }
 
 func newSyncService(es *EdgeService) *SyncService {
@@ -33,160 +26,20 @@ func newSyncService(es *EdgeService) *SyncService {
 	}
 }
 
-func (s *SyncService) SetNodeUpdated(ctx context.Context, in *edges.SyncUpdated) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Updated == 0 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Updated")
-		}
-	}
-
-	err = s.setNodeUpdated(ctx, time.UnixMicro(in.Updated))
-	if err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
+func (s *SyncService) SetNodeUpdated(ctx context.Context, updated time.Time) error {
+	return s.setNodeUpdated(ctx, updated)
 }
 
-func (s *SyncService) GetNodeUpdated(ctx context.Context, in *pb.MyEmpty) (*edges.SyncUpdated, error) {
-	var output edges.SyncUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	t, err := s.getNodeUpdated(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Updated = t.UnixMicro()
-
-	return &output, nil
+func (s *SyncService) GetNodeUpdated(ctx context.Context) (time.Time, error) {
+	return s.getNodeUpdated(ctx)
 }
 
-func (s *SyncService) WaitNodeUpdated(in *pb.MyEmpty,
-	stream edges.SyncService_WaitNodeUpdatedServer) error {
-
-	return s.waitUpdated(in, stream, NOTIFY)
+func (s *SyncService) GetPinValueUpdated(ctx context.Context) (time.Time, error) {
+	return s.getPinValueUpdated(ctx)
 }
 
-func (s *SyncService) SetPinValueUpdated(ctx context.Context, in *edges.SyncUpdated) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Updated == 0 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Value.Updated")
-		}
-	}
-
-	err = s.setPinValueUpdated(ctx, time.UnixMicro(in.Updated))
-	if err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
-func (s *SyncService) GetPinValueUpdated(ctx context.Context, in *pb.MyEmpty) (*edges.SyncUpdated, error) {
-	var output edges.SyncUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	t, err := s.getPinValueUpdated(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Updated = t.UnixMicro()
-
-	return &output, nil
-}
-
-func (s *SyncService) WaitPinValueUpdated(in *pb.MyEmpty,
-	stream edges.SyncService_WaitPinValueUpdatedServer) error {
-
-	return s.waitUpdated(in, stream, NOTIFY_PV)
-}
-
-func (s *SyncService) SetPinWriteUpdated(ctx context.Context, in *edges.SyncUpdated) (*pb.MyBool, error) {
-	var output pb.MyBool
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-
-		if in.Updated == 0 {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Write.Updated")
-		}
-	}
-
-	err = s.setPinWriteUpdated(ctx, time.UnixMicro(in.Updated))
-	if err != nil {
-		return &output, err
-	}
-
-	output.Bool = true
-
-	return &output, nil
-}
-
-func (s *SyncService) GetPinWriteUpdated(ctx context.Context, in *pb.MyEmpty) (*edges.SyncUpdated, error) {
-	var output edges.SyncUpdated
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	t, err := s.getPinWriteUpdated(ctx)
-	if err != nil {
-		return &output, err
-	}
-
-	output.Updated = t.UnixMicro()
-
-	return &output, nil
-}
-
-func (s *SyncService) WaitPinWriteUpdated(in *pb.MyEmpty,
-	stream edges.SyncService_WaitPinWriteUpdatedServer) error {
-
-	return s.waitUpdated(in, stream, NOTIFY_PW)
+func (s *SyncService) GetPinWriteUpdated(ctx context.Context) (time.Time, error) {
+	return s.getPinWriteUpdated(ctx)
 }
 
 func (s *SyncService) getNodeUpdated(ctx context.Context) (time.Time, error) {
@@ -353,36 +206,5 @@ func (n *Notify) Close() {
 		delete(n.ss.waitsPV, n.ch)
 	case NOTIFY_PW:
 		delete(n.ss.waitsPW, n.ch)
-	}
-}
-
-type waitUpdatedStream interface {
-	Send(*pb.MyBool) error
-	grpc.ServerStream
-}
-
-func (s *SyncService) waitUpdated(in *pb.MyEmpty, stream waitUpdatedStream, nt NotifyType) error {
-	var err error
-
-	// basic validation
-	{
-		if in == nil {
-			return status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
-	notify := s.Notify(nt)
-	defer notify.Close()
-
-	for {
-		select {
-		case <-notify.Wait():
-			err = stream.Send(&pb.MyBool{Bool: true})
-			if err != nil {
-				return err
-			}
-		case <-stream.Context().Done():
-			return nil
-		}
 	}
 }

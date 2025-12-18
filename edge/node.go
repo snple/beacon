@@ -2,19 +2,15 @@ package edge
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/edges"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type NodeService struct {
 	es *EdgeService
-
-	edges.UnimplementedNodeServiceServer
 }
 
 func newNodeService(es *EdgeService) *NodeService {
@@ -28,40 +24,36 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 	var err error
 
 	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, errors.New("please supply valid argument")
+	}
 
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.Name")
-		}
+	if in.Name == "" {
+		return &output, errors.New("please supply valid Node.Name")
 	}
 
 	// name validation
-	{
-		if len(in.Name) < 2 {
-			return &output, status.Error(codes.InvalidArgument, "Node.Name min 2 character")
-		}
+	if len(in.Name) < 2 {
+		return &output, errors.New("Node.Name min 2 character")
 	}
 
 	node, err := s.es.GetStorage().GetNode()
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
+		return &output, err
 	}
 
 	// 更新名称
 	if in.Name != node.Name {
 		err = s.es.GetStorage().UpdateNodeName(ctx, in.Name)
 		if err != nil {
-			return &output, status.Errorf(codes.Internal, "UpdateNodeName: %v", err)
+			return &output, err
 		}
 	}
 
 	// 重新获取更新后的节点
 	node, err = s.es.GetStorage().GetNode()
 	if err != nil {
-		return &output, status.Errorf(codes.Internal, "GetNode: %v", err)
+		return &output, err
 	}
 
 	if err = s.afterUpdate(ctx); err != nil {
@@ -76,16 +68,13 @@ func (s *NodeService) Update(ctx context.Context, in *pb.Node) (*pb.Node, error)
 func (s *NodeService) View(ctx context.Context, in *pb.MyEmpty) (*pb.Node, error) {
 	var output pb.Node
 
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, errors.New("please supply valid argument")
 	}
 
 	node, err := s.es.GetStorage().GetNode()
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
+		return &output, err
 	}
 
 	s.copyModelToOutput(&output, node)
@@ -99,7 +88,7 @@ func (s *NodeService) Destory(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, 
 	// 重置节点配置（清空 Wires）
 	node, err := s.es.GetStorage().GetNode()
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
+		return &output, err
 	}
 
 	// 保留节点基本信息，清空 Wires
@@ -113,7 +102,7 @@ func (s *NodeService) Destory(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, 
 
 	err = s.es.GetStorage().SetNode(ctx, newNode)
 	if err != nil {
-		return &output, status.Errorf(codes.Internal, "SetNode: %v", err)
+		return &output, err
 	}
 
 	output.Bool = true
@@ -124,7 +113,7 @@ func (s *NodeService) Destory(ctx context.Context, in *pb.MyEmpty) (*pb.MyBool, 
 func (s *NodeService) ViewByID(ctx context.Context) (*storage.Node, error) {
 	node, err := s.es.GetStorage().GetNode()
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "Node not found: %v", err)
+		return nil, err
 	}
 
 	return node, nil
@@ -166,11 +155,9 @@ func (s *NodeService) copyModelToOutput(output *pb.Node, node *storage.Node) {
 }
 
 func (s *NodeService) afterUpdate(ctx context.Context) error {
-	var err error
-
-	err = s.es.GetSync().setNodeUpdated(ctx, time.Now())
+	err := s.es.GetSync().setNodeUpdated(ctx, time.Now())
 	if err != nil {
-		return status.Errorf(codes.Internal, "Sync.setNodeUpdated: %v", err)
+		return err
 	}
 
 	return nil

@@ -82,7 +82,10 @@ func (s *PinWriteService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.My
 		return &output, status.Errorf(codes.Internal, "SetPinWrite failed: %v", err)
 	}
 
-	// TODO: 通知同步服务
+	// 通知节点有新的 Pin 写入
+	if err := s.cs.NotifyPinWrite(nodeID, in.Id, pin.Name, in.Value); err != nil {
+		s.cs.Logger().Sugar().Warnf("NotifyPinWrite failed: %v", err)
+	}
 
 	output.Bool = true
 	return &output, nil
@@ -148,7 +151,10 @@ func (s *PinWriteService) SetWriteByName(ctx context.Context, in *cores.PinNameV
 		return &output, status.Errorf(codes.Internal, "SetPinWrite failed: %v", err)
 	}
 
-	// TODO: 通知同步服务
+	// 通知节点有新的 Pin 写入
+	if err := s.cs.NotifyPinWrite(in.NodeId, pin.ID, pin.Name, in.Value); err != nil {
+		s.cs.Logger().Sugar().Warnf("NotifyPinWrite failed: %v", err)
+	}
 
 	output.Bool = true
 	return &output, nil

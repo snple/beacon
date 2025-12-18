@@ -2,18 +2,14 @@ package edge
 
 import (
 	"context"
+	"errors"
 
 	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/edges"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type WireService struct {
 	es *EdgeService
-
-	edges.UnimplementedWireServiceServer
 }
 
 func newWireService(es *EdgeService) *WireService {
@@ -25,20 +21,17 @@ func newWireService(es *EdgeService) *WireService {
 func (s *WireService) View(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
 	var output pb.Wire
 
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, errors.New("please supply valid argument")
+	}
 
-		if in.Id == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.ID")
-		}
+	if in.Id == "" {
+		return &output, errors.New("please supply valid Wire.ID")
 	}
 
 	wire, err := s.es.GetStorage().GetWireByID(in.Id)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Wire not found: %v", err)
+		return &output, err
 	}
 
 	s.copyModelToOutput(&output, wire)
@@ -49,20 +42,17 @@ func (s *WireService) View(ctx context.Context, in *pb.Id) (*pb.Wire, error) {
 func (s *WireService) Name(ctx context.Context, in *pb.Name) (*pb.Wire, error) {
 	var output pb.Wire
 
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
+	if in == nil {
+		return &output, errors.New("please supply valid argument")
+	}
 
-		if in.Name == "" {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid Wire.Name")
-		}
+	if in.Name == "" {
+		return &output, errors.New("please supply valid Wire.Name")
 	}
 
 	wire, err := s.es.GetStorage().GetWireByName(in.Name)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Wire not found: %v", err)
+		return &output, err
 	}
 
 	s.copyModelToOutput(&output, wire)
@@ -70,43 +60,25 @@ func (s *WireService) Name(ctx context.Context, in *pb.Name) (*pb.Wire, error) {
 	return &output, nil
 }
 
-func (s *WireService) List(ctx context.Context, in *pb.MyEmpty) (*edges.WireListResponse, error) {
-	var output edges.WireListResponse
-
-	// basic validation
-	{
-		if in == nil {
-			return &output, status.Error(codes.InvalidArgument, "Please supply valid argument")
-		}
-	}
-
+func (s *WireService) List(ctx context.Context) ([]*pb.Wire, error) {
 	wires := s.es.GetStorage().ListWires()
 
+	var output []*pb.Wire
 	for _, wire := range wires {
-		item := pb.Wire{}
-		s.copyModelToOutput(&item, wire)
-		output.Wires = append(output.Wires, &item)
+		item := &pb.Wire{}
+		s.copyModelToOutput(item, wire)
+		output = append(output, item)
 	}
 
-	return &output, nil
+	return output, nil
 }
 
 func (s *WireService) ViewByID(ctx context.Context, id string) (*storage.Wire, error) {
-	wire, err := s.es.GetStorage().GetWireByID(id)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "Wire not found: %v", err)
-	}
-
-	return wire, nil
+	return s.es.GetStorage().GetWireByID(id)
 }
 
 func (s *WireService) ViewByName(ctx context.Context, name string) (*storage.Wire, error) {
-	wire, err := s.es.GetStorage().GetWireByName(name)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "Wire not found: %v", err)
-	}
-
-	return wire, nil
+	return s.es.GetStorage().GetWireByName(name)
 }
 
 func (s *WireService) copyModelToOutput(output *pb.Wire, wire *storage.Wire) {

@@ -13,8 +13,6 @@ import (
 	"github.com/snple/beacon/bin/core/config"
 	"github.com/snple/beacon/bin/core/log"
 	"github.com/snple/beacon/core"
-	"github.com/snple/beacon/core/node"
-	tcp_node "github.com/snple/beacon/tcp/node"
 	"github.com/snple/beacon/util"
 	_ "github.com/snple/beacon/util/compress/zstd"
 	"google.golang.org/grpc"
@@ -94,76 +92,6 @@ func main() {
 				log.Logger.Sugar().Errorf("failed to serve: %v", err)
 			}
 		}()
-	}
-
-	if config.Config.NodeService.Enable {
-		nodeOpts := make([]node.NodeOption, 0)
-
-		ns, err := node.Node(cs, nodeOpts...)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("NewNodeService: %v", err)
-		}
-
-		ns.Start()
-		defer ns.Stop()
-
-		grpcOpts := []grpc.ServerOption{
-			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{PermitWithoutStream: true}),
-		}
-
-		if config.Config.NodeService.TLS {
-			tlsConfig, err := util.LoadServerCert(config.Config.NodeService.CA, config.Config.NodeService.Cert, config.Config.NodeService.Key)
-			if err != nil {
-				log.Logger.Sugar().Fatal(err)
-			}
-
-			grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
-		} else {
-			grpcOpts = append(grpcOpts, grpc.Creds(insecure.NewCredentials()))
-		}
-
-		s := grpc.NewServer(grpcOpts...)
-		defer s.Stop()
-
-		ns.RegisterGrpc(s)
-
-		lis, err := net.Listen("tcp", config.Config.NodeService.Addr)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("failed to listen: %v", err)
-		}
-
-		go func() {
-			log.Logger.Sugar().Infof("node grpc start: %v", config.Config.NodeService.Addr)
-			if err := s.Serve(lis); err != nil {
-				log.Logger.Sugar().Fatalf("failed to serve: %v", err)
-			}
-		}()
-	}
-
-	if config.Config.TcpNodeService.Enable {
-		nodeOpts := make([]tcp_node.NodeOption, 0)
-
-		nodeOpts = append(nodeOpts, tcp_node.WithAddr(config.Config.TcpNodeService.Addr))
-
-		if config.Config.TcpNodeService.TLS {
-			tlsConfig, err := util.LoadServerCert(config.Config.TcpNodeService.CA,
-				config.Config.TcpNodeService.Cert, config.Config.TcpNodeService.Key)
-			if err != nil {
-				log.Logger.Sugar().Fatal(err)
-			}
-
-			nodeOpts = append(nodeOpts, tcp_node.WithTLSConfig(tlsConfig))
-		}
-
-		ns, err := tcp_node.Node(cs, nodeOpts...)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("NewNodeService: %v", err)
-		}
-
-		log.Logger.Sugar().Infof("tcp node service start: %v", config.Config.TcpNodeService.Addr)
-
-		ns.Start()
-		defer ns.Stop()
 	}
 
 	signalCh := make(chan os.Signal, 1)

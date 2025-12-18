@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"sync"
 	"time"
@@ -11,11 +12,16 @@ import (
 	"github.com/snple/beacon/pb/cores"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	queen "snple.com/queen/core"
 )
 
 type CoreService struct {
 	badger  *BadgerService
 	storage *storage.Storage
+
+	// Queen 通信层
+	broker         *queen.Broker
+	internalClient *queen.InternalClient
 
 	sync     *SyncService
 	node     *NodeService
@@ -74,6 +80,14 @@ func CoreContext(ctx context.Context, opts ...CoreOption) (*CoreService, error) 
 	cs.pinValue = newPinValueService(cs)
 	cs.pinWrite = newPinWriteService(cs)
 
+	// 初始化 Queen broker (如果启用)
+	if cs.dopts.queenEnable {
+		if err := cs.initQueenBroker(); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
+
 	return cs, nil
 }
 
@@ -89,9 +103,36 @@ func (cs *CoreService) Start() {
 
 		cs.badger.start()
 	}()
+
+	// 启动 Queen broker
+	if cs.broker != nil {
+		if err := cs.broker.Start(); err != nil {
+			cs.Logger().Sugar().Errorf("Failed to start queen broker: %v", err)
+		} else {
+			cs.Logger().Sugar().Infof("Queen broker started on %s", cs.dopts.queenAddr)
+		}
+	}
+
+	// 启动消息处理协程
+	if cs.internalClient != nil {
+		cs.closeWG.Add(1)
+		go cs.processQueenMessages()
+	}
 }
 
 func (cs *CoreService) Stop() {
+	// 关闭内部客户端
+	if cs.internalClient != nil {
+		cs.internalClient.Close()
+	}
+
+	// 停止 Queen broker
+	if cs.broker != nil {
+		if err := cs.broker.Stop(); err != nil {
+			cs.Logger().Sugar().Errorf("Failed to stop queen broker: %v", err)
+		}
+	}
+
 	cs.badger.stop()
 
 	cs.cancel()
@@ -131,6 +172,14 @@ func (cs *CoreService) GetPinWrite() *PinWriteService {
 	return cs.pinWrite
 }
 
+func (cs *CoreService) GetBroker() *queen.Broker {
+	return cs.broker
+}
+
+func (cs *CoreService) GetInternalClient() *queen.InternalClient {
+	return cs.internalClient
+}
+
 func (cs *CoreService) Context() context.Context {
 	return cs.ctx
 }
@@ -153,6 +202,11 @@ type coreOptions struct {
 	linkTTL         time.Duration
 	BadgerOptions   badger.Options
 	BadgerGCOptions BadgerGCOptions
+
+	// Queen broker 选项
+	queenEnable    bool
+	queenAddr      string
+	queenTLSConfig *tls.Config
 }
 
 type BadgerGCOptions struct {
@@ -174,6 +228,8 @@ func defaultCoreOptions() coreOptions {
 			GC:             time.Hour,
 			GCDiscardRatio: 0.7,
 		},
+		queenEnable: false,
+		queenAddr:   ":3883",
 	}
 }
 
@@ -228,5 +284,16 @@ func WithBadgerGC(options *BadgerGCOptions) CoreOption {
 		if options.GCDiscardRatio > 0 {
 			o.BadgerGCOptions.GCDiscardRatio = options.GCDiscardRatio
 		}
+	})
+}
+
+// WithQueenBroker 启用并配置 Queen broker
+func WithQueenBroker(addr string, tlsConfig *tls.Config) CoreOption {
+	return newFuncCoreOption(func(o *coreOptions) {
+		o.queenEnable = true
+		if addr != "" {
+			o.queenAddr = addr
+		}
+		o.queenTLSConfig = tlsConfig
 	})
 }

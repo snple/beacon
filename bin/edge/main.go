@@ -116,9 +116,7 @@ func main() {
 		}
 
 		edgeOpts = append(edgeOpts, edge.WithNode(edge.NodeOptions{
-			Enable:      true,
-			Addr:        config.Config.NodeClient.Addr,
-			GRPCOptions: grpcOpts,
+			Enable: true,
 		}))
 	}
 
@@ -148,7 +146,6 @@ func main() {
 
 		s := grpc.NewServer(grpcOpts...)
 		defer s.Stop()
-		es.Register(s)
 
 		lis, err := net.Listen("tcp", config.Config.EdgeService.Addr)
 		if err != nil {
@@ -207,11 +204,6 @@ func cli(command string) error {
 		} else {
 			grpcOpts = append(grpcOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		}
-
-		edgeOpts = append(edgeOpts, edge.WithNode(edge.NodeOptions{
-			Addr:        config.Config.NodeClient.Addr,
-			GRPCOptions: grpcOpts,
-		}))
 	}
 
 	es, err := edge.Edge(edgeOpts...)

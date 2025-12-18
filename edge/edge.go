@@ -2,6 +2,7 @@ package edge
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log"
 	"sync"
@@ -9,10 +10,8 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/edge/storage"
-	"github.com/snple/beacon/pb/edges"
 	"github.com/snple/types"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
 )
 
 type EdgeService struct {
@@ -23,7 +22,7 @@ type EdgeService struct {
 	wire    *WireService
 	pin     *PinService
 
-	nodeUp types.Option[*NodeUpService]
+	queenUp types.Option[*QueenUpService]
 
 	ctx     context.Context
 	cancel  func()
@@ -77,12 +76,14 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 	es.wire = newWireService(es)
 	es.pin = newPinService(es)
 
+	// 根据配置选择通信方式
 	if es.dopts.NodeOptions.Enable {
-		nodeUp, err := newNodeUpService(es)
+		// 使用 Queen 通信
+		queenUp, err := newQueenUpService(es)
 		if err != nil {
 			return nil, err
 		}
-		es.nodeUp = types.Some(nodeUp)
+		es.queenUp = types.Some(queenUp)
 	}
 
 	return es, nil
@@ -96,19 +97,19 @@ func (es *EdgeService) Start() {
 		es.badger.start()
 	}()
 
-	if es.nodeUp.IsSome() {
+	if es.queenUp.IsSome() {
 		es.closeWG.Add(1)
 		go func() {
 			defer es.closeWG.Done()
 
-			es.nodeUp.Unwrap().start()
+			es.queenUp.Unwrap().start()
 		}()
 	}
 }
 
 func (es *EdgeService) Stop() {
-	if es.nodeUp.IsSome() {
-		es.nodeUp.Unwrap().stop()
+	if es.queenUp.IsSome() {
+		es.queenUp.Unwrap().stop()
 	}
 
 	es.badger.stop()
@@ -119,8 +120,8 @@ func (es *EdgeService) Stop() {
 }
 
 func (es *EdgeService) Push() error {
-	if es.nodeUp.IsSome() {
-		return es.nodeUp.Unwrap().push()
+	if es.queenUp.IsSome() {
+		return es.queenUp.Unwrap().push()
 	}
 
 	return errors.New("node not enable")
@@ -150,23 +151,12 @@ func (es *EdgeService) GetPin() *PinService {
 	return es.pin
 }
 
-func (es *EdgeService) GetNodeUp() types.Option[*NodeUpService] {
-	return es.nodeUp
-}
-
 func (es *EdgeService) Context() context.Context {
 	return es.ctx
 }
 
 func (es *EdgeService) Logger() *zap.Logger {
 	return es.dopts.logger
-}
-
-func (es *EdgeService) Register(server *grpc.Server) {
-	edges.RegisterSyncServiceServer(server, es.sync)
-	edges.RegisterNodeServiceServer(server, es.node)
-	edges.RegisterWireServiceServer(server, es.wire)
-	edges.RegisterPinServiceServer(server, es.pin)
 }
 
 type edgeOptions struct {
@@ -183,9 +173,9 @@ type edgeOptions struct {
 }
 
 type NodeOptions struct {
-	Enable      bool
-	Addr        string
-	GRPCOptions []grpc.DialOption
+	Enable    bool
+	QueenAddr string // Queen broker 地址
+	QueenTLS  *tls.Config
 }
 
 type SyncOptions struct {
