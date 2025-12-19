@@ -17,15 +17,15 @@ func newNodeService(cs *CoreService) *NodeService {
 	}
 }
 
-func (s *NodeService) View(ctx context.Context, in *Id) (*Node, error) {
+func (s *NodeService) View(ctx context.Context, nodeID string) (*Node, error) {
 	var output Node
 
 	// basic validation
-	if in == nil || in.Id == "" {
+	if nodeID == "" {
 		return &output, fmt.Errorf("please supply valid Node.ID")
 	}
 
-	node, err := s.cs.GetStorage().GetNode(in.Id)
+	node, err := s.cs.GetStorage().GetNode(nodeID)
 	if err != nil {
 		return &output, fmt.Errorf("node not found: %w", err)
 	}
@@ -35,15 +35,15 @@ func (s *NodeService) View(ctx context.Context, in *Id) (*Node, error) {
 	return &output, nil
 }
 
-func (s *NodeService) Name(ctx context.Context, in *Name) (*Node, error) {
+func (s *NodeService) Name(ctx context.Context, name string) (*Node, error) {
 	var output Node
 
 	// basic validation
-	if in == nil || in.Name == "" {
+	if name == "" {
 		return &output, fmt.Errorf("please supply valid Node.Name")
 	}
 
-	node, err := s.cs.GetStorage().GetNodeByName(in.Name)
+	node, err := s.cs.GetStorage().GetNodeByName(name)
 	if err != nil {
 		return &output, fmt.Errorf("node not found: %w", err)
 	}
@@ -53,88 +53,75 @@ func (s *NodeService) Name(ctx context.Context, in *Name) (*Node, error) {
 	return &output, nil
 }
 
-func (s *NodeService) List(ctx context.Context, in *MyEmpty) (*NodeListResponse, error) {
-	var output NodeListResponse
-
+func (s *NodeService) List(ctx context.Context) ([]*Node, error) {
 	nodes := s.cs.GetStorage().ListNodes()
 
+	result := make([]*Node, 0, len(nodes))
 	for _, node := range nodes {
-		item := Node{}
-		s.copyStorageToOutput(&item, node)
-		output.Nodes = append(output.Nodes, &item)
+		item := &Node{}
+		s.copyStorageToOutput(item, node)
+		result = append(result, item)
 	}
 
-	return &output, nil
+	return result, nil
 }
 
-func (s *NodeService) Push(ctx context.Context, in *NodePushRequest) (*MyBool, error) {
-	var output MyBool
-
+func (s *NodeService) Push(ctx context.Context, nodeID string, nsonData []byte) error {
 	// basic validation
-	if in == nil || in.Id == "" || len(in.Nson) == 0 {
-		return &output, fmt.Errorf("please supply valid Node.ID and NSON data")
+	if nodeID == "" || len(nsonData) == 0 {
+		return fmt.Errorf("please supply valid Node.ID and NSON data")
 	}
 
-	err := s.cs.GetStorage().Push(ctx, in.Nson)
+	err := s.cs.GetStorage().Push(ctx, nsonData)
 	if err != nil {
-		return &output, fmt.Errorf("push failed: %w", err)
+		return fmt.Errorf("push failed: %w", err)
 	}
 
 	// TODO: 通知同步服务
 
-	output.Bool = true
-	return &output, nil
+	return nil
 }
 
-func (s *NodeService) Delete(ctx context.Context, in *Id) (*MyBool, error) {
-	var output MyBool
-
+func (s *NodeService) Delete(ctx context.Context, nodeID string) error {
 	// basic validation
-	if in == nil || in.Id == "" {
-		return &output, fmt.Errorf("please supply valid Node.ID")
+	if nodeID == "" {
+		return fmt.Errorf("please supply valid Node.ID")
 	}
 
-	err := s.cs.GetStorage().DeleteNode(ctx, in.Id)
+	err := s.cs.GetStorage().DeleteNode(ctx, nodeID)
 	if err != nil {
-		return &output, fmt.Errorf("delete failed: %w", err)
+		return fmt.Errorf("delete failed: %w", err)
 	}
 
-	output.Bool = true
-	return &output, nil
+	return nil
 }
 
-func (s *NodeService) SetSecret(ctx context.Context, in *NodeSecretRequest) (*MyBool, error) {
-	var output MyBool
-
+func (s *NodeService) SetSecret(ctx context.Context, nodeID, secret string) error {
 	// basic validation
-	if in == nil || in.Id == "" || in.Secret == "" {
-		return &output, fmt.Errorf("please supply valid Node.ID and Secret")
+	if nodeID == "" || secret == "" {
+		return fmt.Errorf("please supply valid Node.ID and Secret")
 	}
 
-	err := s.cs.GetStorage().SetSecret(ctx, in.Id, in.Secret)
+	err := s.cs.GetStorage().SetSecret(ctx, nodeID, secret)
 	if err != nil {
-		return &output, fmt.Errorf("setSecret failed: %w", err)
+		return fmt.Errorf("setSecret failed: %w", err)
 	}
 
-	output.Bool = true
-	return &output, nil
+	return nil
 }
 
-func (s *NodeService) GetSecret(ctx context.Context, in *Id) (*Message, error) {
-	var output Message
-
+func (s *NodeService) GetSecret(ctx context.Context, nodeID string) (string, error) {
 	// basic validation
-	if in == nil || in.Id == "" {
-		return &output, fmt.Errorf("please supply valid Node.ID")
+	if nodeID == "" {
+		return "", fmt.Errorf("please supply valid Node.ID")
 	}
 
-	secret, err := s.cs.GetStorage().GetSecret(in.Id)
+	secret, err := s.cs.GetStorage().GetSecret(nodeID)
 	if err != nil {
-		return &output, fmt.Errorf("secret not found: %w", err)
+		return "", fmt.Errorf("secret not found: %w", err)
 	}
 
-	output.Message = secret
-	return &output, nil
+	return secret, nil
 }
 
 func (s *NodeService) copyStorageToOutput(output *Node, node *dt.Node) {

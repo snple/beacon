@@ -19,15 +19,15 @@ func newPinService(cs *CoreService) *PinService {
 	}
 }
 
-func (s *PinService) View(ctx context.Context, in *PinViewRequest) (*Pin, error) {
+func (s *PinService) View(ctx context.Context, nodeID, pinID string) (*Pin, error) {
 	var output Pin
 
 	// basic validation
-	if in == nil || in.NodeId == "" || in.PinId == "" {
+	if nodeID == "" || pinID == "" {
 		return &output, fmt.Errorf("please supply valid NodeId and PinId")
 	}
 
-	pin, err := s.cs.GetStorage().GetPinByID(in.PinId)
+	pin, err := s.cs.GetStorage().GetPinByID(pinID)
 	if err != nil {
 		return &output, fmt.Errorf("pin not found: %w", err)
 	}
@@ -37,15 +37,15 @@ func (s *PinService) View(ctx context.Context, in *PinViewRequest) (*Pin, error)
 	return &output, nil
 }
 
-func (s *PinService) Name(ctx context.Context, in *PinNameRequest) (*Pin, error) {
+func (s *PinService) Name(ctx context.Context, nodeID, name string) (*Pin, error) {
 	var output Pin
 
 	// basic validation
-	if in == nil || in.NodeId == "" || in.Name == "" {
+	if nodeID == "" || name == "" {
 		return &output, fmt.Errorf("please supply valid NodeId and Name")
 	}
 
-	pin, err := s.cs.GetStorage().GetPinByName(in.NodeId, in.Name)
+	pin, err := s.cs.GetStorage().GetPinByName(nodeID, name)
 	if err != nil {
 		return &output, fmt.Errorf("pin not found: %w", err)
 	}
@@ -55,17 +55,17 @@ func (s *PinService) Name(ctx context.Context, in *PinNameRequest) (*Pin, error)
 	return &output, nil
 }
 
-func (s *PinService) NameFull(ctx context.Context, in *Name) (*Pin, error) {
+func (s *PinService) NameFull(ctx context.Context, fullName string) (*Pin, error) {
 	var output Pin
 
 	// basic validation
-	if in == nil || in.Name == "" {
+	if fullName == "" {
 		return &output, fmt.Errorf("please supply valid Name")
 	}
 
 	nodeName := device.DEFAULT_NODE
 	wireName := device.DEFAULT_WIRE
-	pinName := in.Name
+	pinName := fullName
 
 	if strings.Contains(pinName, ".") {
 		parts := strings.Split(pinName, ".")
@@ -98,34 +98,33 @@ func (s *PinService) NameFull(ctx context.Context, in *Name) (*Pin, error) {
 	return &output, nil
 }
 
-func (s *PinService) List(ctx context.Context, in *PinListRequest) (*PinListResponse, error) {
-	var output PinListResponse
-
+func (s *PinService) List(ctx context.Context, nodeID, wireID string) ([]*Pin, error) {
 	// basic validation
-	if in == nil || in.NodeId == "" {
-		return &output, fmt.Errorf("please supply valid NodeId")
+	if nodeID == "" {
+		return nil, fmt.Errorf("please supply valid NodeId")
 	}
 
 	var pins []*dt.Pin
 	var err error
 
-	if in.WireId != "" {
-		pins, err = s.cs.GetStorage().ListPins(in.WireId)
+	if wireID != "" {
+		pins, err = s.cs.GetStorage().ListPins(wireID)
 	} else {
-		pins, err = s.cs.GetStorage().ListPinsByNode(in.NodeId)
+		pins, err = s.cs.GetStorage().ListPinsByNode(nodeID)
 	}
 
 	if err != nil {
-		return &output, fmt.Errorf("list pins failed: %w", err)
+		return nil, fmt.Errorf("list pins failed: %w", err)
 	}
 
+	result := make([]*Pin, 0, len(pins))
 	for _, pin := range pins {
-		item := Pin{}
-		s.copyStorageToOutput(&item, pin)
-		output.Pins = append(output.Pins, &item)
+		item := &Pin{}
+		s.copyStorageToOutput(item, pin)
+		result = append(result, item)
 	}
 
-	return &output, nil
+	return result, nil
 }
 
 func (s *PinService) copyStorageToOutput(output *Pin, pin *dt.Pin) {

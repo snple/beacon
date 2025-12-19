@@ -75,10 +75,10 @@ func (cs *CoreService) authenticateBrokerClient(info *queen.AuthInfo) error {
 	var node *Node
 	var err error
 
-	node, err = cs.GetNode().View(ctx, &Id{Id: clientID})
+	node, err = cs.GetNode().View(ctx, clientID)
 	if err != nil {
 		// 尝试通过 Name 获取
-		node, err = cs.GetNode().Name(ctx, &Name{Name: clientID})
+		node, err = cs.GetNode().Name(ctx, clientID)
 		if err != nil {
 			return fmt.Errorf("node not found: %s", clientID)
 		}
@@ -89,12 +89,12 @@ func (cs *CoreService) authenticateBrokerClient(info *queen.AuthInfo) error {
 	}
 
 	// 验证密钥
-	secretReply, err := cs.GetNode().GetSecret(ctx, &Id{Id: node.Id})
+	nodeSecret, err := cs.GetNode().GetSecret(ctx, node.Id)
 	if err != nil {
 		return fmt.Errorf("getSecret failed: %w", err)
 	}
 
-	if secretReply.Message != secret {
+	if nodeSecret != secret {
 		return fmt.Errorf("invalid secret")
 	}
 

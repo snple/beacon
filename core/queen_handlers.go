@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/danclive/nson-go"
 	queen "snple.com/queen/core"
@@ -142,12 +143,7 @@ func (cs *CoreService) handlePush(nodeID string, payload []byte) error {
 
 	ctx := context.Background()
 
-	request := &NodePushRequest{
-		Id:   nodeID,
-		Nson: payload,
-	}
-
-	_, err := cs.GetNode().Push(ctx, request)
+	err := cs.GetNode().Push(ctx, nodeID, payload)
 	if err != nil {
 		cs.Logger().Sugar().Errorf("Push failed: nodeID=%s, error=%v", nodeID, err)
 		return err
@@ -198,29 +194,19 @@ func (cs *CoreService) setPinValue(ctx context.Context, nodeID string, v *PinVal
 
 	if v.Name != "" {
 		// 通过名称设置
-		request := &PinNameValueRequest{
-			NodeId: nodeID,
-			Name:   v.Name,
-			Value:  v.Value,
-		}
-		_, err := cs.GetPinValue().SetValueByName(ctx, request)
+		err := cs.GetPinValue().SetValueByName(ctx, nodeID, v.Name, v.Value)
 		return err
 	}
 
 	if v.Id != "" {
 		// 通过 ID 设置
 		// 先验证 Pin 属于当前节点
-		pinRequest := &PinViewRequest{NodeId: nodeID, PinId: v.Id}
-		_, err := cs.GetPin().View(ctx, pinRequest)
+		_, err := cs.GetPin().View(ctx, nodeID, v.Id)
 		if err != nil {
 			return err
 		}
 
-		pinValue := &PinValue{
-			Id:    v.Id,
-			Value: v.Value,
-		}
-		_, err = cs.GetPinValue().SetValue(ctx, pinValue)
+		err = cs.GetPinValue().SetValue(ctx, v.Id, v.Value, time.Now())
 		return err
 	}
 
@@ -232,27 +218,26 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	ctx := context.Background()
 
 	// 获取节点的所有 Pin
-	pinsRequest := &PinListRequest{NodeId: nodeID}
-	pinsReply, err := cs.GetPin().List(ctx, pinsRequest)
+	pins, err := cs.GetPin().List(ctx, nodeID, "")
 	if err != nil {
 		return nil, err
 	}
 
 	// 收集有写入值的 Pin
 	var writes []PinWriteMessage
-	for _, pin := range pinsReply.Pins {
-		writeValue, err := cs.GetPinWrite().GetWrite(ctx, &Id{Id: pin.Id})
+	for _, pin := range pins {
+		writeValue, _, err := cs.GetPinWrite().GetWrite(ctx, pin.Id)
 		if err != nil {
 			continue // 忽略没有写入值的 Pin
 		}
-		if writeValue.Value == nil {
+		if writeValue == nil {
 			continue
 		}
 
 		writes = append(writes, PinWriteMessage{
 			Id:    pin.Id,
 			Name:  pin.Name,
-			Value: writeValue.Value,
+			Value: writeValue,
 		})
 	}
 
@@ -331,7 +316,7 @@ func (cs *CoreService) NotifyNodeUpdate(nodeID string) error {
 
 	// 获取节点最新配置
 	ctx := context.Background()
-	node, err := cs.GetNode().View(ctx, &Id{Id: nodeID})
+	node, err := cs.GetNode().View(ctx, nodeID)
 	if err != nil {
 		return err
 	}
