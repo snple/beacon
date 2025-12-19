@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/edge/storage"
 	"github.com/snple/types"
 	"go.uber.org/zap"
@@ -60,10 +63,34 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 	}
 	es.badger = badgerSvc
 
-	// 创建存储
-	es.storage = storage.New(badgerSvc.GetDB())
+	if es.dopts.device == nil {
+		return nil, fmt.Errorf("WithDeviceTemplate is required")
+	}
 
-	// 加载数据
+	dev := *es.dopts.device
+	if strings.TrimSpace(dev.ID) == "" {
+		return nil, fmt.Errorf("device id is required")
+	}
+
+	// Creating edge with a device requires a stable nodeID.
+	if strings.TrimSpace(es.dopts.nodeID) == "" {
+		return nil, fmt.Errorf("please supply WithNodeID when WithDeviceTemplate is set")
+	}
+
+	// Build node from template (generated fresh each time).
+	name := es.dopts.name
+	if name == "" {
+		name = dev.Name
+	}
+	nodeConfig, err := buildNodeFromTemplate(es.dopts.nodeID, name, dev)
+	if err != nil {
+		return nil, err
+	}
+
+	// 创建存储（传入 node 配置，之后不可修改）
+	es.storage = storage.New(badgerSvc.GetDB(), nodeConfig)
+
+	// 加载数据（仅加载 secret 等持久化数据）
 	if err := es.storage.Load(ctx); err != nil {
 		return nil, err
 	}
@@ -144,7 +171,9 @@ func (es *EdgeService) Logger() *zap.Logger {
 type edgeOptions struct {
 	logger *zap.Logger
 	nodeID string
+	name   string
 	secret string
+	device *device.Device
 
 	NodeOptions     NodeOptions
 	SyncOptions     SyncOptions
@@ -232,6 +261,18 @@ func WithNodeID(id, secret string) EdgeOption {
 	return newFuncEdgeOption(func(o *edgeOptions) {
 		o.nodeID = id
 		o.secret = secret
+	})
+}
+
+func WithName(name string) EdgeOption {
+	return newFuncEdgeOption(func(o *edgeOptions) {
+		o.name = name
+	})
+}
+
+func WithDeviceTemplate(dev device.Device) EdgeOption {
+	return newFuncEdgeOption(func(o *edgeOptions) {
+		o.device = &dev
 	})
 }
 

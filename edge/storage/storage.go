@@ -15,13 +15,11 @@ import (
 
 // Node 节点配置（Edge 只有一个 Node）
 type Node struct {
-	ID      string    `nson:"id"`
-	Name    string    `nson:"name"`
-	Tags    []string  `nson:"tags,omitempty"`   // 节点标签列表
-	Device  string    `nson:"device,omitempty"` // 设备模板 ID（指向 device.Device.ID）
-	Status  int32     `nson:"status"`
-	Updated time.Time `nson:"updated"`
-	Wires   []Wire    `nson:"wires"`
+	ID     string   `nson:"id"`
+	Name   string   `nson:"name"`
+	Tags   []string `nson:"tags,omitempty"`   // 节点标签列表
+	Device string   `nson:"device,omitempty"` // 设备模板 ID（指向 device.Device.ID）
+	Wires  []Wire   `nson:"wires"`
 }
 
 // Wire 通道配置
@@ -78,44 +76,25 @@ func newIndex() *index {
 	}
 }
 
-// New 创建存储
-func New(db *badger.DB) *Storage {
-	return &Storage{
+// New 创建存储（node 配置在创建时传入，之后不可修改）
+func New(db *badger.DB, node *Node) *Storage {
+	s := &Storage{
+		node:  node,
 		index: newIndex(),
 		db:    db,
 	}
+	// 构建索引
+	s.rebuildIndexUnsafe()
+	return s
 }
 
-// Load 启动时加载数据
+// Load 启动时加载数据（注意：node 配置在创建时已传入，这里只加载 secret）
 func (s *Storage) Load(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 加载节点配置
-	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte("node"))
-		if err != nil {
-			if err == badger.ErrKeyNotFound {
-				return nil // 没有节点数据是正常的
-			}
-			return err
-		}
-
-		return item.Value(func(val []byte) error {
-			node, err := decodeNode(val)
-			if err != nil {
-				return err
-			}
-			s.node = node
-			return nil
-		})
-	})
-	if err != nil {
-		return err
-	}
-
 	// 加载 secret
-	err = s.db.View(func(txn *badger.Txn) error {
+	err := s.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte("secret"))
 		if err != nil {
 			if err == badger.ErrKeyNotFound {
@@ -129,16 +108,7 @@ func (s *Storage) Load(ctx context.Context) error {
 			return nil
 		})
 	})
-	if err != nil {
-		return err
-	}
-
-	// 重建索引
-	if s.node != nil {
-		s.rebuildIndexUnsafe()
-	}
-
-	return nil
+	return err
 }
 
 // --- Node 操作 ---
@@ -165,75 +135,21 @@ func (s *Storage) GetNodeID() string {
 	return s.node.ID
 }
 
-// SetNode 设置/更新节点配置
-func (s *Storage) SetNode(ctx context.Context, node *Node) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 更新内存
-	s.node = node
-
-	// 重建索引
-	s.clearIndexUnsafe()
-	s.rebuildIndexUnsafe()
-
-	// 持久化
-	return s.saveNodeUnsafe()
-}
-
-// UpdateNodeName 更新节点名称
-func (s *Storage) UpdateNodeName(ctx context.Context, name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.node == nil {
-		return fmt.Errorf("node not initialized")
-	}
-
-	s.node.Name = name
-	s.node.Updated = time.Now()
-
-	return s.saveNodeUnsafe()
-}
-
-// UpdateNodeStatus 更新节点状态
-func (s *Storage) UpdateNodeStatus(ctx context.Context, status int32) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.node == nil {
-		return fmt.Errorf("node not initialized")
-	}
-
-	s.node.Status = status
-	s.node.Updated = time.Now()
-
-	return s.saveNodeUnsafe()
-}
-
-// --- Secret 操作 ---
-
-// GetSecret 获取节点 Secret
-func (s *Storage) GetSecret() (string, error) {
+// HasNode reports whether a node configuration is loaded.
+func (s *Storage) HasNode() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	if s.secret == "" {
-		return "", fmt.Errorf("secret not set")
-	}
-	return s.secret, nil
+	return s.node != nil
 }
 
-// SetSecret 设置节点 Secret
-func (s *Storage) SetSecret(ctx context.Context, secret string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.secret = secret
-
-	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte("secret"), []byte(secret))
-	})
+// GetNodeDevice returns node.Device if node is initialized, otherwise empty.
+func (s *Storage) GetNodeDevice() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.node == nil {
+		return ""
+	}
+	return s.node.Device
 }
 
 // --- Wire 操作 ---
@@ -726,9 +642,15 @@ func (s *Storage) SetSyncTime(key string, t time.Time) error {
 		byte(usec >> 32), byte(usec >> 40), byte(usec >> 48), byte(usec >> 56),
 	}
 
-	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(key), val)
-	})
+	commitTs := uint64(time.Now().UnixMicro())
+	txn := s.db.NewTransactionAt(commitTs, true)
+	defer txn.Discard()
+
+	if err := txn.Set([]byte(key), val); err != nil {
+		return err
+	}
+
+	return txn.CommitAt(commitTs, nil)
 }
 
 // --- 内部方法 ---
@@ -759,24 +681,9 @@ func (s *Storage) rebuildIndexUnsafe() {
 	}
 }
 
-func (s *Storage) saveNodeUnsafe() error {
-	if s.node == nil {
-		return nil
-	}
-
-	data, err := encodeNode(s.node)
-	if err != nil {
-		return err
-	}
-
-	return s.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte("node"), data)
-	})
-}
-
 // --- 配置导入/导出 ---
 
-// ExportConfig 导出节点配置为 NSON 字节
+// ExportConfig 导出节点配置为 NSON 字节（注意：node 配置不持久化，仅导出当前内存中的配置）
 func (s *Storage) ExportConfig() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -785,22 +692,12 @@ func (s *Storage) ExportConfig() ([]byte, error) {
 		return nil, fmt.Errorf("node not initialized")
 	}
 
-	return encodeNode(s.node)
-}
-
-// ImportConfig 从 NSON 字节导入节点配置
-func (s *Storage) ImportConfig(ctx context.Context, data []byte) error {
-	node, err := decodeNode(data)
-	if err != nil {
-		return fmt.Errorf("decode node: %w", err)
-	}
-
-	return s.SetNode(ctx, node)
+	return EncodeNode(s.node)
 }
 
 // --- 编解码 ---
 
-func encodeNode(node *Node) ([]byte, error) {
+func EncodeNode(node *Node) ([]byte, error) {
 	m, err := nson.Marshal(node)
 	if err != nil {
 		return nil, err
@@ -814,7 +711,7 @@ func encodeNode(node *Node) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func decodeNode(data []byte) (*Node, error) {
+func DecodeNode(data []byte) (*Node, error) {
 	buf := bytes.NewBuffer(data)
 	m, err := nson.DecodeMap(buf)
 	if err != nil {

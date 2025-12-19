@@ -10,6 +10,7 @@ import (
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/core/storage"
+	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/edge"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,11 +56,25 @@ func TestQueenCommunication_Basic(t *testing.T) {
 	err = cs.GetStorage().SetSecret(ctx, nodeID, secret)
 	require.NoError(t, err)
 
-	// 3. 创建 Edge 服务，使用 Queen 通信
+	// 3. 创建 Edge 服务，使用 Queen 通信和设备模板
+	testDevice := device.Device{
+		ID:   "test_device_queen",
+		Name: "Test Device",
+		Wires: []device.Wire{
+			{
+				Name: "w1",
+				Pins: []device.Pin{
+					{Name: "p1", Type: uint32(nson.DataTypeBOOL), Rw: device.RW},
+				},
+			},
+		},
+	}
+
 	edgeLogger, _ := zap.NewDevelopment()
 	es, err := edge.Edge(
 		edge.WithLogger(edgeLogger),
 		edge.WithNodeID(nodeID, secret),
+		edge.WithDeviceTemplate(testDevice),
 		edge.WithNode(edge.NodeOptions{
 			Enable:    true,
 			QueenAddr: "127.0.0.1:13883",

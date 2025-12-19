@@ -10,56 +10,52 @@ import (
 	"github.com/snple/beacon/edge/storage"
 )
 
-// Node returns the current node configuration.
-func (es *EdgeService) Node(ctx context.Context) (*storage.Node, error) {
-	_ = ctx
-	return cloneNode(es.storage.GetNode())
-}
-
-// UpdateNodeName updates node name and bumps sync timestamp.
-func (es *EdgeService) UpdateNodeName(ctx context.Context, name string) error {
-	if name == "" {
-		return fmt.Errorf("please supply valid name")
-	}
-	if len(name) < 2 {
-		return fmt.Errorf("name min 2 character")
-	}
-
-	oldNode, err := es.storage.GetNode()
-	if err != nil {
-		return err
-	}
-	if name == oldNode.Name {
-		return nil
-	}
-
-	if err := es.storage.UpdateNodeName(ctx, name); err != nil {
-		return err
-	}
-	return es.sync.setNodeUpdated(ctx, time.Now())
-}
-
-// ResetNodeWires clears node wires but keeps basic node identity.
-func (es *EdgeService) ResetNodeWires(ctx context.Context) error {
-	node, err := es.storage.GetNode()
-	if err != nil {
-		return err
-	}
-
+func buildNodeFromTemplate(nodeID, name string, dev device.Device) (*storage.Node, error) {
 	newNode := &storage.Node{
-		ID:      node.ID,
-		Name:    node.Name,
-		Status:  node.Status,
-		Device:  node.Device,
-		Tags:    append([]string(nil), node.Tags...),
-		Updated: time.Now(),
-		Wires:   nil,
+		ID:     nodeID,
+		Name:   name,
+		Tags:   dev.Tags,
+		Device: dev.ID,
+		Wires:  make([]storage.Wire, 0, len(dev.Wires)),
 	}
 
-	if err := es.storage.SetNode(ctx, newNode); err != nil {
-		return err
+	for _, tw := range dev.Wires {
+		wire := storage.Wire{
+			ID:   stableWireID(nodeID, tw.Name),
+			Name: tw.Name,
+			Tags: tw.Tags,
+			Type: tw.Type,
+			Pins: make([]storage.Pin, 0, len(tw.Pins)),
+		}
+
+		for _, tp := range tw.Pins {
+			wire.Pins = append(wire.Pins, storage.Pin{
+				ID:   stablePinID(nodeID, tw.Name, tp.Name),
+				Name: tp.Name,
+				Tags: tp.Tags,
+				Addr: "",
+				Type: tp.Type,
+				Rw:   tp.Rw,
+			})
+		}
+
+		newNode.Wires = append(newNode.Wires, wire)
 	}
-	return es.sync.setNodeUpdated(ctx, time.Now())
+
+	return newNode, nil
+}
+
+func stableWireID(nodeID, wireName string) string {
+	return nodeID + "." + wireName
+}
+
+func stablePinID(nodeID, wireName, pinName string) string {
+	return nodeID + "." + wireName + "." + pinName
+}
+
+// Node returns the current node configuration.
+func (es *EdgeService) Node() (*storage.Node, error) {
+	return cloneNode(es.storage.GetNode())
 }
 
 // WireByID fetches a wire config by ID.
@@ -231,20 +227,6 @@ func (es *EdgeService) ListPinWrites(ctx context.Context, after time.Time, limit
 	return es.storage.ListPinWrites(after, limit)
 }
 
-// ExportConfig exports node config in NSON bytes.
-func (es *EdgeService) ExportConfig(ctx context.Context) ([]byte, error) {
-	_ = ctx
-	return es.storage.ExportConfig()
-}
-
-// ImportConfig imports node config from NSON bytes and bumps sync timestamp.
-func (es *EdgeService) ImportConfig(ctx context.Context, data []byte) error {
-	if err := es.storage.ImportConfig(ctx, data); err != nil {
-		return err
-	}
-	return es.sync.setNodeUpdated(ctx, time.Now())
-}
-
 func cloneNode(node *storage.Node, err error) (*storage.Node, error) {
 	if err != nil {
 		return nil, err
@@ -254,13 +236,11 @@ func cloneNode(node *storage.Node, err error) (*storage.Node, error) {
 	}
 
 	out := &storage.Node{
-		ID:      node.ID,
-		Name:    node.Name,
-		Tags:    append([]string(nil), node.Tags...),
-		Device:  node.Device,
-		Status:  node.Status,
-		Updated: node.Updated,
-		Wires:   make([]storage.Wire, 0, len(node.Wires)),
+		ID:     node.ID,
+		Name:   node.Name,
+		Tags:   append([]string(nil), node.Tags...),
+		Device: node.Device,
+		Wires:  make([]storage.Wire, 0, len(node.Wires)),
 	}
 	for i := range node.Wires {
 		out.Wires = append(out.Wires, *cloneWire(&node.Wires[i]))
