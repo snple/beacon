@@ -9,9 +9,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/core/storage"
-	"github.com/snple/beacon/pb/cores"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
 	queen "snple.com/queen/core"
 )
 
@@ -186,15 +184,6 @@ func (cs *CoreService) Context() context.Context {
 
 func (cs *CoreService) Logger() *zap.Logger {
 	return cs.dopts.logger
-}
-
-func (cs *CoreService) Register(server *grpc.Server) {
-	cores.RegisterSyncServiceServer(server, cs.sync)
-	cores.RegisterNodeServiceServer(server, cs.node)
-	cores.RegisterWireServiceServer(server, cs.wire)
-	cores.RegisterPinServiceServer(server, cs.pin)
-	cores.RegisterPinValueServiceServer(server, cs.pinValue)
-	cores.RegisterPinWriteServiceServer(server, cs.pinWrite)
 }
 
 type coreOptions struct {

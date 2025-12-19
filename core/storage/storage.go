@@ -20,46 +20,15 @@ import (
 	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/dt"
-	"github.com/snple/beacon/pb"
 )
-
-// Node 节点配置
-type Node struct {
-	ID      string    `nson:"id"`
-	Name    string    `nson:"name"`
-	Tags    []string  `nson:"tags,omitempty"`   // 节点标签列表
-	Device  string    `nson:"device,omitempty"` // 设备模板 ID（指向 device.Device.ID）
-	Status  int32     `nson:"status"`
-	Updated time.Time `nson:"updated"`
-	Wires   []Wire    `nson:"wires"`
-}
-
-// Wire 通道配置
-type Wire struct {
-	ID   string   `nson:"id"`
-	Name string   `nson:"name"`
-	Tags []string `nson:"tags,omitempty"`
-	Type string   `nson:"type"`
-	Pins []Pin    `nson:"pins"`
-}
-
-// Pin 点位配置
-type Pin struct {
-	ID   string   `nson:"id"`
-	Name string   `nson:"name"`
-	Tags []string `nson:"tags,omitempty"`
-	Addr string   `nson:"addr"`
-	Type uint32   `nson:"type"` // nson.DataType
-	Rw   int32    `nson:"rw"`
-}
 
 // Storage Core 端存储
 type Storage struct {
 	mu sync.RWMutex
 
 	// 主存储
-	nodes   map[string]*Node  // nodeID -> Node
-	secrets map[string]string // nodeID -> secret
+	nodes   map[string]*dt.Node // nodeID -> Node
+	secrets map[string]string   // nodeID -> secret
 
 	// 索引/缓存
 	index *index
@@ -71,41 +40,41 @@ type Storage struct {
 // index 查询索引（缓存）
 type index struct {
 	// 全局索引
-	nodeByName map[string]*Node // nodeName -> Node
-	wireByID   map[string]*Wire // wireID -> Wire（全局唯一）
-	pinByID    map[string]*Pin  // pinID -> Pin（全局唯一）
+	nodeByName map[string]*dt.Node // nodeName -> Node
+	wireByID   map[string]*dt.Wire // wireID -> Wire（全局唯一）
+	pinByID    map[string]*dt.Pin  // pinID -> Pin（全局唯一）
 
 	// 按节点的名称索引（懒构建）: nodeID -> (name -> item)
-	wireByName map[string]map[string]*Wire // nodeID -> wireName -> Wire
-	pinByName  map[string]map[string]*Pin  // nodeID -> pinName -> Pin
+	wireByName map[string]map[string]*dt.Wire // nodeID -> wireName -> Wire
+	pinByName  map[string]map[string]*dt.Pin  // nodeID -> pinName -> Pin
 }
 
 func newIndex() *index {
 	return &index{
-		nodeByName: make(map[string]*Node),
-		wireByID:   make(map[string]*Wire),
-		pinByID:    make(map[string]*Pin),
-		wireByName: make(map[string]map[string]*Wire),
-		pinByName:  make(map[string]map[string]*Pin),
+		nodeByName: make(map[string]*dt.Node),
+		wireByID:   make(map[string]*dt.Wire),
+		pinByID:    make(map[string]*dt.Pin),
+		wireByName: make(map[string]map[string]*dt.Wire),
+		pinByName:  make(map[string]map[string]*dt.Pin),
 	}
 }
 
 // getWireNameIndex 获取或创建节点的 wire 名称索引（无锁）
-func (s *Storage) getWireNameIndex(nodeID string) map[string]*Wire {
+func (s *Storage) getWireNameIndex(nodeID string) map[string]*dt.Wire {
 	if m, ok := s.index.wireByName[nodeID]; ok {
 		return m
 	}
-	m := make(map[string]*Wire)
+	m := make(map[string]*dt.Wire)
 	s.index.wireByName[nodeID] = m
 	return m
 }
 
 // getPinNameIndex 获取或创建节点的 pin 名称索引（无锁）
-func (s *Storage) getPinNameIndex(nodeID string) map[string]*Pin {
+func (s *Storage) getPinNameIndex(nodeID string) map[string]*dt.Pin {
 	if m, ok := s.index.pinByName[nodeID]; ok {
 		return m
 	}
-	m := make(map[string]*Pin)
+	m := make(map[string]*dt.Pin)
 	s.index.pinByName[nodeID] = m
 	return m
 }
@@ -119,7 +88,7 @@ func (s *Storage) getPinNameIndex(nodeID string) map[string]*Pin {
 //   - *Storage: 初始化后的存储实例
 func New(db *badger.DB) *Storage {
 	return &Storage{
-		nodes:   make(map[string]*Node),
+		nodes:   make(map[string]*dt.Node),
 		secrets: make(map[string]string),
 		index:   newIndex(),
 		db:      db,
@@ -196,9 +165,9 @@ func (s *Storage) Load(ctx context.Context) error {
 //   - nodeID: 节点 ID
 //
 // 返回：
-//   - *Node: 节点对象
+//   - *dt.Node: 节点对象
 //   - error: 节点不存在时返回错误
-func (s *Storage) GetNode(nodeID string) (*Node, error) {
+func (s *Storage) GetNode(nodeID string) (*dt.Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -210,7 +179,7 @@ func (s *Storage) GetNode(nodeID string) (*Node, error) {
 }
 
 // GetNodeByName 按名称获取节点
-func (s *Storage) GetNodeByName(name string) (*Node, error) {
+func (s *Storage) GetNodeByName(name string) (*dt.Node, error) {
 	s.mu.RLock()
 	if node, ok := s.index.nodeByName[name]; ok {
 		s.mu.RUnlock()
@@ -237,11 +206,11 @@ func (s *Storage) GetNodeByName(name string) (*Node, error) {
 }
 
 // ListNodes 获取所有节点
-func (s *Storage) ListNodes() []*Node {
+func (s *Storage) ListNodes() []*dt.Node {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	nodes := make([]*Node, 0, len(s.nodes))
+	nodes := make([]*dt.Node, 0, len(s.nodes))
 	for _, node := range s.nodes {
 		nodes = append(nodes, node)
 	}
@@ -251,7 +220,7 @@ func (s *Storage) ListNodes() []*Node {
 // --- Wire 操作 ---
 
 // GetWireByID 按 ID 获取 Wire（全局唯一）
-func (s *Storage) GetWireByID(wireID string) (*Wire, error) {
+func (s *Storage) GetWireByID(wireID string) (*dt.Wire, error) {
 	s.mu.RLock()
 	if wire, ok := s.index.wireByID[wireID]; ok {
 		s.mu.RUnlock()
@@ -280,7 +249,7 @@ func (s *Storage) GetWireByID(wireID string) (*Wire, error) {
 }
 
 // GetWireByName 按名称获取 Wire
-func (s *Storage) GetWireByName(nodeID, wireName string) (*Wire, error) {
+func (s *Storage) GetWireByName(nodeID, wireName string) (*dt.Wire, error) {
 	s.mu.RLock()
 	if m, ok := s.index.wireByName[nodeID]; ok {
 		if wire, ok := m[wireName]; ok {
@@ -316,7 +285,7 @@ func (s *Storage) GetWireByName(nodeID, wireName string) (*Wire, error) {
 }
 
 // GetWireByFullName 按全名获取 Wire（格式：NodeName.WireName）
-func (s *Storage) GetWireByFullName(fullName string) (*Wire, error) {
+func (s *Storage) GetWireByFullName(fullName string) (*dt.Wire, error) {
 	parts := strings.Split(fullName, ".")
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid wire full name: %s, expected NodeName.WireName", fullName)
@@ -333,7 +302,7 @@ func (s *Storage) GetWireByFullName(fullName string) (*Wire, error) {
 }
 
 // ListWires 获取节点的所有 Wire
-func (s *Storage) ListWires(nodeID string) ([]*Wire, error) {
+func (s *Storage) ListWires(nodeID string) ([]*dt.Wire, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -342,7 +311,7 @@ func (s *Storage) ListWires(nodeID string) ([]*Wire, error) {
 		return nil, fmt.Errorf("node not found: %s", nodeID)
 	}
 
-	wires := make([]*Wire, len(node.Wires))
+	wires := make([]*dt.Wire, len(node.Wires))
 	for i := range node.Wires {
 		wires[i] = &node.Wires[i]
 	}
@@ -352,7 +321,7 @@ func (s *Storage) ListWires(nodeID string) ([]*Wire, error) {
 // --- Pin 操作 ---
 
 // GetPinByID 按 ID 获取 Pin（全局唯一）
-func (s *Storage) GetPinByID(pinID string) (*Pin, error) {
+func (s *Storage) GetPinByID(pinID string) (*dt.Pin, error) {
 	s.mu.RLock()
 	if pin, ok := s.index.pinByID[pinID]; ok {
 		s.mu.RUnlock()
@@ -401,7 +370,7 @@ func (s *Storage) GetPinNodeID(pinID string) (string, error) {
 }
 
 // GetPinByName 按名称获取 Pin（支持 "wire.pin"）
-func (s *Storage) GetPinByName(nodeID, pinName string) (*Pin, error) {
+func (s *Storage) GetPinByName(nodeID, pinName string) (*dt.Pin, error) {
 	s.mu.RLock()
 	if m, ok := s.index.pinByName[nodeID]; ok {
 		if pin, ok := m[pinName]; ok {
@@ -441,7 +410,7 @@ func (s *Storage) GetPinByName(nodeID, pinName string) (*Pin, error) {
 }
 
 // GetPinByFullName 按全名获取 Pin（格式：NodeName.WireName.PinName）
-func (s *Storage) GetPinByFullName(fullName string) (*Pin, error) {
+func (s *Storage) GetPinByFullName(fullName string) (*dt.Pin, error) {
 	parts := strings.Split(fullName, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid pin full name: %s, expected NodeName.WireName.PinName", fullName)
@@ -459,13 +428,13 @@ func (s *Storage) GetPinByFullName(fullName string) (*Pin, error) {
 }
 
 // ListPins 获取 Wire 的所有 Pin
-func (s *Storage) ListPins(wireID string) ([]*Pin, error) {
+func (s *Storage) ListPins(wireID string) ([]*dt.Pin, error) {
 	wire, err := s.GetWireByID(wireID)
 	if err != nil {
 		return nil, err
 	}
 
-	pins := make([]*Pin, len(wire.Pins))
+	pins := make([]*dt.Pin, len(wire.Pins))
 	for i := range wire.Pins {
 		pins[i] = &wire.Pins[i]
 	}
@@ -473,7 +442,7 @@ func (s *Storage) ListPins(wireID string) ([]*Pin, error) {
 }
 
 // ListPinsByNode 获取节点的所有 Pin
-func (s *Storage) ListPinsByNode(nodeID string) ([]*Pin, error) {
+func (s *Storage) ListPinsByNode(nodeID string) ([]*dt.Pin, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -482,7 +451,7 @@ func (s *Storage) ListPinsByNode(nodeID string) ([]*Pin, error) {
 		return nil, fmt.Errorf("node not found: %s", nodeID)
 	}
 
-	var pins []*Pin
+	var pins []*dt.Pin
 	for i := range node.Wires {
 		for j := range node.Wires[i].Pins {
 			pins = append(pins, &node.Wires[i].Pins[j])
@@ -596,8 +565,8 @@ const (
 )
 
 // GetPinValue 获取点位值
-func (s *Storage) GetPinValue(nodeID, pinID string) (*pb.NsonValue, time.Time, error) {
-	var value *pb.NsonValue
+func (s *Storage) GetPinValue(nodeID, pinID string) (nson.Value, time.Time, error) {
+	var value nson.Value = nson.Null{}
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -638,7 +607,7 @@ func (s *Storage) GetPinValue(nodeID, pinID string) (*pb.NsonValue, time.Time, e
 }
 
 // SetPinValue 设置点位值
-func (s *Storage) SetPinValue(ctx context.Context, nodeID, pinID string, value *pb.NsonValue, updated time.Time) error {
+func (s *Storage) SetPinValue(ctx context.Context, nodeID, pinID string, value nson.Value, updated time.Time) error {
 	// 使用 dt.EncodeNsonValue 序列化
 	valueBytes, err := dt.EncodeNsonValue(value)
 	if err != nil {
@@ -726,8 +695,8 @@ func (s *Storage) ListPinValues(nodeID string, after time.Time, limit int) ([]Pi
 // --- PinWrite 操作 ---
 
 // GetPinWrite 获取点位写入值
-func (s *Storage) GetPinWrite(nodeID, pinID string) (*pb.NsonValue, time.Time, error) {
-	var value *pb.NsonValue
+func (s *Storage) GetPinWrite(nodeID, pinID string) (nson.Value, time.Time, error) {
+	var value nson.Value = nson.Null{}
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -768,7 +737,7 @@ func (s *Storage) GetPinWrite(nodeID, pinID string) (*pb.NsonValue, time.Time, e
 }
 
 // SetPinWrite 设置点位写入值
-func (s *Storage) SetPinWrite(ctx context.Context, nodeID, pinID string, value *pb.NsonValue, updated time.Time) error {
+func (s *Storage) SetPinWrite(ctx context.Context, nodeID, pinID string, value nson.Value, updated time.Time) error {
 	// 使用 dt.EncodeNsonValue 序列化
 	valueBytes, err := dt.EncodeNsonValue(value)
 	if err != nil {
@@ -870,7 +839,7 @@ func (s *Storage) ListPinWrites(nodeID string, after time.Time, limit int) ([]Pi
 // --- 内部方法 ---
 
 // clearNodeIndexUnsafe 清除节点相关的所有索引（无锁）
-func (s *Storage) clearNodeIndexUnsafe(node *Node) {
+func (s *Storage) clearNodeIndexUnsafe(node *dt.Node) {
 	delete(s.index.nodeByName, node.Name)
 	delete(s.index.wireByName, node.ID)
 	delete(s.index.pinByName, node.ID)
@@ -884,7 +853,7 @@ func (s *Storage) clearNodeIndexUnsafe(node *Node) {
 	}
 }
 
-func (s *Storage) saveNodeUnsafe(node *Node) error {
+func (s *Storage) saveNodeUnsafe(node *dt.Node) error {
 	data, err := encodeNode(node)
 	if err != nil {
 		return err
@@ -904,7 +873,7 @@ func (s *Storage) saveNodeUnsafe(node *Node) error {
 
 // --- 编解码 ---
 
-func encodeNode(node *Node) ([]byte, error) {
+func encodeNode(node *dt.Node) ([]byte, error) {
 	m, err := nson.Marshal(node)
 	if err != nil {
 		return nil, err
@@ -918,14 +887,14 @@ func encodeNode(node *Node) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func decodeNode(data []byte) (*Node, error) {
+func decodeNode(data []byte) (*dt.Node, error) {
 	buf := bytes.NewBuffer(data)
 	m, err := nson.DecodeMap(buf)
 	if err != nil {
 		return nil, err
 	}
 
-	var node Node
+	var node dt.Node
 	if err := nson.Unmarshal(m, &node); err != nil {
 		return nil, err
 	}

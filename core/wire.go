@@ -2,20 +2,15 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
-	"github.com/snple/beacon/core/storage"
 	"github.com/snple/beacon/device"
-	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/cores"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"github.com/snple/beacon/dt"
 )
 
 type WireService struct {
 	cs *CoreService
-
-	cores.UnimplementedWireServiceServer
 }
 
 func newWireService(cs *CoreService) *WireService {
@@ -24,17 +19,17 @@ func newWireService(cs *CoreService) *WireService {
 	}
 }
 
-func (s *WireService) View(ctx context.Context, in *cores.WireViewRequest) (*pb.Wire, error) {
-	var output pb.Wire
+func (s *WireService) View(ctx context.Context, in *WireViewRequest) (*Wire, error) {
+	var output Wire
 
 	// basic validation
 	if in == nil || in.NodeId == "" || in.WireId == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId and WireId")
+		return &output, fmt.Errorf("please supply valid NodeId and WireId")
 	}
 
 	wire, err := s.cs.GetStorage().GetWireByID(in.WireId)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Wire not found: %v", err)
+		return &output, fmt.Errorf("wire not found: %w", err)
 	}
 
 	s.copyStorageToOutput(&output, wire)
@@ -42,17 +37,17 @@ func (s *WireService) View(ctx context.Context, in *cores.WireViewRequest) (*pb.
 	return &output, nil
 }
 
-func (s *WireService) Name(ctx context.Context, in *cores.WireNameRequest) (*pb.Wire, error) {
-	var output pb.Wire
+func (s *WireService) Name(ctx context.Context, in *WireNameRequest) (*Wire, error) {
+	var output Wire
 
 	// basic validation
 	if in == nil || in.NodeId == "" || in.Name == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId and Name")
+		return &output, fmt.Errorf("please supply valid NodeId and Name")
 	}
 
 	wire, err := s.cs.GetStorage().GetWireByName(in.NodeId, in.Name)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Wire not found: %v", err)
+		return &output, fmt.Errorf("wire not found: %w", err)
 	}
 
 	s.copyStorageToOutput(&output, wire)
@@ -60,12 +55,12 @@ func (s *WireService) Name(ctx context.Context, in *cores.WireNameRequest) (*pb.
 	return &output, nil
 }
 
-func (s *WireService) NameFull(ctx context.Context, in *pb.Name) (*pb.Wire, error) {
-	var output pb.Wire
+func (s *WireService) NameFull(ctx context.Context, in *Name) (*Wire, error) {
+	var output Wire
 
 	// basic validation
 	if in == nil || in.Name == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Name")
+		return &output, fmt.Errorf("please supply valid Name")
 	}
 
 	nodeName := device.DEFAULT_NODE
@@ -74,7 +69,7 @@ func (s *WireService) NameFull(ctx context.Context, in *pb.Name) (*pb.Wire, erro
 	if strings.Contains(wireName, ".") {
 		parts := strings.Split(wireName, ".")
 		if len(parts) != 2 {
-			return &output, status.Error(codes.InvalidArgument, "Invalid wire full name format, expected NodeName.WireName")
+			return &output, fmt.Errorf("invalid wire full name format, expected NodeName.WireName")
 		}
 		nodeName = parts[0]
 		wireName = parts[1]
@@ -82,12 +77,12 @@ func (s *WireService) NameFull(ctx context.Context, in *pb.Name) (*pb.Wire, erro
 
 	node, err := s.cs.GetStorage().GetNodeByName(nodeName)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
+		return &output, fmt.Errorf("node not found: %w", err)
 	}
 
 	wire, err := s.cs.GetStorage().GetWireByName(node.ID, wireName)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Wire not found: %v", err)
+		return &output, fmt.Errorf("wire not found: %w", err)
 	}
 
 	s.copyStorageToOutput(&output, wire)
@@ -95,21 +90,21 @@ func (s *WireService) NameFull(ctx context.Context, in *pb.Name) (*pb.Wire, erro
 	return &output, nil
 }
 
-func (s *WireService) List(ctx context.Context, in *cores.WireListRequest) (*cores.WireListResponse, error) {
-	var output cores.WireListResponse
+func (s *WireService) List(ctx context.Context, in *WireListRequest) (*WireListResponse, error) {
+	var output WireListResponse
 
 	// basic validation
 	if in == nil || in.NodeId == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId")
+		return &output, fmt.Errorf("please supply valid NodeId")
 	}
 
 	wires, err := s.cs.GetStorage().ListWires(in.NodeId)
 	if err != nil {
-		return &output, status.Errorf(codes.Internal, "List wires failed: %v", err)
+		return &output, fmt.Errorf("list wires failed: %w", err)
 	}
 
 	for _, wire := range wires {
-		item := pb.Wire{}
+		item := Wire{}
 		s.copyStorageToOutput(&item, wire)
 		output.Wires = append(output.Wires, &item)
 	}
@@ -117,7 +112,7 @@ func (s *WireService) List(ctx context.Context, in *cores.WireListRequest) (*cor
 	return &output, nil
 }
 
-func (s *WireService) copyStorageToOutput(output *pb.Wire, wire *storage.Wire) {
+func (s *WireService) copyStorageToOutput(output *Wire, wire *dt.Wire) {
 	output.Id = wire.ID
 	output.Name = wire.Name
 	output.Type = wire.Type
@@ -125,7 +120,7 @@ func (s *WireService) copyStorageToOutput(output *pb.Wire, wire *storage.Wire) {
 
 	for i := range wire.Pins {
 		pin := &wire.Pins[i]
-		pbPin := &pb.Pin{
+		p := &Pin{
 			Id:   pin.ID,
 			Name: pin.Name,
 			Addr: pin.Addr,
@@ -133,6 +128,6 @@ func (s *WireService) copyStorageToOutput(output *pb.Wire, wire *storage.Wire) {
 			Rw:   pin.Rw,
 			Tags: pin.Tags,
 		}
-		output.Pins = append(output.Pins, pbPin)
+		output.Pins = append(output.Pins, p)
 	}
 }

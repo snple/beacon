@@ -6,9 +6,6 @@ import (
 	"fmt"
 
 	"github.com/danclive/nson-go"
-	"github.com/snple/beacon/dt"
-	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/cores"
 	queen "snple.com/queen/core"
 	"snple.com/queen/packet"
 )
@@ -145,7 +142,7 @@ func (cs *CoreService) handlePush(nodeID string, payload []byte) error {
 
 	ctx := context.Background()
 
-	request := &cores.NodePushRequest{
+	request := &NodePushRequest{
 		Id:   nodeID,
 		Nson: payload,
 	}
@@ -198,18 +195,13 @@ func (cs *CoreService) handlePinValueBatch(nodeID string, payload []byte) error 
 
 // setPinValue 设置 Pin 值
 func (cs *CoreService) setPinValue(ctx context.Context, nodeID string, v *PinValueMessage) error {
-	// 将 nson.Value 转换为 pb.NsonValue
-	pbValue, err := dt.NsonToProto(v.Value)
-	if err != nil {
-		return fmt.Errorf("failed to convert value: %w", err)
-	}
 
 	if v.Name != "" {
 		// 通过名称设置
-		request := &cores.PinNameValueRequest{
+		request := &PinNameValueRequest{
 			NodeId: nodeID,
 			Name:   v.Name,
-			Value:  pbValue,
+			Value:  v.Value,
 		}
 		_, err := cs.GetPinValue().SetValueByName(ctx, request)
 		return err
@@ -218,15 +210,15 @@ func (cs *CoreService) setPinValue(ctx context.Context, nodeID string, v *PinVal
 	if v.Id != "" {
 		// 通过 ID 设置
 		// 先验证 Pin 属于当前节点
-		pinRequest := &cores.PinViewRequest{NodeId: nodeID, PinId: v.Id}
+		pinRequest := &PinViewRequest{NodeId: nodeID, PinId: v.Id}
 		_, err := cs.GetPin().View(ctx, pinRequest)
 		if err != nil {
 			return err
 		}
 
-		pinValue := &pb.PinValue{
+		pinValue := &PinValue{
 			Id:    v.Id,
-			Value: pbValue,
+			Value: v.Value,
 		}
 		_, err = cs.GetPinValue().SetValue(ctx, pinValue)
 		return err
@@ -240,7 +232,7 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	ctx := context.Background()
 
 	// 获取节点的所有 Pin
-	pinsRequest := &cores.PinListRequest{NodeId: nodeID}
+	pinsRequest := &PinListRequest{NodeId: nodeID}
 	pinsReply, err := cs.GetPin().List(ctx, pinsRequest)
 	if err != nil {
 		return nil, err
@@ -249,7 +241,7 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	// 收集有写入值的 Pin
 	var writes []PinWriteMessage
 	for _, pin := range pinsReply.Pins {
-		writeValue, err := cs.GetPinWrite().GetWrite(ctx, &pb.Id{Id: pin.Id})
+		writeValue, err := cs.GetPinWrite().GetWrite(ctx, &Id{Id: pin.Id})
 		if err != nil {
 			continue // 忽略没有写入值的 Pin
 		}
@@ -257,16 +249,10 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 			continue
 		}
 
-		// 转换 pb.NsonValue 到 nson.Value
-		nsonVal, err := dt.ProtoToNson(writeValue.Value)
-		if err != nil {
-			continue
-		}
-
 		writes = append(writes, PinWriteMessage{
 			Id:    pin.Id,
 			Name:  pin.Name,
-			Value: nsonVal,
+			Value: writeValue.Value,
 		})
 	}
 
@@ -294,7 +280,7 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 
 // NotifyPinWrite 通知节点有新的 Pin 写入
 // 使用 Publish 发送命令到 Edge
-func (cs *CoreService) NotifyPinWrite(nodeID string, pinID string, pinName string, value *pb.NsonValue) error {
+func (cs *CoreService) NotifyPinWrite(nodeID string, pinID string, pinName string, value nson.Value) error {
 	if cs.broker == nil {
 		return nil
 	}
@@ -305,16 +291,10 @@ func (cs *CoreService) NotifyPinWrite(nodeID string, pinID string, pinName strin
 		return nil
 	}
 
-	// 转换 pb.NsonValue 到 nson.Value
-	nsonVal, err := dt.ProtoToNson(value)
-	if err != nil {
-		return fmt.Errorf("failed to convert value: %w", err)
-	}
-
 	msg := PinWriteMessage{
 		Id:    pinID,
 		Name:  pinName,
-		Value: nsonVal,
+		Value: value,
 	}
 
 	// 序列化为 NSON
@@ -351,7 +331,7 @@ func (cs *CoreService) NotifyNodeUpdate(nodeID string) error {
 
 	// 获取节点最新配置
 	ctx := context.Background()
-	node, err := cs.GetNode().View(ctx, &pb.Id{Id: nodeID})
+	node, err := cs.GetNode().View(ctx, &Id{Id: nodeID})
 	if err != nil {
 		return err
 	}

@@ -1,9 +1,9 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,11 +15,6 @@ import (
 	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/util"
 	_ "github.com/snple/beacon/util/compress/zstd"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	_ "google.golang.org/grpc/encoding/gzip"
-	"google.golang.org/grpc/keepalive"
 )
 
 func main() {
@@ -52,6 +47,20 @@ func main() {
 		core.WithBadger(badgerOpts),
 	}
 
+	// 配置 Queen broker（如果启用）
+	if config.Config.CoreService.Enable {
+		var tlsConfig *tls.Config
+		if config.Config.CoreService.TLS {
+			var err error
+			tlsConfig, err = util.LoadServerCert(config.Config.CoreService.CA, config.Config.CoreService.Cert, config.Config.CoreService.Key)
+			if err != nil {
+				log.Logger.Sugar().Fatal(err)
+			}
+		}
+
+		coreOpts = append(coreOpts, core.WithQueenBroker(config.Config.CoreService.Addr, tlsConfig))
+	}
+
 	cs, err := core.Core(coreOpts...)
 	if err != nil {
 		log.Logger.Sugar().Fatalf("NewCoreService: %v", err)
@@ -59,40 +68,6 @@ func main() {
 
 	cs.Start()
 	defer cs.Stop()
-
-	if config.Config.CoreService.Enable {
-		grpcOpts := make([]grpc.ServerOption, 0)
-
-		if config.Config.CoreService.TLS {
-			tlsConfig, err := util.LoadServerCert(config.Config.CoreService.CA, config.Config.CoreService.Cert, config.Config.CoreService.Key)
-			if err != nil {
-				log.Logger.Sugar().Fatal(err)
-			}
-
-			grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
-		} else {
-			grpcOpts = append(grpcOpts, grpc.Creds(insecure.NewCredentials()))
-		}
-
-		grpcOpts = append(grpcOpts, grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{PermitWithoutStream: true}))
-
-		s := grpc.NewServer(grpcOpts...)
-		defer s.Stop()
-
-		cs.Register(s)
-
-		lis, err := net.Listen("tcp", config.Config.CoreService.Addr)
-		if err != nil {
-			log.Logger.Sugar().Fatalf("failed to listen: %v", err)
-		}
-
-		go func() {
-			log.Logger.Sugar().Infof("core grpc start: %v", config.Config.CoreService.Addr)
-			if err := s.Serve(lis); err != nil {
-				log.Logger.Sugar().Errorf("failed to serve: %v", err)
-			}
-		}()
-	}
 
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)

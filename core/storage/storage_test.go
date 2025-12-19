@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snple/beacon/dt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,17 +29,16 @@ func TestStorage_Push_GetNode(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建测试节点
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "TestWire",
 				Type: "modbus",
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{
 						ID:   "pin-001",
 						Name: "TestPin",
@@ -73,12 +73,11 @@ func TestStorage_GetNodeByName(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires:   []Wire{},
+		Wires:   []dt.Wire{},
 	}
 
 	data, err := encodeNode(node)
@@ -105,12 +104,11 @@ func TestStorage_ListNodes(t *testing.T) {
 
 	// 添加多个节点
 	for i := 1; i <= 3; i++ {
-		node := &Node{
+		node := &dt.Node{
 			ID:      "node-00" + string(rune('0'+i)),
 			Name:    "Node" + string(rune('0'+i)),
-			Status:  1,
 			Updated: time.Now(),
-			Wires:   []Wire{},
+			Wires:   []dt.Wire{},
 		}
 		data, err := encodeNode(node)
 		require.NoError(t, err)
@@ -128,17 +126,16 @@ func TestStorage_GetWireByID(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "TestWire",
 				Type: "modbus",
-				Pins: []Pin{},
+				Pins: []dt.Pin{},
 			},
 		},
 	}
@@ -165,17 +162,16 @@ func TestStorage_GetWireByName(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "TestWire",
 				Type: "modbus",
-				Pins: []Pin{},
+				Pins: []dt.Pin{},
 			},
 		},
 	}
@@ -198,17 +194,16 @@ func TestStorage_GetWireByFullName(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "TestWire",
 				Type: "modbus",
-				Pins: []Pin{},
+				Pins: []dt.Pin{},
 			},
 		},
 	}
@@ -235,14 +230,13 @@ func TestStorage_ListWires(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
-			{ID: "wire-001", Name: "Wire1", Type: "modbus", Pins: []Pin{}},
-			{ID: "wire-002", Name: "Wire2", Type: "mqtt", Pins: []Pin{}},
+		Wires: []dt.Wire{
+			{ID: "wire-001", Name: "Wire1", Type: "modbus", Pins: []dt.Pin{}},
+			{ID: "wire-002", Name: "Wire2", Type: "mqtt", Pins: []dt.Pin{}},
 		},
 	}
 
@@ -262,17 +256,16 @@ func TestStorage_GetPinByID(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "TestWire",
 				Type: "modbus",
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{
 						ID:   "pin-001",
 						Name: "TestPin",
@@ -307,17 +300,16 @@ func TestStorage_GetPinByName(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "TestWire",
 				Type: "modbus",
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{ID: "pin-001", Name: "TestPin", Addr: "0x01", Type: 1, Rw: 3},
 				},
 			},
@@ -342,17 +334,16 @@ func TestStorage_ListPins(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "TestWire",
 				Type: "modbus",
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{ID: "pin-001", Name: "Pin1", Addr: "0x01", Type: 1, Rw: 3},
 					{ID: "pin-002", Name: "Pin2", Addr: "0x02", Type: 1, Rw: 3},
 					{ID: "pin-003", Name: "Pin3", Addr: "0x03", Type: 1, Rw: 3},
@@ -377,17 +368,16 @@ func TestStorage_ListPinsByNode(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "Wire1",
 				Type: "modbus",
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{ID: "pin-001", Name: "Pin1", Addr: "0x01", Type: 1, Rw: 3},
 					{ID: "pin-002", Name: "Pin2", Addr: "0x02", Type: 1, Rw: 3},
 				},
@@ -396,7 +386,7 @@ func TestStorage_ListPinsByNode(t *testing.T) {
 				ID:   "wire-002",
 				Name: "Wire2",
 				Type: "",
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{ID: "pin-003", Name: "Pin3", Addr: "topic/test", Type: 1, Rw: 3},
 				},
 			},
@@ -419,12 +409,11 @@ func TestStorage_DeleteNode(t *testing.T) {
 	s := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires:   []Wire{},
+		Wires:   []dt.Wire{},
 	}
 
 	data, err := encodeNode(node)
@@ -481,17 +470,16 @@ func TestStorage_Load(t *testing.T) {
 	s1 := New(db)
 	ctx := context.Background()
 
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "wire-001",
 				Name: "TestWire",
 				Type: "modbus",
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{ID: "pin-001", Name: "TestPin", Addr: "0x01", Type: 1, Rw: 3},
 				},
 			},
@@ -538,13 +526,12 @@ func TestStorage_UpdateNode(t *testing.T) {
 	ctx := context.Background()
 
 	// 初始节点
-	node := &Node{
+	node := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
-			{ID: "wire-001", Name: "Wire1", Type: "modbus", Pins: []Pin{}},
+		Wires: []dt.Wire{
+			{ID: "wire-001", Name: "Wire1", Type: "modbus", Pins: []dt.Pin{}},
 		},
 	}
 
@@ -554,14 +541,13 @@ func TestStorage_UpdateNode(t *testing.T) {
 	require.NoError(t, err)
 
 	// 更新节点 (添加新 Wire)
-	updatedNode := &Node{
+	updatedNode := &dt.Node{
 		ID:      "node-001",
 		Name:    "TestNode",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
-			{ID: "wire-001", Name: "Wire1", Type: "modbus", Pins: []Pin{}},
-			{ID: "wire-002", Name: "Wire2", Type: "mqtt", Pins: []Pin{}},
+		Wires: []dt.Wire{
+			{ID: "wire-001", Name: "Wire1", Type: "modbus", Pins: []dt.Pin{}},
+			{ID: "wire-002", Name: "Wire2", Type: "mqtt", Pins: []dt.Pin{}},
 		},
 	}
 

@@ -3,20 +3,21 @@ package storage
 import (
 	"testing"
 	"time"
+
+	"github.com/snple/beacon/dt"
 )
 
 func TestSimpleEncode(t *testing.T) {
-	node := &Node{
+	node := &dt.Node{
 		ID:      "test",
 		Name:    "test",
-		Status:  1,
 		Updated: time.Now(),
-		Wires: []Wire{
+		Wires: []dt.Wire{
 			{
 				ID:   "w1",
 				Name: "Wire1",
 				Type: "t1",
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{ID: "p1", Name: "P1", Addr: "a1", Type: 1, Rw: 3},
 				},
 			},
@@ -24,7 +25,7 @@ func TestSimpleEncode(t *testing.T) {
 				ID:   "w2",
 				Name: "Wire2",
 				Type: "", // 空字符串
-				Pins: []Pin{
+				Pins: []dt.Pin{
 					{ID: "p2", Name: "P2", Addr: "a2", Type: 1, Rw: 3},
 				},
 			},

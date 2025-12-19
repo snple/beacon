@@ -2,21 +2,14 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/snple/beacon/device"
-	"github.com/snple/beacon/dt"
-	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/cores"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type PinWriteService struct {
 	cs *CoreService
-
-	cores.UnimplementedPinWriteServiceServer
 }
 
 func newPinWriteService(cs *CoreService) *PinWriteService {
@@ -25,12 +18,12 @@ func newPinWriteService(cs *CoreService) *PinWriteService {
 	}
 }
 
-func (s *PinWriteService) GetWrite(ctx context.Context, in *pb.Id) (*pb.PinValue, error) {
-	var output pb.PinValue
+func (s *PinWriteService) GetWrite(ctx context.Context, in *Id) (*PinValue, error) {
+	var output PinValue
 
 	// basic validation
 	if in == nil || in.Id == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
+		return &output, fmt.Errorf("please supply valid Pin.Id")
 	}
 
 	output.Id = in.Id
@@ -53,33 +46,33 @@ func (s *PinWriteService) GetWrite(ctx context.Context, in *pb.Id) (*pb.PinValue
 	return &output, nil
 }
 
-func (s *PinWriteService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var output pb.MyBool
+func (s *PinWriteService) SetWrite(ctx context.Context, in *PinValue) (*MyBool, error) {
+	var output MyBool
 
 	// basic validation
 	if in == nil || in.Id == "" || in.Value == nil {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id and Value")
+		return &output, fmt.Errorf("please supply valid Pin.Id and Value")
 	}
 
 	// 获取 Pin 所属的 Node ID
 	nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
+		return &output, fmt.Errorf("pin not found: %w", err)
 	}
 
 	// 验证 Pin 存在且可写
 	pin, err := s.cs.GetStorage().GetPinByID(in.Id)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
+		return &output, fmt.Errorf("pin not found: %w", err)
 	}
 
 	if pin.Rw == device.RO {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin is not writable")
+		return &output, fmt.Errorf("pin is not writable")
 	}
 
 	err = s.cs.GetStorage().SetPinWrite(ctx, nodeID, in.Id, in.Value, time.Now())
 	if err != nil {
-		return &output, status.Errorf(codes.Internal, "SetPinWrite failed: %v", err)
+		return &output, fmt.Errorf("setPinWrite failed: %w", err)
 	}
 
 	// 通知节点有新的 Pin 写入
@@ -91,17 +84,17 @@ func (s *PinWriteService) SetWrite(ctx context.Context, in *pb.PinValue) (*pb.My
 	return &output, nil
 }
 
-func (s *PinWriteService) GetWriteByName(ctx context.Context, in *cores.PinNameRequest) (*pb.PinNameValue, error) {
-	var output pb.PinNameValue
+func (s *PinWriteService) GetWriteByName(ctx context.Context, in *PinNameRequest) (*PinNameValue, error) {
+	var output PinNameValue
 
 	// basic validation
 	if in == nil || in.NodeId == "" || in.Name == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId and Name")
+		return &output, fmt.Errorf("please supply valid NodeId and Name")
 	}
 
 	pin, err := s.cs.GetStorage().GetPinByName(in.NodeId, in.Name)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
+		return &output, fmt.Errorf("pin not found: %w", err)
 	}
 
 	output.Name = in.Name
@@ -118,37 +111,27 @@ func (s *PinWriteService) GetWriteByName(ctx context.Context, in *cores.PinNameR
 	return &output, nil
 }
 
-func (s *PinWriteService) SetWriteByName(ctx context.Context, in *cores.PinNameValueRequest) (*pb.MyBool, error) {
-	var output pb.MyBool
+func (s *PinWriteService) SetWriteByName(ctx context.Context, in *PinNameValueRequest) (*MyBool, error) {
+	var output MyBool
 
 	// basic validation
 	if in == nil || in.NodeId == "" || in.Name == "" || in.Value == nil {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId, Name and Value")
-	}
-
-	// 验证 Node 状态
-	node, err := s.cs.GetStorage().GetNode(in.NodeId)
-	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Node not found: %v", err)
-	}
-
-	if node.Status != device.ON {
-		return &output, status.Errorf(codes.FailedPrecondition, "Node.Status != ON")
+		return &output, fmt.Errorf("please supply valid NodeId, Name and Value")
 	}
 
 	// 验证 Pin 存在且可写
 	pin, err := s.cs.GetStorage().GetPinByName(in.NodeId, in.Name)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
+		return &output, fmt.Errorf("pin not found: %w", err)
 	}
 
 	if pin.Rw == device.RO {
-		return &output, status.Errorf(codes.FailedPrecondition, "Pin is not writable")
+		return &output, fmt.Errorf("pin is not writable")
 	}
 
 	err = s.cs.GetStorage().SetPinWrite(ctx, in.NodeId, pin.ID, in.Value, time.Now())
 	if err != nil {
-		return &output, status.Errorf(codes.Internal, "SetPinWrite failed: %v", err)
+		return &output, fmt.Errorf("setPinWrite failed: %w", err)
 	}
 
 	// 通知节点有新的 Pin 写入
@@ -160,12 +143,12 @@ func (s *PinWriteService) SetWriteByName(ctx context.Context, in *cores.PinNameV
 	return &output, nil
 }
 
-func (s *PinWriteService) DeleteWrite(ctx context.Context, in *pb.Id) (*pb.MyBool, error) {
-	var output pb.MyBool
+func (s *PinWriteService) DeleteWrite(ctx context.Context, in *Id) (*MyBool, error) {
+	var output MyBool
 
 	// basic validation
 	if in == nil || in.Id == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
+		return &output, fmt.Errorf("please supply valid Pin.Id")
 	}
 
 	// 获取 Pin 所属的 Node ID
@@ -178,48 +161,9 @@ func (s *PinWriteService) DeleteWrite(ctx context.Context, in *pb.Id) (*pb.MyBoo
 
 	err = s.cs.GetStorage().DeletePinWrite(ctx, nodeID, in.Id)
 	if err != nil {
-		return &output, status.Errorf(codes.Internal, "DeletePinWrite failed: %v", err)
+		return &output, fmt.Errorf("deletePinWrite failed: %w", err)
 	}
 
 	output.Bool = true
 	return &output, nil
-}
-
-func (s *PinWriteService) PullWrite(in *cores.PinPullWriteRequest, stream grpc.ServerStreamingServer[pb.PinValue]) error {
-	ctx := stream.Context()
-
-	// basic validation
-	if in == nil || in.NodeId == "" {
-		return status.Error(codes.InvalidArgument, "Please supply valid NodeId")
-	}
-
-	writes, err := s.cs.GetStorage().ListPinWrites(in.NodeId, time.UnixMicro(in.After), int(in.Limit))
-	if err != nil {
-		return status.Errorf(codes.Internal, "ListPinWrites failed: %v", err)
-	}
-
-	for _, w := range writes {
-		// 使用 dt.DecodeNsonValue 反序列化
-		var value *pb.NsonValue
-		if len(w.Value) > 0 {
-			var err error
-			value, err = dt.DecodeNsonValue(w.Value)
-			if err != nil {
-				continue
-			}
-		}
-
-		item := pb.PinValue{
-			Id:      w.ID,
-			Value:   value,
-			Updated: w.Updated.UnixMicro(),
-		}
-
-		if err := stream.Send(&item); err != nil {
-			return err
-		}
-	}
-
-	_ = ctx // 保持上下文引用
-	return nil
 }

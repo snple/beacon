@@ -7,29 +7,31 @@ import (
 
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/device"
+	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/edge/storage"
 )
 
-func buildNodeFromTemplate(nodeID, name string, dev device.Device) (*storage.Node, error) {
-	newNode := &storage.Node{
-		ID:     nodeID,
-		Name:   name,
-		Tags:   dev.Tags,
-		Device: dev.ID,
-		Wires:  make([]storage.Wire, 0, len(dev.Wires)),
+func buildNodeFromTemplate(nodeID, name string, dev device.Device) (*dt.Node, error) {
+	newNode := &dt.Node{
+		ID:      nodeID,
+		Name:    name,
+		Tags:    dev.Tags,
+		Device:  dev.ID,
+		Updated: time.Now(),
+		Wires:   make([]dt.Wire, 0, len(dev.Wires)),
 	}
 
 	for _, tw := range dev.Wires {
-		wire := storage.Wire{
+		wire := dt.Wire{
 			ID:   stableWireID(nodeID, tw.Name),
 			Name: tw.Name,
 			Tags: tw.Tags,
 			Type: tw.Type,
-			Pins: make([]storage.Pin, 0, len(tw.Pins)),
+			Pins: make([]dt.Pin, 0, len(tw.Pins)),
 		}
 
 		for _, tp := range tw.Pins {
-			wire.Pins = append(wire.Pins, storage.Pin{
+			wire.Pins = append(wire.Pins, dt.Pin{
 				ID:   stablePinID(nodeID, tw.Name, tp.Name),
 				Name: tp.Name,
 				Tags: tp.Tags,
@@ -54,12 +56,12 @@ func stablePinID(nodeID, wireName, pinName string) string {
 }
 
 // Node returns the current node configuration.
-func (es *EdgeService) Node() (*storage.Node, error) {
+func (es *EdgeService) Node() (*dt.Node, error) {
 	return cloneNode(es.storage.GetNode())
 }
 
 // WireByID fetches a wire config by ID.
-func (es *EdgeService) WireByID(ctx context.Context, id string) (*storage.Wire, error) {
+func (es *EdgeService) WireByID(ctx context.Context, id string) (*dt.Wire, error) {
 	_ = ctx
 	w, err := es.storage.GetWireByID(id)
 	if err != nil {
@@ -69,7 +71,7 @@ func (es *EdgeService) WireByID(ctx context.Context, id string) (*storage.Wire, 
 }
 
 // WireByName fetches a wire config by name.
-func (es *EdgeService) WireByName(ctx context.Context, name string) (*storage.Wire, error) {
+func (es *EdgeService) WireByName(ctx context.Context, name string) (*dt.Wire, error) {
 	_ = ctx
 	w, err := es.storage.GetWireByName(name)
 	if err != nil {
@@ -79,10 +81,10 @@ func (es *EdgeService) WireByName(ctx context.Context, name string) (*storage.Wi
 }
 
 // Wires lists all wires.
-func (es *EdgeService) Wires(ctx context.Context) ([]*storage.Wire, error) {
+func (es *EdgeService) Wires(ctx context.Context) ([]*dt.Wire, error) {
 	_ = ctx
 	ws := es.storage.ListWires()
-	out := make([]*storage.Wire, 0, len(ws))
+	out := make([]*dt.Wire, 0, len(ws))
 	for _, w := range ws {
 		out = append(out, cloneWire(w))
 	}
@@ -90,7 +92,7 @@ func (es *EdgeService) Wires(ctx context.Context) ([]*storage.Wire, error) {
 }
 
 // PinByID fetches a pin config by ID.
-func (es *EdgeService) PinByID(ctx context.Context, id string) (*storage.Pin, error) {
+func (es *EdgeService) PinByID(ctx context.Context, id string) (*dt.Pin, error) {
 	_ = ctx
 	p, err := es.storage.GetPinByID(id)
 	if err != nil {
@@ -100,7 +102,7 @@ func (es *EdgeService) PinByID(ctx context.Context, id string) (*storage.Pin, er
 }
 
 // PinByName fetches a pin config by name ("wire.pin").
-func (es *EdgeService) PinByName(ctx context.Context, name string) (*storage.Pin, error) {
+func (es *EdgeService) PinByName(ctx context.Context, name string) (*dt.Pin, error) {
 	_ = ctx
 	p, err := es.storage.GetPinByName(name)
 	if err != nil {
@@ -110,9 +112,9 @@ func (es *EdgeService) PinByName(ctx context.Context, name string) (*storage.Pin
 }
 
 // Pins lists pins. If wireID is non-empty, it filters by wire.
-func (es *EdgeService) Pins(ctx context.Context, wireID string) ([]*storage.Pin, error) {
+func (es *EdgeService) Pins(ctx context.Context, wireID string) ([]*dt.Pin, error) {
 	_ = ctx
-	var pins []*storage.Pin
+	var pins []*dt.Pin
 	if wireID != "" {
 		ps, err := es.storage.ListPinsByWire(wireID)
 		if err != nil {
@@ -123,7 +125,7 @@ func (es *EdgeService) Pins(ctx context.Context, wireID string) ([]*storage.Pin,
 		pins = es.storage.ListPins()
 	}
 
-	out := make([]*storage.Pin, 0, len(pins))
+	out := make([]*dt.Pin, 0, len(pins))
 	for _, p := range pins {
 		out = append(out, clonePin(p))
 	}
@@ -227,7 +229,7 @@ func (es *EdgeService) ListPinWrites(ctx context.Context, after time.Time, limit
 	return es.storage.ListPinWrites(after, limit)
 }
 
-func cloneNode(node *storage.Node, err error) (*storage.Node, error) {
+func cloneNode(node *dt.Node, err error) (*dt.Node, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -235,12 +237,12 @@ func cloneNode(node *storage.Node, err error) (*storage.Node, error) {
 		return nil, fmt.Errorf("node not initialized")
 	}
 
-	out := &storage.Node{
+	out := &dt.Node{
 		ID:     node.ID,
 		Name:   node.Name,
 		Tags:   append([]string(nil), node.Tags...),
 		Device: node.Device,
-		Wires:  make([]storage.Wire, 0, len(node.Wires)),
+		Wires:  make([]dt.Wire, 0, len(node.Wires)),
 	}
 	for i := range node.Wires {
 		out.Wires = append(out.Wires, *cloneWire(&node.Wires[i]))
@@ -248,16 +250,16 @@ func cloneNode(node *storage.Node, err error) (*storage.Node, error) {
 	return out, nil
 }
 
-func cloneWire(w *storage.Wire) *storage.Wire {
+func cloneWire(w *dt.Wire) *dt.Wire {
 	if w == nil {
 		return nil
 	}
-	out := &storage.Wire{
+	out := &dt.Wire{
 		ID:   w.ID,
 		Name: w.Name,
 		Tags: append([]string(nil), w.Tags...),
 		Type: w.Type,
-		Pins: make([]storage.Pin, 0, len(w.Pins)),
+		Pins: make([]dt.Pin, 0, len(w.Pins)),
 	}
 	for i := range w.Pins {
 		out.Pins = append(out.Pins, *clonePin(&w.Pins[i]))
@@ -265,11 +267,11 @@ func cloneWire(w *storage.Wire) *storage.Wire {
 	return out
 }
 
-func clonePin(p *storage.Pin) *storage.Pin {
+func clonePin(p *dt.Pin) *dt.Pin {
 	if p == nil {
 		return nil
 	}
-	return &storage.Pin{
+	return &dt.Pin{
 		ID:   p.ID,
 		Name: p.Name,
 		Tags: append([]string(nil), p.Tags...),

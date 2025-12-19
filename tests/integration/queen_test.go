@@ -3,23 +3,18 @@ package integration
 import (
 	"bytes"
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/core"
-	"github.com/snple/beacon/core/storage"
 	"github.com/snple/beacon/device"
+	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/edge"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
-
-func init() {
-	os.Setenv("TOKEN_SALT", "test-secret-key-for-jwt-signing")
-}
 
 // TestQueenCommunication_Basic 测试基本的 Queen 通信
 func TestQueenCommunication_Basic(t *testing.T) {
@@ -43,10 +38,9 @@ func TestQueenCommunication_Basic(t *testing.T) {
 	nodeName := "TestQueenNode"
 	secret := "test-queen-secret-123"
 
-	testNode := &storage.Node{
+	testNode := &dt.Node{
 		ID:      nodeID,
 		Name:    nodeName,
-		Status:  1,
 		Updated: time.Now(),
 	}
 
@@ -97,7 +91,7 @@ func TestQueenCommunication_Basic(t *testing.T) {
 }
 
 // mustEncodeNode 编码节点数据
-func mustEncodeNode(t *testing.T, node *storage.Node) []byte {
+func mustEncodeNode(t *testing.T, node *dt.Node) []byte {
 	t.Helper()
 
 	m, err := nson.Marshal(node)

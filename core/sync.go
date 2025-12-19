@@ -2,14 +2,9 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
-
-	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/cores"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type SyncService struct {
@@ -24,8 +19,6 @@ type SyncService struct {
 	nodeUpdated     map[string]time.Time
 	pinValueUpdated map[string]time.Time
 	pinWriteUpdated map[string]time.Time
-
-	cores.UnimplementedSyncServiceServer
 }
 
 func newSyncService(cs *CoreService) *SyncService {
@@ -40,12 +33,12 @@ func newSyncService(cs *CoreService) *SyncService {
 	}
 }
 
-func (s *SyncService) GetNodeUpdated(ctx context.Context, in *pb.Id) (*cores.SyncUpdated, error) {
-	var output cores.SyncUpdated
+func (s *SyncService) GetNodeUpdated(ctx context.Context, in *Id) (*SyncUpdated, error) {
+	var output SyncUpdated
 
 	// basic validation
 	if in == nil || in.Id == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
+		return &output, fmt.Errorf("please supply valid Node.ID")
 	}
 
 	output.NodeId = in.Id
@@ -61,16 +54,12 @@ func (s *SyncService) GetNodeUpdated(ctx context.Context, in *pb.Id) (*cores.Syn
 	return &output, nil
 }
 
-func (s *SyncService) WaitNodeUpdated(in *pb.Id, stream cores.SyncService_WaitNodeUpdatedServer) error {
-	return s.waitUpdated(in, stream, NOTIFY)
-}
-
-func (s *SyncService) GetPinValueUpdated(ctx context.Context, in *pb.Id) (*cores.SyncUpdated, error) {
-	var output cores.SyncUpdated
+func (s *SyncService) GetPinValueUpdated(ctx context.Context, in *Id) (*SyncUpdated, error) {
+	var output SyncUpdated
 
 	// basic validation
 	if in == nil || in.Id == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
+		return &output, fmt.Errorf("please supply valid Node.ID")
 	}
 
 	output.NodeId = in.Id
@@ -86,16 +75,12 @@ func (s *SyncService) GetPinValueUpdated(ctx context.Context, in *pb.Id) (*cores
 	return &output, nil
 }
 
-func (s *SyncService) WaitPinValueUpdated(in *pb.Id, stream cores.SyncService_WaitPinValueUpdatedServer) error {
-	return s.waitUpdated(in, stream, NOTIFY_PV)
-}
-
-func (s *SyncService) GetPinWriteUpdated(ctx context.Context, in *pb.Id) (*cores.SyncUpdated, error) {
-	var output cores.SyncUpdated
+func (s *SyncService) GetPinWriteUpdated(ctx context.Context, in *Id) (*SyncUpdated, error) {
+	var output SyncUpdated
 
 	// basic validation
 	if in == nil || in.Id == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Node.ID")
+		return &output, fmt.Errorf("please supply valid Node.ID")
 	}
 
 	output.NodeId = in.Id
@@ -109,10 +94,6 @@ func (s *SyncService) GetPinWriteUpdated(ctx context.Context, in *pb.Id) (*cores
 	}
 
 	return &output, nil
-}
-
-func (s *SyncService) WaitPinWriteUpdated(in *pb.Id, stream cores.SyncService_WaitPinWriteUpdatedServer) error {
-	return s.waitUpdated(in, stream, NOTIFY_PW)
 }
 
 // 内部方法
@@ -285,31 +266,4 @@ func (n *Notify) Close() {
 
 func (n *Notify) Id() string {
 	return n.id
-}
-
-type waitUpdatedStream interface {
-	Send(*pb.MyBool) error
-	grpc.ServerStream
-}
-
-func (s *SyncService) waitUpdated(in *pb.Id, stream waitUpdatedStream, nt NotifyType) error {
-	// basic validation
-	if in == nil || in.Id == "" {
-		return status.Error(codes.InvalidArgument, "Please supply valid NodeId")
-	}
-
-	notify := s.Notify(in.Id, nt)
-	defer notify.Close()
-
-	for {
-		select {
-		case <-notify.Wait():
-			err := stream.Send(&pb.MyBool{Bool: true})
-			if err != nil {
-				return err
-			}
-		case <-stream.Context().Done():
-			return nil
-		}
-	}
 }

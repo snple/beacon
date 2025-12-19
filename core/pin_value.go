@@ -2,20 +2,12 @@ package core
 
 import (
 	"context"
-	"io"
+	"fmt"
 	"time"
-
-	"github.com/snple/beacon/pb"
-	"github.com/snple/beacon/pb/cores"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type PinValueService struct {
 	cs *CoreService
-
-	cores.UnimplementedPinValueServiceServer
 }
 
 func newPinValueService(cs *CoreService) *PinValueService {
@@ -24,12 +16,12 @@ func newPinValueService(cs *CoreService) *PinValueService {
 	}
 }
 
-func (s *PinValueService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue, error) {
-	var output pb.PinValue
+func (s *PinValueService) GetValue(ctx context.Context, in *Id) (*PinValue, error) {
+	var output PinValue
 
 	// basic validation
 	if in == nil || in.Id == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
+		return &output, fmt.Errorf("please supply valid Pin.Id")
 	}
 
 	output.Id = in.Id
@@ -52,23 +44,23 @@ func (s *PinValueService) GetValue(ctx context.Context, in *pb.Id) (*pb.PinValue
 	return &output, nil
 }
 
-func (s *PinValueService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.MyBool, error) {
-	var output pb.MyBool
+func (s *PinValueService) SetValue(ctx context.Context, in *PinValue) (*MyBool, error) {
+	var output MyBool
 
 	// basic validation
 	if in == nil || in.Id == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
+		return &output, fmt.Errorf("please supply valid Pin.Id")
 	}
 
 	// 验证 Pin 存在并获取 nodeID
 	nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
+		return &output, fmt.Errorf("pin not found: %w", err)
 	}
 
 	err = s.cs.GetStorage().SetPinValue(ctx, nodeID, in.Id, in.Value, time.UnixMicro(in.Updated))
 	if err != nil {
-		return &output, status.Errorf(codes.Internal, "SetPinValue failed: %v", err)
+		return &output, fmt.Errorf("setPinValue failed: %w", err)
 	}
 
 	// TODO: 通知同步服务
@@ -77,17 +69,17 @@ func (s *PinValueService) SetValue(ctx context.Context, in *pb.PinValue) (*pb.My
 	return &output, nil
 }
 
-func (s *PinValueService) GetValueByName(ctx context.Context, in *cores.PinNameRequest) (*pb.PinNameValue, error) {
-	var output pb.PinNameValue
+func (s *PinValueService) GetValueByName(ctx context.Context, in *PinNameRequest) (*PinNameValue, error) {
+	var output PinNameValue
 
 	// basic validation
 	if in == nil || in.NodeId == "" || in.Name == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId and Name")
+		return &output, fmt.Errorf("please supply valid NodeId and Name")
 	}
 
 	pin, err := s.cs.GetStorage().GetPinByName(in.NodeId, in.Name)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
+		return &output, fmt.Errorf("pin not found: %w", err)
 	}
 
 	output.Name = in.Name
@@ -104,57 +96,26 @@ func (s *PinValueService) GetValueByName(ctx context.Context, in *cores.PinNameR
 	return &output, nil
 }
 
-func (s *PinValueService) SetValueByName(ctx context.Context, in *cores.PinNameValueRequest) (*pb.MyBool, error) {
-	var output pb.MyBool
+func (s *PinValueService) SetValueByName(ctx context.Context, in *PinNameValueRequest) (*MyBool, error) {
+	var output MyBool
 
 	// basic validation
 	if in == nil || in.NodeId == "" || in.Name == "" {
-		return &output, status.Error(codes.InvalidArgument, "Please supply valid NodeId and Name")
+		return &output, fmt.Errorf("please supply valid NodeId and Name")
 	}
 
 	pin, err := s.cs.GetStorage().GetPinByName(in.NodeId, in.Name)
 	if err != nil {
-		return &output, status.Errorf(codes.NotFound, "Pin not found: %v", err)
+		return &output, fmt.Errorf("pin not found: %w", err)
 	}
 
 	err = s.cs.GetStorage().SetPinValue(ctx, in.NodeId, pin.ID, in.Value, time.Now())
 	if err != nil {
-		return &output, status.Errorf(codes.Internal, "SetPinValue failed: %v", err)
+		return &output, fmt.Errorf("setPinValue failed: %w", err)
 	}
 
 	// TODO: 通知同步服务
 
 	output.Bool = true
 	return &output, nil
-}
-
-func (s *PinValueService) PushValue(stream grpc.ClientStreamingServer[pb.PinValue, pb.MyBool]) error {
-	var output pb.MyBool
-	ctx := stream.Context()
-
-	for {
-		in, err := stream.Recv()
-		if err == io.EOF {
-			return stream.SendAndClose(&output)
-		}
-		if err != nil {
-			return err
-		}
-
-		// basic validation
-		if in.Id == "" {
-			return status.Error(codes.InvalidArgument, "Please supply valid Pin.Id")
-		}
-
-		// 验证 Pin 存在并获取 nodeID
-		nodeID, err := s.cs.GetStorage().GetPinNodeID(in.Id)
-		if err != nil {
-			return status.Errorf(codes.NotFound, "Pin not found: %v", err)
-		}
-
-		err = s.cs.GetStorage().SetPinValue(ctx, nodeID, in.Id, in.Value, time.UnixMicro(in.Updated))
-		if err != nil {
-			return status.Errorf(codes.Internal, "SetPinValue failed: %v", err)
-		}
-	}
 }

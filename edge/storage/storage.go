@@ -11,42 +11,15 @@ import (
 
 	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
+	"github.com/snple/beacon/dt"
 )
-
-// Node 节点配置（Edge 只有一个 Node）
-type Node struct {
-	ID     string   `nson:"id"`
-	Name   string   `nson:"name"`
-	Tags   []string `nson:"tags,omitempty"`   // 节点标签列表
-	Device string   `nson:"device,omitempty"` // 设备模板 ID（指向 device.Device.ID）
-	Wires  []Wire   `nson:"wires"`
-}
-
-// Wire 通道配置
-type Wire struct {
-	ID   string   `nson:"id"`
-	Name string   `nson:"name"`
-	Tags []string `nson:"tags,omitempty"`
-	Type string   `nson:"type"`
-	Pins []Pin    `nson:"pins"`
-}
-
-// Pin 点位配置
-type Pin struct {
-	ID   string   `nson:"id"`
-	Name string   `nson:"name"`
-	Tags []string `nson:"tags,omitempty"`
-	Addr string   `nson:"addr"`
-	Type uint32   `nson:"type"` // nson.DataType
-	Rw   int32    `nson:"rw"`
-}
 
 // Storage Edge 端存储（单 Node）
 type Storage struct {
 	mu sync.RWMutex
 
 	// 主存储（只有一个 Node）
-	node   *Node
+	node   *dt.Node
 	secret string
 
 	// 索引/缓存
@@ -59,25 +32,25 @@ type Storage struct {
 // index 查询索引（缓存）
 type index struct {
 	// 按 ID 的索引
-	wireByID map[string]*Wire // wireID -> Wire
-	pinByID  map[string]*Pin  // pinID -> Pin
+	wireByID map[string]*dt.Wire // wireID -> Wire
+	pinByID  map[string]*dt.Pin  // pinID -> Pin
 
 	// 按名称的索引
-	wireByName map[string]*Wire // wireName -> Wire
-	pinByName  map[string]*Pin  // "wire.pin" -> Pin
+	wireByName map[string]*dt.Wire // wireName -> Wire
+	pinByName  map[string]*dt.Pin  // "wire.pin" -> Pin
 }
 
 func newIndex() *index {
 	return &index{
-		wireByID:   make(map[string]*Wire),
-		pinByID:    make(map[string]*Pin),
-		wireByName: make(map[string]*Wire),
-		pinByName:  make(map[string]*Pin),
+		wireByID:   make(map[string]*dt.Wire),
+		pinByID:    make(map[string]*dt.Pin),
+		wireByName: make(map[string]*dt.Wire),
+		pinByName:  make(map[string]*dt.Pin),
 	}
 }
 
 // New 创建存储（node 配置在创建时传入，之后不可修改）
-func New(db *badger.DB, node *Node) *Storage {
+func New(db *badger.DB, node *dt.Node) *Storage {
 	s := &Storage{
 		node:  node,
 		index: newIndex(),
@@ -114,7 +87,7 @@ func (s *Storage) Load(ctx context.Context) error {
 // --- Node 操作 ---
 
 // GetNode 获取节点
-func (s *Storage) GetNode() (*Node, error) {
+func (s *Storage) GetNode() (*dt.Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -155,7 +128,7 @@ func (s *Storage) GetNodeDevice() string {
 // --- Wire 操作 ---
 
 // GetWireByID 按 ID 获取 Wire
-func (s *Storage) GetWireByID(wireID string) (*Wire, error) {
+func (s *Storage) GetWireByID(wireID string) (*dt.Wire, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -167,7 +140,7 @@ func (s *Storage) GetWireByID(wireID string) (*Wire, error) {
 }
 
 // GetWireByName 按名称获取 Wire
-func (s *Storage) GetWireByName(wireName string) (*Wire, error) {
+func (s *Storage) GetWireByName(wireName string) (*dt.Wire, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -179,7 +152,7 @@ func (s *Storage) GetWireByName(wireName string) (*Wire, error) {
 }
 
 // ListWires 获取所有 Wire
-func (s *Storage) ListWires() []*Wire {
+func (s *Storage) ListWires() []*dt.Wire {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -187,7 +160,7 @@ func (s *Storage) ListWires() []*Wire {
 		return nil
 	}
 
-	wires := make([]*Wire, len(s.node.Wires))
+	wires := make([]*dt.Wire, len(s.node.Wires))
 	for i := range s.node.Wires {
 		wires[i] = &s.node.Wires[i]
 	}
@@ -197,7 +170,7 @@ func (s *Storage) ListWires() []*Wire {
 // --- Pin 操作 ---
 
 // GetPinByID 按 ID 获取 Pin
-func (s *Storage) GetPinByID(pinID string) (*Pin, error) {
+func (s *Storage) GetPinByID(pinID string) (*dt.Pin, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -209,7 +182,7 @@ func (s *Storage) GetPinByID(pinID string) (*Pin, error) {
 }
 
 // GetPinByName 按名称获取 Pin（支持 "wire.pin" 格式）
-func (s *Storage) GetPinByName(pinName string) (*Pin, error) {
+func (s *Storage) GetPinByName(pinName string) (*dt.Pin, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -242,7 +215,7 @@ func (s *Storage) GetPinWireID(pinID string) (string, error) {
 }
 
 // ListPins 获取所有 Pin
-func (s *Storage) ListPins() []*Pin {
+func (s *Storage) ListPins() []*dt.Pin {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -250,7 +223,7 @@ func (s *Storage) ListPins() []*Pin {
 		return nil
 	}
 
-	var pins []*Pin
+	var pins []*dt.Pin
 	for i := range s.node.Wires {
 		for j := range s.node.Wires[i].Pins {
 			pins = append(pins, &s.node.Wires[i].Pins[j])
@@ -260,7 +233,7 @@ func (s *Storage) ListPins() []*Pin {
 }
 
 // ListPinsByWire 获取 Wire 的所有 Pin
-func (s *Storage) ListPinsByWire(wireID string) ([]*Pin, error) {
+func (s *Storage) ListPinsByWire(wireID string) ([]*dt.Pin, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -271,7 +244,7 @@ func (s *Storage) ListPinsByWire(wireID string) ([]*Pin, error) {
 	for i := range s.node.Wires {
 		if s.node.Wires[i].ID == wireID {
 			wire := &s.node.Wires[i]
-			pins := make([]*Pin, len(wire.Pins))
+			pins := make([]*dt.Pin, len(wire.Pins))
 			for j := range wire.Pins {
 				pins[j] = &wire.Pins[j]
 			}
@@ -655,11 +628,6 @@ func (s *Storage) SetSyncTime(key string, t time.Time) error {
 
 // --- 内部方法 ---
 
-// clearIndexUnsafe 清除索引（无锁）
-func (s *Storage) clearIndexUnsafe() {
-	s.index = newIndex()
-}
-
 // rebuildIndexUnsafe 重建索引（无锁）
 func (s *Storage) rebuildIndexUnsafe() {
 	if s.node == nil {
@@ -697,7 +665,7 @@ func (s *Storage) ExportConfig() ([]byte, error) {
 
 // --- 编解码 ---
 
-func EncodeNode(node *Node) ([]byte, error) {
+func EncodeNode(node *dt.Node) ([]byte, error) {
 	m, err := nson.Marshal(node)
 	if err != nil {
 		return nil, err
@@ -711,14 +679,14 @@ func EncodeNode(node *Node) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func DecodeNode(data []byte) (*Node, error) {
+func DecodeNode(data []byte) (*dt.Node, error) {
 	buf := bytes.NewBuffer(data)
 	m, err := nson.DecodeMap(buf)
 	if err != nil {
 		return nil, err
 	}
 
-	var node Node
+	var node dt.Node
 	if err := nson.Unmarshal(m, &node); err != nil {
 		return nil, err
 	}

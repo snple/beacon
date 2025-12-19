@@ -2,11 +2,9 @@ package core
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/snple/beacon/device"
-	"github.com/snple/beacon/pb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	queen "snple.com/queen/core"
 	"snple.com/queen/packet"
 )
@@ -64,40 +62,40 @@ func (cs *CoreService) authenticateBrokerClient(info *queen.AuthInfo) error {
 	// ClientID 作为 Node ID 或 Name
 	clientID := info.ClientID
 	if clientID == "" {
-		return status.Error(codes.InvalidArgument, "ClientID is required")
+		return fmt.Errorf("clientID is required")
 	}
 
 	// AuthData 作为 Secret
 	secret := string(info.AuthData)
 	if secret == "" {
-		return status.Error(codes.InvalidArgument, "Secret is required")
+		return fmt.Errorf("secret is required")
 	}
 
 	// 尝试通过 ID 或 Name 获取 Node
-	var node *pb.Node
+	var node *Node
 	var err error
 
-	node, err = cs.GetNode().View(ctx, &pb.Id{Id: clientID})
+	node, err = cs.GetNode().View(ctx, &Id{Id: clientID})
 	if err != nil {
 		// 尝试通过 Name 获取
-		node, err = cs.GetNode().Name(ctx, &pb.Name{Name: clientID})
+		node, err = cs.GetNode().Name(ctx, &Name{Name: clientID})
 		if err != nil {
-			return status.Errorf(codes.NotFound, "Node not found: %s", clientID)
+			return fmt.Errorf("node not found: %s", clientID)
 		}
 	}
 
 	if node.Status != device.ON {
-		return status.Error(codes.FailedPrecondition, "Node is not enabled")
+		return fmt.Errorf("node is not enabled")
 	}
 
 	// 验证密钥
-	secretReply, err := cs.GetNode().GetSecret(ctx, &pb.Id{Id: node.Id})
+	secretReply, err := cs.GetNode().GetSecret(ctx, &Id{Id: node.Id})
 	if err != nil {
-		return status.Errorf(codes.Internal, "GetSecret failed: %v", err)
+		return fmt.Errorf("getSecret failed: %w", err)
 	}
 
 	if secretReply.Message != secret {
-		return status.Error(codes.Unauthenticated, "Invalid secret")
+		return fmt.Errorf("invalid secret")
 	}
 
 	cs.Logger().Sugar().Infof("Queen broker client authenticated: %s, remote: %s", node.Id, info.RemoteAddr)
@@ -116,7 +114,7 @@ func (cs *CoreService) IsNodeOnline(nodeID string) bool {
 // PublishToNode 向指定节点发布消息
 func (cs *CoreService) PublishToNode(nodeID string, topic string, payload []byte, qos int) error {
 	if cs.broker == nil {
-		return status.Error(codes.Unavailable, "Queen broker not enabled")
+		return fmt.Errorf("queen broker not enabled")
 	}
 
 	return cs.broker.PublishToClient(nodeID, topic, payload, queen.PublishOptions{
