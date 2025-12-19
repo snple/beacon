@@ -23,13 +23,11 @@ import (
 //
 // Core → Edge（命令下发，使用 Publish）:
 //   - beacon/pin/write  : Pin 写入命令（NSON Map）
-//   - beacon/node/update: 节点配置更新通知（NSON Map）
 const (
-	TopicPrefix     = "beacon/"
-	TopicPush       = "beacon/push"
-	TopicPinValue   = "beacon/pin/value"
-	TopicPinWrite   = "beacon/pin/write"
-	TopicNodeUpdate = "beacon/node/update"
+	TopicPrefix   = "beacon/"
+	TopicPush     = "beacon/push"
+	TopicPinValue = "beacon/pin/value"
+	TopicPinWrite = "beacon/pin/write"
 
 	// Action 名称（用于 Request/Response）
 	ActionPinWriteSync = "beacon.pin.write.sync"
@@ -261,78 +259,4 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-// NotifyPinWrite 通知节点有新的 Pin 写入
-// 使用 Publish 发送命令到 Edge
-func (cs *CoreService) NotifyPinWrite(nodeID string, pinID string, pinName string, value nson.Value) error {
-	if cs.broker == nil {
-		return nil
-	}
-
-	// 检查节点是否在线
-	if !cs.broker.IsClientOnline(nodeID) {
-		cs.Logger().Sugar().Debugf("Node not online, skip pin write notify: nodeID=%s", nodeID)
-		return nil
-	}
-
-	msg := PinWriteMessage{
-		Id:    pinID,
-		Name:  pinName,
-		Value: value,
-	}
-
-	// 序列化为 NSON
-	m, err := nson.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	buf := new(bytes.Buffer)
-	if err := nson.EncodeMap(m, buf); err != nil {
-		return err
-	}
-
-	err = cs.broker.PublishToClient(nodeID, TopicPinWrite, buf.Bytes(), queen.PublishOptions{
-		QoS: 1,
-	})
-	if err != nil {
-		cs.Logger().Sugar().Warnf("Notify pin write failed: nodeID=%s, pinID=%s, error=%v",
-			nodeID, pinID, err)
-	}
-
-	return err
-}
-
-// NotifyNodeUpdate 通知节点配置更新
-func (cs *CoreService) NotifyNodeUpdate(nodeID string) error {
-	if cs.broker == nil {
-		return nil
-	}
-
-	if !cs.broker.IsClientOnline(nodeID) {
-		return nil
-	}
-
-	// 获取节点最新配置
-	ctx := context.Background()
-	node, err := cs.GetNode().View(ctx, nodeID)
-	if err != nil {
-		return err
-	}
-
-	// 序列化为 NSON
-	m, err := nson.Marshal(node)
-	if err != nil {
-		return err
-	}
-
-	buf := new(bytes.Buffer)
-	if err := nson.EncodeMap(m, buf); err != nil {
-		return err
-	}
-
-	return cs.broker.PublishToClient(nodeID, TopicNodeUpdate, buf.Bytes(), queen.PublishOptions{
-		QoS: 1,
-	})
 }

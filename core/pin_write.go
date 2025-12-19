@@ -40,7 +40,7 @@ func (s *PinWriteService) GetWrite(ctx context.Context, pinID string) (nson.Valu
 	return value, updated, nil
 }
 
-func (s *PinWriteService) SetWrite(ctx context.Context, pinID string, value nson.Value) error {
+func (s *PinWriteService) SetWrite(ctx context.Context, pinID string, value nson.Value, realtime bool) error {
 	// basic validation
 	if pinID == "" || value == nil {
 		return fmt.Errorf("please supply valid Pin.Id and Value")
@@ -68,7 +68,7 @@ func (s *PinWriteService) SetWrite(ctx context.Context, pinID string, value nson
 	}
 
 	// 通知节点有新的 Pin 写入
-	if err := s.cs.NotifyPinWrite(nodeID, pinID, pin.Name, value); err != nil {
+	if err := s.cs.NotifyPinWrite(nodeID, pinID, pin.Name, value, realtime); err != nil {
 		s.cs.Logger().Sugar().Warnf("NotifyPinWrite failed: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func (s *PinWriteService) GetWriteByName(ctx context.Context, nodeID, name strin
 	return value, updated, nil
 }
 
-func (s *PinWriteService) SetWriteByName(ctx context.Context, nodeID, name string, value nson.Value) error {
+func (s *PinWriteService) SetWriteByName(ctx context.Context, nodeID, name string, value nson.Value, realtime bool) error {
 	// basic validation
 	if nodeID == "" || name == "" || value == nil {
 		return fmt.Errorf("please supply valid NodeId, Name and Value")
@@ -117,7 +117,7 @@ func (s *PinWriteService) SetWriteByName(ctx context.Context, nodeID, name strin
 	}
 
 	// 通知节点有新的 Pin 写入
-	if err := s.cs.NotifyPinWrite(nodeID, pin.ID, pin.Name, value); err != nil {
+	if err := s.cs.NotifyPinWrite(nodeID, pin.ID, pin.Name, value, realtime); err != nil {
 		s.cs.Logger().Sugar().Warnf("NotifyPinWrite failed: %v", err)
 	}
 

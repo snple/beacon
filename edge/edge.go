@@ -3,26 +3,27 @@ package edge
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/edge/storage"
-	"github.com/snple/types"
 	"go.uber.org/zap"
 )
 
 type EdgeService struct {
 	badger  *BadgerService
 	storage *storage.Storage
-	sync    *SyncService
 
-	queenUp types.Option[*QueenUpService]
+	queenUp *QueenUpService
+
+	// PinValue 批量通知
+	pinValueChanges chan PinValueChange
 
 	ctx     context.Context
 	cancel  func()
@@ -40,9 +41,10 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 	ctx, cancel := context.WithCancel(ctx)
 
 	es := &EdgeService{
-		ctx:    ctx,
-		cancel: cancel,
-		dopts:  defaultEdgeOptions(),
+		ctx:             ctx,
+		cancel:          cancel,
+		dopts:           defaultEdgeOptions(),
+		pinValueChanges: make(chan PinValueChange, 1000),
 	}
 
 	for _, opt := range extraEdgeOptions {
@@ -95,17 +97,12 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 		return nil, err
 	}
 
-	es.sync = newSyncService(es)
-
-	// 根据配置选择通信方式
-	if es.dopts.NodeOptions.Enable {
-		// 使用 Queen 通信
-		queenUp, err := newQueenUpService(es)
-		if err != nil {
-			return nil, err
-		}
-		es.queenUp = types.Some(queenUp)
+	// 使用 Queen 通信
+	queenUp, err := newQueenUpService(es)
+	if err != nil {
+		return nil, err
 	}
+	es.queenUp = queenUp
 
 	return es, nil
 }
@@ -118,21 +115,17 @@ func (es *EdgeService) Start() {
 		es.badger.start()
 	}()
 
-	if es.queenUp.IsSome() {
-		es.closeWG.Add(1)
-		go func() {
-			defer es.closeWG.Done()
+	es.closeWG.Add(1)
+	go func() {
+		defer es.closeWG.Done()
 
-			es.queenUp.Unwrap().start()
-		}()
-	}
+		es.queenUp.start()
+	}()
+
 }
 
 func (es *EdgeService) Stop() {
-	if es.queenUp.IsSome() {
-		es.queenUp.Unwrap().stop()
-	}
-
+	es.queenUp.stop()
 	es.badger.stop()
 
 	es.cancel()
@@ -141,11 +134,7 @@ func (es *EdgeService) Stop() {
 }
 
 func (es *EdgeService) Push() error {
-	if es.queenUp.IsSome() {
-		return es.queenUp.Unwrap().push()
-	}
-
-	return errors.New("node not enable")
+	return es.queenUp.push()
 }
 
 func (es *EdgeService) GetStorage() *storage.Storage {
@@ -154,10 +143,6 @@ func (es *EdgeService) GetStorage() *storage.Storage {
 
 func (es *EdgeService) GetBadgerDB() *badger.DB {
 	return es.badger.GetDB()
-}
-
-func (es *EdgeService) GetSync() *SyncService {
-	return es.sync
 }
 
 func (es *EdgeService) Context() context.Context {
@@ -180,7 +165,8 @@ type edgeOptions struct {
 	BadgerOptions   badger.Options
 	BadgerGCOptions BadgerGCOptions
 
-	linkTTL time.Duration
+	linkTTL             time.Duration
+	batchNotifyInterval time.Duration // 批量通知间隔
 }
 
 type NodeOptions struct {
@@ -223,7 +209,8 @@ func defaultEdgeOptions() edgeOptions {
 			GC:             time.Hour,
 			GCDiscardRatio: 0.7,
 		},
-		linkTTL: 3 * time.Minute,
+		linkTTL:             3 * time.Minute,
+		batchNotifyInterval: time.Second, // 默认 1 秒批量发送一次
 	}
 }
 
@@ -322,4 +309,44 @@ func WithLinkTTL(d time.Duration) EdgeOption {
 	return newFuncEdgeOption(func(o *edgeOptions) {
 		o.linkTTL = d
 	})
+}
+
+// WithBatchNotifyInterval 设置批量通知间隔
+func WithBatchNotifyInterval(interval time.Duration) EdgeOption {
+	return newFuncEdgeOption(func(o *edgeOptions) {
+		if interval > 0 {
+			o.batchNotifyInterval = interval
+		}
+	})
+}
+
+// PinValueChange PinValue 变更通知
+type PinValueChange struct {
+	PinID string
+	Value nson.Value
+}
+
+// NotifyPinValue 通知 PinValue 变更（非阻塞）
+func (es *EdgeService) NotifyPinValue(pinID string, value nson.Value, realtime bool) error {
+	if realtime {
+		// 实时模式，直接发送
+		return es.queenUp.publishPinValueBatch(context.Background(), []PinValueChange{
+			{
+				PinID: pinID,
+				Value: value,
+			},
+		})
+	}
+
+	select {
+	case es.pinValueChanges <- PinValueChange{
+		PinID: pinID,
+		Value: value,
+	}:
+		return nil
+	default:
+		// 通道满，记录警告但不阻塞
+		es.Logger().Sugar().Warnf("PinValue changes channel is full, dropping notification for pin %s", pinID)
+		return nil
+	}
 }

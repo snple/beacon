@@ -140,7 +140,7 @@ func (es *EdgeService) GetPinValue(ctx context.Context, pinID string) (nson.Valu
 
 // SetPinValue sets PinValue, validates pin exists and datatype matches Pin.Type.
 // If updated is zero, time.Now() is used.
-func (es *EdgeService) SetPinValue(ctx context.Context, pinID string, value nson.Value, updated time.Time) error {
+func (es *EdgeService) SetPinValue(ctx context.Context, pinID string, value nson.Value, realtime bool) error {
 	if pinID == "" {
 		return fmt.Errorf("please supply valid pinID")
 	}
@@ -156,13 +156,16 @@ func (es *EdgeService) SetPinValue(ctx context.Context, pinID string, value nson
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	if updated.IsZero() {
-		updated = time.Now()
-	}
-	if err := es.storage.SetPinValue(ctx, pinID, value, updated); err != nil {
+	if err := es.storage.SetPinValue(ctx, pinID, value, time.Now()); err != nil {
 		return err
 	}
-	return es.sync.setPinValueUpdated(ctx, updated)
+
+	// 通知 PinValue 变更
+	if err := es.NotifyPinValue(pinID, value, realtime); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // DeletePinValue deletes PinValue.
@@ -209,10 +212,12 @@ func (es *EdgeService) SetPinWrite(ctx context.Context, pinID string, value nson
 	if updated.IsZero() {
 		updated = time.Now()
 	}
+
 	if err := es.storage.SetPinWrite(ctx, pinID, value, updated); err != nil {
 		return err
 	}
-	return es.sync.setPinWriteUpdated(ctx, updated)
+
+	return nil
 }
 
 // DeletePinWrite deletes PinWrite.

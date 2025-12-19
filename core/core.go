@@ -1,16 +1,19 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"log"
 	"sync"
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/core/storage"
 	"go.uber.org/zap"
 	queen "snple.com/queen/core"
+	"snple.com/queen/packet"
 )
 
 type CoreService struct {
@@ -21,18 +24,28 @@ type CoreService struct {
 	broker         *queen.Broker
 	internalClient *queen.InternalClient
 
-	sync     *SyncService
 	node     *NodeService
 	wire     *WireService
 	pin      *PinService
 	pinValue *PinValueService
 	pinWrite *PinWriteService
 
+	// PinWrite 批量通知
+	pinWriteChanges chan PinWriteChange
+
 	ctx     context.Context
 	cancel  func()
 	closeWG sync.WaitGroup
 
 	dopts coreOptions
+}
+
+// PinWriteChange PinWrite 变更通知
+type PinWriteChange struct {
+	NodeID string
+	PinID  string
+	Name   string
+	Value  nson.Value
 }
 
 func Core(opts ...CoreOption) (*CoreService, error) {
@@ -43,9 +56,10 @@ func CoreContext(ctx context.Context, opts ...CoreOption) (*CoreService, error) 
 	ctx, cancel := context.WithCancel(ctx)
 
 	cs := &CoreService{
-		ctx:    ctx,
-		cancel: cancel,
-		dopts:  defaultCoreOptions(),
+		ctx:             ctx,
+		cancel:          cancel,
+		dopts:           defaultCoreOptions(),
+		pinWriteChanges: make(chan PinWriteChange, 1000),
 	}
 
 	for _, opt := range extraCoreOptions {
@@ -71,7 +85,6 @@ func CoreContext(ctx context.Context, opts ...CoreOption) (*CoreService, error) 
 	// 创建存储
 	cs.storage = storage.New(badgerSvc.GetDB())
 
-	cs.sync = newSyncService(cs)
 	cs.node = newNodeService(cs)
 	cs.wire = newWireService(cs)
 	cs.pin = newPinService(cs)
@@ -115,6 +128,10 @@ func (cs *CoreService) Start() {
 	if cs.internalClient != nil {
 		cs.closeWG.Add(1)
 		go cs.processQueenMessages()
+
+		// 启动批量 PinWrite 通知
+		cs.closeWG.Add(1)
+		go cs.batchNotifyPinWrite()
 	}
 }
 
@@ -144,10 +161,6 @@ func (cs *CoreService) GetBadgerDB() *badger.DB {
 
 func (cs *CoreService) GetStorage() *storage.Storage {
 	return cs.storage
-}
-
-func (cs *CoreService) GetSync() *SyncService {
-	return cs.sync
 }
 
 func (cs *CoreService) GetNode() *NodeService {
@@ -196,6 +209,9 @@ type coreOptions struct {
 	queenEnable    bool
 	queenAddr      string
 	queenTLSConfig *tls.Config
+
+	// 批量通知间隔（默认 1 秒）
+	batchNotifyInterval time.Duration
 }
 
 type BadgerGCOptions struct {
@@ -217,8 +233,9 @@ func defaultCoreOptions() coreOptions {
 			GC:             time.Hour,
 			GCDiscardRatio: 0.7,
 		},
-		queenEnable: false,
-		queenAddr:   ":3883",
+		queenEnable:         false,
+		queenAddr:           ":3883",
+		batchNotifyInterval: time.Second, // 默认 1 秒批量发送一次
 	}
 }
 
@@ -285,4 +302,133 @@ func WithQueenBroker(addr string, tlsConfig *tls.Config) CoreOption {
 		}
 		o.queenTLSConfig = tlsConfig
 	})
+}
+
+// WithBatchNotifyInterval 设置批量通知间隔
+func WithBatchNotifyInterval(interval time.Duration) CoreOption {
+	return newFuncCoreOption(func(o *coreOptions) {
+		if interval > 0 {
+			o.batchNotifyInterval = interval
+		}
+	})
+}
+
+// NotifyPinWrite 通知 PinWrite 变更（非阻塞）
+func (cs *CoreService) NotifyPinWrite(nodeID, pinID, name string, value nson.Value, realtime bool) error {
+	if realtime {
+		// 实时模式，直接发送
+		return cs.publishPinWritesToNode(nodeID, []PinWriteChange{
+			{
+				NodeID: nodeID,
+				PinID:  pinID,
+				Name:   name,
+				Value:  value,
+			},
+		})
+	}
+
+	select {
+	case cs.pinWriteChanges <- PinWriteChange{
+		NodeID: nodeID,
+		PinID:  pinID,
+		Name:   name,
+		Value:  value,
+	}:
+		return nil
+	default:
+		// 通道满，记录警告但不阻塞
+		cs.Logger().Sugar().Warnf("PinWrite changes channel is full, dropping notification for pin %s", pinID)
+		return nil
+	}
+}
+
+// batchNotifyPinWrite 批量发送 PinWrite 通知
+func (cs *CoreService) batchNotifyPinWrite() {
+	defer cs.closeWG.Done()
+
+	ticker := time.NewTicker(cs.dopts.batchNotifyInterval)
+	defer ticker.Stop()
+
+	// 按 NodeID 分组的 PinWrite 变更
+	changes := make(map[string][]PinWriteChange)
+
+	sendBatch := func() {
+		if len(changes) == 0 {
+			return
+		}
+
+		for nodeID, pinWrites := range changes {
+			if err := cs.publishPinWritesToNode(nodeID, pinWrites); err != nil {
+				cs.Logger().Sugar().Errorf("Failed to publish pin writes to node %s: %v", nodeID, err)
+			}
+		}
+
+		// 清空
+		changes = make(map[string][]PinWriteChange)
+	}
+
+	for {
+		select {
+		case <-cs.ctx.Done():
+			// 发送剩余的变更
+			sendBatch()
+			return
+
+		case <-ticker.C:
+			sendBatch()
+
+		case change := <-cs.pinWriteChanges:
+			changes[change.NodeID] = append(changes[change.NodeID], change)
+		}
+	}
+}
+
+// publishPinWritesToNode 发布 PinWrite 到指定节点
+func (cs *CoreService) publishPinWritesToNode(nodeID string, pinWrites []PinWriteChange) error {
+	if cs.internalClient == nil {
+		return nil
+	}
+
+	type PinWriteMessage struct {
+		Id    string     `nson:"id,omitempty"`
+		Name  string     `nson:"name,omitempty"`
+		Value nson.Value `nson:"value,omitempty"`
+	}
+
+	// 去重：同一个 Pin 只保留最后一次变更
+	pinMap := make(map[string]PinWriteMessage)
+	for _, pw := range pinWrites {
+		pinMap[pw.PinID] = PinWriteMessage{
+			Id:    pw.PinID,
+			Name:  pw.Name,
+			Value: pw.Value,
+		}
+	}
+
+	if len(pinMap) == 0 {
+		return nil
+	}
+
+	// 批量发送
+	for _, msg := range pinMap {
+		m, err := nson.Marshal(msg)
+		if err != nil {
+			continue
+		}
+
+		buf := new(bytes.Buffer)
+		if err := nson.EncodeMap(m, buf); err != nil {
+			continue
+		}
+
+		// 发布到节点特定的主题，指定目标客户端
+		if err := cs.broker.PublishToClient(nodeID, "beacon/pin/write", buf.Bytes(), queen.PublishOptions{
+			QoS: packet.QoS1,
+		}); err != nil {
+			return err
+		}
+	}
+
+	cs.Logger().Sugar().Debugf("Published %d pin writes to node %s", len(pinMap), nodeID)
+	return nil
 }
