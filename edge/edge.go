@@ -18,9 +18,6 @@ type EdgeService struct {
 	badger  *BadgerService
 	storage *storage.Storage
 	sync    *SyncService
-	node    *NodeService
-	wire    *WireService
-	pin     *PinService
 
 	queenUp types.Option[*QueenUpService]
 
@@ -72,9 +69,6 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 	}
 
 	es.sync = newSyncService(es)
-	es.node = newNodeService(es)
-	es.wire = newWireService(es)
-	es.pin = newPinService(es)
 
 	// 根据配置选择通信方式
 	if es.dopts.NodeOptions.Enable {
@@ -137,18 +131,6 @@ func (es *EdgeService) GetBadgerDB() *badger.DB {
 
 func (es *EdgeService) GetSync() *SyncService {
 	return es.sync
-}
-
-func (es *EdgeService) GetNode() *NodeService {
-	return es.node
-}
-
-func (es *EdgeService) GetWire() *WireService {
-	return es.wire
-}
-
-func (es *EdgeService) GetPin() *PinService {
-	return es.pin
 }
 
 func (es *EdgeService) Context() context.Context {

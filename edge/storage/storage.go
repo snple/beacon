@@ -11,8 +11,6 @@ import (
 
 	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
-	"github.com/snple/beacon/dt"
-	"github.com/snple/beacon/pb"
 )
 
 // Node 节点配置（Edge 只有一个 Node）
@@ -373,7 +371,7 @@ func (s *Storage) ListPinsByWire(wireID string) ([]*Pin, error) {
 // PinValueEntry 点位值条目
 type PinValueEntry struct {
 	ID      string    `nson:"id"`
-	Value   []byte    `nson:"value"` // 序列化的 pb.NsonValue
+	Value   []byte    `nson:"value"` // 序列化的 nson.Value（使用 nson.EncodeValue）
 	Updated time.Time `nson:"updated"`
 }
 
@@ -383,8 +381,8 @@ const (
 )
 
 // GetPinValue 获取点位值
-func (s *Storage) GetPinValue(pinID string) (*pb.NsonValue, time.Time, error) {
-	var value *pb.NsonValue
+func (s *Storage) GetPinValue(pinID string) (nson.Value, time.Time, error) {
+	var value nson.Value
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -405,12 +403,12 @@ func (s *Storage) GetPinValue(pinID string) (*pb.NsonValue, time.Time, error) {
 				return err
 			}
 
-			// 使用 dt.DecodeNsonValue 反序列化
 			if len(entry.Value) > 0 {
-				value, err = dt.DecodeNsonValue(entry.Value)
+				vv, err := nson.DecodeValue(bytes.NewBuffer(entry.Value))
 				if err != nil {
 					return err
 				}
+				value = vv
 			}
 			updated = entry.Updated
 			return nil
@@ -425,11 +423,14 @@ func (s *Storage) GetPinValue(pinID string) (*pb.NsonValue, time.Time, error) {
 }
 
 // SetPinValue 设置点位值
-func (s *Storage) SetPinValue(ctx context.Context, pinID string, value *pb.NsonValue, updated time.Time) error {
-	// 使用 dt.EncodeNsonValue 序列化
-	valueBytes, err := dt.EncodeNsonValue(value)
-	if err != nil {
-		return err
+func (s *Storage) SetPinValue(ctx context.Context, pinID string, value nson.Value, updated time.Time) error {
+	var valueBytes []byte
+	if value != nil {
+		bufVal := new(bytes.Buffer)
+		if err := nson.EncodeValue(bufVal, value); err != nil {
+			return err
+		}
+		valueBytes = bufVal.Bytes()
 	}
 
 	entry := PinValueEntry{
@@ -531,8 +532,8 @@ func (s *Storage) ListPinValues(after time.Time, limit int) ([]PinValueEntry, er
 // --- PinWrite 操作 ---
 
 // GetPinWrite 获取点位写入值
-func (s *Storage) GetPinWrite(pinID string) (*pb.NsonValue, time.Time, error) {
-	var value *pb.NsonValue
+func (s *Storage) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
+	var value nson.Value
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -553,12 +554,12 @@ func (s *Storage) GetPinWrite(pinID string) (*pb.NsonValue, time.Time, error) {
 				return err
 			}
 
-			// 使用 dt.DecodeNsonValue 反序列化
 			if len(entry.Value) > 0 {
-				value, err = dt.DecodeNsonValue(entry.Value)
+				vv, err := nson.DecodeValue(bytes.NewBuffer(entry.Value))
 				if err != nil {
 					return err
 				}
+				value = vv
 			}
 			updated = entry.Updated
 			return nil
@@ -573,11 +574,14 @@ func (s *Storage) GetPinWrite(pinID string) (*pb.NsonValue, time.Time, error) {
 }
 
 // SetPinWrite 设置点位写入值
-func (s *Storage) SetPinWrite(ctx context.Context, pinID string, value *pb.NsonValue, updated time.Time) error {
-	// 使用 dt.EncodeNsonValue 序列化
-	valueBytes, err := dt.EncodeNsonValue(value)
-	if err != nil {
-		return err
+func (s *Storage) SetPinWrite(ctx context.Context, pinID string, value nson.Value, updated time.Time) error {
+	var valueBytes []byte
+	if value != nil {
+		bufVal := new(bytes.Buffer)
+		if err := nson.EncodeValue(bufVal, value); err != nil {
+			return err
+		}
+		valueBytes = bufVal.Bytes()
 	}
 
 	entry := PinValueEntry{

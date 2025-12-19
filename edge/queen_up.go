@@ -9,7 +9,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/danclive/nson-go"
-	"github.com/snple/beacon/dt"
 	queen "snple.com/queen/client"
 	"snple.com/queen/packet"
 )
@@ -250,12 +249,6 @@ func (s *QueenUpService) handlePinWrite(payload []byte) error {
 		return fmt.Errorf("failed to unmarshal pin write: %w", err)
 	}
 
-	// 转换为 pb.NsonValue
-	pbValue, err := dt.NsonToProto(msg.Value)
-	if err != nil {
-		return fmt.Errorf("failed to convert value: %w", err)
-	}
-
 	// 保存到本地存储
 	ctx := context.Background()
 	pin, err := s.es.GetStorage().GetPinByID(msg.Id)
@@ -263,12 +256,19 @@ func (s *QueenUpService) handlePinWrite(payload []byte) error {
 		return fmt.Errorf("get pin by id: %w", err)
 	}
 
-	if err := s.es.GetStorage().SetPinWrite(ctx, msg.Id, pbValue, time.Now()); err != nil {
+	// 基本类型校验（按 Pin.Type）
+	if msg.Value != nil && uint32(msg.Value.DataType()) != pin.Type {
+		return fmt.Errorf("invalid value for Pin.Type")
+	}
+
+	updated := time.Now()
+	if err := s.es.GetStorage().SetPinWrite(ctx, msg.Id, msg.Value, updated); err != nil {
 		return fmt.Errorf("set pin write: %w", err)
 	}
 
-	if err := s.es.GetPin().afterUpdateWrite(ctx, pin, pbValue); err != nil {
-		return fmt.Errorf("after update write: %w", err)
+	// 记录 PinWrite 更新时间（用于后续同步/通知）
+	if err := s.es.GetSync().setPinWriteUpdated(ctx, updated); err != nil {
+		return fmt.Errorf("set pin write updated: %w", err)
 	}
 
 	s.es.Logger().Sugar().Debugf("pin write applied: %s", msg.Id)
@@ -412,23 +412,14 @@ func (s *QueenUpService) syncPinValueToRemote(ctx context.Context) error {
 				goto DONE
 			}
 
-			// 转换 pb.NsonValue 到 nson.Value
 			if len(item.Value) > 0 {
-				nsonVal, err := dt.DecodeNsonValue(item.Value)
+				val, err := nson.DecodeValue(bytes.NewBuffer(item.Value))
 				if err != nil {
-					s.es.Logger().Sugar().Errorf("DecodeNsonValue: %v", err)
+					s.es.Logger().Sugar().Errorf("DecodeValue: %v", err)
 					continue
 				}
 
-				protoVal, err := dt.ProtoToNson(nsonVal)
-				if err != nil {
-					continue
-				}
-
-				messages = append(messages, PinValueMessage{
-					Id:    item.ID,
-					Value: protoVal,
-				})
+				messages = append(messages, PinValueMessage{Id: item.ID, Value: val})
 			}
 
 			after = item.Updated
@@ -512,13 +503,6 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 			continue
 		}
 
-		// 转换为 pb.NsonValue
-		pbValue, err := dt.NsonToProto(msg.Value)
-		if err != nil {
-			s.es.Logger().Sugar().Errorf("convert value: %v", err)
-			continue
-		}
-
 		// 保存到本地存储
 		pin, err := s.es.GetStorage().GetPinByID(msg.Id)
 		if err != nil {
@@ -526,13 +510,19 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 			continue
 		}
 
-		if err := s.es.GetStorage().SetPinWrite(ctx, msg.Id, pbValue, time.Now()); err != nil {
+		if msg.Value != nil && uint32(msg.Value.DataType()) != pin.Type {
+			s.es.Logger().Sugar().Errorf("invalid value for Pin.Type")
+			continue
+		}
+
+		updated := time.Now()
+		if err := s.es.GetStorage().SetPinWrite(ctx, msg.Id, msg.Value, updated); err != nil {
 			s.es.Logger().Sugar().Errorf("SetPinWrite: %v", err)
 			continue
 		}
 
-		if err := s.es.GetPin().afterUpdateWrite(ctx, pin, pbValue); err != nil {
-			s.es.Logger().Sugar().Errorf("afterUpdateWrite: %v", err)
+		if err := s.es.GetSync().setPinWriteUpdated(ctx, updated); err != nil {
+			s.es.Logger().Sugar().Errorf("setPinWriteUpdated: %v", err)
 			continue
 		}
 	}
