@@ -10,7 +10,7 @@ import (
 	"github.com/snple/beacon/pb"
 	"github.com/snple/beacon/pb/cores"
 	queen "snple.com/queen/core"
-	"snple.com/queen/pkg/protocol"
+	"snple.com/queen/packet"
 )
 
 // Queen 协议通讯约定：
@@ -65,7 +65,7 @@ func (cs *CoreService) subscribeQueenTopics() error {
 	}
 
 	for _, topic := range topics {
-		if err := cs.internalClient.Subscribe(topic, protocol.QoS1); err != nil {
+		if err := cs.internalClient.Subscribe(topic, packet.QoS1); err != nil {
 			return fmt.Errorf("failed to subscribe to %s: %w", topic, err)
 		}
 	}
@@ -83,15 +83,15 @@ func (cs *CoreService) registerQueenHandlers() error {
 
 	// beacon.pin.write.sync -> 返回全量待写入的 pin writes（NSON Array）
 	// Edge 在连接或重连时调用，确保获取所有待写入命令
-	_ = cs.internalClient.RegisterHandler(ActionPinWriteSync, func(req *queen.InternalRequest) ([]byte, protocol.ReasonCode, error) {
+	_ = cs.internalClient.RegisterHandler(ActionPinWriteSync, func(req *queen.InternalRequest) ([]byte, packet.ReasonCode, error) {
 		data, err := cs.buildPinWritesPayload(req.SourceClientID)
 		if err != nil {
-			return nil, protocol.ReasonImplementationError, err
+			return nil, packet.ReasonImplementationError, err
 		}
 		if data == nil {
-			return nil, protocol.ReasonSuccess, nil
+			return nil, packet.ReasonSuccess, nil
 		}
-		return data, protocol.ReasonSuccess, nil
+		return data, packet.ReasonSuccess, nil
 	}, 2)
 
 	return nil

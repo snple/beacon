@@ -8,7 +8,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	queen "snple.com/queen/core"
-	"snple.com/queen/pkg/protocol"
+	"snple.com/queen/packet"
 )
 
 // initQueenBroker 初始化 Queen broker
@@ -120,6 +120,6 @@ func (cs *CoreService) PublishToNode(nodeID string, topic string, payload []byte
 	}
 
 	return cs.broker.PublishToClient(nodeID, topic, payload, queen.PublishOptions{
-		QoS: protocol.QoS(qos),
+		QoS: packet.QoS(qos),
 	})
 }

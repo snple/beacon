@@ -11,7 +11,7 @@ import (
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/dt"
 	queen "snple.com/queen/client"
-	"snple.com/queen/pkg/protocol"
+	"snple.com/queen/packet"
 )
 
 // QueenUpService 使用 Queen 协议与 Core 通信的服务
@@ -46,31 +46,25 @@ func newQueenUpService(es *EdgeService) (*QueenUpService, error) {
 		cancel: cancel,
 	}
 
-	// 创建 Queen 客户端配置
-	config := queen.Config{
-		Broker:         es.dopts.NodeOptions.QueenAddr,
-		ClientID:       es.dopts.nodeID,
-		AuthMethod:     "plain",
-		AuthData:       []byte(es.dopts.secret),
-		CleanStart:     false,
-		KeepAlive:      60,
-		ConnectTimeout: 10 * time.Second,
-		// 连接成功回调：执行订阅和初始同步
-		OnConnect: func(props map[string]string) {
+	opts := []queen.Option{
+		queen.WithBroker(es.dopts.NodeOptions.QueenAddr),
+		queen.WithClientID(es.dopts.nodeID),
+		queen.WithAuth("plain", []byte(es.dopts.secret)),
+		queen.WithCleanSession(false),
+		queen.WithKeepAlive(60),
+		queen.WithConnectTimeout(10 * time.Second),
+		queen.WithOnConnect(func(props map[string]string) {
 			s.onConnect(props)
-		},
-		// 断开连接回调
-		OnDisconnect: func(err error) {
+		}),
+		queen.WithOnDisconnect(func(err error) {
 			s.onDisconnect(err)
-		},
+		}),
 	}
-
 	if es.dopts.NodeOptions.QueenTLS != nil {
-		config.TLSConfig = es.dopts.NodeOptions.QueenTLS
+		opts = append(opts, queen.WithTLSConfig(es.dopts.NodeOptions.QueenTLS))
 	}
 
-	client := queen.New(config)
-	s.client = client
+	s.client = queen.New(opts...)
 
 	return s, nil
 }
@@ -229,7 +223,7 @@ func (s *QueenUpService) subscribePinWrite() error {
 		return nil
 	}
 
-	return s.client.Subscribe("beacon/pin/write", handler, queen.WithSubQoS(protocol.QoS1))
+	return s.client.Subscribe("beacon/pin/write", handler, queen.WithSubQoS(packet.QoS1))
 }
 
 // handlePinWrite 处理 Core 发来的 Pin 写入通知
@@ -371,7 +365,7 @@ func (s *QueenUpService) syncLocalToRemote(ctx context.Context) error {
 	}
 
 	// 通过 Queen 发布到 beacon/push 主题
-	if err := s.client.Publish("beacon/push", data, queen.WithQoS(protocol.QoS1)); err != nil {
+	if err := s.client.Publish("beacon/push", data, queen.WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish config failed: %w", err)
 	}
 
@@ -466,7 +460,7 @@ DONE:
 	}
 
 	// 通过 Queen 发布
-	if err := s.client.Publish("beacon/pin/value", buf.Bytes(), queen.WithQoS(protocol.QoS1)); err != nil {
+	if err := s.client.Publish("beacon/pin/value", buf.Bytes(), queen.WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish pin values failed: %w", err)
 	}
 
@@ -484,7 +478,7 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 		return fmt.Errorf("request pin writes failed: %w", err)
 	}
 
-	if response.ReasonCode != protocol.ReasonSuccess {
+	if response.ReasonCode != packet.ReasonSuccess {
 		return fmt.Errorf("request failed with reason: %s", response.ReasonCode)
 	}
 
