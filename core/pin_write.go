@@ -67,6 +67,10 @@ func (s *PinWriteService) SetWrite(ctx context.Context, value dt.PinValue, realt
 		return fmt.Errorf("pin is not writable")
 	}
 
+	if uint32(value.Value.DataType()) != pin.Type {
+		return fmt.Errorf("invalid value for Pin.Type")
+	}
+
 	err = s.cs.GetStorage().SetPinWrite(ctx, nodeID, value)
 	if err != nil {
 		return fmt.Errorf("setPinWrite failed: %w", err)

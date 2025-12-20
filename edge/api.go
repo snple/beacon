@@ -8,7 +8,6 @@ import (
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/device"
 	"github.com/snple/beacon/dt"
-	"github.com/snple/beacon/edge/storage"
 )
 
 func buildNodeFromTemplate(nodeID, name string, dev device.Device) (dt.Node, error) {
@@ -45,6 +44,50 @@ func buildNodeFromTemplate(nodeID, name string, dev device.Device) (dt.Node, err
 	}
 
 	return newNode, nil
+}
+
+// buildNode: 为 Node 下的 Wire 和 Pin 添加 NodeID 前缀
+func buildNode(node *dt.Node) *dt.Node {
+	if node == nil {
+		return nil
+	}
+
+	// 深拷贝 Tags
+	tags := make([]string, len(node.Tags))
+	copy(tags, node.Tags)
+
+	// 深拷贝 Wires
+	wires := make([]dt.Wire, len(node.Wires))
+	for i, wire := range node.Wires {
+		wires[i] = dt.Wire{
+			ID:   node.ID + "." + wire.ID,
+			Name: wire.Name,
+			Tags: make([]string, len(wire.Tags)),
+			Type: wire.Type,
+			Pins: make([]dt.Pin, len(wire.Pins)),
+		}
+		copy(wires[i].Tags, wire.Tags)
+		for j, pin := range wire.Pins {
+			wires[i].Pins[j] = dt.Pin{
+				ID:   node.ID + "." + pin.ID,
+				Name: pin.Name,
+				Tags: make([]string, len(pin.Tags)),
+				Addr: pin.Addr,
+				Type: pin.Type,
+				Rw:   pin.Rw,
+			}
+			copy(wires[i].Pins[j].Tags, pin.Tags)
+		}
+	}
+
+	return &dt.Node{
+		ID:      node.ID,
+		Name:    node.Name,
+		Tags:    tags,
+		Device:  node.Device,
+		Updated: node.Updated,
+		Wires:   wires,
+	}
 }
 
 // Node returns the current node configuration.
@@ -90,33 +133,41 @@ func (es *EdgeService) GetPinValue(pinID string) (nson.Value, time.Time, error) 
 
 // SetPinValue sets PinValue, validates pin exists and datatype matches Pin.Type.
 // If updated is zero, time.Now() is used.
-func (es *EdgeService) SetPinValue(ctx context.Context, pinID string, value nson.Value, realtime bool) error {
-	if pinID == "" {
+func (es *EdgeService) SetPinValue(ctx context.Context, value dt.PinValue, realtime bool) error {
+	if value.ID == "" {
 		return fmt.Errorf("please supply valid pinID")
 	}
-	if value == nil {
+	if value.Value == nil {
 		return fmt.Errorf("please supply valid value")
 	}
 
-	pin, err := es.storage.GetPinByID(pinID)
+	if value.Updated.IsZero() {
+		value.Updated = time.Now()
+	}
+
+	pin, err := es.storage.GetPinByID(value.ID)
 	if err != nil {
 		return err
 	}
-	if uint32(value.DataType()) != pin.Type {
+
+	if pin.Rw == device.RO {
+		return fmt.Errorf("pin is not writable")
+	}
+
+	if uint32(value.Value.DataType()) != pin.Type {
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	if err := es.storage.SetPinValue(ctx, pinID, value, time.Now()); err != nil {
+	if err := es.storage.SetPinValue(ctx, value); err != nil {
 		return err
 	}
 
 	// 通知 PinValue 变更
-	if err := es.NotifyPinValue(pinID, value, realtime); err != nil {
+	if err := es.NotifyPinValue(value.ID, value.Value, realtime); err != nil {
 		return err
 	}
 
-	es.dopts.logger.Sugar().Infof("SetPinValue: pinID=%s value=%v", pinID, value)
-
+	es.dopts.logger.Sugar().Infof("SetPinValue: pinID=%s value=%v", value.ID, value)
 	return nil
 }
 
@@ -129,7 +180,7 @@ func (es *EdgeService) DeletePinValue(ctx context.Context, pinID string) error {
 }
 
 // ListPinValues lists PinValue entries after time.
-func (es *EdgeService) ListPinValues(ctx context.Context, after time.Time, limit int) ([]storage.PinValueEntry, error) {
+func (es *EdgeService) ListPinValues(ctx context.Context, after time.Time, limit int) ([]dt.PinValue, error) {
 	_ = ctx
 	return es.storage.ListPinValues(after, limit)
 }
@@ -142,35 +193,35 @@ func (es *EdgeService) GetPinWrite(ctx context.Context, pinID string) (nson.Valu
 
 // SetPinWrite sets PinWrite, validates pin exists, is writable, and datatype matches Pin.Type.
 // If updated is zero, time.Now() is used.
-func (es *EdgeService) SetPinWrite(ctx context.Context, pinID string, value nson.Value, updated time.Time) error {
-	if pinID == "" {
+func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue, updated time.Time) error {
+	if value.ID == "" {
 		return fmt.Errorf("please supply valid pinID")
 	}
-	if value == nil {
+	if value.Value == nil {
 		return fmt.Errorf("please supply valid value")
 	}
 
-	pin, err := es.storage.GetPinByID(pinID)
+	if value.Updated.IsZero() {
+		value.Updated = time.Now()
+	}
+
+	pin, err := es.storage.GetPinByID(value.ID)
 	if err != nil {
 		return err
 	}
 	if pin.Rw == device.RO {
 		return fmt.Errorf("pin is not writable")
 	}
-	if uint32(value.DataType()) != pin.Type {
+
+	if uint32(value.Value.DataType()) != pin.Type {
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	if updated.IsZero() {
-		updated = time.Now()
-	}
-
-	if err := es.storage.SetPinWrite(ctx, pinID, value, updated); err != nil {
+	if err := es.storage.SetPinWrite(ctx, value); err != nil {
 		return err
 	}
 
-	es.dopts.logger.Sugar().Infof("SetPinWrite: pinID=%s value=%v", pinID, value)
-
+	es.dopts.logger.Sugar().Infof("SetPinWrite: pinID=%s value=%v", value.ID, value)
 	return nil
 }
 
@@ -183,7 +234,7 @@ func (es *EdgeService) DeletePinWrite(ctx context.Context, pinID string) error {
 }
 
 // ListPinWrites lists PinWrite entries after time.
-func (es *EdgeService) ListPinWrites(ctx context.Context, after time.Time, limit int) ([]storage.PinValueEntry, error) {
+func (es *EdgeService) ListPinWrites(ctx context.Context, after time.Time, limit int) ([]dt.PinValue, error) {
 	_ = ctx
 	return es.storage.ListPinWrites(after, limit)
 }

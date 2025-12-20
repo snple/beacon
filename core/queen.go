@@ -213,9 +213,12 @@ func (cs *CoreService) handlePush(nodeID string, payload []byte) error {
 		return nil
 	}
 
-	ctx := context.Background()
+	node, err := dt.DecodeNode(payload)
+	if err != nil {
+		return fmt.Errorf("decode node: %w", err)
+	}
 
-	err := cs.GetNode().Push(ctx, nodeID, payload)
+	err = cs.GetNode().Push(context.Background(), node)
 	if err != nil {
 		cs.Logger().Sugar().Errorf("Push failed: nodeID=%s, error=%v", nodeID, err)
 		return err

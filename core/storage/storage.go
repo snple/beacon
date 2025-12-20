@@ -297,14 +297,13 @@ func (s *Storage) ListPinsByNode(nodeID string) ([]dt.Pin, error) {
 // --- 同步操作 ---
 
 // Push 接收 Edge 推送的节点配置（NSON 格式）
-func (s *Storage) Push(ctx context.Context, data []byte) error {
-	node, err := dt.DecodeNode(data)
-	if err != nil {
-		return fmt.Errorf("decode node: %w", err)
-	}
-
+func (s *Storage) Push(node *dt.Node) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if node == nil {
+		return fmt.Errorf("node is nil")
+	}
 
 	// 清除旧索引
 	if old, ok := s.nodes[node.ID]; ok {
@@ -413,6 +412,7 @@ func (s *Storage) GetPinValue(nodeID, pinID string) (nson.Value, time.Time, erro
 				return err
 			}
 
+			value = entry.Value
 			updated = entry.Updated
 			return nil
 		})

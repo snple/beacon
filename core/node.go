@@ -37,13 +37,13 @@ func (s *NodeService) List(ctx context.Context) ([]dt.Node, error) {
 	return nodes, nil
 }
 
-func (s *NodeService) Push(ctx context.Context, nodeID string, nsonData []byte) error {
+func (s *NodeService) Push(ctx context.Context, node *dt.Node) error {
 	// basic validation
-	if nodeID == "" || len(nsonData) == 0 {
-		return fmt.Errorf("please supply valid Node.ID and NSON data")
+	if node == nil || node.ID == "" {
+		return fmt.Errorf("please supply valid Node.ID")
 	}
 
-	err := s.cs.GetStorage().Push(ctx, nsonData)
+	err := s.cs.GetStorage().Push(node)
 	if err != nil {
 		return fmt.Errorf("push failed: %w", err)
 	}

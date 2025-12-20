@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -303,9 +304,19 @@ func (s *QueenUpService) handlePinWriteBatch(payload []byte) error {
 
 // applyPinWrite 应用 Pin 写入
 func (s *QueenUpService) applyPinWrite(msg dt.PinValueMessage) error {
+	// msg.ID 形如 "nodeID.WireName.pinName"，需要去掉 `nodeID.` 前缀
+	nodeID := s.es.GetStorage().GetNodeID()
+	prefix := nodeID + "."
+	var pinID string
+	if strings.HasPrefix(msg.ID, prefix) {
+		pinID = strings.TrimPrefix(msg.ID, prefix)
+	} else {
+		pinID = msg.ID
+	}
+
 	// 保存到本地存储
 	ctx := context.Background()
-	pin, err := s.es.GetStorage().GetPinByID(msg.ID)
+	pin, err := s.es.GetStorage().GetPinByID(pinID)
 	if err != nil {
 		return fmt.Errorf("get pin by id: %w", err)
 	}
@@ -315,8 +326,11 @@ func (s *QueenUpService) applyPinWrite(msg dt.PinValueMessage) error {
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	updated := time.Now()
-	if err := s.es.GetStorage().SetPinWrite(ctx, msg.ID, msg.Value, updated); err != nil {
+	if err := s.es.GetStorage().SetPinWrite(ctx, dt.PinValue{
+		ID:      pinID,
+		Value:   msg.Value,
+		Updated: time.Now(),
+	}); err != nil {
 		return fmt.Errorf("set pin write: %w", err)
 	}
 
@@ -337,14 +351,18 @@ func (s *QueenUpService) syncToRemote(ctx context.Context) error {
 
 // publishConfig: 发布 Edge 配置数据到 Core
 func (s *QueenUpService) publishConfig(_ context.Context) error {
-	// 导出配置为 NSON 字节
-	data, err := s.es.GetStorage().ExportConfig()
+	node := s.es.GetStorage().GetNode()
+
+	// 构建用于发布的 Node 结构
+	nodeBuilt := buildNode(&node)
+
+	payload, err := dt.EncodeNode(nodeBuilt)
 	if err != nil {
 		return err
 	}
 
 	// 通过 Queen 发布到 beacon/push 主题
-	if err := s.client.Publish(dt.TopicPush, data, queen.WithQoS(packet.QoS1)); err != nil {
+	if err := s.client.Publish(dt.TopicPush, payload, queen.WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish config failed: %w", err)
 	}
 
@@ -355,13 +373,9 @@ func (s *QueenUpService) publishConfig(_ context.Context) error {
 func (s *QueenUpService) publishPinValueAll(_ context.Context) error {
 	limit := 100
 
-	type PinValueMessage struct {
-		Id    string     `nson:"id,omitempty"`
-		Name  string     `nson:"name,omitempty"`
-		Value nson.Value `nson:"value,omitempty"`
-	}
+	nodeID := s.es.GetStorage().GetNodeID()
 
-	var messages []PinValueMessage
+	var messages []dt.PinValueMessage
 	after := time.Time{}
 
 	// 从本地存储读取所有 PinValue
@@ -372,15 +386,7 @@ func (s *QueenUpService) publishPinValueAll(_ context.Context) error {
 		}
 
 		for _, item := range items {
-			if len(item.Value) > 0 {
-				val, err := nson.DecodeValue(bytes.NewBuffer(item.Value))
-				if err != nil {
-					s.es.Logger().Sugar().Errorf("DecodeValue: %v", err)
-					continue
-				}
-
-				messages = append(messages, PinValueMessage{Id: item.ID, Value: val})
-			}
+			messages = append(messages, dt.PinValueMessage{ID: nodeID + "." + item.ID, Value: item.Value})
 
 			after = item.Updated
 		}
@@ -456,6 +462,10 @@ func (s *QueenUpService) publishPinValueBatch(_ context.Context, changes []PinVa
 
 // PublishPinValueSingle: 发布单个 PinValue 到 Core（realtime模式）
 func (s *QueenUpService) PublishPinValue(ctx context.Context, value dt.PinValueMessage) error {
+	nodeID := s.es.GetStorage().GetNodeID()
+	// 添加 NodeID 前缀
+	value.ID = nodeID + "." + value.ID
+
 	// 序列化为 NSON Map
 	m, err := nson.Marshal(value)
 	if err != nil {
@@ -526,10 +536,8 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 			continue
 		}
 
-		updated := time.Now()
-		if err := s.es.GetStorage().SetPinWrite(ctx, msg.ID, msg.Value, updated); err != nil {
-			s.es.Logger().Sugar().Errorf("SetPinWrite: %v", err)
-			continue
+		if err := s.applyPinWrite(msg); err != nil {
+			s.es.Logger().Sugar().Warnf("apply pin write failed: %s, error=%v", msg.ID, err)
 		}
 	}
 

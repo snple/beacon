@@ -173,13 +173,6 @@ func (s *Storage) ListPinsByWire(wireID string) ([]dt.Pin, error) {
 
 // --- PinValue 操作 ---
 
-// PinValueEntry 点位值条目
-type PinValueEntry struct {
-	ID      string    `nson:"id"`
-	Value   []byte    `nson:"value"` // 序列化的 nson.Value（使用 nson.EncodeValue）
-	Updated time.Time `nson:"updated"`
-}
-
 const (
 	PIN_VALUE_PREFIX = "pv:"
 	PIN_WRITE_PREFIX = "pw:"
@@ -203,18 +196,12 @@ func (s *Storage) GetPinValue(pinID string) (nson.Value, time.Time, error) {
 				return err
 			}
 
-			var entry PinValueEntry
+			var entry dt.PinValue
 			if err := nson.Unmarshal(m, &entry); err != nil {
 				return err
 			}
 
-			if len(entry.Value) > 0 {
-				vv, err := nson.DecodeValue(bytes.NewBuffer(entry.Value))
-				if err != nil {
-					return err
-				}
-				value = vv
-			}
+			value = entry.Value
 			updated = entry.Updated
 			return nil
 		})
@@ -228,23 +215,8 @@ func (s *Storage) GetPinValue(pinID string) (nson.Value, time.Time, error) {
 }
 
 // SetPinValue 设置点位值
-func (s *Storage) SetPinValue(ctx context.Context, pinID string, value nson.Value, updated time.Time) error {
-	var valueBytes []byte
-	if value != nil {
-		bufVal := new(bytes.Buffer)
-		if err := nson.EncodeValue(bufVal, value); err != nil {
-			return err
-		}
-		valueBytes = bufVal.Bytes()
-	}
-
-	entry := PinValueEntry{
-		ID:      pinID,
-		Value:   valueBytes,
-		Updated: updated,
-	}
-
-	m, err := nson.Marshal(entry)
+func (s *Storage) SetPinValue(ctx context.Context, value dt.PinValue) error {
+	m, err := nson.Marshal(value)
 	if err != nil {
 		return err
 	}
@@ -255,11 +227,11 @@ func (s *Storage) SetPinValue(ctx context.Context, pinID string, value nson.Valu
 	}
 
 	// 使用 NewTransactionAt + CommitAt 写入
-	commitTs := uint64(updated.UnixMicro())
+	commitTs := uint64(value.Updated.UnixMicro())
 	txn := s.db.NewTransactionAt(commitTs, true)
 	defer txn.Discard()
 
-	if err := txn.Set([]byte(PIN_VALUE_PREFIX+pinID), buf.Bytes()); err != nil {
+	if err := txn.Set([]byte(PIN_VALUE_PREFIX+value.ID), buf.Bytes()); err != nil {
 		return err
 	}
 
@@ -281,19 +253,14 @@ func (s *Storage) DeletePinValue(ctx context.Context, pinID string) error {
 }
 
 // ListPinValues 列出点位值（使用 SinceTs 优化查询）
-func (s *Storage) ListPinValues(after time.Time, limit int) ([]PinValueEntry, error) {
-	var result []PinValueEntry
+func (s *Storage) ListPinValues(after time.Time, limit int) ([]dt.PinValue, error) {
+	var result []dt.PinValue
 
-	// 将 after 转换为微秒时间戳作为 SinceTs
-	sinceTs := uint64(after.UnixMicro())
-	// 使用足够大的 readTs 读取所有当前数据
-	readTs := uint64(time.Now().Add(time.Hour).UnixMicro())
-
-	txn := s.db.NewTransactionAt(readTs, false)
+	txn := s.db.NewTransactionAt(uint64(time.Now().UnixMicro()), false)
 	defer txn.Discard()
 
 	opts := badger.DefaultIteratorOptions
-	opts.SinceTs = sinceTs // 只读取 version > sinceTs 的数据
+	opts.SinceTs = uint64(after.UnixMicro()) // 只读取 version > sinceTs 的数据
 	it := txn.NewIterator(opts)
 	defer it.Close()
 
@@ -307,7 +274,7 @@ func (s *Storage) ListPinValues(after time.Time, limit int) ([]PinValueEntry, er
 				return err
 			}
 
-			var entry PinValueEntry
+			var entry dt.PinValue
 			if err := nson.Unmarshal(m, &entry); err != nil {
 				return err
 			}
@@ -338,7 +305,7 @@ func (s *Storage) ListPinValues(after time.Time, limit int) ([]PinValueEntry, er
 
 // GetPinWrite 获取点位写入值
 func (s *Storage) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
-	var value nson.Value
+	var value nson.Value = nson.Null{}
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
@@ -354,18 +321,12 @@ func (s *Storage) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
 				return err
 			}
 
-			var entry PinValueEntry
+			var entry dt.PinValue
 			if err := nson.Unmarshal(m, &entry); err != nil {
 				return err
 			}
 
-			if len(entry.Value) > 0 {
-				vv, err := nson.DecodeValue(bytes.NewBuffer(entry.Value))
-				if err != nil {
-					return err
-				}
-				value = vv
-			}
+			value = entry.Value
 			updated = entry.Updated
 			return nil
 		})
@@ -379,23 +340,8 @@ func (s *Storage) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
 }
 
 // SetPinWrite 设置点位写入值
-func (s *Storage) SetPinWrite(ctx context.Context, pinID string, value nson.Value, updated time.Time) error {
-	var valueBytes []byte
-	if value != nil {
-		bufVal := new(bytes.Buffer)
-		if err := nson.EncodeValue(bufVal, value); err != nil {
-			return err
-		}
-		valueBytes = bufVal.Bytes()
-	}
-
-	entry := PinValueEntry{
-		ID:      pinID,
-		Value:   valueBytes,
-		Updated: updated,
-	}
-
-	m, err := nson.Marshal(entry)
+func (s *Storage) SetPinWrite(ctx context.Context, value dt.PinValue) error {
+	m, err := nson.Marshal(value)
 	if err != nil {
 		return err
 	}
@@ -406,11 +352,11 @@ func (s *Storage) SetPinWrite(ctx context.Context, pinID string, value nson.Valu
 	}
 
 	// 使用 NewTransactionAt + CommitAt 写入
-	commitTs := uint64(updated.UnixMicro())
+	commitTs := uint64(value.Updated.UnixMicro())
 	txn := s.db.NewTransactionAt(commitTs, true)
 	defer txn.Discard()
 
-	if err := txn.Set([]byte(PIN_WRITE_PREFIX+pinID), buf.Bytes()); err != nil {
+	if err := txn.Set([]byte(PIN_WRITE_PREFIX+value.ID), buf.Bytes()); err != nil {
 		return err
 	}
 
@@ -432,8 +378,8 @@ func (s *Storage) DeletePinWrite(ctx context.Context, pinID string) error {
 }
 
 // ListPinWrites 列出点位写入值（使用 SinceTs 优化查询）
-func (s *Storage) ListPinWrites(after time.Time, limit int) ([]PinValueEntry, error) {
-	var result []PinValueEntry
+func (s *Storage) ListPinWrites(after time.Time, limit int) ([]dt.PinValue, error) {
+	var result []dt.PinValue
 
 	txn := s.db.NewTransactionAt(uint64(time.Now().UnixMicro()), false)
 	defer txn.Discard()
@@ -453,7 +399,7 @@ func (s *Storage) ListPinWrites(after time.Time, limit int) ([]PinValueEntry, er
 				return err
 			}
 
-			var entry PinValueEntry
+			var entry dt.PinValue
 			if err := nson.Unmarshal(m, &entry); err != nil {
 				return err
 			}
@@ -556,18 +502,6 @@ func (s *Storage) buildIndexUnsafe() {
 		}
 	}
 }
-
-// --- 配置导入/导出 ---
-
-// ExportConfig 导出节点配置为 NSON 字节（注意：node 配置不持久化，仅导出当前内存中的配置）
-func (s *Storage) ExportConfig() ([]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return dt.EncodeNode(&s.node)
-}
-
-// --- 辅助方法 ---
 
 // ParsePinName 解析 Pin 名称，支持 "wire.pin" 格式
 func ParsePinName(name string) (wireName, pinName string, ok bool) {
