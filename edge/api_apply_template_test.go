@@ -44,10 +44,7 @@ func TestApplyDeviceTemplate_GeneratesStableIDs(t *testing.T) {
 	}
 	defer es.Stop()
 
-	node, err := es.Node()
-	if err != nil {
-		t.Fatalf("Node(): %v", err)
-	}
+	node := es.Node()
 	if node.ID != nodeID {
 		t.Fatalf("node.ID=%q want %q", node.ID, nodeID)
 	}
@@ -109,10 +106,7 @@ func TestApplyDeviceTemplate_NodeIDMismatch(t *testing.T) {
 	defer es2.Stop()
 
 	// Verify node uses dev2 template.
-	node, err := es2.Node()
-	if err != nil {
-		t.Fatalf("Node(): %v", err)
-	}
+	node := es2.Node()
 	if node.Device != dev2.ID {
 		t.Fatalf("node.Device=%q want %q", node.Device, dev2.ID)
 	}

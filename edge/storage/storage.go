@@ -19,7 +19,7 @@ type Storage struct {
 	mu sync.RWMutex
 
 	// 主存储（只有一个 Node）
-	node   *dt.Node
+	node   dt.Node
 	secret string
 
 	// 索引/缓存
@@ -44,7 +44,7 @@ func newIndex() *index {
 }
 
 // New 创建存储（node 配置在创建时传入，之后不可修改）
-func New(db *badger.DB, node *dt.Node) *Storage {
+func New(db *badger.DB, node dt.Node) *Storage {
 	s := &Storage{
 		node:  node,
 		index: newIndex(),
@@ -58,14 +58,11 @@ func New(db *badger.DB, node *dt.Node) *Storage {
 // --- Node 操作 ---
 
 // GetNode 获取节点
-func (s *Storage) GetNode() (*dt.Node, error) {
+func (s *Storage) GetNode() dt.Node {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.node == nil {
-		return nil, fmt.Errorf("node not initialized")
-	}
-	return s.node, nil
+	return dt.DeepCopyNode(&s.node)
 }
 
 // GetNodeID 获取节点 ID
@@ -73,26 +70,14 @@ func (s *Storage) GetNodeID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.node == nil {
-		return ""
-	}
 	return s.node.ID
-}
-
-// HasNode reports whether a node configuration is loaded.
-func (s *Storage) HasNode() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.node != nil
 }
 
 // GetNodeDevice returns node.Device if node is initialized, otherwise empty.
 func (s *Storage) GetNodeDevice() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.node == nil {
-		return ""
-	}
+
 	return s.node.Device
 }
 
@@ -111,17 +96,13 @@ func (s *Storage) GetWireByID(wireID string) (*dt.Wire, error) {
 }
 
 // ListWires 获取所有 Wire
-func (s *Storage) ListWires() []*dt.Wire {
+func (s *Storage) ListWires() []dt.Wire {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.node == nil {
-		return nil
-	}
-
-	wires := make([]*dt.Wire, len(s.node.Wires))
+	wires := make([]dt.Wire, len(s.node.Wires))
 	for i := range s.node.Wires {
-		wires[i] = &s.node.Wires[i]
+		wires[i] = dt.DeepCopyWire(&s.node.Wires[i])
 	}
 	return wires
 }
@@ -145,10 +126,6 @@ func (s *Storage) GetPinWireID(pinID string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.node == nil {
-		return "", fmt.Errorf("node not initialized")
-	}
-
 	for i := range s.node.Wires {
 		wire := &s.node.Wires[i]
 		for j := range wire.Pins {
@@ -162,38 +139,30 @@ func (s *Storage) GetPinWireID(pinID string) (string, error) {
 }
 
 // ListPins 获取所有 Pin
-func (s *Storage) ListPins() []*dt.Pin {
+func (s *Storage) ListPins() []dt.Pin {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.node == nil {
-		return nil
-	}
-
-	var pins []*dt.Pin
+	var pins []dt.Pin
 	for i := range s.node.Wires {
 		for j := range s.node.Wires[i].Pins {
-			pins = append(pins, &s.node.Wires[i].Pins[j])
+			pins = append(pins, dt.DeepCopyPin(&s.node.Wires[i].Pins[j]))
 		}
 	}
 	return pins
 }
 
 // ListPinsByWire 获取 Wire 的所有 Pin
-func (s *Storage) ListPinsByWire(wireID string) ([]*dt.Pin, error) {
+func (s *Storage) ListPinsByWire(wireID string) ([]dt.Pin, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	if s.node == nil {
-		return nil, fmt.Errorf("node not initialized")
-	}
 
 	for i := range s.node.Wires {
 		if s.node.Wires[i].ID == wireID {
 			wire := &s.node.Wires[i]
-			pins := make([]*dt.Pin, len(wire.Pins))
+			pins := make([]dt.Pin, len(wire.Pins))
 			for j := range wire.Pins {
-				pins[j] = &wire.Pins[j]
+				pins[j] = dt.DeepCopyPin(&wire.Pins[j])
 			}
 			return pins, nil
 		}
@@ -577,10 +546,6 @@ func (s *Storage) SetSyncTime(key string, t time.Time) error {
 
 // buildIndexUnsafe 构建索引（无锁）
 func (s *Storage) buildIndexUnsafe() {
-	if s.node == nil {
-		return
-	}
-
 	for i := range s.node.Wires {
 		wire := &s.node.Wires[i]
 		s.index.wireByID[wire.ID] = wire
@@ -599,14 +564,8 @@ func (s *Storage) ExportConfig() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.node == nil {
-		return nil, fmt.Errorf("node not initialized")
-	}
-
-	return dt.EncodeNode(s.node)
+	return dt.EncodeNode(&s.node)
 }
-
-// --- 编解码 ---
 
 // --- 辅助方法 ---
 

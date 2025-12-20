@@ -11,8 +11,8 @@ import (
 	"github.com/snple/beacon/edge/storage"
 )
 
-func buildNodeFromTemplate(nodeID, name string, dev device.Device) (*dt.Node, error) {
-	newNode := &dt.Node{
+func buildNodeFromTemplate(nodeID, name string, dev device.Device) (dt.Node, error) {
+	newNode := dt.Node{
 		ID:      nodeID,
 		Name:    name,
 		Tags:    dev.Tags,
@@ -23,7 +23,7 @@ func buildNodeFromTemplate(nodeID, name string, dev device.Device) (*dt.Node, er
 
 	for _, tw := range dev.Wires {
 		wire := dt.Wire{
-			ID:   stableWireID(nodeID, tw.Name),
+			ID:   tw.Name,
 			Name: tw.Name,
 			Tags: tw.Tags,
 			Type: tw.Type,
@@ -32,7 +32,7 @@ func buildNodeFromTemplate(nodeID, name string, dev device.Device) (*dt.Node, er
 
 		for _, tp := range tw.Pins {
 			wire.Pins = append(wire.Pins, dt.Pin{
-				ID:   stablePinID(nodeID, tw.Name, tp.Name),
+				ID:   tw.Name + "." + tp.Name,
 				Name: tp.Name,
 				Tags: tp.Tags,
 				Addr: "",
@@ -47,16 +47,8 @@ func buildNodeFromTemplate(nodeID, name string, dev device.Device) (*dt.Node, er
 	return newNode, nil
 }
 
-func stableWireID(nodeID, wireName string) string {
-	return nodeID + "." + wireName
-}
-
-func stablePinID(nodeID, wireName, pinName string) string {
-	return nodeID + "." + wireName + "." + pinName
-}
-
 // Node returns the current node configuration.
-func (es *EdgeService) Node() (*dt.Node, error) {
+func (es *EdgeService) Node() dt.Node {
 	return es.storage.GetNode()
 }
 
@@ -66,13 +58,8 @@ func (es *EdgeService) WireByID(id string) (*dt.Wire, error) {
 }
 
 // Wires lists all wires.
-func (es *EdgeService) Wires() ([]dt.Wire, error) {
-	ws := es.storage.ListWires()
-	out := make([]dt.Wire, 0, len(ws))
-	for _, w := range ws {
-		out = append(out, dt.DeepCopyWire(w))
-	}
-	return out, nil
+func (es *EdgeService) Wires() []dt.Wire {
+	return es.storage.ListWires()
 }
 
 // PinByID fetches a pin config by ID.
@@ -82,7 +69,7 @@ func (es *EdgeService) PinByID(id string) (*dt.Pin, error) {
 
 // Pins lists pins. If wireID is non-empty, it filters by wire.
 func (es *EdgeService) Pins(wireID string) ([]dt.Pin, error) {
-	var pins []*dt.Pin
+	var pins []dt.Pin
 	if wireID != "" {
 		ps, err := es.storage.ListPinsByWire(wireID)
 		if err != nil {
@@ -93,16 +80,11 @@ func (es *EdgeService) Pins(wireID string) ([]dt.Pin, error) {
 		pins = es.storage.ListPins()
 	}
 
-	out := make([]dt.Pin, 0, len(pins))
-	for _, p := range pins {
-		out = append(out, dt.DeepCopyPin(p))
-	}
-	return out, nil
+	return pins, nil
 }
 
 // GetPinValue returns latest PinValue.
-func (es *EdgeService) GetPinValue(ctx context.Context, pinID string) (nson.Value, time.Time, error) {
-	_ = ctx
+func (es *EdgeService) GetPinValue(pinID string) (nson.Value, time.Time, error) {
 	return es.storage.GetPinValue(pinID)
 }
 
