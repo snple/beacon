@@ -44,8 +44,8 @@ func newQueenUpService(es *EdgeService) (*QueenUpService, error) {
 		queen.WithCleanSession(false),
 		queen.WithKeepAlive(60),
 		queen.WithConnectTimeout(10 * time.Second),
-		queen.WithOnConnect(func(props map[string]string) {
-			s.onConnect(props)
+		queen.WithOnConnect(func(sessionPresent bool, props map[string]string) {
+			s.onConnect(sessionPresent, props)
 		}),
 		queen.WithOnDisconnect(func(err error) {
 			s.onDisconnect(err)
@@ -127,29 +127,38 @@ func (s *QueenUpService) push() error {
 }
 
 // onConnect 连接成功回调：订阅、全量同步和启动批量发送
-func (s *QueenUpService) onConnect(_ map[string]string) {
+func (s *QueenUpService) onConnect(sessionPresent bool, _ map[string]string) {
 	s.es.Logger().Sugar().Info("queen client connected")
 
-	// 订阅 Pin Write 通知（从 Core 接收）
-	if err := s.subscribePinWrite(); err != nil {
-		s.es.Logger().Sugar().Errorf("subscribe pin write: %v", err)
-		return
+	if !sessionPresent {
+		s.es.Logger().Sugar().Info("no existing session, subscribing topics")
+
+		// 执行初始同步（推送配置和 PinValue）
+		if err := s.syncToRemote(s.ctx); err != nil {
+			s.es.Logger().Sugar().Errorf("initial sync failed: %v", err)
+		}
+
+		// 订阅 Pin Write 通知（从 Core 接收）
+		if err := s.subscribePinWrite(); err != nil {
+			s.es.Logger().Sugar().Errorf("subscribe pin write: %v", err)
+			return
+		}
+
+		// 订阅批量 Pin Write 通知
+		if err := s.subscribePinWriteBatch(); err != nil {
+			s.es.Logger().Sugar().Errorf("subscribe pin write batch: %v", err)
+			return
+		}
 	}
 
-	// 订阅批量 Pin Write 通知
-	if err := s.subscribePinWriteBatch(); err != nil {
-		s.es.Logger().Sugar().Errorf("subscribe pin write batch: %v", err)
-		return
-	}
-
-	// 全量同步待写入数据（重连或首次连接时获取所有待写入命令）
+	// 全量同步 PinWrite
 	if err := s.syncPinWriteFromRemote(s.ctx); err != nil {
 		s.es.Logger().Sugar().Errorf("sync pin write from remote failed: %v", err)
 	}
 
-	// 执行初始同步（推送配置和 PinValue）
-	if err := s.syncToRemote(s.ctx); err != nil {
-		s.es.Logger().Sugar().Errorf("initial sync failed: %v", err)
+	// 全量同步 PinValue
+	if err := s.syncPinValueToRemote(s.ctx); err != nil {
+		s.es.Logger().Sugar().Errorf("sync pin value to remote failed: %v", err)
 	}
 
 	// 启动批量发送 PinValue （只启动一次）
@@ -177,7 +186,7 @@ func (s *QueenUpService) startBatchNotify() {
 		defer ticker.Stop()
 
 		// 收集的 PinValue 变更（去重）
-		changes := make(map[string]PinValueChange)
+		changes := make(map[string]dt.PinValueMessage)
 
 		sendBatch := func() {
 			if len(changes) == 0 {
@@ -190,7 +199,7 @@ func (s *QueenUpService) startBatchNotify() {
 			}
 
 			// 转换为数组
-			var pinValues []PinValueChange
+			var pinValues []dt.PinValueMessage
 			for _, change := range changes {
 				pinValues = append(pinValues, change)
 			}
@@ -202,7 +211,7 @@ func (s *QueenUpService) startBatchNotify() {
 			}
 
 			// 清空
-			changes = make(map[string]PinValueChange)
+			changes = make(map[string]dt.PinValueMessage)
 		}
 
 		for {
@@ -217,7 +226,7 @@ func (s *QueenUpService) startBatchNotify() {
 
 			case change := <-s.es.pinValueChanges:
 				// 同一个 Pin 只保留最后一次变更
-				changes[change.PinID] = change
+				changes[change.ID] = change
 			}
 		}
 	})
@@ -266,7 +275,7 @@ func (s *QueenUpService) handlePinWrite(payload []byte) error {
 		return fmt.Errorf("failed to unmarshal pin write: %w", err)
 	}
 
-	return s.applyPinWrite(msg)
+	return s.setPinWrite(msg)
 }
 
 // handlePinWriteBatch 处理 Core 发来的批量 Pin 写入通知（ticker模式）
@@ -293,7 +302,7 @@ func (s *QueenUpService) handlePinWriteBatch(payload []byte) error {
 			continue
 		}
 
-		if err := s.applyPinWrite(msg); err != nil {
+		if err := s.setPinWrite(msg); err != nil {
 			s.es.Logger().Sugar().Warnf("apply pin write failed: %s, error=%v", msg.ID, err)
 		}
 	}
@@ -302,55 +311,35 @@ func (s *QueenUpService) handlePinWriteBatch(payload []byte) error {
 	return nil
 }
 
-// applyPinWrite 应用 Pin 写入
-func (s *QueenUpService) applyPinWrite(msg dt.PinValueMessage) error {
-	// msg.ID 形如 "nodeID.WireName.pinName"，需要去掉 `nodeID.` 前缀
+// setPinWrite 应用 Pin 写入
+func (s *QueenUpService) setPinWrite(msg dt.PinValueMessage) error {
 	nodeID := s.es.GetStorage().GetNodeID()
-	prefix := nodeID + "."
-	var pinID string
-	if strings.HasPrefix(msg.ID, prefix) {
-		pinID = strings.TrimPrefix(msg.ID, prefix)
-	} else {
-		pinID = msg.ID
+
+	// msg.ID 形如 "nodeID.WireName.pinName"，需要去掉 `nodeID.` 前缀
+	parts := strings.Split(msg.ID, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("invalid pin ID format: expected 'NodeID.WireName.PinName', got '%s'", msg.ID)
 	}
 
-	// 保存到本地存储
-	ctx := context.Background()
-	pin, err := s.es.GetStorage().GetPinByID(pinID)
-	if err != nil {
-		return fmt.Errorf("get pin by id: %w", err)
+	// 验证 NodeID
+	if parts[0] != nodeID {
+		return fmt.Errorf("node ID mismatch: expected '%s', got '%s'", nodeID, parts[0])
 	}
 
-	// 基本类型校验（按 Pin.Type）
-	if msg.Value != nil && uint32(msg.Value.DataType()) != pin.Type {
-		return fmt.Errorf("invalid value for Pin.Type")
-	}
+	// 构造本地 Pin ID: "WireName.PinName"
+	pinID := parts[1] + "." + parts[2]
 
-	if err := s.es.GetStorage().SetPinWrite(ctx, dt.PinValue{
+	s.es.SetPinWrite(context.Background(), dt.PinValue{
 		ID:      pinID,
 		Value:   msg.Value,
 		Updated: time.Now(),
-	}); err != nil {
-		return fmt.Errorf("set pin write: %w", err)
-	}
+	})
 
-	s.es.Logger().Sugar().Debugf("pin write applied: %s", msg.ID)
 	return nil
 }
 
-// syncToRemote: Edge → Core 同步（配置 + PinValue）
-func (s *QueenUpService) syncToRemote(ctx context.Context) error {
-	// 同步配置数据
-	if err := s.publishConfig(ctx); err != nil {
-		return err
-	}
-
-	// 同步 PinValue
-	return s.publishPinValueAll(ctx)
-}
-
-// publishConfig: 发布 Edge 配置数据到 Core
-func (s *QueenUpService) publishConfig(_ context.Context) error {
+// syncToRemote: Edge → Core 同步（配置）
+func (s *QueenUpService) syncToRemote(_ context.Context) error {
 	node := s.es.GetStorage().GetNode()
 
 	// 构建用于发布的 Node 结构
@@ -370,7 +359,7 @@ func (s *QueenUpService) publishConfig(_ context.Context) error {
 }
 
 // publishPinValue: 发布 PinValue 到 Core（全量同步）
-func (s *QueenUpService) publishPinValueAll(_ context.Context) error {
+func (s *QueenUpService) syncPinValueToRemote(ctx context.Context) error {
 	limit := 100
 
 	nodeID := s.es.GetStorage().GetNodeID()
@@ -400,31 +389,11 @@ func (s *QueenUpService) publishPinValueAll(_ context.Context) error {
 		return nil
 	}
 
-	// 序列化为 NSON Array
-	arr := make(nson.Array, 0, len(messages))
-	for _, msg := range messages {
-		m, err := nson.Marshal(msg)
-		if err != nil {
-			continue
-		}
-		arr = append(arr, m)
-	}
-
-	buf := new(bytes.Buffer)
-	if err := nson.EncodeArray(arr, buf); err != nil {
-		return err
-	}
-
-	// 通过 Queen 发布
-	if err := s.client.Publish("beacon/pin/value", buf.Bytes(), queen.WithQoS(packet.QoS1)); err != nil {
-		return fmt.Errorf("publish pin values failed: %w", err)
-	}
-
-	return nil
+	return s.publishPinValueBatch(ctx, messages)
 }
 
 // publishPinValueBatch: 批量发布 PinValue 到 Core（ticker模式）
-func (s *QueenUpService) publishPinValueBatch(_ context.Context, changes []PinValueChange) error {
+func (s *QueenUpService) publishPinValueBatch(_ context.Context, changes []dt.PinValueMessage) error {
 	if len(changes) == 0 {
 		return nil
 	}
@@ -432,7 +401,7 @@ func (s *QueenUpService) publishPinValueBatch(_ context.Context, changes []PinVa
 	var messages []dt.PinValueMessage
 	for _, change := range changes {
 		messages = append(messages, dt.PinValueMessage{
-			ID:    change.PinID,
+			ID:    change.ID,
 			Value: change.Value,
 		})
 	}
@@ -489,7 +458,7 @@ func (s *QueenUpService) PublishPinValue(ctx context.Context, value dt.PinValueM
 // 使用 Request/Response 机制（需要立即响应，确保可靠获取）
 func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 	// 使用 Request 拉取所有 pin writes
-	response, err := s.client.Request(ctx, "beacon.pin.write.sync", nil, &queen.RequestOptions{
+	response, err := s.client.Request(ctx, dt.ActionPinWriteSync, nil, &queen.RequestOptions{
 		Timeout: 5 * time.Second,
 	})
 	if err != nil {
@@ -524,23 +493,12 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 			continue
 		}
 
-		// 保存到本地存储
-		pin, err := s.es.GetStorage().GetPinByID(msg.ID)
-		if err != nil {
-			s.es.Logger().Sugar().Errorf("GetPinByID: %v", err)
-			continue
-		}
-
-		if msg.Value != nil && uint32(msg.Value.DataType()) != pin.Type {
-			s.es.Logger().Sugar().Errorf("invalid value for Pin.Type")
-			continue
-		}
-
-		if err := s.applyPinWrite(msg); err != nil {
+		if err := s.setPinWrite(msg); err != nil {
 			s.es.Logger().Sugar().Warnf("apply pin write failed: %s, error=%v", msg.ID, err)
 		}
 	}
 
 	s.es.Logger().Sugar().Infof("Synced %d pin writes from remote", len(arr))
+
 	return nil
 }

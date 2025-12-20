@@ -193,7 +193,7 @@ func (es *EdgeService) GetPinWrite(ctx context.Context, pinID string) (nson.Valu
 
 // SetPinWrite sets PinWrite, validates pin exists, is writable, and datatype matches Pin.Type.
 // If updated is zero, time.Now() is used.
-func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue, updated time.Time) error {
+func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue) error {
 	if value.ID == "" {
 		return fmt.Errorf("please supply valid pinID")
 	}

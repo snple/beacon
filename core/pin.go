@@ -17,10 +17,10 @@ func newPinService(cs *CoreService) *PinService {
 	}
 }
 
-func (s *PinService) View(ctx context.Context, nodeID, pinID string) (*dt.Pin, error) {
+func (s *PinService) View(ctx context.Context, pinID string) (*dt.Pin, error) {
 	// basic validation
-	if nodeID == "" || pinID == "" {
-		return nil, fmt.Errorf("please supply valid NodeId and PinId")
+	if pinID == "" {
+		return nil, fmt.Errorf("please supply valid PinId")
 	}
 
 	pin, err := s.cs.GetStorage().GetPinByID(pinID)

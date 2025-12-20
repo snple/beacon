@@ -40,7 +40,7 @@ func (s *PinValueService) GetValue(ctx context.Context, pinID string) (nson.Valu
 	return value, updated, nil
 }
 
-func (s *PinValueService) SetValue(ctx context.Context, value dt.PinValue) error {
+func (s *PinValueService) setValue(ctx context.Context, value dt.PinValue) error {
 	// basic validation
 	if value.ID == "" || value.Value == nil {
 		return fmt.Errorf("please supply valid Pin.Id and Value")

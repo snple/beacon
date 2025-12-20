@@ -24,7 +24,7 @@ type EdgeService struct {
 	queenUp *QueenUpService
 
 	// PinValue 批量通知
-	pinValueChanges chan PinValueChange
+	pinValueChanges chan dt.PinValueMessage
 
 	ctx     context.Context
 	cancel  func()
@@ -45,7 +45,7 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 		ctx:             ctx,
 		cancel:          cancel,
 		dopts:           defaultEdgeOptions(),
-		pinValueChanges: make(chan PinValueChange, 1000),
+		pinValueChanges: make(chan dt.PinValueMessage, 1000),
 	}
 
 	for _, opt := range extraEdgeOptions {
@@ -316,12 +316,6 @@ func WithBatchNotifyInterval(interval time.Duration) EdgeOption {
 	})
 }
 
-// PinValueChange PinValue 变更通知
-type PinValueChange struct {
-	PinID string
-	Value nson.Value
-}
-
 // NotifyPinValue 通知 PinValue 变更（非阻塞）
 func (es *EdgeService) NotifyPinValue(pinID string, value nson.Value, realtime bool) error {
 	if realtime {
@@ -333,8 +327,8 @@ func (es *EdgeService) NotifyPinValue(pinID string, value nson.Value, realtime b
 	}
 
 	select {
-	case es.pinValueChanges <- PinValueChange{
-		PinID: pinID,
+	case es.pinValueChanges <- dt.PinValueMessage{
+		ID:    pinID,
 		Value: value,
 	}:
 		return nil

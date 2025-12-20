@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -46,12 +47,12 @@ func (cs *CoreService) initQueenBroker() error {
 	cs.internalClient = ic
 
 	// 注册内部 action 处理器
-	if err := cs.registerQueenHandlers(); err != nil {
+	if err := cs.registerHandlers(); err != nil {
 		cs.Logger().Sugar().Warnf("Failed to register internal handlers: %v", err)
 	}
 
 	// 订阅所有 beacon 主题
-	if err := cs.subscribeQueenTopics(); err != nil {
+	if err := cs.subscribeTopics(); err != nil {
 		cs.Logger().Sugar().Warnf("Failed to subscribe topics: %v", err)
 	}
 
@@ -119,7 +120,7 @@ func (cs *CoreService) PublishToNode(nodeID string, topic string, payload []byte
 
 // subscribeQueenTopics 订阅所有 beacon 主题
 // 用于接收 Edge 的数据同步消息（不需要立即响应）
-func (cs *CoreService) subscribeQueenTopics() error {
+func (cs *CoreService) subscribeTopics() error {
 	if cs.internalClient == nil {
 		return fmt.Errorf("internal client not initialized")
 	}
@@ -143,7 +144,7 @@ func (cs *CoreService) subscribeQueenTopics() error {
 
 // registerQueenHandlers 注册内部 action 处理器
 // 用于处理需要立即响应的 Request
-func (cs *CoreService) registerQueenHandlers() error {
+func (cs *CoreService) registerHandlers() error {
 	if cs.internalClient == nil {
 		return fmt.Errorf("internal client not initialized")
 	}
@@ -296,14 +297,22 @@ func (cs *CoreService) handlePinValueBatch(nodeID string, payload []byte) error 
 
 // setPinValue 设置 Pin 值
 func (cs *CoreService) setPinValue(ctx context.Context, nodeID string, v dt.PinValueMessage) error {
-	// 先验证 Pin 属于当前节点
-	_, err := cs.GetPin().View(ctx, nodeID, v.ID)
-	if err != nil {
-		return err
+	// 验证 v.ID 的格式，必须是 "NodeID.WireName.PinName"
+	parts := strings.Split(v.ID, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("invalid pin ID format: expected 'NodeID.WireName.PinName', got '%s'", v.ID)
 	}
 
-	err = cs.GetPinValue().SetValue(ctx, dt.PinValue{
-		ID:      v.ID,
+	// 验证 NodeID
+	if parts[0] != nodeID {
+		return fmt.Errorf("node ID mismatch: expected '%s', got '%s'", nodeID, parts[0])
+	}
+
+	// 构造本地 Pin ID: "WireName.PinName"
+	pinID := parts[1] + "." + parts[2]
+
+	err := cs.GetPinValue().setValue(ctx, dt.PinValue{
+		ID:      pinID,
 		Value:   v.Value,
 		Updated: time.Now(),
 	})
