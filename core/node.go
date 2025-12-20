@@ -17,53 +17,24 @@ func newNodeService(cs *CoreService) *NodeService {
 	}
 }
 
-func (s *NodeService) View(ctx context.Context, nodeID string) (*Node, error) {
-	var output Node
-
+func (s *NodeService) View(ctx context.Context, nodeID string) (*dt.Node, error) {
 	// basic validation
 	if nodeID == "" {
-		return &output, fmt.Errorf("please supply valid Node.ID")
+		return nil, fmt.Errorf("please supply valid Node.ID")
 	}
 
 	node, err := s.cs.GetStorage().GetNode(nodeID)
 	if err != nil {
-		return &output, fmt.Errorf("node not found: %w", err)
+		return nil, fmt.Errorf("node not found: %w", err)
 	}
 
-	s.copyStorageToOutput(&output, node)
-
-	return &output, nil
+	return node, nil
 }
 
-func (s *NodeService) Name(ctx context.Context, name string) (*Node, error) {
-	var output Node
-
-	// basic validation
-	if name == "" {
-		return &output, fmt.Errorf("please supply valid Node.Name")
-	}
-
-	node, err := s.cs.GetStorage().GetNodeByName(name)
-	if err != nil {
-		return &output, fmt.Errorf("node not found: %w", err)
-	}
-
-	s.copyStorageToOutput(&output, node)
-
-	return &output, nil
-}
-
-func (s *NodeService) List(ctx context.Context) ([]*Node, error) {
+func (s *NodeService) List(ctx context.Context) ([]dt.Node, error) {
 	nodes := s.cs.GetStorage().ListNodes()
 
-	result := make([]*Node, 0, len(nodes))
-	for _, node := range nodes {
-		item := &Node{}
-		s.copyStorageToOutput(item, node)
-		result = append(result, item)
-	}
-
-	return result, nil
+	return nodes, nil
 }
 
 func (s *NodeService) Push(ctx context.Context, nodeID string, nsonData []byte) error {
@@ -122,37 +93,4 @@ func (s *NodeService) GetSecret(ctx context.Context, nodeID string) (string, err
 	}
 
 	return secret, nil
-}
-
-func (s *NodeService) copyStorageToOutput(output *Node, node *dt.Node) {
-	output.Id = node.ID
-	output.Name = node.Name
-	output.Device = node.Device
-	output.Tags = node.Tags
-	output.Updated = node.Updated.UnixMicro()
-
-	for i := range node.Wires {
-		wire := &node.Wires[i]
-		w := &Wire{
-			Id:   wire.ID,
-			Name: wire.Name,
-			Type: wire.Type,
-			Tags: wire.Tags,
-		}
-
-		for j := range wire.Pins {
-			pin := &wire.Pins[j]
-			p := &Pin{
-				Id:   pin.ID,
-				Name: pin.Name,
-				Addr: pin.Addr,
-				Type: pin.Type,
-				Rw:   pin.Rw,
-				Tags: pin.Tags,
-			}
-			w.Pins = append(w.Pins, p)
-		}
-
-		output.Wires = append(output.Wires, w)
-	}
 }

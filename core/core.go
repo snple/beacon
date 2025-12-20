@@ -314,14 +314,13 @@ func WithBatchNotifyInterval(interval time.Duration) CoreOption {
 }
 
 // NotifyPinWrite 通知 PinWrite 变更（非阻塞）
-func (cs *CoreService) NotifyPinWrite(nodeID, pinID, name string, value nson.Value, realtime bool) error {
+func (cs *CoreService) NotifyPinWrite(nodeID, pinID string, value nson.Value, realtime bool) error {
 	if realtime {
 		// 实时模式，直接发送
 		return cs.publishPinWritesToNode(nodeID, []PinWriteChange{
 			{
 				NodeID: nodeID,
 				PinID:  pinID,
-				Name:   name,
 				Value:  value,
 			},
 		})
@@ -331,7 +330,6 @@ func (cs *CoreService) NotifyPinWrite(nodeID, pinID, name string, value nson.Val
 	case cs.pinWriteChanges <- PinWriteChange{
 		NodeID: nodeID,
 		PinID:  pinID,
-		Name:   name,
 		Value:  value,
 	}:
 		return nil

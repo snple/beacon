@@ -28,13 +28,13 @@ func TestNodeEncoding(t *testing.T) {
 	}
 
 	// 编码
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err, "encode should succeed")
 	t.Logf("Encoded data length: %d bytes", len(data))
 	t.Logf("Encoded data (hex): %x", data[:min(len(data), 100)])
 
 	// 解码
-	decoded, err := decodeNode(data)
+	decoded, err := dt.DecodeNode(data)
 	if err != nil {
 		t.Logf("Decode error: %v", err)
 	}

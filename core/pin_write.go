@@ -7,6 +7,7 @@ import (
 
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/device"
+	"github.com/snple/beacon/dt"
 )
 
 type PinWriteService struct {
@@ -40,20 +41,24 @@ func (s *PinWriteService) GetWrite(ctx context.Context, pinID string) (nson.Valu
 	return value, updated, nil
 }
 
-func (s *PinWriteService) SetWrite(ctx context.Context, pinID string, value nson.Value, realtime bool) error {
+func (s *PinWriteService) SetWrite(ctx context.Context, value dt.PinValue, realtime bool) error {
 	// basic validation
-	if pinID == "" || value == nil {
+	if value.ID == "" || value.Value == nil {
 		return fmt.Errorf("please supply valid Pin.Id and Value")
 	}
 
+	if value.Updated.IsZero() {
+		value.Updated = time.Now()
+	}
+
 	// 获取 Pin 所属的 Node ID
-	nodeID, err := s.cs.GetStorage().GetPinNodeID(pinID)
+	nodeID, err := s.cs.GetStorage().GetPinNodeID(value.ID)
 	if err != nil {
 		return fmt.Errorf("pin not found: %w", err)
 	}
 
 	// 验证 Pin 存在且可写
-	pin, err := s.cs.GetStorage().GetPinByID(pinID)
+	pin, err := s.cs.GetStorage().GetPinByID(value.ID)
 	if err != nil {
 		return fmt.Errorf("pin not found: %w", err)
 	}
@@ -62,62 +67,13 @@ func (s *PinWriteService) SetWrite(ctx context.Context, pinID string, value nson
 		return fmt.Errorf("pin is not writable")
 	}
 
-	err = s.cs.GetStorage().SetPinWrite(ctx, nodeID, pinID, value, time.Now())
+	err = s.cs.GetStorage().SetPinWrite(ctx, nodeID, value)
 	if err != nil {
 		return fmt.Errorf("setPinWrite failed: %w", err)
 	}
 
 	// 通知节点有新的 Pin 写入
-	if err := s.cs.NotifyPinWrite(nodeID, pinID, pin.Name, value, realtime); err != nil {
-		s.cs.Logger().Sugar().Warnf("NotifyPinWrite failed: %v", err)
-	}
-
-	return nil
-}
-
-func (s *PinWriteService) GetWriteByName(ctx context.Context, nodeID, name string) (nson.Value, time.Time, error) {
-	// basic validation
-	if nodeID == "" || name == "" {
-		return nil, time.Time{}, fmt.Errorf("please supply valid NodeId and Name")
-	}
-
-	pin, err := s.cs.GetStorage().GetPinByName(nodeID, name)
-	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("pin not found: %w", err)
-	}
-
-	value, updated, err := s.cs.GetStorage().GetPinWrite(nodeID, pin.ID)
-	if err != nil {
-		// 如果未找到值，返回空值而不是错误
-		return nil, time.Time{}, nil
-	}
-
-	return value, updated, nil
-}
-
-func (s *PinWriteService) SetWriteByName(ctx context.Context, nodeID, name string, value nson.Value, realtime bool) error {
-	// basic validation
-	if nodeID == "" || name == "" || value == nil {
-		return fmt.Errorf("please supply valid NodeId, Name and Value")
-	}
-
-	// 验证 Pin 存在且可写
-	pin, err := s.cs.GetStorage().GetPinByName(nodeID, name)
-	if err != nil {
-		return fmt.Errorf("pin not found: %w", err)
-	}
-
-	if pin.Rw == device.RO {
-		return fmt.Errorf("pin is not writable")
-	}
-
-	err = s.cs.GetStorage().SetPinWrite(ctx, nodeID, pin.ID, value, time.Now())
-	if err != nil {
-		return fmt.Errorf("setPinWrite failed: %w", err)
-	}
-
-	// 通知节点有新的 Pin 写入
-	if err := s.cs.NotifyPinWrite(nodeID, pin.ID, pin.Name, value, realtime); err != nil {
+	if err := s.cs.NotifyPinWrite(nodeID, pin.ID, value.Value, realtime); err != nil {
 		s.cs.Logger().Sugar().Warnf("NotifyPinWrite failed: %v", err)
 	}
 

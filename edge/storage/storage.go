@@ -34,18 +34,12 @@ type index struct {
 	// 按 ID 的索引
 	wireByID map[string]*dt.Wire // wireID -> Wire
 	pinByID  map[string]*dt.Pin  // pinID -> Pin
-
-	// 按名称的索引
-	wireByName map[string]*dt.Wire // wireName -> Wire
-	pinByName  map[string]*dt.Pin  // "wire.pin" -> Pin
 }
 
 func newIndex() *index {
 	return &index{
-		wireByID:   make(map[string]*dt.Wire),
-		pinByID:    make(map[string]*dt.Pin),
-		wireByName: make(map[string]*dt.Wire),
-		pinByName:  make(map[string]*dt.Pin),
+		wireByID: make(map[string]*dt.Wire),
+		pinByID:  make(map[string]*dt.Pin),
 	}
 }
 
@@ -57,31 +51,8 @@ func New(db *badger.DB, node *dt.Node) *Storage {
 		db:    db,
 	}
 	// 构建索引
-	s.rebuildIndexUnsafe()
+	s.buildIndexUnsafe()
 	return s
-}
-
-// Load 启动时加载数据（注意：node 配置在创建时已传入，这里只加载 secret）
-func (s *Storage) Load(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 加载 secret
-	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte("secret"))
-		if err != nil {
-			if err == badger.ErrKeyNotFound {
-				return nil
-			}
-			return err
-		}
-
-		return item.Value(func(val []byte) error {
-			s.secret = string(val)
-			return nil
-		})
-	})
-	return err
 }
 
 // --- Node 操作 ---
@@ -139,18 +110,6 @@ func (s *Storage) GetWireByID(wireID string) (*dt.Wire, error) {
 	return nil, fmt.Errorf("wire not found: %s", wireID)
 }
 
-// GetWireByName 按名称获取 Wire
-func (s *Storage) GetWireByName(wireName string) (*dt.Wire, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if wire, ok := s.index.wireByName[wireName]; ok {
-		return wire, nil
-	}
-
-	return nil, fmt.Errorf("wire not found by name: %s", wireName)
-}
-
 // ListWires 获取所有 Wire
 func (s *Storage) ListWires() []*dt.Wire {
 	s.mu.RLock()
@@ -179,18 +138,6 @@ func (s *Storage) GetPinByID(pinID string) (*dt.Pin, error) {
 	}
 
 	return nil, fmt.Errorf("pin not found: %s", pinID)
-}
-
-// GetPinByName 按名称获取 Pin（支持 "wire.pin" 格式）
-func (s *Storage) GetPinByName(pinName string) (*dt.Pin, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if pin, ok := s.index.pinByName[pinName]; ok {
-		return pin, nil
-	}
-
-	return nil, fmt.Errorf("pin not found by name: %s", pinName)
 }
 
 // GetPinWireID 获取 Pin 所属的 Wire ID
@@ -628,8 +575,8 @@ func (s *Storage) SetSyncTime(key string, t time.Time) error {
 
 // --- 内部方法 ---
 
-// rebuildIndexUnsafe 重建索引（无锁）
-func (s *Storage) rebuildIndexUnsafe() {
+// buildIndexUnsafe 构建索引（无锁）
+func (s *Storage) buildIndexUnsafe() {
 	if s.node == nil {
 		return
 	}
@@ -637,14 +584,10 @@ func (s *Storage) rebuildIndexUnsafe() {
 	for i := range s.node.Wires {
 		wire := &s.node.Wires[i]
 		s.index.wireByID[wire.ID] = wire
-		s.index.wireByName[wire.Name] = wire
 
 		for j := range wire.Pins {
 			pin := &wire.Pins[j]
 			s.index.pinByID[pin.ID] = pin
-			// 使用 "wire.pin" 作为名称索引
-			fullName := wire.Name + "." + pin.Name
-			s.index.pinByName[fullName] = pin
 		}
 	}
 }
@@ -660,39 +603,10 @@ func (s *Storage) ExportConfig() ([]byte, error) {
 		return nil, fmt.Errorf("node not initialized")
 	}
 
-	return EncodeNode(s.node)
+	return dt.EncodeNode(s.node)
 }
 
 // --- 编解码 ---
-
-func EncodeNode(node *dt.Node) ([]byte, error) {
-	m, err := nson.Marshal(node)
-	if err != nil {
-		return nil, err
-	}
-
-	buf := new(bytes.Buffer)
-	if err := nson.EncodeMap(m, buf); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-func DecodeNode(data []byte) (*dt.Node, error) {
-	buf := bytes.NewBuffer(data)
-	m, err := nson.DecodeMap(buf)
-	if err != nil {
-		return nil, err
-	}
-
-	var node dt.Node
-	if err := nson.Unmarshal(m, &node); err != nil {
-		return nil, err
-	}
-
-	return &node, nil
-}
 
 // --- 辅助方法 ---
 

@@ -57,63 +57,31 @@ func stablePinID(nodeID, wireName, pinName string) string {
 
 // Node returns the current node configuration.
 func (es *EdgeService) Node() (*dt.Node, error) {
-	return cloneNode(es.storage.GetNode())
+	return es.storage.GetNode()
 }
 
 // WireByID fetches a wire config by ID.
-func (es *EdgeService) WireByID(ctx context.Context, id string) (*dt.Wire, error) {
-	_ = ctx
-	w, err := es.storage.GetWireByID(id)
-	if err != nil {
-		return nil, err
-	}
-	return cloneWire(w), nil
-}
-
-// WireByName fetches a wire config by name.
-func (es *EdgeService) WireByName(ctx context.Context, name string) (*dt.Wire, error) {
-	_ = ctx
-	w, err := es.storage.GetWireByName(name)
-	if err != nil {
-		return nil, err
-	}
-	return cloneWire(w), nil
+func (es *EdgeService) WireByID(id string) (*dt.Wire, error) {
+	return es.storage.GetWireByID(id)
 }
 
 // Wires lists all wires.
-func (es *EdgeService) Wires(ctx context.Context) ([]*dt.Wire, error) {
-	_ = ctx
+func (es *EdgeService) Wires() ([]dt.Wire, error) {
 	ws := es.storage.ListWires()
-	out := make([]*dt.Wire, 0, len(ws))
+	out := make([]dt.Wire, 0, len(ws))
 	for _, w := range ws {
-		out = append(out, cloneWire(w))
+		out = append(out, dt.DeepCopyWire(w))
 	}
 	return out, nil
 }
 
 // PinByID fetches a pin config by ID.
-func (es *EdgeService) PinByID(ctx context.Context, id string) (*dt.Pin, error) {
-	_ = ctx
-	p, err := es.storage.GetPinByID(id)
-	if err != nil {
-		return nil, err
-	}
-	return clonePin(p), nil
-}
-
-// PinByName fetches a pin config by name ("wire.pin").
-func (es *EdgeService) PinByName(ctx context.Context, name string) (*dt.Pin, error) {
-	_ = ctx
-	p, err := es.storage.GetPinByName(name)
-	if err != nil {
-		return nil, err
-	}
-	return clonePin(p), nil
+func (es *EdgeService) PinByID(id string) (*dt.Pin, error) {
+	return es.storage.GetPinByID(id)
 }
 
 // Pins lists pins. If wireID is non-empty, it filters by wire.
-func (es *EdgeService) Pins(ctx context.Context, wireID string) ([]*dt.Pin, error) {
-	_ = ctx
+func (es *EdgeService) Pins(wireID string) ([]dt.Pin, error) {
 	var pins []*dt.Pin
 	if wireID != "" {
 		ps, err := es.storage.ListPinsByWire(wireID)
@@ -125,9 +93,9 @@ func (es *EdgeService) Pins(ctx context.Context, wireID string) ([]*dt.Pin, erro
 		pins = es.storage.ListPins()
 	}
 
-	out := make([]*dt.Pin, 0, len(pins))
+	out := make([]dt.Pin, 0, len(pins))
 	for _, p := range pins {
-		out = append(out, clonePin(p))
+		out = append(out, dt.DeepCopyPin(p))
 	}
 	return out, nil
 }
@@ -164,6 +132,8 @@ func (es *EdgeService) SetPinValue(ctx context.Context, pinID string, value nson
 	if err := es.NotifyPinValue(pinID, value, realtime); err != nil {
 		return err
 	}
+
+	es.dopts.logger.Sugar().Infof("SetPinValue: pinID=%s value=%v", pinID, value)
 
 	return nil
 }
@@ -217,6 +187,8 @@ func (es *EdgeService) SetPinWrite(ctx context.Context, pinID string, value nson
 		return err
 	}
 
+	es.dopts.logger.Sugar().Infof("SetPinWrite: pinID=%s value=%v", pinID, value)
+
 	return nil
 }
 
@@ -232,56 +204,4 @@ func (es *EdgeService) DeletePinWrite(ctx context.Context, pinID string) error {
 func (es *EdgeService) ListPinWrites(ctx context.Context, after time.Time, limit int) ([]storage.PinValueEntry, error) {
 	_ = ctx
 	return es.storage.ListPinWrites(after, limit)
-}
-
-func cloneNode(node *dt.Node, err error) (*dt.Node, error) {
-	if err != nil {
-		return nil, err
-	}
-	if node == nil {
-		return nil, fmt.Errorf("node not initialized")
-	}
-
-	out := &dt.Node{
-		ID:     node.ID,
-		Name:   node.Name,
-		Tags:   append([]string(nil), node.Tags...),
-		Device: node.Device,
-		Wires:  make([]dt.Wire, 0, len(node.Wires)),
-	}
-	for i := range node.Wires {
-		out.Wires = append(out.Wires, *cloneWire(&node.Wires[i]))
-	}
-	return out, nil
-}
-
-func cloneWire(w *dt.Wire) *dt.Wire {
-	if w == nil {
-		return nil
-	}
-	out := &dt.Wire{
-		ID:   w.ID,
-		Name: w.Name,
-		Tags: append([]string(nil), w.Tags...),
-		Type: w.Type,
-		Pins: make([]dt.Pin, 0, len(w.Pins)),
-	}
-	for i := range w.Pins {
-		out.Pins = append(out.Pins, *clonePin(&w.Pins[i]))
-	}
-	return out
-}
-
-func clonePin(p *dt.Pin) *dt.Pin {
-	if p == nil {
-		return nil
-	}
-	return &dt.Pin{
-		ID:   p.ID,
-		Name: p.Name,
-		Tags: append([]string(nil), p.Tags...),
-		Addr: p.Addr,
-		Type: p.Type,
-		Rw:   p.Rw,
-	}
 }

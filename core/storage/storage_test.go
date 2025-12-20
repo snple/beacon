@@ -52,7 +52,7 @@ func TestStorage_Push_GetNode(t *testing.T) {
 	}
 
 	// 序列化并推送节点
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 
 	err = s.Push(ctx, data)
@@ -65,35 +65,6 @@ func TestStorage_Push_GetNode(t *testing.T) {
 	assert.Equal(t, node.Name, retrieved.Name)
 	assert.Equal(t, 1, len(retrieved.Wires))
 	assert.Equal(t, "wire-001", retrieved.Wires[0].ID)
-}
-
-// TestStorage_GetNodeByName 测试按名称获取节点
-func TestStorage_GetNodeByName(t *testing.T) {
-	db := setupTestDB(t)
-	s := New(db)
-	ctx := context.Background()
-
-	node := &dt.Node{
-		ID:      "node-001",
-		Name:    "TestNode",
-		Updated: time.Now(),
-		Wires:   []dt.Wire{},
-	}
-
-	data, err := encodeNode(node)
-	require.NoError(t, err)
-	err = s.Push(ctx, data)
-	require.NoError(t, err)
-
-	// 按名称获取
-	retrieved, err := s.GetNodeByName("TestNode")
-	require.NoError(t, err)
-	assert.Equal(t, "node-001", retrieved.ID)
-	assert.Equal(t, "TestNode", retrieved.Name)
-
-	// 测试不存在的节点
-	_, err = s.GetNodeByName("NonExistent")
-	assert.Error(t, err)
 }
 
 // TestStorage_ListNodes 测试列出所有节点
@@ -110,7 +81,7 @@ func TestStorage_ListNodes(t *testing.T) {
 			Updated: time.Now(),
 			Wires:   []dt.Wire{},
 		}
-		data, err := encodeNode(node)
+		data, err := dt.EncodeNode(node)
 		require.NoError(t, err)
 		err = s.Push(ctx, data)
 		require.NoError(t, err)
@@ -140,7 +111,7 @@ func TestStorage_GetWireByID(t *testing.T) {
 		},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 	err = s.Push(ctx, data)
 	require.NoError(t, err)
@@ -153,74 +124,6 @@ func TestStorage_GetWireByID(t *testing.T) {
 
 	// 测试不存在的 Wire
 	_, err = s.GetWireByID("non-existent")
-	assert.Error(t, err)
-}
-
-// TestStorage_GetWireByName 测试按名称获取 Wire
-func TestStorage_GetWireByName(t *testing.T) {
-	db := setupTestDB(t)
-	s := New(db)
-	ctx := context.Background()
-
-	node := &dt.Node{
-		ID:      "node-001",
-		Name:    "TestNode",
-		Updated: time.Now(),
-		Wires: []dt.Wire{
-			{
-				ID:   "wire-001",
-				Name: "TestWire",
-				Type: "modbus",
-				Pins: []dt.Pin{},
-			},
-		},
-	}
-
-	data, err := encodeNode(node)
-	require.NoError(t, err)
-	err = s.Push(ctx, data)
-	require.NoError(t, err)
-
-	// 获取 Wire
-	wire, err := s.GetWireByName("node-001", "TestWire")
-	require.NoError(t, err)
-	assert.Equal(t, "wire-001", wire.ID)
-	assert.Equal(t, "TestWire", wire.Name)
-}
-
-// TestStorage_GetWireByFullName 测试按全名获取 Wire
-func TestStorage_GetWireByFullName(t *testing.T) {
-	db := setupTestDB(t)
-	s := New(db)
-	ctx := context.Background()
-
-	node := &dt.Node{
-		ID:      "node-001",
-		Name:    "TestNode",
-		Updated: time.Now(),
-		Wires: []dt.Wire{
-			{
-				ID:   "wire-001",
-				Name: "TestWire",
-				Type: "modbus",
-				Pins: []dt.Pin{},
-			},
-		},
-	}
-
-	data, err := encodeNode(node)
-	require.NoError(t, err)
-	err = s.Push(ctx, data)
-	require.NoError(t, err)
-
-	// 按全名获取 (格式: nodeName.wireName)
-	wire, err := s.GetWireByFullName("TestNode.TestWire")
-	require.NoError(t, err)
-	assert.Equal(t, "wire-001", wire.ID)
-	assert.Equal(t, "TestWire", wire.Name)
-
-	// 测试无效格式
-	_, err = s.GetWireByFullName("InvalidFormat")
 	assert.Error(t, err)
 }
 
@@ -240,7 +143,7 @@ func TestStorage_ListWires(t *testing.T) {
 		},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 	err = s.Push(ctx, data)
 	require.NoError(t, err)
@@ -278,7 +181,7 @@ func TestStorage_GetPinByID(t *testing.T) {
 		},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 	err = s.Push(ctx, data)
 	require.NoError(t, err)
@@ -292,40 +195,6 @@ func TestStorage_GetPinByID(t *testing.T) {
 	// 测试不存在的 Pin
 	_, err = s.GetPinByID("non-existent")
 	assert.Error(t, err)
-}
-
-// TestStorage_GetPinByName 测试按名称获取 Pin
-func TestStorage_GetPinByName(t *testing.T) {
-	db := setupTestDB(t)
-	s := New(db)
-	ctx := context.Background()
-
-	node := &dt.Node{
-		ID:      "node-001",
-		Name:    "TestNode",
-		Updated: time.Now(),
-		Wires: []dt.Wire{
-			{
-				ID:   "wire-001",
-				Name: "TestWire",
-				Type: "modbus",
-				Pins: []dt.Pin{
-					{ID: "pin-001", Name: "TestPin", Addr: "0x01", Type: 1, Rw: 3},
-				},
-			},
-		},
-	}
-
-	data, err := encodeNode(node)
-	require.NoError(t, err)
-	err = s.Push(ctx, data)
-	require.NoError(t, err)
-
-	// 获取 Pin (格式是 WireName.PinName)
-	pin, err := s.GetPinByName("node-001", "TestWire.TestPin")
-	require.NoError(t, err)
-	assert.Equal(t, "pin-001", pin.ID)
-	assert.Equal(t, "TestPin", pin.Name)
 }
 
 // TestStorage_ListPins 测试列出 Wire 的所有 Pin
@@ -352,7 +221,7 @@ func TestStorage_ListPins(t *testing.T) {
 		},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 	err = s.Push(ctx, data)
 	require.NoError(t, err)
@@ -393,7 +262,7 @@ func TestStorage_ListPinsByNode(t *testing.T) {
 		},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 	err = s.Push(ctx, data)
 	require.NoError(t, err)
@@ -416,7 +285,7 @@ func TestStorage_DeleteNode(t *testing.T) {
 		Wires:   []dt.Wire{},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 	err = s.Push(ctx, data)
 	require.NoError(t, err)
@@ -486,7 +355,7 @@ func TestStorage_Load(t *testing.T) {
 		},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 	err = s1.Push(ctx, data)
 	require.NoError(t, err)
@@ -535,7 +404,7 @@ func TestStorage_UpdateNode(t *testing.T) {
 		},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	require.NoError(t, err)
 	err = s.Push(ctx, data)
 	require.NoError(t, err)
@@ -551,7 +420,7 @@ func TestStorage_UpdateNode(t *testing.T) {
 		},
 	}
 
-	data, err = encodeNode(updatedNode)
+	data, err = dt.EncodeNode(updatedNode)
 	require.NoError(t, err)
 	err = s.Push(ctx, data)
 	require.NoError(t, err)

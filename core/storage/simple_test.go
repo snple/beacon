@@ -32,14 +32,14 @@ func TestSimpleEncode(t *testing.T) {
 		},
 	}
 
-	data, err := encodeNode(node)
+	data, err := dt.EncodeNode(node)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)
 	}
 
 	t.Logf("Encoded %d bytes", len(data))
 
-	decoded, err := decodeNode(data)
+	decoded, err := dt.DecodeNode(data)
 	if err != nil {
 		t.Fatalf("decode failed: %v", err)
 	}

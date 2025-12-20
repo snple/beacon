@@ -12,6 +12,7 @@ import (
 	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/device"
+	"github.com/snple/beacon/dt"
 	"github.com/snple/beacon/edge/storage"
 	"go.uber.org/zap"
 )
@@ -91,11 +92,6 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 
 	// 创建存储（传入 node 配置，之后不可修改）
 	es.storage = storage.New(badgerSvc.GetDB(), nodeConfig)
-
-	// 加载数据（仅加载 secret 等持久化数据）
-	if err := es.storage.Load(ctx); err != nil {
-		return nil, err
-	}
 
 	// 使用 Queen 通信
 	queenUp, err := newQueenUpService(es)
@@ -330,11 +326,9 @@ type PinValueChange struct {
 func (es *EdgeService) NotifyPinValue(pinID string, value nson.Value, realtime bool) error {
 	if realtime {
 		// 实时模式，直接发送
-		return es.queenUp.publishPinValueBatch(context.Background(), []PinValueChange{
-			{
-				PinID: pinID,
-				Value: value,
-			},
+		return es.queenUp.PublishPinValue(context.Background(), dt.PinValueMessage{
+			ID:    pinID,
+			Value: value,
 		})
 	}
 

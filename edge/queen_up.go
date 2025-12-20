@@ -9,20 +9,11 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/dt"
 	queen "snple.com/queen/client"
 	"snple.com/queen/packet"
 )
 
-// QueenUpService 使用 Queen 协议与 Core 通信的服务
-//
-// 通讯约定：
-// 1. REQUEST/RESPONSE：需要立即反馈的操作
-//
-//   - beacon.pin.write.sync: 连接时全量同步待写入数据
-//
-//     2. PUBLISH/SUBSCRIBE：数据同步和命令下发
-//     Edge → Core: beacon/push, beacon/pin/value
-//     Core → Edge: beacon/pin/write
 type QueenUpService struct {
 	es *EdgeService
 
@@ -144,6 +135,12 @@ func (s *QueenUpService) onConnect(_ map[string]string) {
 		return
 	}
 
+	// 订阅批量 Pin Write 通知
+	if err := s.subscribePinWriteBatch(); err != nil {
+		s.es.Logger().Sugar().Errorf("subscribe pin write batch: %v", err)
+		return
+	}
+
 	// 全量同步待写入数据（重连或首次连接时获取所有待写入命令）
 	if err := s.syncPinWriteFromRemote(s.ctx); err != nil {
 		s.es.Logger().Sugar().Errorf("sync pin write from remote failed: %v", err)
@@ -225,7 +222,7 @@ func (s *QueenUpService) startBatchNotify() {
 	})
 }
 
-// subscribePinWrite 订阅 Pin 写入通知
+// subscribePinWrite 订阅 Pin 写入通知（单个，realtime模式）
 // 接收 Core 的 Pin 写入命令
 func (s *QueenUpService) subscribePinWrite() error {
 	handler := func(msg *queen.Message) error {
@@ -235,10 +232,22 @@ func (s *QueenUpService) subscribePinWrite() error {
 		return nil
 	}
 
-	return s.client.Subscribe("beacon/pin/write", handler, queen.WithSubQoS(packet.QoS1))
+	return s.client.Subscribe(dt.TopicPinWrite, handler, queen.WithSubQoS(packet.QoS1))
 }
 
-// handlePinWrite 处理 Core 发来的 Pin 写入通知
+// subscribePinWriteBatch 订阅批量 Pin 写入通知（ticker模式）
+func (s *QueenUpService) subscribePinWriteBatch() error {
+	handler := func(msg *queen.Message) error {
+		if err := s.handlePinWriteBatch(msg.Payload); err != nil {
+			s.es.Logger().Sugar().Errorf("handle pin write batch: %v", err)
+		}
+		return nil
+	}
+
+	return s.client.Subscribe(dt.TopicPinWriteBatch, handler, queen.WithSubQoS(packet.QoS1))
+}
+
+// handlePinWriteSingle 处理 Core 发来的单个 Pin 写入通知（realtime模式）
 func (s *QueenUpService) handlePinWrite(payload []byte) error {
 	if len(payload) == 0 {
 		return nil
@@ -251,20 +260,52 @@ func (s *QueenUpService) handlePinWrite(payload []byte) error {
 		return fmt.Errorf("invalid pin write format: %w", err)
 	}
 
-	type PinWriteMessage struct {
-		Id    string     `nson:"id,omitempty"`
-		Name  string     `nson:"name,omitempty"`
-		Value nson.Value `nson:"value,omitempty"`
-	}
-
-	var msg PinWriteMessage
+	var msg dt.PinValueMessage
 	if err := nson.Unmarshal(m, &msg); err != nil {
 		return fmt.Errorf("failed to unmarshal pin write: %w", err)
 	}
 
+	return s.applyPinWrite(msg)
+}
+
+// handlePinWriteBatch 处理 Core 发来的批量 Pin 写入通知（ticker模式）
+func (s *QueenUpService) handlePinWriteBatch(payload []byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+
+	// 解析 NSON Array
+	buf := bytes.NewBuffer(payload)
+	arr, err := nson.DecodeArray(buf)
+	if err != nil {
+		return fmt.Errorf("invalid pin write batch format: %w", err)
+	}
+
+	for _, item := range arr {
+		itemMap, ok := item.(nson.Map)
+		if !ok {
+			continue
+		}
+
+		var msg dt.PinValueMessage
+		if err := nson.Unmarshal(itemMap, &msg); err != nil {
+			continue
+		}
+
+		if err := s.applyPinWrite(msg); err != nil {
+			s.es.Logger().Sugar().Warnf("apply pin write failed: %s, error=%v", msg.ID, err)
+		}
+	}
+
+	s.es.Logger().Sugar().Debugf("Applied %d pin writes", len(arr))
+	return nil
+}
+
+// applyPinWrite 应用 Pin 写入
+func (s *QueenUpService) applyPinWrite(msg dt.PinValueMessage) error {
 	// 保存到本地存储
 	ctx := context.Background()
-	pin, err := s.es.GetStorage().GetPinByID(msg.Id)
+	pin, err := s.es.GetStorage().GetPinByID(msg.ID)
 	if err != nil {
 		return fmt.Errorf("get pin by id: %w", err)
 	}
@@ -275,11 +316,11 @@ func (s *QueenUpService) handlePinWrite(payload []byte) error {
 	}
 
 	updated := time.Now()
-	if err := s.es.GetStorage().SetPinWrite(ctx, msg.Id, msg.Value, updated); err != nil {
+	if err := s.es.GetStorage().SetPinWrite(ctx, msg.ID, msg.Value, updated); err != nil {
 		return fmt.Errorf("set pin write: %w", err)
 	}
 
-	s.es.Logger().Sugar().Debugf("pin write applied: %s", msg.Id)
+	s.es.Logger().Sugar().Debugf("pin write applied: %s", msg.ID)
 	return nil
 }
 
@@ -291,11 +332,11 @@ func (s *QueenUpService) syncToRemote(ctx context.Context) error {
 	}
 
 	// 同步 PinValue
-	return s.publishPinValue(ctx)
+	return s.publishPinValueAll(ctx)
 }
 
 // publishConfig: 发布 Edge 配置数据到 Core
-func (s *QueenUpService) publishConfig(ctx context.Context) error {
+func (s *QueenUpService) publishConfig(_ context.Context) error {
 	// 导出配置为 NSON 字节
 	data, err := s.es.GetStorage().ExportConfig()
 	if err != nil {
@@ -303,15 +344,15 @@ func (s *QueenUpService) publishConfig(ctx context.Context) error {
 	}
 
 	// 通过 Queen 发布到 beacon/push 主题
-	if err := s.client.Publish("beacon/push", data, queen.WithQoS(packet.QoS1)); err != nil {
+	if err := s.client.Publish(dt.TopicPush, data, queen.WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish config failed: %w", err)
 	}
 
 	return nil
 }
 
-// publishPinValue: 发布 PinValue 到 Core
-func (s *QueenUpService) publishPinValue(ctx context.Context) error {
+// publishPinValue: 发布 PinValue 到 Core（全量同步）
+func (s *QueenUpService) publishPinValueAll(_ context.Context) error {
 	limit := 100
 
 	type PinValueMessage struct {
@@ -376,22 +417,16 @@ func (s *QueenUpService) publishPinValue(ctx context.Context) error {
 	return nil
 }
 
-// publishPinValueBatch: 批量发布 PinValue 到 Core
-func (s *QueenUpService) publishPinValueBatch(ctx context.Context, changes []PinValueChange) error {
+// publishPinValueBatch: 批量发布 PinValue 到 Core（ticker模式）
+func (s *QueenUpService) publishPinValueBatch(_ context.Context, changes []PinValueChange) error {
 	if len(changes) == 0 {
 		return nil
 	}
 
-	type PinValueMessage struct {
-		Id    string     `nson:"id,omitempty"`
-		Name  string     `nson:"name,omitempty"`
-		Value nson.Value `nson:"value,omitempty"`
-	}
-
-	var messages []PinValueMessage
+	var messages []dt.PinValueMessage
 	for _, change := range changes {
-		messages = append(messages, PinValueMessage{
-			Id:    change.PinID,
+		messages = append(messages, dt.PinValueMessage{
+			ID:    change.PinID,
 			Value: change.Value,
 		})
 	}
@@ -411,9 +446,30 @@ func (s *QueenUpService) publishPinValueBatch(ctx context.Context, changes []Pin
 		return err
 	}
 
-	// 通过 Queen 发布
-	if err := s.client.Publish("beacon/pin/value", buf.Bytes(), queen.WithQoS(packet.QoS1)); err != nil {
+	// 通过 Queen 发布到批量主题
+	if err := s.client.Publish(dt.TopicPinValueBatch, buf.Bytes(), queen.WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish pin values failed: %w", err)
+	}
+
+	return nil
+}
+
+// PublishPinValueSingle: 发布单个 PinValue 到 Core（realtime模式）
+func (s *QueenUpService) PublishPinValue(ctx context.Context, value dt.PinValueMessage) error {
+	// 序列化为 NSON Map
+	m, err := nson.Marshal(value)
+	if err != nil {
+		return err
+	}
+
+	buf := new(bytes.Buffer)
+	if err := nson.EncodeMap(m, buf); err != nil {
+		return err
+	}
+
+	// 通过 Queen 发布到单个主题
+	if err := s.client.Publish(dt.TopicPinValue, buf.Bytes(), queen.WithQoS(packet.QoS1)); err != nil {
+		return fmt.Errorf("publish pin value failed: %w", err)
 	}
 
 	return nil
@@ -446,12 +502,6 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 		return fmt.Errorf("invalid pin writes format: %w", err)
 	}
 
-	type PinWriteMessage struct {
-		Id    string     `nson:"id,omitempty"`
-		Name  string     `nson:"name,omitempty"`
-		Value nson.Value `nson:"value,omitempty"`
-	}
-
 	// 应用每个 pin write
 	for _, item := range arr {
 		itemMap, ok := item.(nson.Map)
@@ -459,13 +509,13 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 			continue
 		}
 
-		var msg PinWriteMessage
+		var msg dt.PinValueMessage
 		if err := nson.Unmarshal(itemMap, &msg); err != nil {
 			continue
 		}
 
 		// 保存到本地存储
-		pin, err := s.es.GetStorage().GetPinByID(msg.Id)
+		pin, err := s.es.GetStorage().GetPinByID(msg.ID)
 		if err != nil {
 			s.es.Logger().Sugar().Errorf("GetPinByID: %v", err)
 			continue
@@ -477,7 +527,7 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 		}
 
 		updated := time.Now()
-		if err := s.es.GetStorage().SetPinWrite(ctx, msg.Id, msg.Value, updated); err != nil {
+		if err := s.es.GetStorage().SetPinWrite(ctx, msg.ID, msg.Value, updated); err != nil {
 			s.es.Logger().Sugar().Errorf("SetPinWrite: %v", err)
 			continue
 		}

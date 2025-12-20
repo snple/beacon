@@ -33,7 +33,7 @@ const (
 )
 
 // castInt32ToNson 根据 DataType 将 int32 转换为对应的 nson 整数类型
-func castInt32ToNson(val int32, dt nson.DataType) (nson.Value, error) {
+func CastInt32ToNson(val int32, dt nson.DataType) (nson.Value, error) {
 	switch dt {
 	case nson.DataTypeI8:
 		if val < -128 || val > 127 {
@@ -53,7 +53,7 @@ func castInt32ToNson(val int32, dt nson.DataType) (nson.Value, error) {
 }
 
 // castUint32ToNson 根据 DataType 将 uint32 转换为对应的 nson 整数类型
-func castUint32ToNson(val uint32, dt nson.DataType) (nson.Value, error) {
+func CastUint32ToNson(val uint32, dt nson.DataType) (nson.Value, error) {
 	switch dt {
 	case nson.DataTypeU8:
 		if val > 255 {
@@ -105,4 +105,35 @@ func DecodeNsonValue(data []byte) (nson.Value, error) {
 	}
 
 	return nsonVal, nil
+}
+
+// EncodeNode 将 dt.Node 编码为 NSON 字节
+func EncodeNode(node *Node) ([]byte, error) {
+	m, err := nson.Marshal(node)
+	if err != nil {
+		return nil, err
+	}
+
+	buf := new(bytes.Buffer)
+	if err := nson.EncodeMap(m, buf); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecodeNode 从 NSON 字节解码为 dt.Node
+func DecodeNode(data []byte) (*Node, error) {
+	buf := bytes.NewBuffer(data)
+	m, err := nson.DecodeMap(buf)
+	if err != nil {
+		return nil, err
+	}
+
+	var node Node
+	if err := nson.Unmarshal(m, &node); err != nil {
+		return nil, err
+	}
+
+	return &node, nil
 }
