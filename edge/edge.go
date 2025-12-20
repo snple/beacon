@@ -129,10 +129,6 @@ func (es *EdgeService) Stop() {
 	es.dopts.logger.Sync()
 }
 
-func (es *EdgeService) Push() error {
-	return es.queenUp.push()
-}
-
 func (es *EdgeService) GetStorage() *storage.Storage {
 	return es.storage
 }

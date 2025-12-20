@@ -61,9 +61,7 @@ func (cs *CoreService) initQueenBroker() error {
 
 // authenticateBrokerClient 认证 broker 客户端
 func (cs *CoreService) authenticateBrokerClient(info *queen.AuthInfo) error {
-	ctx := context.Background()
-
-	// ClientID 作为 Node ID 或 Name
+	// ClientID 作为 Node ID
 	clientID := info.ClientID
 	if clientID == "" {
 		return fmt.Errorf("clientID is required")
@@ -75,26 +73,18 @@ func (cs *CoreService) authenticateBrokerClient(info *queen.AuthInfo) error {
 		return fmt.Errorf("secret is required")
 	}
 
-	// 尝试通过 ID 或 Name 获取 Node
-	var node *dt.Node
-	var err error
-
-	node, err = cs.GetNode().View(ctx, clientID)
+	// 验证密钥（不需要 Node 已存在，只要 Secret 已设置即可）
+	ctx := context.Background()
+	nodeSecret, err := cs.GetNode().GetSecret(ctx, clientID)
 	if err != nil {
-		return fmt.Errorf("node not found: %s", clientID)
-	}
-
-	// 验证密钥
-	nodeSecret, err := cs.GetNode().GetSecret(ctx, node.ID)
-	if err != nil {
-		return fmt.Errorf("getSecret failed: %w", err)
+		return fmt.Errorf("node secret not found for: %s", clientID)
 	}
 
 	if nodeSecret != secret {
 		return fmt.Errorf("invalid secret")
 	}
 
-	cs.Logger().Sugar().Infof("Queen broker client authenticated: %s, remote: %s", node.ID, info.RemoteAddr)
+	cs.Logger().Sugar().Infof("Queen broker client authenticated: %s, remote: %s", clientID, info.RemoteAddr)
 
 	return nil
 }
@@ -151,7 +141,7 @@ func (cs *CoreService) registerHandlers() error {
 
 	// beacon.pin.write.sync -> 返回全量待写入的 pin writes（NSON Array）
 	// Edge 在连接或重连时调用，确保获取所有待写入命令
-	_ = cs.internalClient.RegisterHandler(dt.ActionPinWriteSync, func(req *queen.InternalRequest) ([]byte, packet.ReasonCode, error) {
+	if err := cs.internalClient.RegisterHandler(dt.ActionPinWriteSync, func(req *queen.InternalRequest) ([]byte, packet.ReasonCode, error) {
 		data, err := cs.buildPinWritesPayload(req.SourceClientID)
 		if err != nil {
 			return nil, packet.ReasonImplementationError, err
@@ -160,7 +150,11 @@ func (cs *CoreService) registerHandlers() error {
 			return nil, packet.ReasonSuccess, nil
 		}
 		return data, packet.ReasonSuccess, nil
-	}, 2)
+	}, 2); err != nil {
+		return fmt.Errorf("failed to register handler %s: %w", dt.ActionPinWriteSync, err)
+	}
+
+	cs.Logger().Sugar().Infof("Registered internal action handlers")
 
 	return nil
 }
@@ -308,11 +302,9 @@ func (cs *CoreService) setPinValue(ctx context.Context, nodeID string, v dt.PinV
 		return fmt.Errorf("node ID mismatch: expected '%s', got '%s'", nodeID, parts[0])
 	}
 
-	// 构造本地 Pin ID: "WireName.PinName"
-	pinID := parts[1] + "." + parts[2]
-
+	// 使用完整的 Pin ID (与 Push 时的格式一致)
 	err := cs.GetPinValue().setValue(ctx, dt.PinValue{
-		ID:      pinID,
+		ID:      v.ID, // 使用完整格式: "NodeID.WireName.PinName"
 		Value:   v.Value,
 		Updated: time.Now(),
 	})
@@ -387,11 +379,15 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	for _, pin := range pins {
 		writeValue, _, err := cs.GetPinWrite().GetWrite(ctx, pin.ID)
 		if err != nil {
+			cs.Logger().Sugar().Debugf("buildPinWritesPayload: skip pin %s due to error: %v", pin.ID, err)
 			continue // 忽略没有写入值的 Pin
 		}
 		if writeValue == nil {
+			cs.Logger().Sugar().Debugf("buildPinWritesPayload: skip pin %s due to nil value", pin.ID)
 			continue
 		}
+
+		cs.Logger().Sugar().Debugf("buildPinWritesPayload: adding pin %s, value=%v (type=%T)", pin.ID, writeValue, writeValue)
 
 		writes = append(writes, dt.PinValueMessage{
 			ID:    pin.ID,

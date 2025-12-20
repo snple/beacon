@@ -98,34 +98,6 @@ func (s *QueenUpService) stop() {
 	s.closeWG.Wait()
 }
 
-func (s *QueenUpService) push() error {
-	// 使用 backoff 进行初始连接
-	operation := func() error {
-		err := s.client.Connect()
-		if err != nil {
-			s.es.Logger().Sugar().Errorf("queen connect: %v", err)
-		}
-		return err
-	}
-
-	err := backoff.Retry(operation, backoff.WithContext(backoff.NewExponentialBackOff(), s.ctx))
-	if err != nil {
-		s.es.Logger().Sugar().Errorf("backoff.Retry: %v", err)
-		return err
-	}
-
-	s.es.Logger().Sugar().Info("queen connect success")
-
-	// 同步配置数据和 PinValue 到 Core
-	if err := s.syncToRemote(s.ctx); err != nil {
-		return err
-	}
-
-	s.es.Logger().Sugar().Info("push success")
-
-	return nil
-}
-
 // onConnect 连接成功回调：订阅、全量同步和启动批量发送
 func (s *QueenUpService) onConnect(sessionPresent bool, _ map[string]string) {
 	s.es.Logger().Sugar().Info("queen client connected")
@@ -204,7 +176,7 @@ func (s *QueenUpService) startBatchNotify() {
 				pinValues = append(pinValues, change)
 			}
 
-			if err := s.publishPinValueBatch(s.ctx, pinValues); err != nil {
+			if err := s.PublishPinValueBatch(s.ctx, pinValues); err != nil {
 				s.es.Logger().Sugar().Errorf("publish pin value batch: %v", err)
 			} else {
 				s.es.Logger().Sugar().Debugf("Published %d pin values", len(pinValues))
@@ -362,8 +334,6 @@ func (s *QueenUpService) syncToRemote(_ context.Context) error {
 func (s *QueenUpService) syncPinValueToRemote(ctx context.Context) error {
 	limit := 100
 
-	nodeID := s.es.GetStorage().GetNodeID()
-
 	var messages []dt.PinValueMessage
 	after := time.Time{}
 
@@ -375,7 +345,7 @@ func (s *QueenUpService) syncPinValueToRemote(ctx context.Context) error {
 		}
 
 		for _, item := range items {
-			messages = append(messages, dt.PinValueMessage{ID: nodeID + "." + item.ID, Value: item.Value})
+			messages = append(messages, dt.PinValueMessage{ID: item.ID, Value: item.Value})
 
 			after = item.Updated
 		}
@@ -389,19 +359,21 @@ func (s *QueenUpService) syncPinValueToRemote(ctx context.Context) error {
 		return nil
 	}
 
-	return s.publishPinValueBatch(ctx, messages)
+	return s.PublishPinValueBatch(ctx, messages)
 }
 
 // publishPinValueBatch: 批量发布 PinValue 到 Core（ticker模式）
-func (s *QueenUpService) publishPinValueBatch(_ context.Context, changes []dt.PinValueMessage) error {
+func (s *QueenUpService) PublishPinValueBatch(_ context.Context, changes []dt.PinValueMessage) error {
 	if len(changes) == 0 {
 		return nil
 	}
 
+	nodeID := s.es.GetStorage().GetNodeID()
+
 	var messages []dt.PinValueMessage
 	for _, change := range changes {
 		messages = append(messages, dt.PinValueMessage{
-			ID:    change.ID,
+			ID:    nodeID + "." + change.ID, // 添加 NodeID 前缀
 			Value: change.Value,
 		})
 	}
@@ -482,23 +454,30 @@ func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
 	}
 
 	// 应用每个 pin write
+	successCount := 0
 	for _, item := range arr {
 		itemMap, ok := item.(nson.Map)
 		if !ok {
+			s.es.Logger().Sugar().Warnf("pin write item is not a map: type=%T", item)
 			continue
 		}
 
 		var msg dt.PinValueMessage
 		if err := nson.Unmarshal(itemMap, &msg); err != nil {
+			s.es.Logger().Sugar().Warnf("unmarshal pin write failed: %v", err)
 			continue
 		}
 
+		s.es.Logger().Sugar().Debugf("processing pin write: id=%s, value=%v", msg.ID, msg.Value)
+
 		if err := s.setPinWrite(msg); err != nil {
-			s.es.Logger().Sugar().Warnf("apply pin write failed: %s, error=%v", msg.ID, err)
+			s.es.Logger().Sugar().Warnf("apply pin write failed: id=%s, error=%v", msg.ID, err)
+		} else {
+			successCount++
 		}
 	}
 
-	s.es.Logger().Sugar().Infof("Synced %d pin writes from remote", len(arr))
+	s.es.Logger().Sugar().Infof("Synced %d pin writes from remote (success=%d, total=%d)", len(arr), successCount, len(arr))
 
 	return nil
 }

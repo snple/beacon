@@ -25,13 +25,7 @@ func (s *PinValueService) GetValue(ctx context.Context, pinID string) (nson.Valu
 		return nil, time.Time{}, fmt.Errorf("please supply valid Pin.Id")
 	}
 
-	// 获取 Pin 所属的 Node ID
-	nodeID, err := s.cs.GetStorage().GetPinNodeID(pinID)
-	if err != nil {
-		return nil, time.Time{}, nil
-	}
-
-	value, updated, err := s.cs.GetStorage().GetPinValue(nodeID, pinID)
+	value, updated, err := s.cs.GetStorage().GetPinValue(pinID)
 	if err != nil {
 		// 如果未找到值，返回空值而不是错误
 		return nil, time.Time{}, nil
@@ -50,13 +44,7 @@ func (s *PinValueService) setValue(ctx context.Context, value dt.PinValue) error
 		value.Updated = time.Now()
 	}
 
-	// 验证 Pin 存在并获取 nodeID
-	nodeID, err := s.cs.GetStorage().GetPinNodeID(value.ID)
-	if err != nil {
-		return fmt.Errorf("pin not found: %w", err)
-	}
-
-	err = s.cs.GetStorage().SetPinValue(ctx, nodeID, value)
+	err := s.cs.GetStorage().SetPinValue(ctx, value)
 	if err != nil {
 		return fmt.Errorf("setPinValue failed: %w", err)
 	}

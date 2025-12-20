@@ -55,20 +55,20 @@ func TestApplyDeviceTemplate_GeneratesStableIDs(t *testing.T) {
 		t.Fatalf("len(node.Wires)=%d", len(node.Wires))
 	}
 
-	if node.Wires[0].ID != "SN123.w1" {
+	if node.Wires[0].ID != "w1" {
 		t.Fatalf("wire[0].ID=%q", node.Wires[0].ID)
 	}
-	if node.Wires[1].ID != "SN123.w2" {
+	if node.Wires[1].ID != "w2" {
 		t.Fatalf("wire[1].ID=%q", node.Wires[1].ID)
 	}
 
-	if node.Wires[0].Pins[0].ID != "SN123.w1.p1" {
+	if node.Wires[0].Pins[0].ID != "w1.p1" {
 		t.Fatalf("pin id=%q", node.Wires[0].Pins[0].ID)
 	}
-	if node.Wires[0].Pins[1].ID != "SN123.w1.p2" {
+	if node.Wires[0].Pins[1].ID != "w1.p2" {
 		t.Fatalf("pin id=%q", node.Wires[0].Pins[1].ID)
 	}
-	if node.Wires[1].Pins[0].ID != "SN123.w2.p" {
+	if node.Wires[1].Pins[0].ID != "w2.p" {
 		t.Fatalf("pin id=%q", node.Wires[1].Pins[0].ID)
 	}
 

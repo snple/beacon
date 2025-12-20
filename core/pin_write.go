@@ -26,13 +26,7 @@ func (s *PinWriteService) GetWrite(ctx context.Context, pinID string) (nson.Valu
 		return nil, time.Time{}, fmt.Errorf("please supply valid Pin.Id")
 	}
 
-	// 获取 Pin 所属的 Node ID
-	nodeID, err := s.cs.GetStorage().GetPinNodeID(pinID)
-	if err != nil {
-		return nil, time.Time{}, nil
-	}
-
-	value, updated, err := s.cs.GetStorage().GetPinWrite(nodeID, pinID)
+	value, updated, err := s.cs.GetStorage().GetPinWrite(pinID)
 	if err != nil {
 		// 如果未找到值，返回空值而不是错误
 		return nil, time.Time{}, nil
@@ -71,7 +65,7 @@ func (s *PinWriteService) SetWrite(ctx context.Context, value dt.PinValue, realt
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	err = s.cs.GetStorage().SetPinWrite(ctx, nodeID, value)
+	err = s.cs.GetStorage().SetPinWrite(ctx, value)
 	if err != nil {
 		return fmt.Errorf("setPinWrite failed: %w", err)
 	}
@@ -90,14 +84,7 @@ func (s *PinWriteService) DeleteWrite(ctx context.Context, pinID string) error {
 		return fmt.Errorf("please supply valid Pin.Id")
 	}
 
-	// 获取 Pin 所属的 Node ID
-	nodeID, err := s.cs.GetStorage().GetPinNodeID(pinID)
-	if err != nil {
-		// Pin 不存在，返回成功
-		return nil
-	}
-
-	err = s.cs.GetStorage().DeletePinWrite(ctx, nodeID, pinID)
+	err := s.cs.GetStorage().DeletePinWrite(ctx, pinID)
 	if err != nil {
 		return fmt.Errorf("deletePinWrite failed: %w", err)
 	}

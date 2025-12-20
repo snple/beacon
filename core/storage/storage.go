@@ -385,17 +385,17 @@ func (s *Storage) SetSecret(ctx context.Context, nodeID, secret string) error {
 // --- PinValue 操作 ---
 
 const (
-	PIN_VALUE_PREFIX = "pv:" // pv:{nodeID}:{pinID}
-	PIN_WRITE_PREFIX = "pw:" // pw:{nodeID}:{pinID}
+	PIN_VALUE_PREFIX = "pv:" // pv:{pinID}，pinID 格式：nodeID.WireName.PinName
+	PIN_WRITE_PREFIX = "pw:" // pw:{pinID}, pinID 格式：nodeID.WireName.PinName
 )
 
 // GetPinValue 获取点位值
-func (s *Storage) GetPinValue(nodeID, pinID string) (nson.Value, time.Time, error) {
+func (s *Storage) GetPinValue(pinID string) (nson.Value, time.Time, error) {
 	var value nson.Value = nson.Null{}
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(PIN_VALUE_PREFIX + nodeID + ":" + pinID))
+		item, err := txn.Get([]byte(PIN_VALUE_PREFIX + pinID))
 		if err != nil {
 			return err
 		}
@@ -426,7 +426,7 @@ func (s *Storage) GetPinValue(nodeID, pinID string) (nson.Value, time.Time, erro
 }
 
 // SetPinValue 设置点位值
-func (s *Storage) SetPinValue(ctx context.Context, nodeID string, value dt.PinValue) error {
+func (s *Storage) SetPinValue(ctx context.Context, value dt.PinValue) error {
 	m, err := nson.Marshal(value)
 	if err != nil {
 		return err
@@ -442,7 +442,7 @@ func (s *Storage) SetPinValue(ctx context.Context, nodeID string, value dt.PinVa
 	txn := s.db.NewTransactionAt(commitTs, true)
 	defer txn.Discard()
 
-	if err := txn.Set([]byte(PIN_VALUE_PREFIX+nodeID+":"+value.ID), buf.Bytes()); err != nil {
+	if err := txn.Set([]byte(PIN_VALUE_PREFIX+value.ID), buf.Bytes()); err != nil {
 		return err
 	}
 
@@ -462,7 +462,7 @@ func (s *Storage) ListPinValues(nodeID string, after time.Time, limit int) ([]dt
 	defer it.Close()
 
 	// 使用 pv:{nodeID}: 前缀扫描
-	prefix := []byte(PIN_VALUE_PREFIX + nodeID + ":")
+	prefix := []byte(PIN_VALUE_PREFIX + nodeID)
 	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
 		item := it.Item()
 		err := item.Value(func(val []byte) error {
@@ -502,12 +502,12 @@ func (s *Storage) ListPinValues(nodeID string, after time.Time, limit int) ([]dt
 // --- PinWrite 操作 ---
 
 // GetPinWrite 获取点位写入值
-func (s *Storage) GetPinWrite(nodeID, pinID string) (nson.Value, time.Time, error) {
+func (s *Storage) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
 	var value nson.Value = nson.Null{}
 	var updated time.Time
 
 	err := s.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(PIN_WRITE_PREFIX + nodeID + ":" + pinID))
+		item, err := txn.Get([]byte(PIN_WRITE_PREFIX + pinID))
 		if err != nil {
 			return err
 		}
@@ -524,6 +524,7 @@ func (s *Storage) GetPinWrite(nodeID, pinID string) (nson.Value, time.Time, erro
 				return err
 			}
 
+			value = entry.Value  // 赋值解码后的值
 			updated = entry.Updated
 			return nil
 		})
@@ -537,7 +538,7 @@ func (s *Storage) GetPinWrite(nodeID, pinID string) (nson.Value, time.Time, erro
 }
 
 // SetPinWrite 设置点位写入值
-func (s *Storage) SetPinWrite(ctx context.Context, nodeID string, value dt.PinValue) error {
+func (s *Storage) SetPinWrite(ctx context.Context, value dt.PinValue) error {
 	m, err := nson.Marshal(value)
 	if err != nil {
 		return err
@@ -553,7 +554,7 @@ func (s *Storage) SetPinWrite(ctx context.Context, nodeID string, value dt.PinVa
 	txn := s.db.NewTransactionAt(commitTs, true)
 	defer txn.Discard()
 
-	if err := txn.Set([]byte(PIN_WRITE_PREFIX+nodeID+":"+value.ID), buf.Bytes()); err != nil {
+	if err := txn.Set([]byte(PIN_WRITE_PREFIX+value.ID), buf.Bytes()); err != nil {
 		return err
 	}
 
@@ -561,13 +562,13 @@ func (s *Storage) SetPinWrite(ctx context.Context, nodeID string, value dt.PinVa
 }
 
 // DeletePinWrite 删除点位写入值
-func (s *Storage) DeletePinWrite(ctx context.Context, nodeID, pinID string) error {
+func (s *Storage) DeletePinWrite(ctx context.Context, pinID string) error {
 	// 使用 NewTransactionAt + CommitAt 删除
 	commitTs := uint64(time.Now().UnixMicro())
 	txn := s.db.NewTransactionAt(commitTs, true)
 	defer txn.Discard()
 
-	if err := txn.Delete([]byte(PIN_WRITE_PREFIX + nodeID + ":" + pinID)); err != nil {
+	if err := txn.Delete([]byte(PIN_WRITE_PREFIX + pinID)); err != nil {
 		return err
 	}
 
@@ -587,7 +588,7 @@ func (s *Storage) ListPinWrites(nodeID string, after time.Time, limit int) ([]dt
 	defer it.Close()
 
 	// 使用 pw:{nodeID}: 前缀扫描
-	prefix := []byte(PIN_WRITE_PREFIX + nodeID + ":")
+	prefix := []byte(PIN_WRITE_PREFIX + nodeID)
 	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
 		item := it.Item()
 		err := item.Value(func(val []byte) error {
