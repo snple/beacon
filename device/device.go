@@ -1,12 +1,21 @@
 package device
 
-import "github.com/danclive/nson-go"
+import (
+	"context"
+	"fmt"
+	"maps"
+	"sync"
+	"time"
+
+	"github.com/danclive/nson-go"
+	"go.uber.org/zap"
+)
 
 // ============================================================================
 // 核心数据结构（设计为与 storage.Node/Wire/Pin 兼容）
 // ============================================================================
 
-// Device 设备模板定义
+// Device 设备定义（纯配置，可以值传递）
 type Device struct {
 	ID    string   // 设备类型标识（如 "smart_bulb_color"）
 	Name  string   // 设备显示名称（如 "彩色智能灯泡"）
@@ -22,6 +31,10 @@ type Wire struct {
 	Desc string   // Wire 描述
 	Type string   // Wire 类型（可选，用于标识功能类型）
 	Pins []Pin    // Pin 模板列表
+
+	// 执行器配置（可选，与 Device 定义绑定）
+	Actuator       Actuator          // 关联的执行器（nil 表示使用 NoOpActuator）
+	ActuatorConfig map[string]string // 执行器配置选项
 }
 
 // Pin 属性模板定义（对应 storage.Pin）
@@ -29,6 +42,7 @@ type Pin struct {
 	Name      string     // Pin 名称
 	Tags      []string   // 标签列表（用于分类和查询）
 	Desc      string     // Pin 描述
+	Addr      string     // 地址映射（可选，用于绑定实际硬件地址）
 	Type      uint32     // 数据类型（nson.DataType）
 	Rw        int32      // 读写权限：0=只读，1=只写，2=读写，3=内部可写
 	Default   nson.Value // 默认值（可选）
@@ -90,6 +104,12 @@ func (p *PinBuilderT) Desc(desc string) *PinBuilderT {
 // Tags 设置标签
 func (p *PinBuilderT) Tags(tags ...string) *PinBuilderT {
 	p.pin.Tags = tags
+	return p
+}
+
+// Addr 设置地址映射
+func (p *PinBuilderT) Addr(addr string) *PinBuilderT {
+	p.pin.Addr = addr
 	return p
 }
 
@@ -169,9 +189,10 @@ type WireBuilderT struct {
 func WireBuilder(name string) *WireBuilderT {
 	return &WireBuilderT{
 		wire: Wire{
-			Name: name,
-			Pins: []Pin{},
-			Tags: []string{},
+			Name:           name,
+			Pins:           []Pin{},
+			Tags:           []string{},
+			ActuatorConfig: make(map[string]string),
 		},
 	}
 }
@@ -197,6 +218,24 @@ func (w *WireBuilderT) Type(typ string) *WireBuilderT {
 // Pin 添加 Pin
 func (w *WireBuilderT) Pin(p Pin) *WireBuilderT {
 	w.wire.Pins = append(w.wire.Pins, p)
+	return w
+}
+
+// WithActuator 设置执行器（设备定义时绑定）
+func (w *WireBuilderT) WithActuator(act Actuator) *WireBuilderT {
+	w.wire.Actuator = act
+	return w
+}
+
+// ActuatorOption 设置执行器配置选项
+func (w *WireBuilderT) ActuatorOption(key, value string) *WireBuilderT {
+	w.wire.ActuatorConfig[key] = value
+	return w
+}
+
+// ActuatorOptions 批量设置执行器配置选项
+func (w *WireBuilderT) ActuatorOptions(opts map[string]string) *WireBuilderT {
+	maps.Copy(w.wire.ActuatorConfig, opts)
 	return w
 }
 
@@ -275,3 +314,269 @@ const (
 	ON  = 1
 	OFF = 0
 )
+
+// ============================================================================
+// DeviceManager - 设备运行时管理器（管理执行器生命周期）
+// ============================================================================
+
+// DeviceManager 设备运行时管理器
+type DeviceManager struct {
+	device Device // 设备配置（只读）
+
+	// 运行时状态
+	actuators    map[string]Actuator // wireID -> Actuator 实例
+	pollInterval time.Duration       // 轮询间隔
+	pollEnabled  map[string]bool     // wireID -> 是否启用轮询
+	pollCancel   context.CancelFunc  // 停止轮询
+	pollWG       sync.WaitGroup      // 等待轮询结束
+	mu           sync.RWMutex        // 保护 actuators
+	logger       *zap.Logger         // 日志
+	onPinRead    PinReadCallback     // Pin 读取回调（用于上报传感器数据）
+}
+
+// PinReadCallback Pin 读取回调（用于将传感器数据上报到上层）
+type PinReadCallback func(wireID, pinName string, value nson.Value) error
+
+// NewDeviceManager 创建设备管理器
+func NewDeviceManager(dev Device) *DeviceManager {
+	return &DeviceManager{
+		device:       dev,
+		pollInterval: 5 * time.Second, // 默认 5 秒轮询
+	}
+}
+
+// GetDevice 获取设备配置（只读）
+func (dm *DeviceManager) GetDevice() Device {
+	return dm.device
+}
+
+// Initialize 初始化设备的所有执行器
+func (dm *DeviceManager) Initialize(ctx context.Context, logger *zap.Logger, onPinRead PinReadCallback) error {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	if dm.actuators != nil {
+		return fmt.Errorf("device already initialized")
+	}
+
+	dm.actuators = make(map[string]Actuator)
+	dm.pollEnabled = make(map[string]bool)
+	dm.logger = logger
+	dm.onPinRead = onPinRead
+
+	// 为每个 Wire 初始化执行器
+	for i := range dm.device.Wires {
+		wire := &dm.device.Wires[i]
+
+		// 选择执行器
+		var actuator Actuator
+		if wire.Actuator != nil {
+			// 使用 Wire 中预配置的执行器
+			actuator = wire.Actuator
+		} else if wire.Type != "" {
+			// 根据 Wire.Type 从注册表获取
+			act, err := GetActuator(wire.Type)
+			if err != nil {
+				logger.Sugar().Warnf("No actuator for wire %s (type=%s), using noop: %v",
+					wire.Name, wire.Type, err)
+				actuator, _ = GetActuator("") // NoOpActuator
+			} else {
+				actuator = act
+			}
+		} else {
+			// 默认使用 NoOpActuator
+			actuator, _ = GetActuator("")
+		}
+
+		// 初始化执行器
+		config := ActuatorConfig{
+			WireName: wire.Name,
+			WireType: wire.Type,
+			Pins:     wire.Pins,
+			Options:  wire.ActuatorConfig,
+		}
+
+		if err := actuator.Initialize(ctx, config); err != nil {
+			return fmt.Errorf("initialize actuator for wire %s: %w", wire.Name, err)
+		}
+
+		dm.actuators[wire.Name] = actuator
+
+		// 检查是否需要轮询（有只读或可读写的 Pin）
+		hasReadable := false
+		for _, pin := range wire.Pins {
+			if pin.Rw == RO || pin.Rw == RW {
+				hasReadable = true
+				break
+			}
+		}
+		dm.pollEnabled[wire.Name] = hasReadable
+
+		info := actuator.Info()
+		logger.Sugar().Infof("Actuator initialized: wire=%s, type=%s, name=%s, version=%s",
+			wire.Name, wire.Type, info.Name, info.Version)
+	}
+
+	return nil
+}
+
+// Start 启动设备（开始轮询传感器等）
+func (dm *DeviceManager) Start(ctx context.Context) error {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	if dm.actuators == nil {
+		return fmt.Errorf("device not initialized, call Initialize first")
+	}
+
+	if dm.pollCancel != nil {
+		return fmt.Errorf("device already started")
+	}
+
+	// 创建轮询上下文
+	pollCtx, cancel := context.WithCancel(ctx)
+	dm.pollCancel = cancel
+
+	// 为每个可读的 Wire 启动轮询
+	for wireID, enabled := range dm.pollEnabled {
+		if !enabled {
+			continue
+		}
+
+		wireID := wireID // 捕获变量
+		dm.pollWG.Add(1)
+		go dm.pollActuator(pollCtx, wireID)
+	}
+
+	dm.logger.Info("Device started")
+	return nil
+}
+
+// Stop 停止设备（停止轮询，关闭执行器）
+func (dm *DeviceManager) Stop() error {
+	dm.mu.Lock()
+	if dm.pollCancel != nil {
+		dm.pollCancel()
+		dm.pollCancel = nil
+	}
+	dm.mu.Unlock()
+
+	// 等待所有轮询停止
+	dm.pollWG.Wait()
+
+	// 关闭所有执行器
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	var errs []error
+	for wireID, actuator := range dm.actuators {
+		if err := actuator.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close actuator %s: %w", wireID, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("stop device: %v", errs)
+	}
+
+	dm.logger.Info("Device stopped")
+	return nil
+}
+
+// Execute 执行 Pin 写入
+func (dm *DeviceManager) Execute(ctx context.Context, wireID, pinName string, value nson.Value) error {
+	dm.mu.RLock()
+	actuator, ok := dm.actuators[wireID]
+	dm.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("no actuator for wire: %s", wireID)
+	}
+
+	return actuator.Execute(ctx, pinName, value)
+}
+
+// Read 读取 Wire 的所有可读 Pin
+func (dm *DeviceManager) Read(ctx context.Context, wireID string) (map[string]nson.Value, error) {
+	dm.mu.RLock()
+	actuator, ok := dm.actuators[wireID]
+	dm.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("no actuator for wire: %s", wireID)
+	}
+
+	return actuator.Read(ctx, nil)
+}
+
+// GetActuatorInfo 获取 Wire 的执行器信息
+func (dm *DeviceManager) GetActuatorInfo(wireID string) (ActuatorInfo, error) {
+	dm.mu.RLock()
+	actuator, ok := dm.actuators[wireID]
+	dm.mu.RUnlock()
+
+	if !ok {
+		return ActuatorInfo{}, fmt.Errorf("no actuator for wire: %s", wireID)
+	}
+
+	return actuator.Info(), nil
+}
+
+// ListActuatorInfos 列出所有执行器信息
+func (dm *DeviceManager) ListActuatorInfos() map[string]ActuatorInfo {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	infos := make(map[string]ActuatorInfo, len(dm.actuators))
+	for wireID, actuator := range dm.actuators {
+		infos[wireID] = actuator.Info()
+	}
+	return infos
+}
+
+// SetPollInterval 设置轮询间隔
+func (dm *DeviceManager) SetPollInterval(interval time.Duration) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	dm.pollInterval = interval
+}
+
+// pollActuator 轮询某个 Wire 的传感器数据
+func (dm *DeviceManager) pollActuator(ctx context.Context, wireID string) {
+	defer dm.pollWG.Done()
+
+	ticker := time.NewTicker(dm.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			dm.mu.RLock()
+			actuator, ok := dm.actuators[wireID]
+			dm.mu.RUnlock()
+
+			if !ok {
+				continue
+			}
+
+			// 读取所有 Pin
+			values, err := actuator.Read(ctx, nil)
+			if err != nil {
+				dm.logger.Sugar().Warnf("Poll actuator %s: %v", wireID, err)
+				continue
+			}
+
+			// 回调上报
+			if dm.onPinRead != nil {
+				for pinName, value := range values {
+					if err := dm.onPinRead(wireID, pinName, value); err != nil {
+						dm.logger.Sugar().Warnf("OnPinRead callback for %s.%s: %v",
+							wireID, pinName, err)
+					}
+				}
+			}
+		}
+	}
+}

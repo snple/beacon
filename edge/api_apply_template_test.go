@@ -37,7 +37,7 @@ func TestApplyDeviceTemplate_GeneratesStableIDs(t *testing.T) {
 	nodeID := "SN123"
 	es, err := Edge(
 		WithNodeID(nodeID, "secret"),
-		WithDeviceTemplate(dev),
+		WithDevice(dev),
 	)
 	if err != nil {
 		t.Fatalf("Edge(): %v", err)
@@ -86,7 +86,7 @@ func TestApplyDeviceTemplate_NodeIDMismatch(t *testing.T) {
 	es1, err := Edge(
 		WithBadger(bo),
 		WithNodeID("SN1", "secret"),
-		WithDeviceTemplate(dev1),
+		WithDevice(dev1),
 	)
 	if err != nil {
 		t.Fatalf("Edge() first: %v", err)
@@ -98,7 +98,7 @@ func TestApplyDeviceTemplate_NodeIDMismatch(t *testing.T) {
 	es2, err := Edge(
 		WithBadger(bo),
 		WithNodeID("SN1", "secret"),
-		WithDeviceTemplate(dev2),
+		WithDevice(dev2),
 	)
 	if err != nil {
 		t.Fatalf("Edge() second: %v", err)

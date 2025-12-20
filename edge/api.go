@@ -3,6 +3,7 @@ package edge
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -222,6 +223,20 @@ func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue) error
 	}
 
 	es.dopts.logger.Sugar().Infof("SetPinWrite: pinID=%s value=%v", value.ID, value)
+
+	// 🔥 执行硬件操作
+	if es.deviceMgr != nil {
+		// 解析 wireID 和 pinName（格式：wireID.pinName）
+		parts := strings.SplitN(value.ID, ".", 2)
+		if len(parts) == 2 {
+			wireID, pinName := parts[0], parts[1]
+			if err := es.deviceMgr.Execute(ctx, wireID, pinName, value.Value); err != nil {
+				// 硬件执行失败记录错误，但不影响数据保存
+				es.dopts.logger.Sugar().Errorf("Execute actuator for pin %s: %v", value.ID, err)
+			}
+		}
+	}
+
 	return nil
 }
 

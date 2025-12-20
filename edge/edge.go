@@ -23,6 +23,9 @@ type EdgeService struct {
 
 	queenUp *QueenUpService
 
+	// Device 管理器（管理执行器生命周期）
+	deviceMgr *device.DeviceManager
+
 	// PinValue 批量通知
 	pinValueChanges chan dt.PinValueMessage
 
@@ -100,6 +103,12 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 	}
 	es.queenUp = queenUp
 
+	// 创建 DeviceManager 并初始化执行器
+	es.deviceMgr = device.NewDeviceManager(*es.dopts.device)
+	if err := es.deviceMgr.Initialize(ctx, es.dopts.logger, es.onPinRead); err != nil {
+		return nil, fmt.Errorf("initialize device manager: %w", err)
+	}
+
 	return es, nil
 }
 
@@ -118,9 +127,18 @@ func (es *EdgeService) Start() {
 		es.queenUp.start()
 	}()
 
+	// 启动 DeviceManager（开始轮询传感器）
+	if err := es.deviceMgr.Start(es.ctx); err != nil {
+		es.Logger().Sugar().Errorf("Start device manager: %v", err)
+	}
 }
 
 func (es *EdgeService) Stop() {
+	// 先停止 Device（停止轮询和关闭执行器）
+	if err := es.deviceMgr.Stop(); err != nil {
+		es.Logger().Sugar().Errorf("Stop device: %v", err)
+	}
+
 	es.queenUp.stop()
 	es.badger.stop()
 
@@ -143,6 +161,31 @@ func (es *EdgeService) Context() context.Context {
 
 func (es *EdgeService) Logger() *zap.Logger {
 	return es.dopts.logger
+}
+
+// GetDeviceManager 获取设备管理器
+func (es *EdgeService) GetDeviceManager() *device.DeviceManager {
+	return es.deviceMgr
+}
+
+// onPinRead Device 传感器数据读取回调
+func (es *EdgeService) onPinRead(wireID, pinName string, value nson.Value) error {
+	// 构建完整的 pinID
+	pinID := wireID + "." + pinName
+
+	// 更新本地存储
+	ctx := context.Background()
+	pinValue := dt.PinValue{
+		ID:      pinID,
+		Value:   value,
+		Updated: time.Now(),
+	}
+	if err := es.storage.SetPinValue(ctx, pinValue); err != nil {
+		return fmt.Errorf("set pin value: %w", err)
+	}
+
+	// 通知 Core
+	return es.NotifyPinValue(pinID, value, false)
 }
 
 type edgeOptions struct {
@@ -249,7 +292,7 @@ func WithName(name string) EdgeOption {
 	})
 }
 
-func WithDeviceTemplate(dev device.Device) EdgeOption {
+func WithDevice(dev device.Device) EdgeOption {
 	return newFuncEdgeOption(func(o *edgeOptions) {
 		o.device = &dev
 	})
