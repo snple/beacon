@@ -65,14 +65,79 @@ func Enum(value nson.Value, label string) EnumItem {
 	return EnumItem{Value: value, Label: label}
 }
 
-// ============================================================================
-// 默认常量（用于 core 模块后向兼容）
-// ============================================================================
+// DeepCopyWire 深拷贝 Wire（包括 Pins）
+func DeepCopyWire(wire *Wire) Wire {
+	if wire == nil {
+		return Wire{}
+	}
 
-const (
-	DEFAULT_NODE = "default"
-	DEFAULT_WIRE = "default"
-)
+	copied := Wire{
+		Name: wire.Name,
+		Desc: wire.Desc,
+		Type: wire.Type,
+	}
+
+	// 深拷贝 Tags
+	if wire.Tags != nil {
+		copied.Tags = make([]string, len(wire.Tags))
+		copy(copied.Tags, wire.Tags)
+	}
+
+	// 深拷贝 Pins
+	if wire.Pins != nil {
+		copied.Pins = make([]Pin, len(wire.Pins))
+		for i, pin := range wire.Pins {
+			copied.Pins[i] = DeepCopyPin(pin)
+		}
+	}
+
+	// 深拷贝 ActuatorConfig
+	if wire.ActuatorConfig != nil {
+		copied.ActuatorConfig = make(map[string]string, len(wire.ActuatorConfig))
+		maps.Copy(copied.ActuatorConfig, wire.ActuatorConfig)
+	}
+
+	// Actuator 是接口，只复制引用（执行器通常是单例或共享的）
+	copied.Actuator = wire.Actuator
+
+	return copied
+}
+
+// DeepCopyPin 深拷贝 Pin
+func DeepCopyPin(pin Pin) Pin {
+	copied := Pin{
+		Name:      pin.Name,
+		Desc:      pin.Desc,
+		Addr:      pin.Addr,
+		Type:      pin.Type,
+		Rw:        pin.Rw,
+		Precision: pin.Precision,
+		Unit:      pin.Unit,
+		Default:   pin.Default,
+		Min:       pin.Min,
+		Max:       pin.Max,
+		Step:      pin.Step,
+	}
+
+	// 深拷贝 Tags
+	if pin.Tags != nil {
+		copied.Tags = make([]string, len(pin.Tags))
+		copy(copied.Tags, pin.Tags)
+	}
+
+	// 深拷贝 Enum
+	if pin.Enum != nil {
+		copied.Enum = make([]EnumItem, len(pin.Enum))
+		for i, item := range pin.Enum {
+			copied.Enum[i] = EnumItem{
+				Value: item.Value,
+				Label: item.Label,
+			}
+		}
+	}
+
+	return copied
+}
 
 // ============================================================================
 // Pin Builder
@@ -351,7 +416,7 @@ func (dm *DeviceManager) GetDevice() Device {
 }
 
 // Initialize 初始化设备的所有执行器
-func (dm *DeviceManager) Initialize(ctx context.Context, logger *zap.Logger, onPinRead PinReadCallback) error {
+func (dm *DeviceManager) Init(ctx context.Context, logger *zap.Logger, onPinRead PinReadCallback) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -390,13 +455,11 @@ func (dm *DeviceManager) Initialize(ctx context.Context, logger *zap.Logger, onP
 
 		// 初始化执行器
 		config := ActuatorConfig{
-			WireName: wire.Name,
-			WireType: wire.Type,
-			Pins:     wire.Pins,
-			Options:  wire.ActuatorConfig,
+			Wire: DeepCopyWire(wire),
+			Pins: wire.Pins,
 		}
 
-		if err := actuator.Initialize(ctx, config); err != nil {
+		if err := actuator.Init(ctx, config); err != nil {
 			return fmt.Errorf("initialize actuator for wire %s: %w", wire.Name, err)
 		}
 

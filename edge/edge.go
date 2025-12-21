@@ -105,7 +105,7 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 
 	// 创建 DeviceManager 并初始化执行器
 	es.deviceMgr = device.NewDeviceManager(*es.dopts.device)
-	if err := es.deviceMgr.Initialize(ctx, es.dopts.logger, es.onPinRead); err != nil {
+	if err := es.deviceMgr.Init(ctx, es.dopts.logger, es.onPinRead); err != nil {
 		return nil, fmt.Errorf("initialize device manager: %w", err)
 	}
 

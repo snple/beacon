@@ -14,8 +14,10 @@ func TestNoOpActuator(t *testing.T) {
 	}
 
 	config := ActuatorConfig{
-		WireName: "test",
-		WireType: "noop",
+		Wire: Wire{
+			Name: "test",
+			Type: "noop",
+		},
 		Pins: []Pin{
 			{Name: "on", Type: uint32(nson.DataTypeBOOL), Default: nson.Bool(false)},
 			{Name: "dim", Type: uint32(nson.DataTypeU8), Default: nson.U8(0)},
@@ -23,7 +25,7 @@ func TestNoOpActuator(t *testing.T) {
 	}
 
 	// 初始化
-	if err := actuator.Initialize(ctx, config); err != nil {
+	if err := actuator.Init(ctx, config); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
@@ -113,14 +115,17 @@ func TestActuatorChain(t *testing.T) {
 	chain := NewActuatorChain(act1, act2)
 
 	config := ActuatorConfig{
-		WireName: "chain",
+		Wire: Wire{
+			Name: "test_chain",
+			Type: "noop",
+		},
 		Pins: []Pin{
 			{Name: "test", Type: uint32(nson.DataTypeBOOL)},
 		},
 	}
 
 	// 初始化
-	if err := chain.Initialize(ctx, config); err != nil {
+	if err := chain.Init(ctx, config); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 

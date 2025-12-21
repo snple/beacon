@@ -15,9 +15,9 @@ import (
 // Actuator 是 Wire 级别的硬件执行器接口
 // 每个 Wire 对应一个 Actuator，负责将 Pin 写入转换为实际的硬件操作
 type Actuator interface {
-	// Initialize 初始化执行器（如打开串口、连接设备等）
+	// Init 初始化执行器（如打开串口、连接设备等）
 	// config: Wire 配置信息，包含地址映射等
-	Initialize(ctx context.Context, config ActuatorConfig) error
+	Init(ctx context.Context, config ActuatorConfig) error
 
 	// Execute 执行 Pin 写入操作
 	// pinName: Pin 名称（不含 Wire 前缀，如 "on", "dim"）
@@ -38,17 +38,15 @@ type Actuator interface {
 
 // ActuatorConfig 执行器配置
 type ActuatorConfig struct {
-	WireName string            // Wire 名称
-	WireType string            // Wire 类型（用于选择执行器）
-	Pins     []Pin             // Pin 列表（包含地址映射等）
-	Options  map[string]string // 自定义配置选项
+	Wire Wire  // Wire
+	Pins []Pin // Pin 列表（包含地址映射等）
 }
 
 // ActuatorInfo 执行器信息
 type ActuatorInfo struct {
-	Name        string   // 执行器名称
-	Type        string   // 执行器类型
-	Version     string   // 版本
+	Name         string   // 执行器名称
+	Type         string   // 执行器类型
+	Version      string   // 版本
 	Capabilities []string // 支持的功能（如 "read", "write", "batch"）
 }
 
@@ -121,7 +119,7 @@ type NoOpActuator struct {
 	info  ActuatorInfo
 }
 
-func (a *NoOpActuator) Initialize(ctx context.Context, config ActuatorConfig) error {
+func (a *NoOpActuator) Init(ctx context.Context, config ActuatorConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -211,12 +209,12 @@ func NewActuatorChain(actuators ...Actuator) *ActuatorChain {
 	}
 }
 
-func (c *ActuatorChain) Initialize(ctx context.Context, config ActuatorConfig) error {
+func (c *ActuatorChain) Init(ctx context.Context, config ActuatorConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for _, act := range c.actuators {
-		if err := act.Initialize(ctx, config); err != nil {
+		if err := act.Init(ctx, config); err != nil {
 			return fmt.Errorf("initialize actuator: %w", err)
 		}
 	}

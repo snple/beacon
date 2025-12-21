@@ -30,15 +30,15 @@ type GPIOActuator struct {
 
 // GPIOPin GPIO 引脚抽象
 type GPIOPin struct {
-	Number    int  // GPIO 引脚号
-	IsOutput  bool // 是否为输出
-	State     bool // 当前状态（仅输出）
-	PullUp    bool // 是否启用上拉
-	PullDown  bool // 是否启用下拉
-	Inverted  bool // 是否反相（高电平=false）
+	Number   int  // GPIO 引脚号
+	IsOutput bool // 是否为输出
+	State    bool // 当前状态（仅输出）
+	PullUp   bool // 是否启用上拉
+	PullDown bool // 是否启用下拉
+	Inverted bool // 是否反相（高电平=false）
 }
 
-func (a *GPIOActuator) Initialize(ctx context.Context, config device.ActuatorConfig) error {
+func (a *GPIOActuator) Init(ctx context.Context, config device.ActuatorConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
