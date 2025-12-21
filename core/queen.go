@@ -24,9 +24,11 @@ func (cs *CoreService) initQueenBroker() error {
 		cs.Logger().Sugar().Infof("Queen broker TLS enabled")
 	}
 
-	// 设置认证器，使用 beacon 的 node 认证
-	brokerOpts = append(brokerOpts, queen.WithAuthFunc(func(info *queen.AuthInfo) error {
-		return cs.authenticateBrokerClient(info)
+	// 设置认证处理器，使用 beacon 的 node 认证
+	brokerOpts = append(brokerOpts, queen.WithAuthHandler(&queen.AuthHandlerFunc{
+		ConnectFunc: func(ctx *queen.AuthContext) error {
+			return cs.authenticateBrokerClient(ctx)
+		},
 	}))
 
 	broker, err := queen.New(brokerOpts...)
@@ -60,22 +62,22 @@ func (cs *CoreService) initQueenBroker() error {
 }
 
 // authenticateBrokerClient 认证 broker 客户端
-func (cs *CoreService) authenticateBrokerClient(info *queen.AuthInfo) error {
+func (cs *CoreService) authenticateBrokerClient(ctx *queen.AuthContext) error {
 	// ClientID 作为 Node ID
-	clientID := info.ClientID
+	clientID := ctx.ClientID
 	if clientID == "" {
 		return fmt.Errorf("clientID is required")
 	}
 
 	// AuthData 作为 Secret
-	secret := string(info.AuthData)
+	secret := string(ctx.AuthData)
 	if secret == "" {
 		return fmt.Errorf("secret is required")
 	}
 
 	// 验证密钥（不需要 Node 已存在，只要 Secret 已设置即可）
-	ctx := context.Background()
-	nodeSecret, err := cs.GetNode().GetSecret(ctx, clientID)
+	ctxBg := context.Background()
+	nodeSecret, err := cs.GetNode().GetSecret(ctxBg, clientID)
 	if err != nil {
 		return fmt.Errorf("node secret not found for: %s", clientID)
 	}
@@ -84,7 +86,7 @@ func (cs *CoreService) authenticateBrokerClient(info *queen.AuthInfo) error {
 		return fmt.Errorf("invalid secret")
 	}
 
-	cs.Logger().Sugar().Infof("Queen broker client authenticated: %s, remote: %s", clientID, info.RemoteAddr)
+	cs.Logger().Sugar().Infof("Queen broker client authenticated: %s, remote: %s", clientID, ctx.RemoteAddr)
 
 	return nil
 }

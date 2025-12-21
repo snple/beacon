@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -35,13 +34,6 @@ func main() {
 
 	badgerOpts := badger.DefaultOptions(config.Config.DB.File)
 	badgerOpts.Logger = nil
-
-	command := flag.Arg(0)
-	switch command {
-	case "seed":
-		log.Logger.Sugar().Infof("seed: Completed")
-		return
-	}
 
 	coreOpts := []core.CoreOption{
 		core.WithBadger(badgerOpts),
