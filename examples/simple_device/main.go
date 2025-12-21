@@ -35,20 +35,24 @@ func runVirtualDevice() {
 		Wire(device.WireBuilder("ctrl").
 			Pin(device.Pin{
 				Name: "on",
-				Type: uint32(nson.DataTypeBOOL),
+				Type: nson.DataTypeBOOL,
 				Rw:   device.RW,
 			}).
 			Pin(device.Pin{
 				Name: "brightness",
-				Type: uint32(nson.DataTypeU8),
+				Type: nson.DataTypeU8,
 				Rw:   device.RW,
 			}),
 		).Done()
 
-	// 创建 Edge（自动使用 NoOpActuator）
+	// 创建 DeviceManager
+	dm := device.NewDeviceManager(dev)
+	// 不设置执行器，Init 时会自动使用 NoOpActuator
+
+	// 创建 Edge（传入 DeviceManager）
 	es, err := edge.Edge(
 		edge.WithNodeID("NODE001", "secret"),
-		edge.WithDevice(dev),
+		edge.WithDeviceManager(dm),
 	)
 	if err != nil {
 		panic(err)
@@ -56,9 +60,6 @@ func runVirtualDevice() {
 
 	es.Start()
 	defer es.Stop()
-
-	// 获取设备管理器
-	dm := es.GetDeviceManager()
 
 	// 查看执行器信息
 	infos := dm.ListActuatorInfos()
@@ -81,31 +82,29 @@ func runVirtualDevice() {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// 示例 2：带预配置执行器
+// 示例 2：带执行器的设备（外部设置）
 func runDeviceWithActuator() {
-	// 创建 GPIO 执行器实例
-	gpioActuator := &actuators.GPIOActuator{}
-
-	// 定义设备并绑定执行器
+	// 定义设备（不包含执行器）
 	dev := device.DeviceBuilder("gpio_relay", "GPIO 继电器").
 		Wire(device.WireBuilder("relay").
 			Type("gpio").
-			WithActuator(gpioActuator). // 预配置执行器
-			ActuatorOptions(map[string]string{
-				"port": "/dev/gpiochip0",
-			}).
 			Pin(device.Pin{
 				Name: "ch1",
-				Type: uint32(nson.DataTypeBOOL),
+				Type: nson.DataTypeBOOL,
 				Rw:   device.RW,
 				Addr: "GPIO17",
 			}),
 		).Done()
 
-	// 创建 Edge
+	// 创建 DeviceManager 并设置执行器
+	dm := device.NewDeviceManager(dev)
+	gpioActuator := &actuators.GPIOActuator{}
+	dm.SetActuator("relay", gpioActuator)
+
+	// 创建 Edge（传入已配置执行器的 DeviceManager）
 	es, err := edge.Edge(
 		edge.WithNodeID("RELAY001", "secret"),
-		edge.WithDevice(dev),
+		edge.WithDeviceManager(dm),
 	)
 	if err != nil {
 		panic(err)
@@ -115,7 +114,6 @@ func runDeviceWithActuator() {
 	defer es.Stop()
 
 	// 获取执行器信息
-	dm := es.GetDeviceManager()
 	info, _ := dm.GetActuatorInfo("relay")
 	fmt.Printf("  Actuator: %s v%s\n", info.Name, info.Version)
 
@@ -134,7 +132,7 @@ func runDeviceWithActuator() {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// 示例 3：设备模板 + 后期配置
+// 示例 3：设备模板 + 后期配置执行器
 func runDeviceTemplate() {
 	// 预定义设备模板（不配置执行器）
 	templateDev := device.DeviceBuilder("temp_sensor", "温度传感器").
@@ -142,33 +140,23 @@ func runDeviceTemplate() {
 			Type("modbus_rtu"). // 仅指定类型
 			Pin(device.Pin{
 				Name: "temp",
-				Type: uint32(nson.DataTypeI16),
+				Type: nson.DataTypeI16,
 				Rw:   device.RO,
 				Addr: "30001",
 			}),
 		).Done()
 
-	// 复制模板并配置实际执行器
+	// 复制模板
 	dev := templateDev // 值复制，安全！
 
-	// 为 Wire 配置执行器（使用 NoOpActuator 模拟）
-	for i := range dev.Wires {
-		if dev.Wires[i].Name == "modbus" {
-			// 实际项目中使用: &actuators.ModbusRTUActuator{}
-			// 这里用 nil 会自动使用 NoOpActuator
-			dev.Wires[i].Actuator = nil
-			dev.Wires[i].ActuatorConfig = map[string]string{
-				"port":     "/dev/ttyUSB0",
-				"baudrate": "9600",
-				"slave_id": "1",
-			}
-		}
-	}
+	// 创建 DeviceManager
+	dm := device.NewDeviceManager(dev)
+	// 实际项目中使用: dm.SetActuator("modbus", &actuators.ModbusRTUActuator{})
 
 	// 创建 Edge
 	es, err := edge.Edge(
 		edge.WithNodeID("SENSOR001", "secret"),
-		edge.WithDevice(dev),
+		edge.WithDeviceManager(dm),
 	)
 	if err != nil {
 		panic(err)
@@ -178,7 +166,6 @@ func runDeviceTemplate() {
 	defer es.Stop()
 
 	// 查看执行器
-	dm := es.GetDeviceManager()
 	info, _ := dm.GetActuatorInfo("modbus")
 	fmt.Printf("  Actuator: %s v%s\n", info.Name, info.Version)
 	fmt.Println("  ✓ 设备模板可复制，执行器可后期配置（安全的值传递）")

@@ -3,7 +3,7 @@ package device
 import (
 	"testing"
 
-	"github.com/snple/beacon/dt"
+	"github.com/danclive/nson-go"
 )
 
 func TestDeviceBuilder(t *testing.T) {
@@ -11,8 +11,8 @@ func TestDeviceBuilder(t *testing.T) {
 	dev := DeviceBuilder("test_device", "测试设备").
 		Tags("test", "demo").
 		Wire(WireBuilder("control").
-			Pin(PinBuilder("switch", dt.TypeBool, RW).Build()).
-			Pin(PinBuilder("value", dt.TypeI32, RO).Build()),
+			Pin(PinBuilder("switch", nson.DataTypeBOOL, RW).Build()).
+			Pin(PinBuilder("value", nson.DataTypeI32, RO).Build()),
 		).
 		Done()
 
@@ -36,10 +36,10 @@ func TestDeviceBuilder(t *testing.T) {
 func TestMultipleWires(t *testing.T) {
 	dev := DeviceBuilder("multi_wire", "多Wire设备").
 		Wire(WireBuilder("wire1").
-			Pin(PinBuilder("pin1", dt.TypeBool, RW).Build()),
+			Pin(PinBuilder("pin1", nson.DataTypeBOOL, RW).Build()),
 		).
 		Wire(WireBuilder("wire2").
-			Pin(PinBuilder("pin2", dt.TypeI32, RW).Build()),
+			Pin(PinBuilder("pin2", nson.DataTypeI32, RW).Build()),
 		).
 		Done()
 
@@ -103,7 +103,7 @@ func TestCustomDevice(t *testing.T) {
 	custom := DeviceBuilder("custom_device", "自定义设备").
 		Tags("custom", "test").
 		Wire(WireBuilder("control").
-			Pin(PinBuilder("custom_pin", dt.TypeString, RW).Build()),
+			Pin(PinBuilder("custom_pin", nson.DataTypeSTRING, RW).Build()),
 		).
 		Done()
 

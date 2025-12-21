@@ -3,7 +3,6 @@ package device
 import (
 	"context"
 	"fmt"
-	"maps"
 	"sync"
 	"time"
 
@@ -25,33 +24,32 @@ type Device struct {
 }
 
 // Wire 端点模板定义（对应 storage.Wire）
+//
+// 设计原则：Wire 只描述结构，不包含执行器。
+// 执行器在 DeviceManager 创建后通过 SetActuator() 设置。
 type Wire struct {
 	Name string   // Wire 名称
 	Tags []string // 标签列表（用于分类和查询）
 	Desc string   // Wire 描述
 	Type string   // Wire 类型（可选，用于标识功能类型）
 	Pins []Pin    // Pin 模板列表
-
-	// 执行器配置（可选，与 Device 定义绑定）
-	Actuator       Actuator          // 关联的执行器（nil 表示使用 NoOpActuator）
-	ActuatorConfig map[string]string // 执行器配置选项
 }
 
 // Pin 属性模板定义（对应 storage.Pin）
 type Pin struct {
-	Name      string     // Pin 名称
-	Tags      []string   // 标签列表（用于分类和查询）
-	Desc      string     // Pin 描述
-	Addr      string     // 地址映射（可选，用于绑定实际硬件地址）
-	Type      uint32     // 数据类型（nson.DataType）
-	Rw        int32      // 读写权限：0=只读，1=只写，2=读写，3=内部可写
-	Default   nson.Value // 默认值（可选）
-	Min       nson.Value // 最小值（可选，用于数值类型）
-	Max       nson.Value // 最大值（可选，用于数值类型）
-	Step      nson.Value // 步进值（可选，用于数值类型，如 0.5, 1, 10）
-	Precision int        // 精度/小数位数（可选，用于浮点类型）
-	Unit      string     // 单位（可选，如 "°C", "%", "W", "lux"）
-	Enum      []EnumItem // 枚举值列表（可选，用于限定取值范围）
+	Name      string        // Pin 名称
+	Tags      []string      // 标签列表（用于分类和查询）
+	Desc      string        // Pin 描述
+	Addr      string        // 地址映射（可选，用于绑定实际硬件地址）
+	Type      nson.DataType // 数据类型（nson.DataType）
+	Rw        int32         // 读写权限：0=只读，1=只写，2=读写，3=内部可写
+	Default   nson.Value    // 默认值（可选）
+	Min       nson.Value    // 最小值（可选，用于数值类型）
+	Max       nson.Value    // 最大值（可选，用于数值类型）
+	Step      nson.Value    // 步进值（可选，用于数值类型，如 0.5, 1, 10）
+	Precision int           // 精度/小数位数（可选，用于浮点类型）
+	Unit      string        // 单位（可选，如 "°C", "%", "W", "lux"）
+	Enum      []EnumItem    // 枚举值列表（可选，用于限定取值范围）
 }
 
 // EnumItem 枚举项
@@ -90,15 +88,6 @@ func DeepCopyWire(wire *Wire) Wire {
 			copied.Pins[i] = DeepCopyPin(pin)
 		}
 	}
-
-	// 深拷贝 ActuatorConfig
-	if wire.ActuatorConfig != nil {
-		copied.ActuatorConfig = make(map[string]string, len(wire.ActuatorConfig))
-		maps.Copy(copied.ActuatorConfig, wire.ActuatorConfig)
-	}
-
-	// Actuator 是接口，只复制引用（执行器通常是单例或共享的）
-	copied.Actuator = wire.Actuator
 
 	return copied
 }
@@ -149,7 +138,7 @@ type PinBuilderT struct {
 }
 
 // PinBuilder 创建 Pin 构建器
-func PinBuilder(name string, typ uint32, rw int32) *PinBuilderT {
+func PinBuilder(name string, typ nson.DataType, rw int32) *PinBuilderT {
 	return &PinBuilderT{
 		pin: Pin{
 			Name: name,
@@ -254,10 +243,9 @@ type WireBuilderT struct {
 func WireBuilder(name string) *WireBuilderT {
 	return &WireBuilderT{
 		wire: Wire{
-			Name:           name,
-			Pins:           []Pin{},
-			Tags:           []string{},
-			ActuatorConfig: make(map[string]string),
+			Name: name,
+			Pins: []Pin{},
+			Tags: []string{},
 		},
 	}
 }
@@ -283,24 +271,6 @@ func (w *WireBuilderT) Type(typ string) *WireBuilderT {
 // Pin 添加 Pin
 func (w *WireBuilderT) Pin(p Pin) *WireBuilderT {
 	w.wire.Pins = append(w.wire.Pins, p)
-	return w
-}
-
-// WithActuator 设置执行器（设备定义时绑定）
-func (w *WireBuilderT) WithActuator(act Actuator) *WireBuilderT {
-	w.wire.Actuator = act
-	return w
-}
-
-// ActuatorOption 设置执行器配置选项
-func (w *WireBuilderT) ActuatorOption(key, value string) *WireBuilderT {
-	w.wire.ActuatorConfig[key] = value
-	return w
-}
-
-// ActuatorOptions 批量设置执行器配置选项
-func (w *WireBuilderT) ActuatorOptions(opts map[string]string) *WireBuilderT {
-	maps.Copy(w.wire.ActuatorConfig, opts)
 	return w
 }
 
@@ -385,6 +355,23 @@ const (
 // ============================================================================
 
 // DeviceManager 设备运行时管理器
+//
+// 设计原则：
+// 1. 设备定义（Device/Wire/Pin）只描述结构，不包含执行器
+// 2. 执行器通过 SetActuator() 从外部设置
+// 3. 分离设备描述与硬件执行，更清晰的所有权模型
+//
+// 使用方式：
+//
+//	// 1. 创建 DeviceManager
+//	dm := device.NewDeviceManager(myDevice)
+//
+//	// 2. 外部创建并设置执行器
+//	ledActuator := NewLedActuator()
+//	dm.SetActuator("light", ledActuator)
+//
+//	// 3. 初始化（未设置执行器的 Wire 使用 NoOpActuator）
+//	dm.Init(ctx, logger, onPinRead)
 type DeviceManager struct {
 	device Device // 设备配置（只读）
 
@@ -397,6 +384,7 @@ type DeviceManager struct {
 	mu           sync.RWMutex        // 保护 actuators
 	logger       *zap.Logger         // 日志
 	onPinRead    PinReadCallback     // Pin 读取回调（用于上报传感器数据）
+	initialized  bool                // 是否已初始化
 }
 
 // PinReadCallback Pin 读取回调（用于将传感器数据上报到上层）
@@ -415,16 +403,55 @@ func (dm *DeviceManager) GetDevice() Device {
 	return dm.device
 }
 
+// SetActuator 设置 Wire 的执行器（在 Init 之前调用）
+//
+// 如果 Wire 不存在，返回 false。
+// 如果已经初始化，返回 false（初始化后不能修改）。
+func (dm *DeviceManager) SetActuator(wireName string, actuator Actuator) bool {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	// 已初始化后不能修改
+	if dm.initialized {
+		return false
+	}
+
+	// 检查 Wire 是否存在
+	found := false
+	for _, wire := range dm.device.Wires {
+		if wire.Name == wireName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+
+	// 延迟初始化 actuators map
+	if dm.actuators == nil {
+		dm.actuators = make(map[string]Actuator)
+	}
+
+	dm.actuators[wireName] = actuator
+	return true
+}
+
 // Initialize 初始化设备的所有执行器
+//
+// 在调用此方法前，应通过 SetActuator() 设置所需的执行器。
+// 未设置执行器的 Wire 将使用 NoOpActuator。
 func (dm *DeviceManager) Init(ctx context.Context, logger *zap.Logger, onPinRead PinReadCallback) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	if dm.actuators != nil {
+	if dm.initialized {
 		return fmt.Errorf("device already initialized")
 	}
 
-	dm.actuators = make(map[string]Actuator)
+	if dm.actuators == nil {
+		dm.actuators = make(map[string]Actuator)
+	}
 	dm.pollEnabled = make(map[string]bool)
 	dm.logger = logger
 	dm.onPinRead = onPinRead
@@ -433,24 +460,24 @@ func (dm *DeviceManager) Init(ctx context.Context, logger *zap.Logger, onPinRead
 	for i := range dm.device.Wires {
 		wire := &dm.device.Wires[i]
 
-		// 选择执行器
-		var actuator Actuator
-		if wire.Actuator != nil {
-			// 使用 Wire 中预配置的执行器
-			actuator = wire.Actuator
-		} else if wire.Type != "" {
-			// 根据 Wire.Type 从注册表获取
-			act, err := GetActuator(wire.Type)
-			if err != nil {
-				logger.Sugar().Warnf("No actuator for wire %s (type=%s), using noop: %v",
-					wire.Name, wire.Type, err)
-				actuator, _ = GetActuator("") // NoOpActuator
+		// 获取执行器（如果未通过 SetActuator 设置，使用默认）
+		actuator, ok := dm.actuators[wire.Name]
+		if !ok {
+			// 未设置执行器，根据 Wire.Type 从注册表获取或使用 NoOp
+			if wire.Type != "" {
+				act, err := GetActuator(wire.Type)
+				if err != nil {
+					logger.Sugar().Warnf("No actuator for wire %s (type=%s), using noop: %v",
+						wire.Name, wire.Type, err)
+					actuator, _ = GetActuator("") // NoOpActuator
+				} else {
+					actuator = act
+				}
 			} else {
-				actuator = act
+				// 默认使用 NoOpActuator
+				actuator, _ = GetActuator("")
 			}
-		} else {
-			// 默认使用 NoOpActuator
-			actuator, _ = GetActuator("")
+			dm.actuators[wire.Name] = actuator
 		}
 
 		// 初始化执行器
@@ -462,8 +489,6 @@ func (dm *DeviceManager) Init(ctx context.Context, logger *zap.Logger, onPinRead
 		if err := actuator.Init(ctx, config); err != nil {
 			return fmt.Errorf("initialize actuator for wire %s: %w", wire.Name, err)
 		}
-
-		dm.actuators[wire.Name] = actuator
 
 		// 检查是否需要轮询（有只读或可读写的 Pin）
 		hasReadable := false
@@ -480,6 +505,7 @@ func (dm *DeviceManager) Init(ctx context.Context, logger *zap.Logger, onPinRead
 			wire.Name, wire.Type, info.Name, info.Version)
 	}
 
+	dm.initialized = true
 	return nil
 }
 

@@ -25,18 +25,33 @@ type Wire struct {
 	ID   string   `nson:"id"`
 	Name string   `nson:"name"`
 	Tags []string `nson:"tags,omitempty"`
+	Desc string   `nson:"desc,omitempty"` // Wire 描述
 	Type string   `nson:"type"`
 	Pins []Pin    `nson:"pins"`
 }
 
 // Pin 点位配置
 type Pin struct {
-	ID   string   `nson:"id"`
-	Name string   `nson:"name"`
-	Tags []string `nson:"tags,omitempty"`
-	Addr string   `nson:"addr"`
-	Type uint32   `nson:"type"` // nson.DataType
-	Rw   int32    `nson:"rw"`
+	ID        string     `nson:"id"`
+	Name      string     `nson:"name"`
+	Tags      []string   `nson:"tags,omitempty"`
+	Desc      string     `nson:"desc,omitempty"` // Pin 描述
+	Addr      string     `nson:"addr"`
+	Type      uint8      `nson:"type"` // nson.DataType
+	Rw        int32      `nson:"rw"`
+	Default   nson.Value `nson:"default,omitempty"`   // 默认值
+	Min       nson.Value `nson:"min,omitempty"`       // 最小值
+	Max       nson.Value `nson:"max,omitempty"`       // 最大值
+	Step      nson.Value `nson:"step,omitempty"`      // 步进值
+	Precision int        `nson:"precision,omitempty"` // 精度/小数位数
+	Unit      string     `nson:"unit,omitempty"`      // 单位
+	Enum      []EnumItem `nson:"enum,omitempty"`      // 枚举值列表
+}
+
+// EnumItem 枚举项
+type EnumItem struct {
+	Value nson.Value `nson:"value"` // 值
+	Label string     `nson:"label"` // 显示名称
 }
 
 // PinValue Pin 值
@@ -66,25 +81,7 @@ func DeepCopyNode(node *Node) Node {
 	// 深拷贝 Wires
 	wires := make([]Wire, len(node.Wires))
 	for i, wire := range node.Wires {
-		wires[i] = Wire{
-			ID:   wire.ID,
-			Name: wire.Name,
-			Tags: make([]string, len(wire.Tags)), // 深拷贝 Tags
-			Type: wire.Type,
-			Pins: make([]Pin, len(wire.Pins)), // 深拷贝 Pins
-		}
-		copy(wires[i].Tags, wire.Tags)
-		for j, pin := range wire.Pins {
-			wires[i].Pins[j] = Pin{
-				ID:   pin.ID,
-				Name: pin.Name,
-				Tags: make([]string, len(pin.Tags)), // 深拷贝 Tags
-				Addr: pin.Addr,
-				Type: pin.Type,
-				Rw:   pin.Rw,
-			}
-			copy(wires[i].Pins[j].Tags, pin.Tags)
-		}
+		wires[i] = DeepCopyWire(&wire)
 	}
 
 	return Node{
@@ -110,21 +107,14 @@ func DeepCopyWire(wire *Wire) Wire {
 	// 深拷贝 Pins
 	pins := make([]Pin, len(wire.Pins))
 	for i, pin := range wire.Pins {
-		pins[i] = Pin{
-			ID:   pin.ID,
-			Name: pin.Name,
-			Tags: make([]string, len(pin.Tags)), // 深拷贝 Tags
-			Addr: pin.Addr,
-			Type: pin.Type,
-			Rw:   pin.Rw,
-		}
-		copy(pins[i].Tags, pin.Tags)
+		pins[i] = DeepCopyPin(&pin)
 	}
 
 	return Wire{
 		ID:   wire.ID,
 		Name: wire.Name,
 		Tags: tags,
+		Desc: wire.Desc,
 		Type: wire.Type,
 		Pins: pins,
 	}
@@ -140,12 +130,32 @@ func DeepCopyPin(pin *Pin) Pin {
 	tags := make([]string, len(pin.Tags))
 	copy(tags, pin.Tags)
 
+	// 深拷贝 Enum
+	var enumItems []EnumItem
+	if pin.Enum != nil {
+		enumItems = make([]EnumItem, len(pin.Enum))
+		for i, item := range pin.Enum {
+			enumItems[i] = EnumItem{
+				Value: item.Value,
+				Label: item.Label,
+			}
+		}
+	}
+
 	return Pin{
-		ID:   pin.ID,
-		Name: pin.Name,
-		Tags: tags,
-		Addr: pin.Addr,
-		Type: pin.Type,
-		Rw:   pin.Rw,
+		ID:        pin.ID,
+		Name:      pin.Name,
+		Tags:      tags,
+		Desc:      pin.Desc,
+		Addr:      pin.Addr,
+		Type:      pin.Type,
+		Rw:        pin.Rw,
+		Default:   pin.Default,
+		Min:       pin.Min,
+		Max:       pin.Max,
+		Step:      pin.Step,
+		Precision: pin.Precision,
+		Unit:      pin.Unit,
+		Enum:      enumItems,
 	}
 }

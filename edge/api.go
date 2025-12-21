@@ -26,18 +26,39 @@ func buildNodeFromTemplate(nodeID, name string, dev device.Device) (dt.Node, err
 			ID:   tw.Name,
 			Name: tw.Name,
 			Tags: tw.Tags,
+			Desc: tw.Desc,
 			Type: tw.Type,
 			Pins: make([]dt.Pin, 0, len(tw.Pins)),
 		}
 
 		for _, tp := range tw.Pins {
+			// 转换 device.EnumItem 到 dt.EnumItem
+			var enumItems []dt.EnumItem
+			if tp.Enum != nil {
+				enumItems = make([]dt.EnumItem, len(tp.Enum))
+				for i, item := range tp.Enum {
+					enumItems[i] = dt.EnumItem{
+						Value: item.Value,
+						Label: item.Label,
+					}
+				}
+			}
+
 			wire.Pins = append(wire.Pins, dt.Pin{
-				ID:   tw.Name + "." + tp.Name,
-				Name: tp.Name,
-				Tags: tp.Tags,
-				Addr: "",
-				Type: tp.Type,
-				Rw:   tp.Rw,
+				ID:        tw.Name + "." + tp.Name,
+				Name:      tp.Name,
+				Tags:      tp.Tags,
+				Desc:      tp.Desc,
+				Addr:      "",
+				Type:      uint8(tp.Type),
+				Rw:        tp.Rw,
+				Default:   tp.Default,
+				Min:       tp.Min,
+				Max:       tp.Max,
+				Step:      tp.Step,
+				Precision: tp.Precision,
+				Unit:      tp.Unit,
+				Enum:      enumItems,
 			})
 		}
 
@@ -64,20 +85,44 @@ func buildNode(node *dt.Node) *dt.Node {
 			ID:   node.ID + "." + wire.ID,
 			Name: wire.Name,
 			Tags: make([]string, len(wire.Tags)),
+			Desc: wire.Desc,
 			Type: wire.Type,
 			Pins: make([]dt.Pin, len(wire.Pins)),
 		}
 		copy(wires[i].Tags, wire.Tags)
 		for j, pin := range wire.Pins {
-			wires[i].Pins[j] = dt.Pin{
-				ID:   node.ID + "." + pin.ID,
-				Name: pin.Name,
-				Tags: make([]string, len(pin.Tags)),
-				Addr: pin.Addr,
-				Type: pin.Type,
-				Rw:   pin.Rw,
+			// 深拷贝 Pin Tags
+			pinTags := make([]string, len(pin.Tags))
+			copy(pinTags, pin.Tags)
+
+			// 深拷贝 Enum
+			var enumItems []dt.EnumItem
+			if pin.Enum != nil {
+				enumItems = make([]dt.EnumItem, len(pin.Enum))
+				for k, item := range pin.Enum {
+					enumItems[k] = dt.EnumItem{
+						Value: item.Value,
+						Label: item.Label,
+					}
+				}
 			}
-			copy(wires[i].Pins[j].Tags, pin.Tags)
+
+			wires[i].Pins[j] = dt.Pin{
+				ID:        node.ID + "." + pin.ID,
+				Name:      pin.Name,
+				Tags:      pinTags,
+				Desc:      pin.Desc,
+				Addr:      pin.Addr,
+				Type:      pin.Type,
+				Rw:        pin.Rw,
+				Default:   pin.Default,
+				Min:       pin.Min,
+				Max:       pin.Max,
+				Step:      pin.Step,
+				Precision: pin.Precision,
+				Unit:      pin.Unit,
+				Enum:      enumItems,
+			}
 		}
 	}
 
@@ -155,7 +200,7 @@ func (es *EdgeService) SetPinValue(ctx context.Context, value dt.PinValue, realt
 		return fmt.Errorf("pin is not writable")
 	}
 
-	if uint32(value.Value.DataType()) != pin.Type {
+	if uint8(value.Value.DataType()) != pin.Type {
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
@@ -214,7 +259,7 @@ func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue) error
 		return fmt.Errorf("pin is not writable")
 	}
 
-	if uint32(value.Value.DataType()) != pin.Type {
+	if uint8(value.Value.DataType()) != pin.Type {
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 

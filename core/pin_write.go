@@ -61,7 +61,7 @@ func (s *PinWriteService) SetWrite(ctx context.Context, value dt.PinValue, realt
 		return fmt.Errorf("pin is not writable")
 	}
 
-	if uint32(value.Value.DataType()) != pin.Type {
+	if uint8(value.Value.DataType()) != pin.Type {
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 

@@ -69,18 +69,20 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 	}
 	es.badger = badgerSvc
 
-	if es.dopts.device == nil {
-		return nil, fmt.Errorf("WithDeviceTemplate is required")
+	if es.dopts.deviceMgr == nil {
+		return nil, fmt.Errorf("WithDeviceManager is required")
 	}
 
-	dev := *es.dopts.device
+	es.deviceMgr = es.dopts.deviceMgr
+	dev := es.deviceMgr.GetDevice()
+
 	if strings.TrimSpace(dev.ID) == "" {
 		return nil, fmt.Errorf("device id is required")
 	}
 
 	// Creating edge with a device requires a stable nodeID.
 	if strings.TrimSpace(es.dopts.nodeID) == "" {
-		return nil, fmt.Errorf("please supply WithNodeID when WithDeviceTemplate is set")
+		return nil, fmt.Errorf("please supply WithNodeID when WithDeviceManager is set")
 	}
 
 	// Build node from template (generated fresh each time).
@@ -103,8 +105,7 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 	}
 	es.queenUp = queenUp
 
-	// 创建 DeviceManager 并初始化执行器
-	es.deviceMgr = device.NewDeviceManager(*es.dopts.device)
+	// 初始化 DeviceManager（执行器应该已经通过 SetActuator 设置）
 	if err := es.deviceMgr.Init(ctx, es.dopts.logger, es.onPinRead); err != nil {
 		return nil, fmt.Errorf("initialize device manager: %w", err)
 	}
@@ -189,11 +190,11 @@ func (es *EdgeService) onPinRead(wireID, pinName string, value nson.Value) error
 }
 
 type edgeOptions struct {
-	logger *zap.Logger
-	nodeID string
-	name   string
-	secret string
-	device *device.Device
+	logger    *zap.Logger
+	nodeID    string
+	name      string
+	secret    string
+	deviceMgr *device.DeviceManager // 改为接收 DeviceManager
 
 	NodeOptions     NodeOptions
 	SyncOptions     SyncOptions
@@ -292,9 +293,13 @@ func WithName(name string) EdgeOption {
 	})
 }
 
-func WithDevice(dev device.Device) EdgeOption {
+// WithDeviceManager 设置 DeviceManager
+//
+// DeviceManager 应该在传入前完成执行器设置（通过 SetActuator）
+// EdgeService 会在创建时调用 DeviceManager.Init()
+func WithDeviceManager(dm *device.DeviceManager) EdgeOption {
 	return newFuncEdgeOption(func(o *edgeOptions) {
-		o.device = &dev
+		o.deviceMgr = dm
 	})
 }
 

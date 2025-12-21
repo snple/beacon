@@ -32,20 +32,23 @@ func runVirtualDevice() {
 		Wire(device.WireBuilder("ctrl").
 			Pin(device.Pin{
 				Name: "on",
-				Type: uint32(nson.DataTypeBOOL),
+				Type: nson.DataTypeBOOL,
 				Rw:   device.RW,
 			}).
 			Pin(device.Pin{
 				Name: "brightness",
-				Type: uint32(nson.DataTypeU8),
+				Type: nson.DataTypeU8,
 				Rw:   device.RW,
 			}),
 		).Done()
 
-	// 创建 Edge（设备会自动使用 NoOpActuator）
+	// 创建 DeviceManager
+	dm := device.NewDeviceManager(dev)
+
+	// 创建 Edge（传入 DeviceManager）
 	es, err := edge.Edge(
 		edge.WithNodeID("NODE001", "secret"),
-		edge.WithDevice(dev),
+		edge.WithDeviceManager(dm),
 	)
 	if err != nil {
 		panic(err)
@@ -55,11 +58,9 @@ func runVirtualDevice() {
 	defer es.Stop()
 
 	// 获取设备并查看执行器信息
-	if device := es.GetDeviceManager(); device != nil {
-		infos := device.ListActuatorInfos()
-		for wireID, info := range infos {
-			fmt.Printf("  Wire %s: %s v%s\n", wireID, info.Name, info.Version)
-		}
+	infos := dm.ListActuatorInfos()
+	for wireID, info := range infos {
+		fmt.Printf("  Wire %s: %s v%s\n", wireID, info.Name, info.Version)
 	}
 
 	// 模拟写入
@@ -77,41 +78,39 @@ func runVirtualDevice() {
 }
 
 // ============================================================================
-// 示例 2：带预配置执行器的设备
+// 示例 2：带执行器的设备（外部设置）
 // ============================================================================
 
 func runDeviceWithActuator() {
-	// 创建 GPIO 执行器（带配置）
-	gpioActuator := &actuators.GPIOActuator{}
-
-	// 定义设备（Wire 预配置 Actuator）
+	// 定义设备（不包含执行器）
 	dev := device.DeviceBuilder("gpio_relay", "GPIO 继电器").
 		Wire(device.WireBuilder("relay").
-			Type("gpio"). // Type 仅用于识别，Actuator 已指定
-			WithActuator(gpioActuator).
-			ActuatorOptions(map[string]string{
-				"port": "/dev/gpiochip0",
-			}).
+			Type("gpio"). // Type 仅用于识别
 			Pin(device.Pin{
 				Name: "ch1",
 				Desc: "通道1",
-				Type: uint32(nson.DataTypeBOOL),
+				Type: nson.DataTypeBOOL,
 				Rw:   device.RW,
 				Addr: "GPIO17", // GPIO 引脚号
 			}).
 			Pin(device.Pin{
 				Name: "ch2",
 				Desc: "通道2",
-				Type: uint32(nson.DataTypeBOOL),
+				Type: nson.DataTypeBOOL,
 				Rw:   device.RW,
 				Addr: "GPIO27",
 			}),
 		).Done()
 
-	// 创建 Edge
+	// 创建 DeviceManager 并设置执行器
+	dm := device.NewDeviceManager(dev)
+	gpioActuator := &actuators.GPIOActuator{}
+	dm.SetActuator("relay", gpioActuator)
+
+	// 创建 Edge（传入 DeviceManager）
 	es, err := edge.Edge(
 		edge.WithNodeID("RELAY001", "secret"),
-		edge.WithDevice(dev),
+		edge.WithDeviceManager(dm),
 	)
 	if err != nil {
 		panic(err)
@@ -121,10 +120,8 @@ func runDeviceWithActuator() {
 	defer es.Stop()
 
 	// 执行器信息
-	if device := es.GetDeviceManager(); device != nil {
-		if info, err := device.GetActuatorInfo("relay"); err == nil {
-			fmt.Printf("  Actuator: %s v%s\n", info.Name, info.Version)
-		}
+	if info, err := dm.GetActuatorInfo("relay"); err == nil {
+		fmt.Printf("  Actuator: %s v%s\n", info.Name, info.Version)
 	}
 
 	// 写入命令（会调用 GPIOActuator.Execute）
@@ -155,7 +152,7 @@ func GetStandardTempSensor() device.Device {
 			Pin(device.Pin{
 				Name: "temp",
 				Desc: "温度",
-				Type: uint32(nson.DataTypeI16),
+				Type: nson.DataTypeI16,
 				Rw:   device.RO,
 				Addr: "30001",
 				Unit: "°C",
@@ -163,7 +160,7 @@ func GetStandardTempSensor() device.Device {
 			Pin(device.Pin{
 				Name: "humi",
 				Desc: "湿度",
-				Type: uint32(nson.DataTypeU16),
+				Type: nson.DataTypeU16,
 				Rw:   device.RO,
 				Addr: "30002",
 				Unit: "%",

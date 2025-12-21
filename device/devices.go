@@ -2,7 +2,6 @@ package device
 
 import (
 	"github.com/danclive/nson-go"
-	"github.com/snple/beacon/dt"
 )
 
 // ============================================================================
@@ -49,7 +48,7 @@ var LightStrip = DeviceBuilder("strip", "LED灯带").
 		Pin(OnOffPin).
 		Pin(DimPin).
 		Pin(RGBPin).
-		Pin(PinBuilder("fx", dt.TypeU8, RW).
+		Pin(PinBuilder("fx", nson.DataTypeU8, RW).
 			Desc("灯效").
 			Default(nson.U8(0)).
 			Enum(
@@ -60,7 +59,7 @@ var LightStrip = DeviceBuilder("strip", "LED灯带").
 			).
 			Build(),
 		).
-		Pin(PinBuilder("spd", dt.TypeU8, RW).
+		Pin(PinBuilder("spd", nson.DataTypeU8, RW).
 			Desc("灯效速度").
 			Default(nson.U8(50)).
 			Range(nson.U8(0), nson.U8(100)).
@@ -88,10 +87,10 @@ var SmartSwitch = DeviceBuilder("sw", "智能开关").
 var SmartSwitch2 = DeviceBuilder("sw2", "双路智能开关").
 	Tags("switch", "smart_home").
 	Wire(WireBuilder("ctrl").
-		Pin(PinBuilder("on1", dt.TypeBool, RW).
+		Pin(PinBuilder("on1", nson.DataTypeBOOL, RW).
 			Default(nson.Bool(false)).
 			Build()).
-		Pin(PinBuilder("on2", dt.TypeBool, RW).
+		Pin(PinBuilder("on2", nson.DataTypeBOOL, RW).
 			Default(nson.Bool(false)).
 			Build()),
 	).
@@ -101,13 +100,13 @@ var SmartSwitch2 = DeviceBuilder("sw2", "双路智能开关").
 var SmartSwitch3 = DeviceBuilder("sw3", "三路智能开关").
 	Tags("switch", "smart_home").
 	Wire(WireBuilder("ctrl").
-		Pin(PinBuilder("on1", dt.TypeBool, RW).
+		Pin(PinBuilder("on1", nson.DataTypeBOOL, RW).
 			Default(nson.Bool(false)).
 			Build()).
-		Pin(PinBuilder("on2", dt.TypeBool, RW).
+		Pin(PinBuilder("on2", nson.DataTypeBOOL, RW).
 			Default(nson.Bool(false)).
 			Build()).
-		Pin(PinBuilder("on3", dt.TypeBool, RW).
+		Pin(PinBuilder("on3", nson.DataTypeBOOL, RW).
 			Default(nson.Bool(false)).
 			Build()),
 	).
@@ -135,12 +134,12 @@ var PowerStrip = DeviceBuilder("pstrip", "智能排插").
 	Desc("多路智能排插").
 	Wire(WireBuilder("ctrl").
 		Pin(OnOffPin).
-		Pin(PinBuilder("ch", dt.TypeArray, RW).
+		Pin(PinBuilder("ch", nson.DataTypeARRAY, RW).
 			Desc("各路开关状态").
 			Build()),
 	).
 	Wire(WireBuilder("meter").
-		Pin(PinBuilder("pwr", dt.TypeF32, RO).
+		Pin(PinBuilder("pwr", nson.DataTypeF32, RO).
 			Desc("总功率").
 			Precision(1).
 			Unit("W").
@@ -167,7 +166,7 @@ var MotionSensor = DeviceBuilder("pir", "人体传感器").
 	Tags("sensor", "smart_home", "security").
 	Desc("红外人体移动传感器").
 	Wire(WireBuilder("data").
-		Pin(PinBuilder("occ", dt.TypeBool, RO).
+		Pin(PinBuilder("occ", nson.DataTypeBOOL, RO).
 			Desc("是否有人").
 			Build()).
 		Pin(LuxPin).
@@ -189,7 +188,7 @@ var DoorSensor = DeviceBuilder("door", "门窗传感器").
 var WaterLeakSensor = DeviceBuilder("leak", "水浸传感器").
 	Tags("sensor", "smart_home", "security").
 	Wire(WireBuilder("data").
-		Pin(PinBuilder("leak", dt.TypeBool, RO).
+		Pin(PinBuilder("leak", nson.DataTypeBOOL, RO).
 			Desc("是否漏水").
 			Build()),
 	).
@@ -200,7 +199,7 @@ var SmokeSensor = DeviceBuilder("smoke", "烟雾传感器").
 	Tags("sensor", "smart_home", "security").
 	Wire(WireBuilder("data").
 		Pin(AlarmPin).
-		Pin(PinBuilder("ppm", dt.TypeU16, RO).
+		Pin(PinBuilder("ppm", nson.DataTypeU16, RO).
 			Desc("烟雾浓度").
 			Unit("ppm").
 			Build()),
@@ -212,7 +211,7 @@ var GasSensor = DeviceBuilder("gas", "燃气传感器").
 	Tags("sensor", "smart_home", "security").
 	Wire(WireBuilder("data").
 		Pin(AlarmPin).
-		Pin(PinBuilder("ppm", dt.TypeU16, RO).
+		Pin(PinBuilder("ppm", nson.DataTypeU16, RO).
 			Desc("燃气浓度").
 			Unit("ppm").
 			Build()),
@@ -255,7 +254,7 @@ var Blind = DeviceBuilder("blind", "百叶窗").
 	Tags("curtain", "smart_home").
 	Wire(WireBuilder("ctrl").
 		Pin(PosPin).
-		Pin(PinBuilder("tilt", dt.TypeI8, RW).
+		Pin(PinBuilder("tilt", nson.DataTypeI8, RW).
 			Desc("叶片角度").
 			Range(nson.I8(-90), nson.I8(90)).
 			Step(nson.I8(1)).
@@ -275,7 +274,7 @@ var AC = DeviceBuilder("ac", "空调").
 	Desc("智能空调").
 	Wire(WireBuilder("ctrl").
 		Pin(OnOffPin).
-		Pin(PinBuilder("mode", dt.TypeU8, RW).
+		Pin(PinBuilder("mode", nson.DataTypeU8, RW).
 			Desc("工作模式").
 			Default(nson.U8(0)).
 			Enum(
@@ -288,7 +287,7 @@ var AC = DeviceBuilder("ac", "空调").
 			Build(),
 		).
 		Pin(TgtTempPin).
-		Pin(PinBuilder("fan", dt.TypeU8, RW).
+		Pin(PinBuilder("fan", nson.DataTypeU8, RW).
 			Desc("风速").
 			Default(nson.U8(0)).
 			Enum(
@@ -335,13 +334,13 @@ var Fan = DeviceBuilder("fan", "风扇").
 	Tags("hvac", "smart_home").
 	Wire(WireBuilder("ctrl").
 		Pin(OnOffPin).
-		Pin(PinBuilder("spd", dt.TypeU8, RW).
+		Pin(PinBuilder("spd", nson.DataTypeU8, RW).
 			Desc("风速档位").
 			Default(nson.U8(0)).
 			Range(nson.U8(0), nson.U8(6)).
 			Step(nson.U8(1)).
 			Build()).
-		Pin(PinBuilder("swing", dt.TypeBool, RW).
+		Pin(PinBuilder("swing", nson.DataTypeBOOL, RW).
 			Desc("摇头").
 			Default(nson.Bool(false)).
 			Build()).
@@ -359,13 +358,13 @@ var DoorLock = DeviceBuilder("lock", "智能门锁").
 	Desc("智能门锁").
 	Wire(WireBuilder("ctrl").
 		Pin(LockPin).
-		Pin(PinBuilder("open", dt.TypeBool, RO).
+		Pin(PinBuilder("open", nson.DataTypeBOOL, RO).
 			Desc("门开合状态").
 			Build()),
 	).
 	Wire(WireBuilder("info").
 		Pin(BattPin).
-		Pin(PinBuilder("method", dt.TypeU8, RO).
+		Pin(PinBuilder("method", nson.DataTypeU8, RO).
 			Desc("最后开锁方式").
 			Enum(
 				Enum(nson.U8(0), "密码"),
@@ -375,14 +374,14 @@ var DoorLock = DeviceBuilder("lock", "智能门锁").
 				Enum(nson.U8(4), "远程"),
 			).
 			Build()).
-		Pin(PinBuilder("uid", dt.TypeString, RO).
+		Pin(PinBuilder("uid", nson.DataTypeSTRING, RO).
 			Desc("最后开锁用户ID").
 			Build()).
 		Pin(LastPin),
 	).
 	Wire(WireBuilder("event").
 		Desc("事件记录").
-		Pin(PinBuilder("log", dt.TypeArray, RO).
+		Pin(PinBuilder("log", nson.DataTypeARRAY, RO).
 			Desc("开锁记录").
 			Build()),
 	).
@@ -393,16 +392,16 @@ var Camera = DeviceBuilder("cam", "摄像头").
 	Tags("security", "smart_home").
 	Wire(WireBuilder("ctrl").
 		Pin(OnOffPin).
-		Pin(PinBuilder("rec", dt.TypeBool, RW).
+		Pin(PinBuilder("rec", nson.DataTypeBOOL, RW).
 			Desc("录制").
 			Build()).
-		Pin(PinBuilder("ptz", dt.TypeMap, WO).
+		Pin(PinBuilder("ptz", nson.DataTypeMAP, WO).
 			Desc("云台控制 {pan, tilt, zoom}").
 			Build()),
 	).
 	Wire(WireBuilder("info").
 		Pin(OnlinePin).
-		Pin(PinBuilder("url", dt.TypeString, RO).
+		Pin(PinBuilder("url", nson.DataTypeSTRING, RO).
 			Desc("视频流地址").
 			Build()),
 	).
@@ -412,12 +411,12 @@ var Camera = DeviceBuilder("cam", "摄像头").
 var Alarm = DeviceBuilder("alarm", "报警器").
 	Tags("security", "smart_home").
 	Wire(WireBuilder("ctrl").
-		Pin(PinBuilder("arm", dt.TypeBool, RW).
+		Pin(PinBuilder("arm", nson.DataTypeBOOL, RW).
 			Desc("布防").
 			Build()).
 		Pin(ModePin).
 		Pin(AlarmPin).
-		Pin(PinBuilder("siren", dt.TypeBool, RW).
+		Pin(PinBuilder("siren", nson.DataTypeBOOL, RW).
 			Desc("警笛开关").
 			Build()),
 	).
@@ -432,13 +431,13 @@ var WaterHeater = DeviceBuilder("wh", "热水器").
 	Tags("appliance", "smart_home").
 	Wire(WireBuilder("ctrl").
 		Pin(OnOffPin).
-		Pin(PinBuilder("tgt", dt.TypeU8, RW).
+		Pin(PinBuilder("tgt", nson.DataTypeU8, RW).
 			Desc("目标温度").
 			Range(nson.U8(35), nson.U8(75)).
 			Step(nson.U8(1)).
 			Unit("°C").
 			Build()).
-		Pin(PinBuilder("temp", dt.TypeU8, RO).
+		Pin(PinBuilder("temp", nson.DataTypeU8, RO).
 			Desc("当前温度").
 			Unit("°C").
 			Build()).
@@ -451,19 +450,19 @@ var Humidifier = DeviceBuilder("humf", "加湿器").
 	Tags("appliance", "smart_home", "env").
 	Wire(WireBuilder("ctrl").
 		Pin(OnOffPin).
-		Pin(PinBuilder("tgt", dt.TypeU8, RW).
+		Pin(PinBuilder("tgt", nson.DataTypeU8, RW).
 			Desc("目标湿度").
 			Range(nson.U8(30), nson.U8(80)).
 			Step(nson.U8(5)).
 			Unit("%").
 			Build()).
 		Pin(HumiPin).
-		Pin(PinBuilder("level", dt.TypeU8, RW).
+		Pin(PinBuilder("level", nson.DataTypeU8, RW).
 			Desc("档位").
 			Range(nson.U8(0), nson.U8(3)).
 			Step(nson.U8(1)).
 			Build()).
-		Pin(PinBuilder("water", dt.TypeBool, RO).
+		Pin(PinBuilder("water", nson.DataTypeBOOL, RO).
 			Desc("缺水").
 			Build()),
 	).
@@ -474,7 +473,7 @@ var Dehumidifier = DeviceBuilder("dehum", "除湿机").
 	Tags("appliance", "smart_home", "env").
 	Wire(WireBuilder("ctrl").
 		Pin(OnOffPin).
-		Pin(PinBuilder("tgt", dt.TypeU8, RW).
+		Pin(PinBuilder("tgt", nson.DataTypeU8, RW).
 			Desc("目标湿度").
 			Range(nson.U8(30), nson.U8(80)).
 			Step(nson.U8(5)).
@@ -482,7 +481,7 @@ var Dehumidifier = DeviceBuilder("dehum", "除湿机").
 			Build()).
 		Pin(HumiPin).
 		Pin(ModePin).
-		Pin(PinBuilder("tank", dt.TypeBool, RO).
+		Pin(PinBuilder("tank", nson.DataTypeBOOL, RO).
 			Desc("水箱满").
 			Build()),
 	).
@@ -509,18 +508,18 @@ var RobotVacuum = DeviceBuilder("vacuum", "扫地机器人").
 	Wire(WireBuilder("ctrl").
 		Pin(CmdPin).
 		Pin(ModePin).
-		Pin(PinBuilder("zone", dt.TypeArray, WO).
+		Pin(PinBuilder("zone", nson.DataTypeARRAY, WO).
 			Desc("指定清扫区域").
 			Build()),
 	).
 	Wire(WireBuilder("stat").
 		Pin(StatePin).
 		Pin(BattPin).
-		Pin(PinBuilder("area", dt.TypeU32, RO).
+		Pin(PinBuilder("area", nson.DataTypeU32, RO).
 			Desc("已清扫面积").
 			Unit("m²").
 			Build()).
-		Pin(PinBuilder("time", dt.TypeU32, RO).
+		Pin(PinBuilder("time", nson.DataTypeU32, RO).
 			Desc("清扫时长").
 			Unit("s").
 			Build()).
@@ -533,14 +532,14 @@ var WashingMachine = DeviceBuilder("washer", "洗衣机").
 	Tags("appliance", "smart_home").
 	Wire(WireBuilder("ctrl").
 		Pin(CmdPin).
-		Pin(PinBuilder("prog", dt.TypeU8, RW).
+		Pin(PinBuilder("prog", nson.DataTypeU8, RW).
 			Desc("程序").
 			Build()).
-		Pin(PinBuilder("temp", dt.TypeU8, RW).
+		Pin(PinBuilder("temp", nson.DataTypeU8, RW).
 			Desc("水温").
 			Unit("°C").
 			Build()).
-		Pin(PinBuilder("spin", dt.TypeU16, RW).
+		Pin(PinBuilder("spin", nson.DataTypeU16, RW).
 			Desc("转速").
 			Unit("rpm").
 			Build()),
@@ -557,17 +556,17 @@ var Dishwasher = DeviceBuilder("dw", "洗碗机").
 	Tags("appliance", "smart_home").
 	Wire(WireBuilder("ctrl").
 		Pin(CmdPin).
-		Pin(PinBuilder("prog", dt.TypeU8, RW).
+		Pin(PinBuilder("prog", nson.DataTypeU8, RW).
 			Desc("程序").
 			Build()),
 	).
 	Wire(WireBuilder("stat").
 		Pin(StatePin).
 		Pin(RemainPin).
-		Pin(PinBuilder("salt", dt.TypeBool, RO).
+		Pin(PinBuilder("salt", nson.DataTypeBOOL, RO).
 			Desc("缺盐").
 			Build()).
-		Pin(PinBuilder("rinse", dt.TypeBool, RO).
+		Pin(PinBuilder("rinse", nson.DataTypeBOOL, RO).
 			Desc("缺漂洗剂").
 			Build()),
 	).
@@ -582,20 +581,20 @@ var SmartOven = DeviceBuilder("oven", "智能烤箱").
 	Tags("kitchen", "smart_home").
 	Wire(WireBuilder("ctrl").
 		Pin(OnOffPin).
-		Pin(PinBuilder("tgt", dt.TypeU16, RW).
+		Pin(PinBuilder("tgt", nson.DataTypeU16, RW).
 			Desc("目标温度").
 			Range(nson.U16(50), nson.U16(250)).
 			Step(nson.U16(5)).
 			Unit("°C").
 			Build()).
-		Pin(PinBuilder("time", dt.TypeU16, RW).
+		Pin(PinBuilder("time", nson.DataTypeU16, RW).
 			Desc("定时").
 			Unit("min").
 			Build()).
 		Pin(ModePin),
 	).
 	Wire(WireBuilder("stat").
-		Pin(PinBuilder("temp", dt.TypeU16, RO).
+		Pin(PinBuilder("temp", nson.DataTypeU16, RO).
 			Desc("当前温度").
 			Unit("°C").
 			Build()).
@@ -609,13 +608,13 @@ var Refrigerator = DeviceBuilder("fridge", "冰箱").
 	Tags("kitchen", "smart_home").
 	Wire(WireBuilder("ctrl").
 		Pin(ModePin).
-		Pin(PinBuilder("ftgt", dt.TypeI8, RW).
+		Pin(PinBuilder("ftgt", nson.DataTypeI8, RW).
 			Desc("冷藏室目标温度").
 			Range(nson.I8(2), nson.I8(8)).
 			Step(nson.I8(1)).
 			Unit("°C").
 			Build()).
-		Pin(PinBuilder("ztgt", dt.TypeI8, RW).
+		Pin(PinBuilder("ztgt", nson.DataTypeI8, RW).
 			Desc("冷冻室目标温度").
 			Range(nson.I8(-24), nson.I8(-16)).
 			Step(nson.I8(1)).
@@ -623,15 +622,15 @@ var Refrigerator = DeviceBuilder("fridge", "冰箱").
 			Build()),
 	).
 	Wire(WireBuilder("sensor").
-		Pin(PinBuilder("ftemp", dt.TypeI8, RO).
+		Pin(PinBuilder("ftemp", nson.DataTypeI8, RO).
 			Desc("冷藏室温度").
 			Unit("°C").
 			Build()).
-		Pin(PinBuilder("ztemp", dt.TypeI8, RO).
+		Pin(PinBuilder("ztemp", nson.DataTypeI8, RO).
 			Desc("冷冻室温度").
 			Unit("°C").
 			Build()).
-		Pin(PinBuilder("door", dt.TypeU8, RO).
+		Pin(PinBuilder("door", nson.DataTypeU8, RO).
 			Desc("门状态 位图").
 			Build()),
 	).
@@ -641,32 +640,32 @@ var Refrigerator = DeviceBuilder("fridge", "冰箱").
 var CoffeeMaker = DeviceBuilder("coffee", "咖啡机").
 	Tags("kitchen", "smart_home").
 	Wire(WireBuilder("ctrl").
-		Pin(PinBuilder("brew", dt.TypeBool, WO).
+		Pin(PinBuilder("brew", nson.DataTypeBOOL, WO).
 			Desc("开始冲泡").
 			Build()).
-		Pin(PinBuilder("type", dt.TypeU8, RW).
+		Pin(PinBuilder("type", nson.DataTypeU8, RW).
 			Desc("类型").
 			Build()).
-		Pin(PinBuilder("size", dt.TypeU8, RW).
+		Pin(PinBuilder("size", nson.DataTypeU8, RW).
 			Desc("杯量").
 			Build()).
-		Pin(PinBuilder("str", dt.TypeU8, RW).
+		Pin(PinBuilder("str", nson.DataTypeU8, RW).
 			Desc("浓度").
 			Range(nson.U8(0), nson.U8(10)).
 			Step(nson.U8(1)).
 			Build()),
 	).
 	Wire(WireBuilder("stat").
-		Pin(PinBuilder("ready", dt.TypeBool, RO).
+		Pin(PinBuilder("ready", nson.DataTypeBOOL, RO).
 			Desc("就绪").
 			Build()).
-		Pin(PinBuilder("water", dt.TypeBool, RO).
+		Pin(PinBuilder("water", nson.DataTypeBOOL, RO).
 			Desc("缺水").
 			Build()).
-		Pin(PinBuilder("bean", dt.TypeBool, RO).
+		Pin(PinBuilder("bean", nson.DataTypeBOOL, RO).
 			Desc("缺豆").
 			Build()).
-		Pin(PinBuilder("tray", dt.TypeBool, RO).
+		Pin(PinBuilder("tray", nson.DataTypeBOOL, RO).
 			Desc("残渣盒满").
 			Build()),
 	).
@@ -689,10 +688,10 @@ var Gateway = DeviceBuilder("gw", "智能网关").
 	).
 	Wire(WireBuilder("devs").
 		Desc("子设备管理").
-		Pin(PinBuilder("list", dt.TypeArray, RO).
+		Pin(PinBuilder("list", nson.DataTypeARRAY, RO).
 			Desc("子设备列表").
 			Build()).
-		Pin(PinBuilder("count", dt.TypeU16, RO).
+		Pin(PinBuilder("count", nson.DataTypeU16, RO).
 			Desc("子设备数量").
 			Build()),
 	).
@@ -702,13 +701,13 @@ var Gateway = DeviceBuilder("gw", "智能网关").
 var IRRemote = DeviceBuilder("ir", "万能遥控器").
 	Tags("controller", "smart_home").
 	Wire(WireBuilder("ctrl").
-		Pin(PinBuilder("send", dt.TypeBinary, WO).
+		Pin(PinBuilder("send", nson.DataTypeBINARY, WO).
 			Desc("发送红外码").
 			Build()).
-		Pin(PinBuilder("learn", dt.TypeBool, RW).
+		Pin(PinBuilder("learn", nson.DataTypeBOOL, RW).
 			Desc("学习模式").
 			Build()).
-		Pin(PinBuilder("code", dt.TypeBinary, RO).
+		Pin(PinBuilder("code", nson.DataTypeBINARY, RO).
 			Desc("学习到的红外码").
 			Build()),
 	).
@@ -718,16 +717,16 @@ var IRRemote = DeviceBuilder("ir", "万能遥控器").
 var SceneController = DeviceBuilder("scene", "场景控制器").
 	Tags("controller", "smart_home").
 	Wire(WireBuilder("ctrl").
-		Pin(PinBuilder("exec", dt.TypeString, WO).
+		Pin(PinBuilder("exec", nson.DataTypeSTRING, WO).
 			Desc("执行场景ID").
 			Build()).
-		Pin(PinBuilder("list", dt.TypeArray, RO).
+		Pin(PinBuilder("list", nson.DataTypeARRAY, RO).
 			Desc("场景列表").
 			Build()),
 	).
 	Wire(WireBuilder("sched").
 		Desc("定时任务").
-		Pin(PinBuilder("tasks", dt.TypeArray, RW).
+		Pin(PinBuilder("tasks", nson.DataTypeARRAY, RW).
 			Desc("定时任务列表").
 			Build()),
 	).

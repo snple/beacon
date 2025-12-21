@@ -19,8 +19,8 @@ func TestNoOpActuator(t *testing.T) {
 			Type: "noop",
 		},
 		Pins: []Pin{
-			{Name: "on", Type: uint32(nson.DataTypeBOOL), Default: nson.Bool(false)},
-			{Name: "dim", Type: uint32(nson.DataTypeU8), Default: nson.U8(0)},
+			{Name: "on", Type: nson.DataTypeBOOL, Default: nson.Bool(false)},
+			{Name: "dim", Type: nson.DataTypeU8, Default: nson.U8(0)},
 		},
 	}
 
@@ -120,7 +120,7 @@ func TestActuatorChain(t *testing.T) {
 			Type: "noop",
 		},
 		Pins: []Pin{
-			{Name: "test", Type: uint32(nson.DataTypeBOOL)},
+			{Name: "test", Type: nson.DataTypeBOOL},
 		},
 	}
 

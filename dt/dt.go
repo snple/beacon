@@ -7,31 +7,6 @@ import (
 	"github.com/danclive/nson-go"
 )
 
-// ============================================================================
-// 类型常量 - 避免使用字符串类型名
-// ============================================================================
-
-const (
-	TypeBool      = uint32(nson.DataTypeBOOL)
-	TypeNull      = uint32(nson.DataTypeNULL)
-	TypeI8        = uint32(nson.DataTypeI8)
-	TypeI16       = uint32(nson.DataTypeI16)
-	TypeI32       = uint32(nson.DataTypeI32)
-	TypeI64       = uint32(nson.DataTypeI64)
-	TypeU8        = uint32(nson.DataTypeU8)
-	TypeU16       = uint32(nson.DataTypeU16)
-	TypeU32       = uint32(nson.DataTypeU32)
-	TypeU64       = uint32(nson.DataTypeU64)
-	TypeF32       = uint32(nson.DataTypeF32)
-	TypeF64       = uint32(nson.DataTypeF64)
-	TypeString    = uint32(nson.DataTypeSTRING)
-	TypeBinary    = uint32(nson.DataTypeBINARY)
-	TypeArray     = uint32(nson.DataTypeARRAY)
-	TypeMap       = uint32(nson.DataTypeMAP)
-	TypeTimestamp = uint32(nson.DataTypeTIMESTAMP)
-	TypeId        = uint32(nson.DataTypeID)
-)
-
 // castInt32ToNson 根据 DataType 将 int32 转换为对应的 nson 整数类型
 func CastInt32ToNson(val int32, dt nson.DataType) (nson.Value, error) {
 	switch dt {

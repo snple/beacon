@@ -61,7 +61,7 @@ func setupTestEnvironment(t *testing.T) (*core.CoreService, *edge.EdgeService, f
 		edge.WithLogger(logger.Named("edge")),
 		edge.WithNodeID(nodeID, secret),
 		edge.WithName("Test Edge"),
-		edge.WithDevice(device.SmartBulb), // 使用智能灯泡模板
+		edge.WithDeviceManager(device.NewDeviceManager(device.SmartBulb)), // 使用智能灯泡模板
 		edge.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
 		edge.WithNode(edge.NodeOptions{
 			Enable:    true,
@@ -590,7 +590,7 @@ func TestEdgeReconnection(t *testing.T) {
 	edgeService1, err := edge.Edge(
 		edge.WithLogger(logger.Named("edge1")),
 		edge.WithNodeID(nodeID, secret),
-		edge.WithDevice(device.SmartBulb),
+		edge.WithDeviceManager(device.NewDeviceManager(device.SmartBulb)),
 		edge.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
 		edge.WithNode(edge.NodeOptions{
 			Enable:    true,
@@ -626,7 +626,7 @@ func TestEdgeReconnection(t *testing.T) {
 	edgeService2, err := edge.Edge(
 		edge.WithLogger(logger.Named("edge2")),
 		edge.WithNodeID(nodeID, secret),
-		edge.WithDevice(device.SmartBulb),
+		edge.WithDeviceManager(device.NewDeviceManager(device.SmartBulb)),
 		edge.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
 		edge.WithNode(edge.NodeOptions{
 			Enable:    true,
@@ -697,7 +697,7 @@ func TestMultipleEdges(t *testing.T) {
 		edgeService, err := edge.Edge(
 			edge.WithLogger(logger.Named(fmt.Sprintf("edge%d", i))),
 			edge.WithNodeID(nodeID, secret),
-			edge.WithDevice(device.SmartBulb),
+			edge.WithDeviceManager(device.NewDeviceManager(device.SmartBulb)),
 			edge.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
 			edge.WithNode(edge.NodeOptions{
 				Enable:    true,
@@ -792,7 +792,7 @@ func TestPinWriteFullSync(t *testing.T) {
 	edgeService1, err := edge.Edge(
 		edge.WithLogger(logger.Named("edge1")),
 		edge.WithNodeID(nodeID, secret),
-		edge.WithDevice(device.SmartBulb),
+		edge.WithDeviceManager(device.NewDeviceManager(device.SmartBulb)),
 		edge.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
 		edge.WithNode(edge.NodeOptions{
 			Enable:    true,
@@ -834,7 +834,7 @@ func TestPinWriteFullSync(t *testing.T) {
 	edgeService2, err := edge.Edge(
 		edge.WithLogger(logger.Named("edge2")),
 		edge.WithNodeID(nodeID, secret),
-		edge.WithDevice(device.SmartBulb),
+		edge.WithDeviceManager(device.NewDeviceManager(device.SmartBulb)),
 		edge.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
 		edge.WithNode(edge.NodeOptions{
 			Enable:    true,
