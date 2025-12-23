@@ -14,6 +14,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// 测试客户端配置
+const (
+	TEST_CLIENT_ID     = "test-client"
+	TEST_CLIENT_SECRET = "client-secret-123"
+)
+
 // ESP32 双路 LED 测试配置
 const (
 	LED_NODE_ID     = "esp32-led-001"
@@ -47,9 +53,16 @@ func main() {
 	coreService.Start()
 	defer coreService.Stop()
 
-	if err := coreService.GetNode().SetSecret(LED_NODE_ID, LED_NODE_SECRET); err != nil {
-		coreService.Stop()
-		log.Logger.Sugar().Fatalf("Failed to set node secret: %v", err)
+	{
+		if err := coreService.GetNode().SetSecret(TEST_CLIENT_ID, TEST_CLIENT_SECRET); err != nil {
+			coreService.Stop()
+			log.Logger.Sugar().Fatalf("Failed to set client secret: %v", err)
+		}
+
+		if err := coreService.GetNode().SetSecret(LED_NODE_ID, LED_NODE_SECRET); err != nil {
+			coreService.Stop()
+			log.Logger.Sugar().Fatalf("Failed to set node secret: %v", err)
+		}
 	}
 
 	{

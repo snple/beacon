@@ -31,13 +31,13 @@ func (s *NodeService) View(nodeID string) (*dt.Node, error) {
 	return node, nil
 }
 
-func (s *NodeService) List(ctx context.Context) ([]dt.Node, error) {
+func (s *NodeService) List() ([]dt.Node, error) {
 	nodes := s.cs.GetStorage().ListNodes()
 
 	return nodes, nil
 }
 
-func (s *NodeService) Push(ctx context.Context, node *dt.Node) error {
+func (s *NodeService) Push(node *dt.Node) error {
 	// basic validation
 	if node == nil || node.ID == "" {
 		return fmt.Errorf("please supply valid Node.ID")

@@ -20,6 +20,14 @@ type Node struct {
 	Wires   []Wire    `nson:"wires"`
 }
 
+func (n *Node) String() string {
+	s, err := nson.Marshal(n)
+	if err != nil {
+		return ""
+	}
+	return s.String()
+}
+
 // Wire 通道配置
 type Wire struct {
 	ID   string   `nson:"id"`
@@ -28,6 +36,14 @@ type Wire struct {
 	Desc string   `nson:"desc,omitempty"` // Wire 描述
 	Type string   `nson:"type"`
 	Pins []Pin    `nson:"pins"`
+}
+
+func (n *Wire) String() string {
+	s, err := nson.Marshal(n)
+	if err != nil {
+		return ""
+	}
+	return s.String()
 }
 
 // Pin 点位配置
@@ -46,6 +62,14 @@ type Pin struct {
 	Precision int        `nson:"precision,omitempty"` // 精度/小数位数
 	Unit      string     `nson:"unit,omitempty"`      // 单位
 	Enum      []EnumItem `nson:"enum,omitempty"`      // 枚举值列表
+}
+
+func (n *Pin) String() string {
+	s, err := nson.Marshal(n)
+	if err != nil {
+		return ""
+	}
+	return s.String()
 }
 
 // EnumItem 枚举项

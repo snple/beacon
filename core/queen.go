@@ -215,7 +215,9 @@ func (cs *CoreService) handlePush(nodeID string, payload []byte) error {
 		return fmt.Errorf("decode node: %w", err)
 	}
 
-	err = cs.GetNode().Push(context.Background(), node)
+	cs.Logger().Sugar().Debugf("Push received: nodeID=%s, payload=%v", nodeID, node)
+
+	err = cs.GetNode().Push(node)
 	if err != nil {
 		cs.Logger().Sugar().Errorf("Push failed: nodeID=%s, error=%v", nodeID, err)
 		return err
@@ -245,8 +247,7 @@ func (cs *CoreService) handlePinValue(nodeID string, payload []byte) error {
 		return err
 	}
 
-	ctx := context.Background()
-	if err := cs.setPinValue(ctx, nodeID, v); err != nil {
+	if err := cs.setPinValue(nodeID, v); err != nil {
 		cs.Logger().Sugar().Warnf("Set pin value failed: nodeID=%s, pin=%s, error=%v",
 			nodeID, v.ID, err)
 		return err
@@ -269,7 +270,7 @@ func (cs *CoreService) handlePinValueBatch(nodeID string, payload []byte) error 
 		return err
 	}
 
-	ctx := context.Background()
+	cs.Logger().Sugar().Debugf("Push received: nodeID=%s, payload=%v", nodeID, arr)
 
 	for _, item := range arr {
 		itemMap, ok := item.(nson.Map)
@@ -282,7 +283,7 @@ func (cs *CoreService) handlePinValueBatch(nodeID string, payload []byte) error 
 			continue
 		}
 
-		if err := cs.setPinValue(ctx, nodeID, v); err != nil {
+		if err := cs.setPinValue(nodeID, v); err != nil {
 			cs.Logger().Sugar().Warnf("Set pin value failed: nodeID=%s, pin=%s, error=%v",
 				nodeID, v.ID, err)
 		}
@@ -292,7 +293,7 @@ func (cs *CoreService) handlePinValueBatch(nodeID string, payload []byte) error 
 }
 
 // setPinValue 设置 Pin 值
-func (cs *CoreService) setPinValue(ctx context.Context, nodeID string, v dt.PinValueMessage) error {
+func (cs *CoreService) setPinValue(nodeID string, v dt.PinValueMessage) error {
 	// 验证 v.ID 的格式，必须是 "NodeID.WireName.PinName"
 	parts := strings.Split(v.ID, ".")
 	if len(parts) != 3 {
