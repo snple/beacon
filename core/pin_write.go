@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -20,7 +19,7 @@ func newPinWriteService(cs *CoreService) *PinWriteService {
 	}
 }
 
-func (s *PinWriteService) GetWrite(ctx context.Context, pinID string) (nson.Value, time.Time, error) {
+func (s *PinWriteService) GetWrite(pinID string) (nson.Value, time.Time, error) {
 	// basic validation
 	if pinID == "" {
 		return nil, time.Time{}, fmt.Errorf("please supply valid Pin.Id")
@@ -35,7 +34,7 @@ func (s *PinWriteService) GetWrite(ctx context.Context, pinID string) (nson.Valu
 	return value, updated, nil
 }
 
-func (s *PinWriteService) SetWrite(ctx context.Context, value dt.PinValue, realtime bool) error {
+func (s *PinWriteService) SetWrite(value dt.PinValue, realtime bool) error {
 	// basic validation
 	if value.ID == "" || value.Value == nil {
 		return fmt.Errorf("please supply valid Pin.Id and Value")
@@ -65,7 +64,7 @@ func (s *PinWriteService) SetWrite(ctx context.Context, value dt.PinValue, realt
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	err = s.cs.GetStorage().SetPinWrite(ctx, value)
+	err = s.cs.GetStorage().SetPinWrite(value)
 	if err != nil {
 		return fmt.Errorf("setPinWrite failed: %w", err)
 	}
@@ -78,13 +77,13 @@ func (s *PinWriteService) SetWrite(ctx context.Context, value dt.PinValue, realt
 	return nil
 }
 
-func (s *PinWriteService) DeleteWrite(ctx context.Context, pinID string) error {
+func (s *PinWriteService) DeleteWrite(pinID string) error {
 	// basic validation
 	if pinID == "" {
 		return fmt.Errorf("please supply valid Pin.Id")
 	}
 
-	err := s.cs.GetStorage().DeletePinWrite(ctx, pinID)
+	err := s.cs.GetStorage().DeletePinWrite(pinID)
 	if err != nil {
 		return fmt.Errorf("deletePinWrite failed: %w", err)
 	}

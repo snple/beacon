@@ -14,6 +14,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// ESP32 双路 LED 测试配置
+const (
+	LED_NODE_ID     = "esp32-led-001"
+	LED_NODE_SECRET = "led-secret-123"
+)
+
 func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
@@ -40,6 +46,11 @@ func main() {
 	}
 	coreService.Start()
 	defer coreService.Stop()
+
+	if err := coreService.GetNode().SetSecret(LED_NODE_ID, LED_NODE_SECRET); err != nil {
+		coreService.Stop()
+		log.Logger.Sugar().Fatalf("Failed to set node secret: %v", err)
+	}
 
 	{
 		signalCh := make(chan os.Signal, 1)

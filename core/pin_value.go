@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -19,7 +18,7 @@ func newPinValueService(cs *CoreService) *PinValueService {
 	}
 }
 
-func (s *PinValueService) GetValue(ctx context.Context, pinID string) (nson.Value, time.Time, error) {
+func (s *PinValueService) GetValue(pinID string) (nson.Value, time.Time, error) {
 	// basic validation
 	if pinID == "" {
 		return nil, time.Time{}, fmt.Errorf("please supply valid Pin.Id")
@@ -34,7 +33,7 @@ func (s *PinValueService) GetValue(ctx context.Context, pinID string) (nson.Valu
 	return value, updated, nil
 }
 
-func (s *PinValueService) setValue(ctx context.Context, value dt.PinValue) error {
+func (s *PinValueService) setValue(value dt.PinValue) error {
 	// basic validation
 	if value.ID == "" || value.Value == nil {
 		return fmt.Errorf("please supply valid Pin.Id and Value")
@@ -44,7 +43,7 @@ func (s *PinValueService) setValue(ctx context.Context, value dt.PinValue) error
 		value.Updated = time.Now()
 	}
 
-	err := s.cs.GetStorage().SetPinValue(ctx, value)
+	err := s.cs.GetStorage().SetPinValue(value)
 	if err != nil {
 		return fmt.Errorf("setPinValue failed: %w", err)
 	}

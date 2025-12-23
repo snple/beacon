@@ -441,7 +441,7 @@ func (dm *DeviceManager) SetActuator(wireName string, actuator Actuator) bool {
 //
 // 在调用此方法前，应通过 SetActuator() 设置所需的执行器。
 // 未设置执行器的 Wire 将使用 NoOpActuator。
-func (dm *DeviceManager) Init(ctx context.Context, logger *zap.Logger, onPinRead PinReadCallback) error {
+func (dm *DeviceManager) Init(logger *zap.Logger, onPinRead PinReadCallback) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -486,7 +486,7 @@ func (dm *DeviceManager) Init(ctx context.Context, logger *zap.Logger, onPinRead
 			Pins: wire.Pins,
 		}
 
-		if err := actuator.Init(ctx, config); err != nil {
+		if err := actuator.Init(config); err != nil {
 			return fmt.Errorf("initialize actuator for wire %s: %w", wire.Name, err)
 		}
 
@@ -573,7 +573,7 @@ func (dm *DeviceManager) Stop() error {
 }
 
 // Execute 执行 Pin 写入
-func (dm *DeviceManager) Execute(ctx context.Context, wireID, pinName string, value nson.Value) error {
+func (dm *DeviceManager) Execute(wireID, pinName string, value nson.Value) error {
 	dm.mu.RLock()
 	actuator, ok := dm.actuators[wireID]
 	dm.mu.RUnlock()
@@ -582,11 +582,11 @@ func (dm *DeviceManager) Execute(ctx context.Context, wireID, pinName string, va
 		return fmt.Errorf("no actuator for wire: %s", wireID)
 	}
 
-	return actuator.Execute(ctx, pinName, value)
+	return actuator.Execute(pinName, value)
 }
 
 // Read 读取 Wire 的所有可读 Pin
-func (dm *DeviceManager) Read(ctx context.Context, wireID string) (map[string]nson.Value, error) {
+func (dm *DeviceManager) Read(wireID string) (map[string]nson.Value, error) {
 	dm.mu.RLock()
 	actuator, ok := dm.actuators[wireID]
 	dm.mu.RUnlock()
@@ -595,7 +595,7 @@ func (dm *DeviceManager) Read(ctx context.Context, wireID string) (map[string]ns
 		return nil, fmt.Errorf("no actuator for wire: %s", wireID)
 	}
 
-	return actuator.Read(ctx, nil)
+	return actuator.Read(nil)
 }
 
 // GetActuatorInfo 获取 Wire 的执行器信息
@@ -651,7 +651,7 @@ func (dm *DeviceManager) pollActuator(ctx context.Context, wireID string) {
 			}
 
 			// 读取所有 Pin
-			values, err := actuator.Read(ctx, nil)
+			values, err := actuator.Read(nil)
 			if err != nil {
 				dm.logger.Sugar().Warnf("Poll actuator %s: %v", wireID, err)
 				continue

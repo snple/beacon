@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -48,8 +47,7 @@ func setupTestEnvironment(t *testing.T) (*core.CoreService, *edge.EdgeService, f
 
 	// 在 Core 中预设节点密钥（Edge 连接时需要验证）
 	// 必须在 Core 启动后设置
-	ctx := context.Background()
-	if err := coreService.GetNode().SetSecret(ctx, nodeID, secret); err != nil {
+	if err := coreService.GetNode().SetSecret(nodeID, secret); err != nil {
 		coreService.Stop()
 		t.Fatalf("Failed to set node secret: %v", err)
 	}
@@ -117,14 +115,13 @@ func TestConfigPush(t *testing.T) {
 	coreService, edgeService, cleanup := setupTestEnvironment(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	nodeID := edgeService.GetStorage().GetNodeID()
 
 	// Edge 启动时已自动推送配置，这里等待同步完成
 	time.Sleep(500 * time.Millisecond)
 
 	// 验证 Core 端已创建并收到了配置
-	node, err := coreService.GetNode().View(ctx, nodeID)
+	node, err := coreService.GetNode().View(nodeID)
 	if err != nil {
 		t.Fatalf("Failed to get node from core: %v", err)
 	}
@@ -138,7 +135,7 @@ func TestConfigPush(t *testing.T) {
 	}
 
 	// 验证 Wire 和 Pin 数据
-	wires, err := coreService.GetWire().List(ctx, nodeID)
+	wires, err := coreService.GetWire().List(nodeID)
 	if err != nil {
 		t.Fatalf("Failed to list wires: %v", err)
 	}
@@ -149,7 +146,7 @@ func TestConfigPush(t *testing.T) {
 
 	// 验证第一个 Wire 的 Pins
 	firstWire := wires[0]
-	pins, err := coreService.GetPin().List(ctx, nodeID, firstWire.ID)
+	pins, err := coreService.GetPin().List(nodeID, firstWire.ID)
 	if err != nil {
 		t.Fatalf("Failed to list pins: %v", err)
 	}
@@ -166,8 +163,6 @@ func TestPinValueSync(t *testing.T) {
 	coreService, edgeService, cleanup := setupTestEnvironment(t)
 	defer cleanup()
 
-	ctx := context.Background()
-
 	// 等待配置同步完成（setupTestEnvironment 已自动推送）
 	time.Sleep(500 * time.Millisecond)
 
@@ -176,7 +171,7 @@ func TestPinValueSync(t *testing.T) {
 	testPinID := "ctrl.on" // SmartBulb 的开关 Pin (本地格式)
 	testValue := nson.Bool(true)
 
-	err := edgeStorage.SetPinValue(ctx, dt.PinValue{
+	err := edgeStorage.SetPinValue(dt.PinValue{
 		ID:      testPinID,
 		Value:   testValue,
 		Updated: time.Now(),
@@ -194,7 +189,7 @@ func TestPinValueSync(t *testing.T) {
 	// 在 Core 端验证 PinValue (Core 端存储的是完整格式: "NodeID.WireName.PinName")
 	nodeID := edgeService.GetStorage().GetNodeID()
 	fullPinID := nodeID + "." + testPinID
-	coreValue, updated, err := coreService.GetPinValue().GetValue(ctx, fullPinID)
+	coreValue, updated, err := coreService.GetPinValue().GetValue(fullPinID)
 	if err != nil {
 		t.Fatalf("Failed to get pin value from core: %v", err)
 	}
@@ -222,7 +217,6 @@ func TestPinValueBatchSync(t *testing.T) {
 	coreService, edgeService, cleanup := setupTestEnvironment(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	nodeID := edgeService.GetStorage().GetNodeID()
 
 	// 等待配置同步完成
@@ -238,7 +232,7 @@ func TestPinValueBatchSync(t *testing.T) {
 	}
 
 	for pinID, value := range testData {
-		if err := edgeStorage.SetPinValue(ctx, dt.PinValue{
+		if err := edgeStorage.SetPinValue(dt.PinValue{
 			ID:      pinID,
 			Value:   value,
 			Updated: time.Now(),
@@ -256,7 +250,7 @@ func TestPinValueBatchSync(t *testing.T) {
 	successCount := 0
 	for pinID, expectedValue := range testData {
 		fullPinID := nodeID + "." + pinID
-		coreValue, _, err := coreService.GetPinValue().GetValue(ctx, fullPinID)
+		coreValue, _, err := coreService.GetPinValue().GetValue(fullPinID)
 		if err != nil {
 			t.Errorf("Failed to get pin value %s from core: %v", pinID, err)
 			continue
@@ -287,7 +281,6 @@ func TestPinWriteSync(t *testing.T) {
 	coreService, edgeService, cleanup := setupTestEnvironment(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	nodeID := edgeService.GetStorage().GetNodeID()
 
 	// 等待配置同步完成
@@ -298,7 +291,7 @@ func TestPinWriteSync(t *testing.T) {
 	fullPinID := nodeID + "." + testPinID
 	testValue := nson.Bool(false)
 
-	err := coreService.GetPinWrite().SetWrite(ctx, dt.PinValue{
+	err := coreService.GetPinWrite().SetWrite(dt.PinValue{
 		ID:      fullPinID,
 		Value:   testValue,
 		Updated: time.Now(),
@@ -341,7 +334,6 @@ func TestPinWriteBatchSync(t *testing.T) {
 	coreService, edgeService, cleanup := setupTestEnvironment(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	nodeID := edgeService.GetStorage().GetNodeID()
 
 	// 等待配置同步完成
@@ -355,7 +347,7 @@ func TestPinWriteBatchSync(t *testing.T) {
 
 	for pinID, value := range testData {
 		fullPinID := nodeID + "." + pinID
-		if err := coreService.GetPinWrite().SetWrite(ctx, dt.PinValue{
+		if err := coreService.GetPinWrite().SetWrite(dt.PinValue{
 			ID:      fullPinID,
 			Value:   value,
 			Updated: time.Now(),
@@ -404,7 +396,6 @@ func TestRealtimeVsBatchNotification(t *testing.T) {
 	coreService, edgeService, cleanup := setupTestEnvironment(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	nodeID := edgeService.GetStorage().GetNodeID()
 
 	// 等待配置同步完成
@@ -417,7 +408,7 @@ func TestRealtimeVsBatchNotification(t *testing.T) {
 
 		// 设置并立即发送
 		edgeStorage := edgeService.GetStorage()
-		if err := edgeStorage.SetPinValue(ctx, dt.PinValue{
+		if err := edgeStorage.SetPinValue(dt.PinValue{
 			ID:      pinID,
 			Value:   value,
 			Updated: time.Now(),
@@ -435,7 +426,7 @@ func TestRealtimeVsBatchNotification(t *testing.T) {
 
 		// 验证
 		fullPinID := nodeID + "." + pinID
-		coreValue, _, err := coreService.GetPinValue().GetValue(ctx, fullPinID)
+		coreValue, _, err := coreService.GetPinValue().GetValue(fullPinID)
 		if err != nil || coreValue == nil {
 			t.Errorf("Realtime notification failed")
 		} else {
@@ -449,7 +440,7 @@ func TestRealtimeVsBatchNotification(t *testing.T) {
 		value := nson.U8(75)
 
 		edgeStorage := edgeService.GetStorage()
-		if err := edgeStorage.SetPinValue(ctx, dt.PinValue{
+		if err := edgeStorage.SetPinValue(dt.PinValue{
 			ID:      pinID,
 			Value:   value,
 			Updated: time.Now(),
@@ -467,7 +458,7 @@ func TestRealtimeVsBatchNotification(t *testing.T) {
 
 		// 验证
 		fullPinID := nodeID + "." + pinID
-		coreValue, _, err := coreService.GetPinValue().GetValue(ctx, fullPinID)
+		coreValue, _, err := coreService.GetPinValue().GetValue(fullPinID)
 		if err != nil || coreValue == nil {
 			t.Errorf("Batch notification failed")
 		} else {
@@ -481,7 +472,6 @@ func TestBidirectionalSync(t *testing.T) {
 	coreService, edgeService, cleanup := setupTestEnvironment(t)
 	defer cleanup()
 
-	ctx := context.Background()
 	nodeID := edgeService.GetStorage().GetNodeID()
 
 	// 等待配置同步完成
@@ -493,7 +483,7 @@ func TestBidirectionalSync(t *testing.T) {
 	edgeValue1 := nson.U8(30)
 
 	edgeStorage := edgeService.GetStorage()
-	if err := edgeStorage.SetPinValue(ctx, dt.PinValue{
+	if err := edgeStorage.SetPinValue(dt.PinValue{
 		ID:      pinID,
 		Value:   edgeValue1,
 		Updated: time.Now(),
@@ -505,7 +495,7 @@ func TestBidirectionalSync(t *testing.T) {
 
 	// 验证 Core 收到
 	fullPinID := nodeID + "." + pinID
-	coreValue1, _, err := coreService.GetPinValue().GetValue(ctx, fullPinID)
+	coreValue1, _, err := coreService.GetPinValue().GetValue(fullPinID)
 	if err != nil || coreValue1 == nil {
 		t.Fatalf("Core didn't receive value from edge")
 	}
@@ -515,7 +505,7 @@ func TestBidirectionalSync(t *testing.T) {
 	t.Log("Step 2: Core → Edge (PinWrite)")
 	coreValue2 := nson.U8(70)
 
-	if err := coreService.GetPinWrite().SetWrite(ctx, dt.PinValue{
+	if err := coreService.GetPinWrite().SetWrite(dt.PinValue{
 		ID:      fullPinID,
 		Value:   coreValue2,
 		Updated: time.Now(),
@@ -534,7 +524,7 @@ func TestBidirectionalSync(t *testing.T) {
 
 	// 3. Edge → Core: 再次上报更新后的值
 	t.Log("Step 3: Edge → Core (Updated PinValue)")
-	if err := edgeStorage.SetPinValue(ctx, dt.PinValue{
+	if err := edgeStorage.SetPinValue(dt.PinValue{
 		ID:      pinID,
 		Value:   coreValue2,
 		Updated: time.Now(),
@@ -545,7 +535,7 @@ func TestBidirectionalSync(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// 最终验证
-	coreValue3, _, err := coreService.GetPinValue().GetValue(ctx, fullPinID)
+	coreValue3, _, err := coreService.GetPinValue().GetValue(fullPinID)
 	if err != nil || coreValue3 == nil {
 		t.Fatalf("Core didn't receive updated value")
 	}
@@ -579,9 +569,8 @@ func TestEdgeReconnection(t *testing.T) {
 	// 设置节点密钥
 	nodeID := "reconnect-test-001"
 	secret := "reconnect-secret"
-	ctx := context.Background()
 
-	if err := coreService.GetNode().SetSecret(ctx, nodeID, secret); err != nil {
+	if err := coreService.GetNode().SetSecret(nodeID, secret); err != nil {
 		t.Fatalf("Failed to set node secret: %v", err)
 	}
 
@@ -650,7 +639,7 @@ func TestEdgeReconnection(t *testing.T) {
 	// 验证重连后通讯正常（等待自动同步）
 	time.Sleep(800 * time.Millisecond)
 
-	node, err := coreService.GetNode().View(ctx, nodeID)
+	node, err := coreService.GetNode().View(nodeID)
 	if err != nil {
 		t.Fatalf("Failed to get node after reconnect: %v", err)
 	}
@@ -679,7 +668,6 @@ func TestMultipleEdges(t *testing.T) {
 	defer coreService.Stop()
 	time.Sleep(200 * time.Millisecond)
 
-	ctx := context.Background()
 	nodeCount := 3
 	edges := make([]*edge.EdgeService, nodeCount)
 
@@ -689,7 +677,7 @@ func TestMultipleEdges(t *testing.T) {
 		secret := fmt.Sprintf("secret-%03d", i)
 
 		// 在 Core 设置节点密钥
-		if err := coreService.GetNode().SetSecret(ctx, nodeID, secret); err != nil {
+		if err := coreService.GetNode().SetSecret(nodeID, secret); err != nil {
 			t.Fatalf("Failed to set node secret %d: %v", i, err)
 		}
 
@@ -746,7 +734,7 @@ func TestMultipleEdges(t *testing.T) {
 	// 验证所有配置都收到了
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("multi-edge-%03d", i)
-		node, err := coreService.GetNode().View(ctx, nodeID)
+		node, err := coreService.GetNode().View(nodeID)
 		if err != nil {
 			t.Errorf("Failed to get node %d: %v", i, err)
 			continue
@@ -781,9 +769,8 @@ func TestPinWriteFullSync(t *testing.T) {
 
 	nodeID := "fullsync-test-001"
 	secret := "fullsync-secret"
-	ctx := context.Background()
 
-	if err := coreService.GetNode().SetSecret(ctx, nodeID, secret); err != nil {
+	if err := coreService.GetNode().SetSecret(nodeID, secret); err != nil {
 		t.Fatalf("Failed to set node secret: %v", err)
 	}
 
@@ -819,7 +806,7 @@ func TestPinWriteFullSync(t *testing.T) {
 
 	for pinID, value := range testWrites {
 		fullPinID := nodeID + "." + pinID
-		if err := coreService.GetPinWrite().SetWrite(ctx, dt.PinValue{
+		if err := coreService.GetPinWrite().SetWrite(dt.PinValue{
 			ID:      fullPinID,
 			Value:   value,
 			Updated: time.Now(),

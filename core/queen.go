@@ -305,7 +305,7 @@ func (cs *CoreService) setPinValue(ctx context.Context, nodeID string, v dt.PinV
 	}
 
 	// 使用完整的 Pin ID (与 Push 时的格式一致)
-	err := cs.GetPinValue().setValue(ctx, dt.PinValue{
+	err := cs.GetPinValue().setValue(dt.PinValue{
 		ID:      v.ID, // 使用完整格式: "NodeID.WireName.PinName"
 		Value:   v.Value,
 		Updated: time.Now(),
@@ -368,10 +368,8 @@ func (cs *CoreService) PublishPinWriteBatch(nodeID string, pinWrites []dt.PinVal
 
 // buildPinWritesPayload 构建节点所有待写入的 pin write 列表（NSON Array）
 func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
-	ctx := context.Background()
-
 	// 获取节点的所有 Pin
-	pins, err := cs.GetPin().List(ctx, nodeID, "")
+	pins, err := cs.GetPin().List(nodeID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +377,7 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	// 收集有写入值的 Pin
 	var writes []dt.PinValueMessage
 	for _, pin := range pins {
-		writeValue, _, err := cs.GetPinWrite().GetWrite(ctx, pin.ID)
+		writeValue, _, err := cs.GetPinWrite().GetWrite(pin.ID)
 		if err != nil {
 			cs.Logger().Sugar().Debugf("buildPinWritesPayload: skip pin %s due to error: %v", pin.ID, err)
 			continue // 忽略没有写入值的 Pin

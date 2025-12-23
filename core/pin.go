@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/snple/beacon/dt"
@@ -17,7 +16,7 @@ func newPinService(cs *CoreService) *PinService {
 	}
 }
 
-func (s *PinService) View(ctx context.Context, pinID string) (*dt.Pin, error) {
+func (s *PinService) View(pinID string) (*dt.Pin, error) {
 	// basic validation
 	if pinID == "" {
 		return nil, fmt.Errorf("please supply valid PinId")
@@ -31,7 +30,7 @@ func (s *PinService) View(ctx context.Context, pinID string) (*dt.Pin, error) {
 	return pin, nil
 }
 
-func (s *PinService) List(ctx context.Context, nodeID, wireID string) ([]dt.Pin, error) {
+func (s *PinService) List(nodeID, wireID string) ([]dt.Pin, error) {
 	// basic validation
 	if nodeID == "" {
 		return nil, fmt.Errorf("please supply valid NodeId")

@@ -106,7 +106,7 @@ func EdgeContext(ctx context.Context, opts ...EdgeOption) (*EdgeService, error) 
 	es.queenUp = queenUp
 
 	// 初始化 DeviceManager（执行器应该已经通过 SetActuator 设置）
-	if err := es.deviceMgr.Init(ctx, es.dopts.logger, es.onPinRead); err != nil {
+	if err := es.deviceMgr.Init(es.dopts.logger, es.onPinRead); err != nil {
 		return nil, fmt.Errorf("initialize device manager: %w", err)
 	}
 
@@ -175,13 +175,12 @@ func (es *EdgeService) onPinRead(wireID, pinName string, value nson.Value) error
 	pinID := wireID + "." + pinName
 
 	// 更新本地存储
-	ctx := context.Background()
 	pinValue := dt.PinValue{
 		ID:      pinID,
 		Value:   value,
 		Updated: time.Now(),
 	}
-	if err := es.storage.SetPinValue(ctx, pinValue); err != nil {
+	if err := es.storage.SetPinValue(pinValue); err != nil {
 		return fmt.Errorf("set pin value: %w", err)
 	}
 

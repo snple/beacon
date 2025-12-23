@@ -1,7 +1,6 @@
 package device
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -17,17 +16,17 @@ import (
 type Actuator interface {
 	// Init 初始化执行器（如打开串口、连接设备等）
 	// config: Wire 配置信息，包含地址映射等
-	Init(ctx context.Context, config ActuatorConfig) error
+	Init(config ActuatorConfig) error
 
 	// Execute 执行 Pin 写入操作
 	// pinName: Pin 名称（不含 Wire 前缀，如 "on", "dim"）
 	// value: 要写入的值
-	Execute(ctx context.Context, pinName string, value nson.Value) error
+	Execute(pinName string, value nson.Value) error
 
 	// Read 读取 Pin 的实际值（用于传感器等只读设备）
 	// pinNames: 要读取的 Pin 名称列表，nil 表示读取所有
 	// 返回: map[pinName]value
-	Read(ctx context.Context, pinNames []string) (map[string]nson.Value, error)
+	Read(pinNames []string) (map[string]nson.Value, error)
 
 	// Close 关闭执行器，释放资源
 	Close() error
@@ -119,7 +118,7 @@ type NoOpActuator struct {
 	info  ActuatorInfo
 }
 
-func (a *NoOpActuator) Init(ctx context.Context, config ActuatorConfig) error {
+func (a *NoOpActuator) Init(config ActuatorConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -140,7 +139,7 @@ func (a *NoOpActuator) Init(ctx context.Context, config ActuatorConfig) error {
 	return nil
 }
 
-func (a *NoOpActuator) Execute(ctx context.Context, pinName string, value nson.Value) error {
+func (a *NoOpActuator) Execute(pinName string, value nson.Value) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -148,7 +147,7 @@ func (a *NoOpActuator) Execute(ctx context.Context, pinName string, value nson.V
 	return nil
 }
 
-func (a *NoOpActuator) Read(ctx context.Context, pinNames []string) (map[string]nson.Value, error) {
+func (a *NoOpActuator) Read(pinNames []string) (map[string]nson.Value, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -209,38 +208,38 @@ func NewActuatorChain(actuators ...Actuator) *ActuatorChain {
 	}
 }
 
-func (c *ActuatorChain) Init(ctx context.Context, config ActuatorConfig) error {
+func (c *ActuatorChain) Init(config ActuatorConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for _, act := range c.actuators {
-		if err := act.Init(ctx, config); err != nil {
+		if err := act.Init(config); err != nil {
 			return fmt.Errorf("initialize actuator: %w", err)
 		}
 	}
 	return nil
 }
 
-func (c *ActuatorChain) Execute(ctx context.Context, pinName string, value nson.Value) error {
+func (c *ActuatorChain) Execute(pinName string, value nson.Value) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	for _, act := range c.actuators {
-		if err := act.Execute(ctx, pinName, value); err != nil {
+		if err := act.Execute(pinName, value); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *ActuatorChain) Read(ctx context.Context, pinNames []string) (map[string]nson.Value, error) {
+func (c *ActuatorChain) Read(pinNames []string) (map[string]nson.Value, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	result := make(map[string]nson.Value)
 
 	for _, act := range c.actuators {
-		values, err := act.Read(ctx, pinNames)
+		values, err := act.Read(pinNames)
 		if err != nil {
 			return nil, err
 		}

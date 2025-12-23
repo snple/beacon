@@ -318,7 +318,7 @@ func (s *Storage) Push(node *dt.Node) error {
 }
 
 // DeleteNode 删除节点
-func (s *Storage) DeleteNode(ctx context.Context, nodeID string) error {
+func (s *Storage) DeleteNode(nodeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -364,7 +364,7 @@ func (s *Storage) GetSecret(nodeID string) (string, error) {
 }
 
 // SetSecret 设置节点 Secret
-func (s *Storage) SetSecret(ctx context.Context, nodeID, secret string) error {
+func (s *Storage) SetSecret(nodeID, secret string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -426,7 +426,7 @@ func (s *Storage) GetPinValue(pinID string) (nson.Value, time.Time, error) {
 }
 
 // SetPinValue 设置点位值
-func (s *Storage) SetPinValue(ctx context.Context, value dt.PinValue) error {
+func (s *Storage) SetPinValue(value dt.PinValue) error {
 	m, err := nson.Marshal(value)
 	if err != nil {
 		return err
@@ -524,7 +524,7 @@ func (s *Storage) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
 				return err
 			}
 
-			value = entry.Value  // 赋值解码后的值
+			value = entry.Value // 赋值解码后的值
 			updated = entry.Updated
 			return nil
 		})
@@ -538,7 +538,7 @@ func (s *Storage) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
 }
 
 // SetPinWrite 设置点位写入值
-func (s *Storage) SetPinWrite(ctx context.Context, value dt.PinValue) error {
+func (s *Storage) SetPinWrite(value dt.PinValue) error {
 	m, err := nson.Marshal(value)
 	if err != nil {
 		return err
@@ -562,7 +562,7 @@ func (s *Storage) SetPinWrite(ctx context.Context, value dt.PinValue) error {
 }
 
 // DeletePinWrite 删除点位写入值
-func (s *Storage) DeletePinWrite(ctx context.Context, pinID string) error {
+func (s *Storage) DeletePinWrite(pinID string) error {
 	// 使用 NewTransactionAt + CommitAt 删除
 	commitTs := uint64(time.Now().UnixMicro())
 	txn := s.db.NewTransactionAt(commitTs, true)

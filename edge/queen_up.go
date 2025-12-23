@@ -301,7 +301,7 @@ func (s *QueenUpService) setPinWrite(msg dt.PinValueMessage) error {
 	// 构造本地 Pin ID: "WireName.PinName"
 	pinID := parts[1] + "." + parts[2]
 
-	s.es.SetPinWrite(context.Background(), dt.PinValue{
+	s.es.SetPinWrite(dt.PinValue{
 		ID:      pinID,
 		Value:   msg.Value,
 		Updated: time.Now(),

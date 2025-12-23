@@ -3,7 +3,6 @@ module github.com/snple/beacon
 go 1.24.0
 
 require (
-	github.com/BurntSushi/toml v1.5.0
 	github.com/DeRuina/timberjack v1.3.9
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/danclive/nson-go v0.0.0-00010101000000-000000000000
@@ -32,6 +31,6 @@ require (
 )
 
 replace (
-	github.com/danclive/nson-go => ../../nson-go
+	github.com/danclive/nson-go => ../nson-go
 	snple.com/queen => ../queen
 )

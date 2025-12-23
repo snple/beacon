@@ -1,14 +1,12 @@
 package device
 
 import (
-	"context"
 	"testing"
 
 	"github.com/danclive/nson-go"
 )
 
 func TestNoOpActuator(t *testing.T) {
-	ctx := context.Background()
 	actuator := &NoOpActuator{
 		state: make(map[string]nson.Value),
 	}
@@ -25,7 +23,7 @@ func TestNoOpActuator(t *testing.T) {
 	}
 
 	// 初始化
-	if err := actuator.Init(ctx, config); err != nil {
+	if err := actuator.Init(config); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
@@ -36,12 +34,12 @@ func TestNoOpActuator(t *testing.T) {
 	}
 
 	// 执行写入
-	if err := actuator.Execute(ctx, "on", nson.Bool(true)); err != nil {
+	if err := actuator.Execute("on", nson.Bool(true)); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
 	// 读取值
-	values, err := actuator.Read(ctx, []string{"on"})
+	values, err := actuator.Read([]string{"on"})
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -53,7 +51,7 @@ func TestNoOpActuator(t *testing.T) {
 	}
 
 	// 读取所有
-	allValues, err := actuator.Read(ctx, nil)
+	allValues, err := actuator.Read(nil)
 	if err != nil {
 		t.Fatalf("Read all failed: %v", err)
 	}
@@ -106,8 +104,6 @@ func TestActuatorRegistry(t *testing.T) {
 }
 
 func TestActuatorChain(t *testing.T) {
-	ctx := context.Background()
-
 	// 创建两个 NoOp 执行器
 	act1 := &NoOpActuator{state: make(map[string]nson.Value)}
 	act2 := &NoOpActuator{state: make(map[string]nson.Value)}
@@ -125,12 +121,12 @@ func TestActuatorChain(t *testing.T) {
 	}
 
 	// 初始化
-	if err := chain.Init(ctx, config); err != nil {
+	if err := chain.Init(config); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
 	// 执行写入（应该同时写入两个执行器）
-	if err := chain.Execute(ctx, "test", nson.Bool(true)); err != nil {
+	if err := chain.Execute("test", nson.Bool(true)); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
@@ -151,7 +147,7 @@ func TestActuatorChain(t *testing.T) {
 	}
 
 	// 读取（应该合并结果）
-	values, err := chain.Read(ctx, nil)
+	values, err := chain.Read(nil)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}

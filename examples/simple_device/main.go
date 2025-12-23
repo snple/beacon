@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -68,8 +67,7 @@ func runVirtualDevice() {
 	}
 
 	// 模拟写入
-	ctx := context.Background()
-	if err := es.SetPinWrite(ctx, dt.PinValue{
+	if err := es.SetPinWrite(dt.PinValue{
 		ID:      "ctrl.on",
 		Value:   nson.Bool(true),
 		Updated: time.Now(),
@@ -118,8 +116,7 @@ func runDeviceWithActuator() {
 	fmt.Printf("  Actuator: %s v%s\n", info.Name, info.Version)
 
 	// 写入命令
-	ctx := context.Background()
-	if err := es.SetPinWrite(ctx, dt.PinValue{
+	if err := es.SetPinWrite(dt.PinValue{
 		ID:      "relay.ch1",
 		Value:   nson.Bool(true),
 		Updated: time.Now(),

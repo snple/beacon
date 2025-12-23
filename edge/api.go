@@ -1,7 +1,6 @@
 package edge
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -179,7 +178,7 @@ func (es *EdgeService) GetPinValue(pinID string) (nson.Value, time.Time, error) 
 
 // SetPinValue sets PinValue, validates pin exists and datatype matches Pin.Type.
 // If updated is zero, time.Now() is used.
-func (es *EdgeService) SetPinValue(ctx context.Context, value dt.PinValue, realtime bool) error {
+func (es *EdgeService) SetPinValue(value dt.PinValue, realtime bool) error {
 	if value.ID == "" {
 		return fmt.Errorf("please supply valid pinID")
 	}
@@ -204,7 +203,7 @@ func (es *EdgeService) SetPinValue(ctx context.Context, value dt.PinValue, realt
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	if err := es.storage.SetPinValue(ctx, value); err != nil {
+	if err := es.storage.SetPinValue(value); err != nil {
 		return err
 	}
 
@@ -218,28 +217,26 @@ func (es *EdgeService) SetPinValue(ctx context.Context, value dt.PinValue, realt
 }
 
 // DeletePinValue deletes PinValue.
-func (es *EdgeService) DeletePinValue(ctx context.Context, pinID string) error {
+func (es *EdgeService) DeletePinValue(pinID string) error {
 	if pinID == "" {
 		return fmt.Errorf("please supply valid pinID")
 	}
-	return es.storage.DeletePinValue(ctx, pinID)
+	return es.storage.DeletePinValue(pinID)
 }
 
 // ListPinValues lists PinValue entries after time.
-func (es *EdgeService) ListPinValues(ctx context.Context, after time.Time, limit int) ([]dt.PinValue, error) {
-	_ = ctx
+func (es *EdgeService) ListPinValues(after time.Time, limit int) ([]dt.PinValue, error) {
 	return es.storage.ListPinValues(after, limit)
 }
 
 // GetPinWrite returns latest PinWrite.
-func (es *EdgeService) GetPinWrite(ctx context.Context, pinID string) (nson.Value, time.Time, error) {
-	_ = ctx
+func (es *EdgeService) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
 	return es.storage.GetPinWrite(pinID)
 }
 
 // SetPinWrite sets PinWrite, validates pin exists, is writable, and datatype matches Pin.Type.
 // If updated is zero, time.Now() is used.
-func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue) error {
+func (es *EdgeService) SetPinWrite(value dt.PinValue) error {
 	if value.ID == "" {
 		return fmt.Errorf("please supply valid pinID")
 	}
@@ -263,7 +260,7 @@ func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue) error
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	if err := es.storage.SetPinWrite(ctx, value); err != nil {
+	if err := es.storage.SetPinWrite(value); err != nil {
 		return err
 	}
 
@@ -275,7 +272,7 @@ func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue) error
 		parts := strings.SplitN(value.ID, ".", 2)
 		if len(parts) == 2 {
 			wireID, pinName := parts[0], parts[1]
-			if err := es.deviceMgr.Execute(ctx, wireID, pinName, value.Value); err != nil {
+			if err := es.deviceMgr.Execute(wireID, pinName, value.Value); err != nil {
 				// 硬件执行失败记录错误，但不影响数据保存
 				es.dopts.logger.Sugar().Errorf("Execute actuator for pin %s: %v", value.ID, err)
 			}
@@ -286,15 +283,14 @@ func (es *EdgeService) SetPinWrite(ctx context.Context, value dt.PinValue) error
 }
 
 // DeletePinWrite deletes PinWrite.
-func (es *EdgeService) DeletePinWrite(ctx context.Context, pinID string) error {
+func (es *EdgeService) DeletePinWrite(pinID string) error {
 	if pinID == "" {
 		return fmt.Errorf("please supply valid pinID")
 	}
-	return es.storage.DeletePinWrite(ctx, pinID)
+	return es.storage.DeletePinWrite(pinID)
 }
 
 // ListPinWrites lists PinWrite entries after time.
-func (es *EdgeService) ListPinWrites(ctx context.Context, after time.Time, limit int) ([]dt.PinValue, error) {
-	_ = ctx
+func (es *EdgeService) ListPinWrites(after time.Time, limit int) ([]dt.PinValue, error) {
 	return es.storage.ListPinWrites(after, limit)
 }

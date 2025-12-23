@@ -17,7 +17,7 @@ func newNodeService(cs *CoreService) *NodeService {
 	}
 }
 
-func (s *NodeService) View(ctx context.Context, nodeID string) (*dt.Node, error) {
+func (s *NodeService) View(nodeID string) (*dt.Node, error) {
 	// basic validation
 	if nodeID == "" {
 		return nil, fmt.Errorf("please supply valid Node.ID")
@@ -53,13 +53,13 @@ func (s *NodeService) Push(ctx context.Context, node *dt.Node) error {
 	return nil
 }
 
-func (s *NodeService) Delete(ctx context.Context, nodeID string) error {
+func (s *NodeService) Delete(nodeID string) error {
 	// basic validation
 	if nodeID == "" {
 		return fmt.Errorf("please supply valid Node.ID")
 	}
 
-	err := s.cs.GetStorage().DeleteNode(ctx, nodeID)
+	err := s.cs.GetStorage().DeleteNode(nodeID)
 	if err != nil {
 		return fmt.Errorf("delete failed: %w", err)
 	}
@@ -67,13 +67,13 @@ func (s *NodeService) Delete(ctx context.Context, nodeID string) error {
 	return nil
 }
 
-func (s *NodeService) SetSecret(ctx context.Context, nodeID, secret string) error {
+func (s *NodeService) SetSecret(nodeID, secret string) error {
 	// basic validation
 	if nodeID == "" || secret == "" {
 		return fmt.Errorf("please supply valid Node.ID and Secret")
 	}
 
-	err := s.cs.GetStorage().SetSecret(ctx, nodeID, secret)
+	err := s.cs.GetStorage().SetSecret(nodeID, secret)
 	if err != nil {
 		return fmt.Errorf("setSecret failed: %w", err)
 	}

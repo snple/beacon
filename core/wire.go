@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/snple/beacon/dt"
@@ -17,7 +16,7 @@ func newWireService(cs *CoreService) *WireService {
 	}
 }
 
-func (s *WireService) View(ctx context.Context, nodeID, wireID string) (*dt.Wire, error) {
+func (s *WireService) View(nodeID, wireID string) (*dt.Wire, error) {
 	// basic validation
 	if nodeID == "" || wireID == "" {
 		return nil, fmt.Errorf("please supply valid NodeId and WireId")
@@ -31,7 +30,7 @@ func (s *WireService) View(ctx context.Context, nodeID, wireID string) (*dt.Wire
 	return wire, nil
 }
 
-func (s *WireService) List(ctx context.Context, nodeID string) ([]dt.Wire, error) {
+func (s *WireService) List(nodeID string) ([]dt.Wire, error) {
 	// basic validation
 	if nodeID == "" {
 		return nil, fmt.Errorf("please supply valid NodeId")

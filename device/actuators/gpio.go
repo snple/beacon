@@ -1,7 +1,6 @@
 package actuators
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"sync"
@@ -38,7 +37,7 @@ type GPIOPin struct {
 	Inverted bool // 是否反相（高电平=false）
 }
 
-func (a *GPIOActuator) Init(ctx context.Context, config device.ActuatorConfig) error {
+func (a *GPIOActuator) Init(config device.ActuatorConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -73,7 +72,7 @@ func (a *GPIOActuator) Init(ctx context.Context, config device.ActuatorConfig) e
 	return nil
 }
 
-func (a *GPIOActuator) Execute(ctx context.Context, pinName string, value nson.Value) error {
+func (a *GPIOActuator) Execute(pinName string, value nson.Value) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -121,7 +120,7 @@ func (a *GPIOActuator) Execute(ctx context.Context, pinName string, value nson.V
 	return nil
 }
 
-func (a *GPIOActuator) Read(ctx context.Context, pinNames []string) (map[string]nson.Value, error) {
+func (a *GPIOActuator) Read(pinNames []string) (map[string]nson.Value, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
