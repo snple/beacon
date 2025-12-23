@@ -247,6 +247,8 @@ func (cs *CoreService) handlePinValue(nodeID string, payload []byte) error {
 		return err
 	}
 
+	cs.Logger().Sugar().Debugf("Push received: nodeID=%s, payload=%v", nodeID, v)
+
 	if err := cs.setPinValue(nodeID, v); err != nil {
 		cs.Logger().Sugar().Warnf("Set pin value failed: nodeID=%s, pin=%s, error=%v",
 			nodeID, v.ID, err)
@@ -282,6 +284,8 @@ func (cs *CoreService) handlePinValueBatch(nodeID string, payload []byte) error 
 		if err := nson.Unmarshal(itemMap, &v); err != nil {
 			continue
 		}
+
+		cs.Logger().Sugar().Debugf("Push received: nodeID=%s, payload=%v", nodeID, v)
 
 		if err := cs.setPinValue(nodeID, v); err != nil {
 			cs.Logger().Sugar().Warnf("Set pin value failed: nodeID=%s, pin=%s, error=%v",
