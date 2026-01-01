@@ -3,6 +3,7 @@ package edge
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/dt"
+	"snple.com/queen/client"
 	queen "snple.com/queen/client"
 	"snple.com/queen/packet"
 )
@@ -37,25 +39,32 @@ func newQueenUpService(es *EdgeService) (*QueenUpService, error) {
 		cancel: cancel,
 	}
 
-	opts := []queen.Option{
-		queen.WithBroker(es.dopts.NodeOptions.QueenAddr),
-		queen.WithClientID(es.dopts.nodeID),
-		queen.WithAuth("plain", []byte(es.dopts.secret)),
-		queen.WithCleanSession(false),
-		queen.WithKeepAlive(60),
-		queen.WithConnectTimeout(10 * time.Second),
-		queen.WithOnConnect(func(sessionPresent bool, props map[string]string) {
-			s.onConnect(sessionPresent, props)
-		}),
-		queen.WithOnDisconnect(func(err error) {
-			s.onDisconnect(err)
-		}),
-	}
+	opts := queen.NewClientOptions().
+		WithBroker(es.dopts.NodeOptions.QueenAddr).
+		WithClientID(es.dopts.nodeID).
+		WithAuth("plain", []byte(es.dopts.secret)).
+		WithCleanSession(false).
+		WithKeepAlive(60).
+		WithConnectTimeout(10 * time.Second).
+		WithConnectionHandler(&queen.ConnectionHandlerFunc{
+			ConnectFunc: func(ctx *queen.ConnectContext) {
+				s.onConnect(ctx.SessionPresent)
+			},
+			DisconnectFunc: func(ctx *queen.DisconnectContext) {
+				s.onDisconnect(ctx.Err)
+			},
+		})
+
 	if es.dopts.NodeOptions.QueenTLS != nil {
-		opts = append(opts, queen.WithTLSConfig(es.dopts.NodeOptions.QueenTLS))
+		opts = opts.WithTLSConfig(es.dopts.NodeOptions.QueenTLS)
 	}
 
-	s.client = queen.New(opts...)
+	client, err := queen.NewWithOptions(opts)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	s.client = client
 
 	return s, nil
 }
@@ -99,7 +108,7 @@ func (s *QueenUpService) stop() {
 }
 
 // onConnect 连接成功回调：订阅、全量同步和启动批量发送
-func (s *QueenUpService) onConnect(sessionPresent bool, _ map[string]string) {
+func (s *QueenUpService) onConnect(sessionPresent bool) {
 	s.es.Logger().Sugar().Info("queen client connected")
 
 	if !sessionPresent {
@@ -121,6 +130,9 @@ func (s *QueenUpService) onConnect(sessionPresent bool, _ map[string]string) {
 			s.es.Logger().Sugar().Errorf("subscribe pin write batch: %v", err)
 			return
 		}
+
+		// 启动消息轮询协程
+		go s.pollMessages()
 	}
 
 	// 全量同步 PinWrite
@@ -207,26 +219,67 @@ func (s *QueenUpService) startBatchNotify() {
 // subscribePinWrite 订阅 Pin 写入通知（单个，realtime模式）
 // 接收 Core 的 Pin 写入命令
 func (s *QueenUpService) subscribePinWrite() error {
-	handler := func(msg *queen.Message) error {
-		if err := s.handlePinWrite(msg.Payload); err != nil {
-			s.es.Logger().Sugar().Errorf("handle pin write: %v", err)
-		}
-		return nil
-	}
-
-	return s.client.Subscribe(dt.TopicPinWrite, handler, queen.WithSubQoS(packet.QoS1))
+	return s.client.SubscribeWithOptions([]string{dt.TopicPinWrite}, queen.NewSubscribeOptions().WithQoS(packet.QoS1))
 }
 
 // subscribePinWriteBatch 订阅批量 Pin 写入通知（ticker模式）
 func (s *QueenUpService) subscribePinWriteBatch() error {
-	handler := func(msg *queen.Message) error {
-		if err := s.handlePinWriteBatch(msg.Payload); err != nil {
-			s.es.Logger().Sugar().Errorf("handle pin write batch: %v", err)
-		}
-		return nil
-	}
+	return s.client.SubscribeWithOptions([]string{dt.TopicPinWriteBatch}, queen.NewSubscribeOptions().WithQoS(packet.QoS1))
+}
 
-	return s.client.Subscribe(dt.TopicPinWriteBatch, handler, queen.WithSubQoS(packet.QoS1))
+// pollMessages 轮询接收消息
+func (s *QueenUpService) pollMessages() {
+	s.closeWG.Add(1)
+	defer s.closeWG.Done()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
+		// 轮询消息（5秒超时）
+		msg, err := s.client.PollMessage(s.ctx, 5*time.Second)
+		if err != nil {
+			if s.ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, client.ErrNotConnected) {
+				// 客户端未连接，继续轮询
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			if errors.Is(err, client.ErrPollTimeout) {
+				continue // 超时，继续轮询
+			}
+			if errors.Is(err, client.ErrClientClosed) {
+				s.es.Logger().Sugar().Debugf("PollMessage: client disconnected, exiting")
+				return // broker 停止，优雅退出
+			}
+			s.es.Logger().Sugar().Errorf("PollMessage error: %v", err)
+			continue
+		}
+
+		if msg == nil {
+			// 超时，继续轮询
+			continue
+		}
+
+		// 根据主题路由消息
+		switch msg.Topic {
+		case dt.TopicPinWrite:
+			if err := s.handlePinWrite(msg.Payload); err != nil {
+				s.es.Logger().Sugar().Errorf("handle pin write: %v", err)
+			}
+		case dt.TopicPinWriteBatch:
+			if err := s.handlePinWriteBatch(msg.Payload); err != nil {
+				s.es.Logger().Sugar().Errorf("handle pin write batch: %v", err)
+			}
+		default:
+			s.es.Logger().Sugar().Debugf("Unknown topic: %s", msg.Topic)
+		}
+	}
 }
 
 // handlePinWriteSingle 处理 Core 发来的单个 Pin 写入通知（realtime模式）
@@ -323,7 +376,7 @@ func (s *QueenUpService) syncToRemote(_ context.Context) error {
 	}
 
 	// 通过 Queen 发布到 beacon/push 主题
-	if err := s.client.Publish(dt.TopicPush, payload, queen.WithQoS(packet.QoS1)); err != nil {
+	if err := s.client.Publish(dt.TopicPush, payload, queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish config failed: %w", err)
 	}
 
@@ -394,7 +447,7 @@ func (s *QueenUpService) PublishPinValueBatch(_ context.Context, changes []dt.Pi
 	}
 
 	// 通过 Queen 发布到批量主题
-	if err := s.client.Publish(dt.TopicPinValueBatch, buf.Bytes(), queen.WithQoS(packet.QoS1)); err != nil {
+	if err := s.client.Publish(dt.TopicPinValueBatch, buf.Bytes(), queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish pin values failed: %w", err)
 	}
 
@@ -419,7 +472,7 @@ func (s *QueenUpService) PublishPinValue(ctx context.Context, value dt.PinValueM
 	}
 
 	// 通过 Queen 发布到单个主题
-	if err := s.client.Publish(dt.TopicPinValue, buf.Bytes(), queen.WithQoS(packet.QoS1)); err != nil {
+	if err := s.client.Publish(dt.TopicPinValue, buf.Bytes(), queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish pin value failed: %w", err)
 	}
 
@@ -429,10 +482,8 @@ func (s *QueenUpService) PublishPinValue(ctx context.Context, value dt.PinValueM
 // syncPinWriteFromRemote: 从 Core 全量同步 PinWrite 写命令
 // 使用 Request/Response 机制（需要立即响应，确保可靠获取）
 func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
-	// 使用 Request 拉取所有 pin writes
-	response, err := s.client.Request(ctx, dt.ActionPinWriteSync, nil, &queen.RequestOptions{
-		Timeout: 5 * time.Second,
-	})
+	// 使用 Request 拉取所有 pin writes（向 broker 的 "core" 发送请求）
+	response, err := s.client.RequestToBroker(ctx, dt.ActionPinWriteSync, nil, 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("request pin writes failed: %w", err)
 	}

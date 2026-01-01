@@ -21,8 +21,7 @@ type CoreService struct {
 	storage *storage.Storage
 
 	// Queen 通信层
-	broker         *queen.Broker
-	internalClient *queen.InternalClient
+	broker *queen.Broker
 
 	node     *NodeService
 	wire     *WireService
@@ -122,12 +121,14 @@ func (cs *CoreService) Start() {
 		} else {
 			cs.Logger().Sugar().Infof("Queen broker started on %s", cs.dopts.queenAddr)
 		}
-	}
 
-	// 启动消息处理协程
-	if cs.internalClient != nil {
+		// 启动消息处理协程（使用轮询模式）
 		cs.closeWG.Add(1)
 		go cs.processQueenMessages()
+
+		// 启动请求处理协程（使用轮询模式）
+		cs.closeWG.Add(1)
+		go cs.processQueenRequests()
 
 		// 启动批量 PinWrite 通知
 		cs.closeWG.Add(1)
@@ -136,11 +137,6 @@ func (cs *CoreService) Start() {
 }
 
 func (cs *CoreService) Stop() {
-	// 关闭内部客户端
-	if cs.internalClient != nil {
-		cs.internalClient.Close()
-	}
-
 	// 停止 Queen broker
 	if cs.broker != nil {
 		if err := cs.broker.Stop(); err != nil {
@@ -185,10 +181,6 @@ func (cs *CoreService) GetPinWrite() *PinWriteService {
 
 func (cs *CoreService) GetBroker() *queen.Broker {
 	return cs.broker
-}
-
-func (cs *CoreService) GetInternalClient() *queen.InternalClient {
-	return cs.internalClient
 }
 
 func (cs *CoreService) Context() context.Context {
@@ -383,7 +375,7 @@ func (cs *CoreService) batchNotifyPinWrite() {
 
 // publishPinWritesToNode 发布 PinWrite 到指定节点
 func (cs *CoreService) publishPinWritesToNode(nodeID string, pinWrites []PinWriteChange) error {
-	if cs.internalClient == nil {
+	if cs.broker == nil {
 		return nil
 	}
 

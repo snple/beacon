@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,54 +16,34 @@ import (
 
 // initQueenBroker 初始化 Queen broker
 func (cs *CoreService) initQueenBroker() error {
-	brokerOpts := []queen.BrokerOption{
-		queen.WithAddress(cs.dopts.queenAddr),
-	}
+	brokerOpts := queen.NewBrokerOptions().
+		WithAddress(cs.dopts.queenAddr).
+		WithLogger(cs.Logger())
 
 	if cs.dopts.queenTLSConfig != nil {
-		brokerOpts = append(brokerOpts, queen.WithTLS(cs.dopts.queenTLSConfig))
+		brokerOpts = brokerOpts.WithTLS(cs.dopts.queenTLSConfig)
 		cs.Logger().Sugar().Infof("Queen broker TLS enabled")
 	}
 
 	// 设置认证处理器，使用 beacon 的 node 认证
-	brokerOpts = append(brokerOpts, queen.WithAuthHandler(&queen.AuthHandlerFunc{
-		ConnectFunc: func(ctx *queen.AuthContext) error {
+	brokerOpts = brokerOpts.WithAuthHandler(&queen.AuthHandlerFunc{
+		ConnectFunc: func(ctx *queen.AuthConnectContext) error {
 			return cs.authenticateBrokerClient(ctx)
 		},
-	}))
+	})
 
-	broker, err := queen.New(brokerOpts...)
+	broker, err := queen.NewWithOptions(brokerOpts)
 	if err != nil {
 		return err
 	}
 
 	cs.broker = broker
 
-	// 创建内部客户端并注册必要的 action 处理器（非致命）
-	icCfg := queen.InternalClientConfig{ClientID: "beacon-core", BufferSize: 200}
-	ic, err := cs.broker.NewInternalClient(icCfg)
-	if err != nil {
-		cs.Logger().Sugar().Warnf("Failed to create internal client: %v", err)
-		// 仍然返回 broker 可用，但不阻塞服务启动
-		return nil
-	}
-	cs.internalClient = ic
-
-	// 注册内部 action 处理器
-	if err := cs.registerHandlers(); err != nil {
-		cs.Logger().Sugar().Warnf("Failed to register internal handlers: %v", err)
-	}
-
-	// 订阅所有 beacon 主题
-	if err := cs.subscribeTopics(); err != nil {
-		cs.Logger().Sugar().Warnf("Failed to subscribe topics: %v", err)
-	}
-
 	return nil
 }
 
 // authenticateBrokerClient 认证 broker 客户端
-func (cs *CoreService) authenticateBrokerClient(ctx *queen.AuthContext) error {
+func (cs *CoreService) authenticateBrokerClient(ctx *queen.AuthConnectContext) error {
 	// ClientID 作为 Node ID
 	clientID := ctx.ClientID
 	if clientID == "" {
@@ -70,7 +51,7 @@ func (cs *CoreService) authenticateBrokerClient(ctx *queen.AuthContext) error {
 	}
 
 	// AuthData 作为 Secret
-	secret := string(ctx.AuthData)
+	secret := string(ctx.Packet.Properties.AuthData)
 	if secret == "" {
 		return fmt.Errorf("secret is required")
 	}
@@ -110,66 +91,39 @@ func (cs *CoreService) PublishToNode(nodeID string, topic string, payload []byte
 	})
 }
 
-// subscribeQueenTopics 订阅所有 beacon 主题
-// 用于接收 Edge 的数据同步消息（不需要立即响应）
-func (cs *CoreService) subscribeTopics() error {
-	if cs.internalClient == nil {
-		return fmt.Errorf("internal client not initialized")
-	}
-
-	// 订阅所有 beacon 相关主题（数据同步类消息）
-	topics := []string{
-		dt.TopicPush,          // Edge -> Core: 配置数据推送
-		dt.TopicPinValue,      // Edge -> Core: Pin 值推送（单个，realtime模式）
-		dt.TopicPinValueBatch, // Edge -> Core: Pin 值批量推送（批量，ticker模式）
-	}
-
-	for _, topic := range topics {
-		if err := cs.internalClient.Subscribe(topic, packet.QoS1); err != nil {
-			return fmt.Errorf("failed to subscribe to %s: %w", topic, err)
-		}
-	}
-
-	cs.Logger().Sugar().Infof("Internal client subscribed to beacon topics")
-	return nil
-}
-
-// registerQueenHandlers 注册内部 action 处理器
-// 用于处理需要立即响应的 Request
-func (cs *CoreService) registerHandlers() error {
-	if cs.internalClient == nil {
-		return fmt.Errorf("internal client not initialized")
-	}
-
-	// beacon.pin.write.sync -> 返回全量待写入的 pin writes（NSON Array）
-	// Edge 在连接或重连时调用，确保获取所有待写入命令
-	if err := cs.internalClient.RegisterHandler(dt.ActionPinWriteSync, func(req *queen.InternalRequest) ([]byte, packet.ReasonCode, error) {
-		data, err := cs.buildPinWritesPayload(req.SourceClientID)
-		if err != nil {
-			return nil, packet.ReasonImplementationError, err
-		}
-		if data == nil {
-			return nil, packet.ReasonSuccess, nil
-		}
-		return data, packet.ReasonSuccess, nil
-	}, 2); err != nil {
-		return fmt.Errorf("failed to register handler %s: %w", dt.ActionPinWriteSync, err)
-	}
-
-	cs.Logger().Sugar().Infof("Registered internal action handlers")
-
-	return nil
-}
-
-// processQueenMessages 处理内部客户端消息的后台协程
+// processQueenMessages 处理 broker 消息的后台协程（使用轮询模式）
 func (cs *CoreService) processQueenMessages() {
 	defer cs.closeWG.Done()
 
 	for {
-		msg, err := cs.internalClient.Receive()
-		if err != nil {
-			// 内部客户端关闭
+		select {
+		case <-cs.ctx.Done():
 			return
+		default:
+		}
+
+		// 轮询消息（5秒超时）
+		msg, err := cs.broker.PollMessage(cs.ctx, 5*time.Second)
+		if err != nil {
+			if cs.ctx.Err() != nil {
+				// context 取消，正常退出
+				return
+			}
+			if errors.Is(err, queen.ErrPollTimeout) {
+				continue // 超时，继续轮询
+			}
+			// broker 停止，优雅退出
+			if errors.Is(err, queen.ErrBrokerNotRunning) || errors.Is(err, queen.ErrBrokerShutdown) {
+				cs.Logger().Sugar().Debugf("PollMessage: broker stopped, exiting")
+				return
+			}
+			cs.Logger().Sugar().Errorf("PollMessage error: %v", err)
+			continue
+		}
+
+		if msg == nil {
+			// 超时，继续轮询
+			continue
 		}
 
 		// 从消息中提取 clientID（即 nodeID）
@@ -200,6 +154,60 @@ func (cs *CoreService) processQueenMessages() {
 		if err2 != nil {
 			cs.Logger().Sugar().Errorf("Failed to handle message: topic=%s, clientID=%s, error=%v",
 				topic, clientID, err2)
+		}
+	}
+}
+
+// processQueenRequests 处理 broker 请求的后台协程（使用轮询模式）
+func (cs *CoreService) processQueenRequests() {
+	defer cs.closeWG.Done()
+
+	for {
+		select {
+		case <-cs.ctx.Done():
+			return
+		default:
+		}
+
+		// 轮询请求（5秒超时）
+		req, err := cs.broker.PollRequest(cs.ctx, 5*time.Second)
+		if err != nil {
+			if cs.ctx.Err() != nil {
+				// context 取消，正常退出
+				return
+			}
+			if errors.Is(err, queen.ErrPollTimeout) {
+				continue // 超时，继续轮询
+			}
+			// broker 停止，优雅退出
+			if errors.Is(err, queen.ErrBrokerNotRunning) || errors.Is(err, queen.ErrBrokerShutdown) {
+				cs.Logger().Sugar().Debugf("PollMessage: broker stopped, exiting")
+				return
+			}
+			cs.Logger().Sugar().Errorf("PollRequest error: %v", err)
+			continue
+		}
+
+		if req == nil {
+			// 超时，继续轮询
+			continue
+		}
+
+		cs.Logger().Sugar().Debugf("Processing request: action=%s, clientID=%s",
+			req.Action, req.SourceClientID)
+
+		// 处理请求
+		switch req.Action {
+		case dt.ActionPinWriteSync:
+			data, err := cs.buildPinWritesPayload(req.SourceClientID)
+			if err != nil {
+				req.RespondError(packet.ReasonImplementationError, err.Error())
+			} else {
+				req.RespondSuccess(data)
+			}
+
+		default:
+			req.RespondError(packet.ReasonActionNotFound, fmt.Sprintf("unknown action: %s", req.Action))
 		}
 	}
 }
