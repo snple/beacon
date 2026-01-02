@@ -95,9 +95,12 @@ func (cs *CoreService) PublishToNode(nodeID string, topic string, payload []byte
 func (cs *CoreService) processQueenMessages() {
 	defer cs.closeWG.Done()
 
+	cs.Logger().Sugar().Debug("processQueenMessages: started")
+
 	for {
 		select {
 		case <-cs.ctx.Done():
+			cs.Logger().Sugar().Debug("processQueenMessages: context canceled, exiting")
 			return
 		default:
 		}
@@ -123,6 +126,7 @@ func (cs *CoreService) processQueenMessages() {
 
 		if msg == nil {
 			// 超时，继续轮询
+			cs.Logger().Sugar().Debug("PollMessage: timeout, continuing")
 			continue
 		}
 
@@ -384,7 +388,9 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	// 获取节点的所有 Pin
 	pins, err := cs.GetPin().List(nodeID, "")
 	if err != nil {
-		return nil, err
+		// 如果节点不存在或没有 Pin，返回空列表（不作为错误）
+		cs.Logger().Sugar().Debugf("buildPinWritesPayload: no pins for node %s: %v", nodeID, err)
+		return nil, nil
 	}
 
 	// 收集有写入值的 Pin

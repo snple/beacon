@@ -114,7 +114,7 @@ func (s *QueenUpService) onConnect(sessionPresent bool) {
 	if !sessionPresent {
 		s.es.Logger().Sugar().Info("no existing session, subscribing topics")
 
-		// 执行初始同步（推送配置和 PinValue）
+		// 执行初始同步（推送配置）- 必须先推送配置，否则 Core 端没有 Pin 信息
 		if err := s.syncToRemote(s.ctx); err != nil {
 			s.es.Logger().Sugar().Errorf("initial sync failed: %v", err)
 		}
@@ -365,6 +365,8 @@ func (s *QueenUpService) setPinWrite(msg dt.PinValueMessage) error {
 
 // syncToRemote: Edge → Core 同步（配置）
 func (s *QueenUpService) syncToRemote(_ context.Context) error {
+	s.es.Logger().Sugar().Debug("syncToRemote: starting config push")
+
 	node := s.es.GetStorage().GetNode()
 
 	// 构建用于发布的 Node 结构
@@ -372,14 +374,19 @@ func (s *QueenUpService) syncToRemote(_ context.Context) error {
 
 	payload, err := dt.EncodeNode(nodeBuilt)
 	if err != nil {
+		s.es.Logger().Sugar().Errorf("syncToRemote: encode node failed: %v", err)
 		return err
 	}
 
-	// 通过 Queen 发布到 beacon/push 主题
-	if err := s.client.Publish(dt.TopicPush, payload, queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
+	s.es.Logger().Sugar().Debugf("syncToRemote: publishing config, payload_len=%d", len(payload))
+
+	// 通过 Queen 发布到 beacon/push 主题（发送给 Core）
+	if err := s.client.PublishToCore(dt.TopicPush, payload, queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
+		s.es.Logger().Sugar().Errorf("syncToRemote: publish config failed: %v", err)
 		return fmt.Errorf("publish config failed: %w", err)
 	}
 
+	s.es.Logger().Sugar().Info("syncToRemote: config pushed successfully")
 	return nil
 }
 
@@ -446,8 +453,8 @@ func (s *QueenUpService) PublishPinValueBatch(_ context.Context, changes []dt.Pi
 		return err
 	}
 
-	// 通过 Queen 发布到批量主题
-	if err := s.client.Publish(dt.TopicPinValueBatch, buf.Bytes(), queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
+	// 通过 Queen 发布到批量主题（发送给 Core）
+	if err := s.client.PublishToCore(dt.TopicPinValueBatch, buf.Bytes(), queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish pin values failed: %w", err)
 	}
 
@@ -471,8 +478,8 @@ func (s *QueenUpService) PublishPinValue(ctx context.Context, value dt.PinValueM
 		return err
 	}
 
-	// 通过 Queen 发布到单个主题
-	if err := s.client.Publish(dt.TopicPinValue, buf.Bytes(), queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
+	// 通过 Queen 发布到单个主题（发送给 Core）
+	if err := s.client.PublishToCore(dt.TopicPinValue, buf.Bytes(), queen.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
 		return fmt.Errorf("publish pin value failed: %w", err)
 	}
 
