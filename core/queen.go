@@ -14,36 +14,36 @@ import (
 	"snple.com/queen/packet"
 )
 
-// initQueenBroker 初始化 Queen broker
-func (cs *CoreService) initQueenBroker() error {
-	brokerOpts := queen.NewBrokerOptions().
+// initQueenCore 初始化 Queen core
+func (cs *CoreService) initQueenCore() error {
+	coreOpts := queen.NewCoreOptions().
 		WithAddress(cs.dopts.queenAddr).
 		WithLogger(cs.Logger())
 
 	if cs.dopts.queenTLSConfig != nil {
-		brokerOpts = brokerOpts.WithTLS(cs.dopts.queenTLSConfig)
-		cs.Logger().Sugar().Infof("Queen broker TLS enabled")
+		coreOpts = coreOpts.WithTLS(cs.dopts.queenTLSConfig)
+		cs.Logger().Sugar().Infof("Queen core TLS enabled")
 	}
 
 	// 设置认证处理器，使用 beacon 的 node 认证
-	brokerOpts = brokerOpts.WithAuthHandler(&queen.AuthHandlerFunc{
+	coreOpts = coreOpts.WithAuthHandler(&queen.AuthHandlerFunc{
 		ConnectFunc: func(ctx *queen.AuthConnectContext) error {
-			return cs.authenticateBrokerClient(ctx)
+			return cs.authenticateClient(ctx)
 		},
 	})
 
-	broker, err := queen.NewWithOptions(brokerOpts)
+	core, err := queen.NewWithOptions(coreOpts)
 	if err != nil {
 		return err
 	}
 
-	cs.broker = broker
+	cs.core = core
 
 	return nil
 }
 
-// authenticateBrokerClient 认证 broker 客户端
-func (cs *CoreService) authenticateBrokerClient(ctx *queen.AuthConnectContext) error {
+// authenticateClient 认证客户端
+func (cs *CoreService) authenticateClient(ctx *queen.AuthConnectContext) error {
 	// ClientID 作为 Node ID
 	clientID := ctx.ClientID
 	if clientID == "" {
@@ -67,31 +67,31 @@ func (cs *CoreService) authenticateBrokerClient(ctx *queen.AuthConnectContext) e
 		return fmt.Errorf("invalid secret")
 	}
 
-	cs.Logger().Sugar().Infof("Queen broker client authenticated: %s, remote: %s", clientID, ctx.RemoteAddr)
+	cs.Logger().Sugar().Infof("Queen client authenticated: %s, remote: %s", clientID, ctx.RemoteAddr)
 
 	return nil
 }
 
 // IsNodeOnline 检查节点是否在线
 func (cs *CoreService) IsNodeOnline(nodeID string) bool {
-	if cs.broker == nil {
+	if cs.core == nil {
 		return false
 	}
-	return cs.broker.IsClientOnline(nodeID)
+	return cs.core.IsClientOnline(nodeID)
 }
 
 // PublishToNode 向指定节点发布消息
 func (cs *CoreService) PublishToNode(nodeID string, topic string, payload []byte, qos int) error {
-	if cs.broker == nil {
-		return fmt.Errorf("queen broker not enabled")
+	if cs.core == nil {
+		return fmt.Errorf("queen core not enabled")
 	}
 
-	return cs.broker.PublishToClient(nodeID, topic, payload, queen.PublishOptions{
+	return cs.core.PublishToClient(nodeID, topic, payload, queen.PublishOptions{
 		QoS: packet.QoS(qos),
 	})
 }
 
-// processQueenMessages 处理 broker 消息的后台协程（使用轮询模式）
+// processQueenMessages 处理消息的后台协程（使用轮询模式）
 func (cs *CoreService) processQueenMessages() {
 	defer cs.closeWG.Done()
 
@@ -103,7 +103,7 @@ func (cs *CoreService) processQueenMessages() {
 		}
 
 		// 轮询消息（5秒超时）
-		msg, err := cs.broker.PollMessage(cs.ctx, 5*time.Second)
+		msg, err := cs.core.PollMessage(cs.ctx, 5*time.Second)
 		if err != nil {
 			if cs.ctx.Err() != nil {
 				// context 取消，正常退出
@@ -112,9 +112,9 @@ func (cs *CoreService) processQueenMessages() {
 			if errors.Is(err, queen.ErrPollTimeout) {
 				continue // 超时，继续轮询
 			}
-			// broker 停止，优雅退出
-			if errors.Is(err, queen.ErrBrokerNotRunning) || errors.Is(err, queen.ErrBrokerShutdown) {
-				cs.Logger().Sugar().Debugf("PollMessage: broker stopped, exiting")
+			// core 停止，优雅退出
+			if errors.Is(err, queen.ErrCoreNotRunning) || errors.Is(err, queen.ErrCoreShutdown) {
+				cs.Logger().Sugar().Debugf("PollMessage: core stopped, exiting")
 				return
 			}
 			cs.Logger().Sugar().Errorf("PollMessage error: %v", err)
@@ -158,7 +158,7 @@ func (cs *CoreService) processQueenMessages() {
 	}
 }
 
-// processQueenRequests 处理 broker 请求的后台协程（使用轮询模式）
+// processQueenRequests 处理请求的后台协程（使用轮询模式）
 func (cs *CoreService) processQueenRequests() {
 	defer cs.closeWG.Done()
 
@@ -170,7 +170,7 @@ func (cs *CoreService) processQueenRequests() {
 		}
 
 		// 轮询请求（5秒超时）
-		req, err := cs.broker.PollRequest(cs.ctx, 5*time.Second)
+		req, err := cs.core.PollRequest(cs.ctx, 5*time.Second)
 		if err != nil {
 			if cs.ctx.Err() != nil {
 				// context 取消，正常退出
@@ -179,9 +179,9 @@ func (cs *CoreService) processQueenRequests() {
 			if errors.Is(err, queen.ErrPollTimeout) {
 				continue // 超时，继续轮询
 			}
-			// broker 停止，优雅退出
-			if errors.Is(err, queen.ErrBrokerNotRunning) || errors.Is(err, queen.ErrBrokerShutdown) {
-				cs.Logger().Sugar().Debugf("PollMessage: broker stopped, exiting")
+			// core 停止，优雅退出
+			if errors.Is(err, queen.ErrCoreNotRunning) || errors.Is(err, queen.ErrCoreShutdown) {
+				cs.Logger().Sugar().Debugf("PollRequest: core stopped, exiting")
 				return
 			}
 			cs.Logger().Sugar().Errorf("PollRequest error: %v", err)
@@ -329,8 +329,8 @@ func (cs *CoreService) setPinValue(nodeID string, v dt.PinValueMessage) error {
 
 // PublishPinWrite 向节点发送单个 Pin 写入命令（realtime模式）
 func (cs *CoreService) PublishPinWrite(nodeID string, pinWrite *dt.PinValueMessage) error {
-	if cs.broker == nil {
-		return fmt.Errorf("queen broker not enabled")
+	if cs.core == nil {
+		return fmt.Errorf("queen core not enabled")
 	}
 
 	// 序列化为 NSON Map
@@ -344,15 +344,15 @@ func (cs *CoreService) PublishPinWrite(nodeID string, pinWrite *dt.PinValueMessa
 		return err
 	}
 
-	return cs.broker.PublishToClient(nodeID, dt.TopicPinWrite, buf.Bytes(), queen.PublishOptions{
+	return cs.core.PublishToClient(nodeID, dt.TopicPinWrite, buf.Bytes(), queen.PublishOptions{
 		QoS: packet.QoS1,
 	})
 }
 
 // PublishPinWriteBatch 向节点发送批量 Pin 写入命令（ticker模式）
 func (cs *CoreService) PublishPinWriteBatch(nodeID string, pinWrites []dt.PinValueMessage) error {
-	if cs.broker == nil {
-		return fmt.Errorf("queen broker not enabled")
+	if cs.core == nil {
+		return fmt.Errorf("queen core not enabled")
 	}
 
 	if len(pinWrites) == 0 {
@@ -374,7 +374,7 @@ func (cs *CoreService) PublishPinWriteBatch(nodeID string, pinWrites []dt.PinVal
 		return err
 	}
 
-	return cs.broker.PublishToClient(nodeID, dt.TopicPinWriteBatch, buf.Bytes(), queen.PublishOptions{
+	return cs.core.PublishToClient(nodeID, dt.TopicPinWriteBatch, buf.Bytes(), queen.PublishOptions{
 		QoS: packet.QoS1,
 	})
 }

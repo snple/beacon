@@ -24,11 +24,11 @@ func setupTestEnvironment(t *testing.T) (*core.CoreService, *edge.EdgeService, f
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	// 创建 Core 服务（内存模式，启用 Queen broker）
+	// 创建 Core 服务（内存模式，启用 Queen core）
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13883", nil),                // 测试端口
+		core.WithQueenCore(":13883", nil),                  // 测试端口
 		core.WithBatchNotifyInterval(100*time.Millisecond), // 加快批量发送
 	)
 	if err != nil {
@@ -556,7 +556,7 @@ func TestEdgeReconnection(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13884", nil),
+		core.WithQueenCore(":13884", nil),
 		core.WithBatchNotifyInterval(100*time.Millisecond),
 	)
 	if err != nil {
@@ -659,7 +659,7 @@ func TestMultipleEdges(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13885", nil),
+		core.WithQueenCore(":13885", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core: %v", err)
@@ -758,7 +758,7 @@ func TestPinWriteFullSync(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13886", nil),
+		core.WithQueenCore(":13886", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core: %v", err)

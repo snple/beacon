@@ -206,7 +206,7 @@ type edgeOptions struct {
 
 type NodeOptions struct {
 	Enable    bool
-	QueenAddr string // Queen broker 地址
+	QueenAddr string // Queen core 地址
 	QueenTLS  *tls.Config
 }
 

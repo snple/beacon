@@ -29,7 +29,7 @@ type QueenUpService struct {
 }
 
 func newQueenUpService(es *EdgeService) (*QueenUpService, error) {
-	es.Logger().Sugar().Infof("connecting to queen broker: %v", es.dopts.NodeOptions.QueenAddr)
+	es.Logger().Sugar().Infof("connecting to queen core: %v", es.dopts.NodeOptions.QueenAddr)
 
 	ctx, cancel := context.WithCancel(es.Context())
 
@@ -40,7 +40,7 @@ func newQueenUpService(es *EdgeService) (*QueenUpService, error) {
 	}
 
 	opts := queen.NewClientOptions().
-		WithBroker(es.dopts.NodeOptions.QueenAddr).
+		WithCore(es.dopts.NodeOptions.QueenAddr).
 		WithClientID(es.dopts.nodeID).
 		WithAuth("plain", []byte(es.dopts.secret)).
 		WithCleanSession(false).
@@ -255,7 +255,7 @@ func (s *QueenUpService) pollMessages() {
 			}
 			if errors.Is(err, client.ErrClientClosed) {
 				s.es.Logger().Sugar().Debugf("PollMessage: client disconnected, exiting")
-				return // broker 停止，优雅退出
+				return // core 停止，优雅退出
 			}
 			s.es.Logger().Sugar().Errorf("PollMessage error: %v", err)
 			continue
@@ -482,8 +482,8 @@ func (s *QueenUpService) PublishPinValue(ctx context.Context, value dt.PinValueM
 // syncPinWriteFromRemote: 从 Core 全量同步 PinWrite 写命令
 // 使用 Request/Response 机制（需要立即响应，确保可靠获取）
 func (s *QueenUpService) syncPinWriteFromRemote(ctx context.Context) error {
-	// 使用 Request 拉取所有 pin writes（向 broker 的 "core" 发送请求）
-	response, err := s.client.RequestToBroker(ctx, dt.ActionPinWriteSync, nil, 5*time.Second)
+	// 使用 Request 拉取所有 pin writes（向 core 发送请求）
+	response, err := s.client.RequestToCore(ctx, dt.ActionPinWriteSync, nil, nil)
 	if err != nil {
 		return fmt.Errorf("request pin writes failed: %w", err)
 	}

@@ -21,7 +21,7 @@ type CoreService struct {
 	storage *storage.Storage
 
 	// Queen 通信层
-	broker *queen.Broker
+	core *queen.Core
 
 	node     *NodeService
 	wire     *WireService
@@ -90,9 +90,9 @@ func CoreContext(ctx context.Context, opts ...CoreOption) (*CoreService, error) 
 	cs.pinValue = newPinValueService(cs)
 	cs.pinWrite = newPinWriteService(cs)
 
-	// 初始化 Queen broker (如果启用)
+	// 初始化 Queen core (如果启用)
 	if cs.dopts.queenEnable {
-		if err := cs.initQueenBroker(); err != nil {
+		if err := cs.initQueenCore(); err != nil {
 			cancel()
 			return nil, err
 		}
@@ -114,12 +114,12 @@ func (cs *CoreService) Start() {
 		cs.badger.start()
 	}()
 
-	// 启动 Queen broker
-	if cs.broker != nil {
-		if err := cs.broker.Start(); err != nil {
-			cs.Logger().Sugar().Errorf("Failed to start queen broker: %v", err)
+	// 启动 Queen core
+	if cs.core != nil {
+		if err := cs.core.Start(); err != nil {
+			cs.Logger().Sugar().Errorf("Failed to start queen core: %v", err)
 		} else {
-			cs.Logger().Sugar().Infof("Queen broker started on %s", cs.dopts.queenAddr)
+			cs.Logger().Sugar().Infof("Queen core started on %s", cs.dopts.queenAddr)
 		}
 
 		// 启动消息处理协程（使用轮询模式）
@@ -137,10 +137,10 @@ func (cs *CoreService) Start() {
 }
 
 func (cs *CoreService) Stop() {
-	// 停止 Queen broker
-	if cs.broker != nil {
-		if err := cs.broker.Stop(); err != nil {
-			cs.Logger().Sugar().Errorf("Failed to stop queen broker: %v", err)
+	// 停止 Queen core
+	if cs.core != nil {
+		if err := cs.core.Stop(); err != nil {
+			cs.Logger().Sugar().Errorf("Failed to stop queen core: %v", err)
 		}
 	}
 
@@ -179,8 +179,8 @@ func (cs *CoreService) GetPinWrite() *PinWriteService {
 	return cs.pinWrite
 }
 
-func (cs *CoreService) GetBroker() *queen.Broker {
-	return cs.broker
+func (cs *CoreService) GetQueen() *queen.Core {
+	return cs.core
 }
 
 func (cs *CoreService) Context() context.Context {
@@ -197,7 +197,7 @@ type coreOptions struct {
 	BadgerOptions   badger.Options
 	BadgerGCOptions BadgerGCOptions
 
-	// Queen broker 选项
+	// Queen core 选项
 	queenEnable    bool
 	queenAddr      string
 	queenTLSConfig *tls.Config
@@ -285,8 +285,8 @@ func WithBadgerGC(options *BadgerGCOptions) CoreOption {
 	})
 }
 
-// WithQueenBroker 启用并配置 Queen broker
-func WithQueenBroker(addr string, tlsConfig *tls.Config) CoreOption {
+// WithQueenCore 启用并配置 Queen core
+func WithQueenCore(addr string, tlsConfig *tls.Config) CoreOption {
 	return newFuncCoreOption(func(o *coreOptions) {
 		o.queenEnable = true
 		if addr != "" {
@@ -375,7 +375,7 @@ func (cs *CoreService) batchNotifyPinWrite() {
 
 // publishPinWritesToNode 发布 PinWrite 到指定节点
 func (cs *CoreService) publishPinWritesToNode(nodeID string, pinWrites []PinWriteChange) error {
-	if cs.broker == nil {
+	if cs.core == nil {
 		return nil
 	}
 
@@ -412,7 +412,7 @@ func (cs *CoreService) publishPinWritesToNode(nodeID string, pinWrites []PinWrit
 		}
 
 		// 发布到节点特定的主题，指定目标客户端
-		if err := cs.broker.PublishToClient(nodeID, "beacon/pin/write", buf.Bytes(), queen.PublishOptions{
+		if err := cs.core.PublishToClient(nodeID, "beacon/pin/write", buf.Bytes(), queen.PublishOptions{
 			QoS: packet.QoS1,
 		}); err != nil {
 			return err

@@ -44,7 +44,7 @@ func main() {
 	coreService, err := core.Core(
 		core.WithLogger(log.Logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("data").WithLogger(NewBadgerLogger(log.Logger))),
-		core.WithQueenBroker(":5208", nil),
+		core.WithQueenCore(":5208", nil),
 		core.WithBatchNotifyInterval(100*time.Millisecond),
 	)
 	if err != nil {

@@ -24,7 +24,7 @@ func TestQueenAuthFailure(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13884", nil),
+		core.WithQueenCore(":13884", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core service: %v", err)
@@ -85,7 +85,7 @@ func TestQueenAuthMissingSecret(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13885", nil),
+		core.WithQueenCore(":13885", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core service: %v", err)
@@ -140,7 +140,7 @@ func TestCoreStopWithActiveEdge(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13886", nil),
+		core.WithQueenCore(":13886", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core service: %v", err)
@@ -215,7 +215,7 @@ func TestEdgeStopWithActiveConnection(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13887", nil),
+		core.WithQueenCore(":13887", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core service: %v", err)
@@ -298,7 +298,7 @@ func TestPublishToOfflineNode(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13888", nil),
+		core.WithQueenCore(":13888", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core service: %v", err)
@@ -330,7 +330,7 @@ func TestIsNodeOnlineAfterReconnect(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13889", nil),
+		core.WithQueenCore(":13889", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core service: %v", err)
@@ -430,7 +430,7 @@ func TestConcurrentConnections(t *testing.T) {
 	coreService, err := core.Core(
 		core.WithLogger(logger.Named("core")),
 		core.WithBadger(badger.DefaultOptions("").WithInMemory(true)),
-		core.WithQueenBroker(":13890", nil),
+		core.WithQueenCore(":13890", nil),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create core service: %v", err)
