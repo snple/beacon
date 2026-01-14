@@ -135,28 +135,28 @@ func buildNode(node *dt.Node) *dt.Node {
 	}
 }
 
-// Node returns the current node configuration.
-func (es *EdgeService) Node() dt.Node {
+// GetNode returns the current node configuration.
+func (es *EdgeService) GetNode() dt.Node {
 	return es.storage.GetNode()
 }
 
-// WireByID fetches a wire config by ID.
-func (es *EdgeService) WireByID(id string) (*dt.Wire, error) {
+// GetWire fetches a wire config by ID.
+func (es *EdgeService) GetWire(id string) (*dt.Wire, error) {
 	return es.storage.GetWireByID(id)
 }
 
-// Wires lists all wires.
-func (es *EdgeService) Wires() []dt.Wire {
+// ListWires lists all wires.
+func (es *EdgeService) ListWires() []dt.Wire {
 	return es.storage.ListWires()
 }
 
-// PinByID fetches a pin config by ID.
-func (es *EdgeService) PinByID(id string) (*dt.Pin, error) {
+// GetPin fetches a pin config by ID.
+func (es *EdgeService) GetPin(id string) (*dt.Pin, error) {
 	return es.storage.GetPinByID(id)
 }
 
-// Pins lists pins. If wireID is non-empty, it filters by wire.
-func (es *EdgeService) Pins(wireID string) ([]dt.Pin, error) {
+// ListPins lists pins. If wireID is non-empty, it filters by wire.
+func (es *EdgeService) ListPins(wireID string) ([]dt.Pin, error) {
 	var pins []dt.Pin
 	if wireID != "" {
 		ps, err := es.storage.ListPinsByWire(wireID)

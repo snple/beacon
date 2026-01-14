@@ -6,23 +6,15 @@ import (
 	"github.com/snple/beacon/dt"
 )
 
-type WireService struct {
-	cs *CoreService
-}
+// Wire operations
 
-func newWireService(cs *CoreService) *WireService {
-	return &WireService{
-		cs: cs,
-	}
-}
-
-func (s *WireService) View(nodeID, wireID string) (*dt.Wire, error) {
+func (cs *CoreService) ViewWire(nodeID, wireID string) (*dt.Wire, error) {
 	// basic validation
 	if nodeID == "" || wireID == "" {
 		return nil, fmt.Errorf("please supply valid NodeId and WireId")
 	}
 
-	wire, err := s.cs.GetStorage().GetWireByID(wireID)
+	wire, err := cs.GetStorage().GetWireByID(wireID)
 	if err != nil {
 		return nil, fmt.Errorf("wire not found: %w", err)
 	}
@@ -30,13 +22,13 @@ func (s *WireService) View(nodeID, wireID string) (*dt.Wire, error) {
 	return wire, nil
 }
 
-func (s *WireService) List(nodeID string) ([]dt.Wire, error) {
+func (cs *CoreService) ListWires(nodeID string) ([]dt.Wire, error) {
 	// basic validation
 	if nodeID == "" {
 		return nil, fmt.Errorf("please supply valid NodeId")
 	}
 
-	wires, err := s.cs.GetStorage().ListWires(nodeID)
+	wires, err := cs.GetStorage().ListWires(nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("list wires failed: %w", err)
 	}

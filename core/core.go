@@ -23,12 +23,6 @@ type CoreService struct {
 	// Queen 通信层
 	core *queen.Core
 
-	node     *NodeService
-	wire     *WireService
-	pin      *PinService
-	pinValue *PinValueService
-	pinWrite *PinWriteService
-
 	// PinWrite 批量通知
 	pinWriteChanges chan PinWriteChange
 
@@ -83,12 +77,6 @@ func CoreContext(ctx context.Context, opts ...CoreOption) (*CoreService, error) 
 
 	// 创建存储
 	cs.storage = storage.New(badgerSvc.GetDB())
-
-	cs.node = newNodeService(cs)
-	cs.wire = newWireService(cs)
-	cs.pin = newPinService(cs)
-	cs.pinValue = newPinValueService(cs)
-	cs.pinWrite = newPinWriteService(cs)
 
 	// 初始化 Queen core (如果启用)
 	if cs.dopts.queenEnable {
@@ -157,26 +145,6 @@ func (cs *CoreService) GetBadgerDB() *badger.DB {
 
 func (cs *CoreService) GetStorage() *storage.Storage {
 	return cs.storage
-}
-
-func (cs *CoreService) GetNode() *NodeService {
-	return cs.node
-}
-
-func (cs *CoreService) GetWire() *WireService {
-	return cs.wire
-}
-
-func (cs *CoreService) GetPin() *PinService {
-	return cs.pin
-}
-
-func (cs *CoreService) GetPinValue() *PinValueService {
-	return cs.pinValue
-}
-
-func (cs *CoreService) GetPinWrite() *PinWriteService {
-	return cs.pinWrite
 }
 
 func (cs *CoreService) GetQueen() *queen.Core {

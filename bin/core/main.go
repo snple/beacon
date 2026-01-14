@@ -54,12 +54,12 @@ func main() {
 	defer coreService.Stop()
 
 	{
-		if err := coreService.GetNode().SetSecret(TEST_CLIENT_ID, TEST_CLIENT_SECRET); err != nil {
+		if err := coreService.SetNodeSecret(TEST_CLIENT_ID, TEST_CLIENT_SECRET); err != nil {
 			coreService.Stop()
 			log.Logger.Sugar().Fatalf("Failed to set client secret: %v", err)
 		}
 
-		if err := coreService.GetNode().SetSecret(LED_NODE_ID, LED_NODE_SECRET); err != nil {
+		if err := coreService.SetNodeSecret(LED_NODE_ID, LED_NODE_SECRET); err != nil {
 			coreService.Stop()
 			log.Logger.Sugar().Fatalf("Failed to set node secret: %v", err)
 		}

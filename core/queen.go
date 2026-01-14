@@ -2,7 +2,6 @@ package core
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -57,8 +56,7 @@ func (cs *CoreService) authenticateClient(ctx *queen.AuthConnectContext) error {
 	}
 
 	// 验证密钥（不需要 Node 已存在，只要 Secret 已设置即可）
-	ctxBg := context.Background()
-	nodeSecret, err := cs.GetNode().GetSecret(ctxBg, clientID)
+	nodeSecret, err := cs.GetNodeSecret(clientID)
 	if err != nil {
 		return fmt.Errorf("node secret not found for: %s", clientID)
 	}
@@ -229,7 +227,7 @@ func (cs *CoreService) handlePush(nodeID string, payload []byte) error {
 
 	cs.Logger().Sugar().Debugf("Push received: nodeID=%s, payload=%v", nodeID, node)
 
-	err = cs.GetNode().Push(node)
+	err = cs.PushNode(node)
 	if err != nil {
 		cs.Logger().Sugar().Errorf("Push failed: nodeID=%s, error=%v", nodeID, err)
 		return err
@@ -261,7 +259,7 @@ func (cs *CoreService) handlePinValue(nodeID string, payload []byte) error {
 
 	cs.Logger().Sugar().Debugf("Push received: nodeID=%s, payload=%v", nodeID, v)
 
-	if err := cs.setPinValue(nodeID, v); err != nil {
+	if err := cs.savePinValue(nodeID, v); err != nil {
 		cs.Logger().Sugar().Warnf("Set pin value failed: nodeID=%s, pin=%s, error=%v",
 			nodeID, v.ID, err)
 		return err
@@ -299,7 +297,7 @@ func (cs *CoreService) handlePinValueBatch(nodeID string, payload []byte) error 
 
 		cs.Logger().Sugar().Debugf("Push received: nodeID=%s, payload=%v", nodeID, v)
 
-		if err := cs.setPinValue(nodeID, v); err != nil {
+		if err := cs.savePinValue(nodeID, v); err != nil {
 			cs.Logger().Sugar().Warnf("Set pin value failed: nodeID=%s, pin=%s, error=%v",
 				nodeID, v.ID, err)
 		}
@@ -308,8 +306,8 @@ func (cs *CoreService) handlePinValueBatch(nodeID string, payload []byte) error 
 	return nil
 }
 
-// setPinValue 设置 Pin 值
-func (cs *CoreService) setPinValue(nodeID string, v dt.PinValueMessage) error {
+// savePinValue 设置 Pin 值
+func (cs *CoreService) savePinValue(nodeID string, v dt.PinValueMessage) error {
 	// 验证 v.ID 的格式，必须是 "NodeID.WireName.PinName"
 	parts := strings.Split(v.ID, ".")
 	if len(parts) != 3 {
@@ -322,7 +320,7 @@ func (cs *CoreService) setPinValue(nodeID string, v dt.PinValueMessage) error {
 	}
 
 	// 使用完整的 Pin ID (与 Push 时的格式一致)
-	err := cs.GetPinValue().setValue(dt.PinValue{
+	err := cs.setPinValue(dt.PinValue{
 		ID:      v.ID, // 使用完整格式: "NodeID.WireName.PinName"
 		Value:   v.Value,
 		Updated: time.Now(),
@@ -386,7 +384,7 @@ func (cs *CoreService) PublishPinWriteBatch(nodeID string, pinWrites []dt.PinVal
 // buildPinWritesPayload 构建节点所有待写入的 pin write 列表（NSON Array）
 func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	// 获取节点的所有 Pin
-	pins, err := cs.GetPin().List(nodeID, "")
+	pins, err := cs.ListPins(nodeID, "")
 	if err != nil {
 		// 如果节点不存在或没有 Pin，返回空列表（不作为错误）
 		cs.Logger().Sugar().Debugf("buildPinWritesPayload: no pins for node %s: %v", nodeID, err)
@@ -396,7 +394,7 @@ func (cs *CoreService) buildPinWritesPayload(nodeID string) ([]byte, error) {
 	// 收集有写入值的 Pin
 	var writes []dt.PinValueMessage
 	for _, pin := range pins {
-		writeValue, _, err := cs.GetPinWrite().GetWrite(pin.ID)
+		writeValue, _, err := cs.GetPinWrite(pin.ID)
 		if err != nil {
 			cs.Logger().Sugar().Debugf("buildPinWritesPayload: skip pin %s due to error: %v", pin.ID, err)
 			continue // 忽略没有写入值的 Pin

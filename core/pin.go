@@ -6,23 +6,15 @@ import (
 	"github.com/snple/beacon/dt"
 )
 
-type PinService struct {
-	cs *CoreService
-}
+// Pin operations
 
-func newPinService(cs *CoreService) *PinService {
-	return &PinService{
-		cs: cs,
-	}
-}
-
-func (s *PinService) View(pinID string) (*dt.Pin, error) {
+func (cs *CoreService) ViewPin(pinID string) (*dt.Pin, error) {
 	// basic validation
 	if pinID == "" {
 		return nil, fmt.Errorf("please supply valid PinId")
 	}
 
-	pin, err := s.cs.GetStorage().GetPinByID(pinID)
+	pin, err := cs.GetStorage().GetPinByID(pinID)
 	if err != nil {
 		return nil, fmt.Errorf("pin not found: %w", err)
 	}
@@ -30,7 +22,7 @@ func (s *PinService) View(pinID string) (*dt.Pin, error) {
 	return pin, nil
 }
 
-func (s *PinService) List(nodeID, wireID string) ([]dt.Pin, error) {
+func (cs *CoreService) ListPins(nodeID, wireID string) ([]dt.Pin, error) {
 	// basic validation
 	if nodeID == "" {
 		return nil, fmt.Errorf("please supply valid NodeId")
@@ -40,9 +32,9 @@ func (s *PinService) List(nodeID, wireID string) ([]dt.Pin, error) {
 	var err error
 
 	if wireID != "" {
-		pins, err = s.cs.GetStorage().ListPins(wireID)
+		pins, err = cs.GetStorage().ListPins(wireID)
 	} else {
-		pins, err = s.cs.GetStorage().ListPinsByNode(nodeID)
+		pins, err = cs.GetStorage().ListPinsByNode(nodeID)
 	}
 
 	if err != nil {

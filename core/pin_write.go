@@ -9,23 +9,15 @@ import (
 	"github.com/snple/beacon/dt"
 )
 
-type PinWriteService struct {
-	cs *CoreService
-}
+// PinWrite operations
 
-func newPinWriteService(cs *CoreService) *PinWriteService {
-	return &PinWriteService{
-		cs: cs,
-	}
-}
-
-func (s *PinWriteService) GetWrite(pinID string) (nson.Value, time.Time, error) {
+func (cs *CoreService) GetPinWrite(pinID string) (nson.Value, time.Time, error) {
 	// basic validation
 	if pinID == "" {
 		return nil, time.Time{}, fmt.Errorf("please supply valid Pin.Id")
 	}
 
-	value, updated, err := s.cs.GetStorage().GetPinWrite(pinID)
+	value, updated, err := cs.GetStorage().GetPinWrite(pinID)
 	if err != nil {
 		// 如果未找到值，返回空值而不是错误
 		return nil, time.Time{}, nil
@@ -34,7 +26,7 @@ func (s *PinWriteService) GetWrite(pinID string) (nson.Value, time.Time, error) 
 	return value, updated, nil
 }
 
-func (s *PinWriteService) SetWrite(value dt.PinValue, realtime bool) error {
+func (cs *CoreService) SetPinWrite(value dt.PinValue, realtime bool) error {
 	// basic validation
 	if value.ID == "" || value.Value == nil {
 		return fmt.Errorf("please supply valid Pin.Id and Value")
@@ -45,13 +37,13 @@ func (s *PinWriteService) SetWrite(value dt.PinValue, realtime bool) error {
 	}
 
 	// 获取 Pin 所属的 Node ID
-	nodeID, err := s.cs.GetStorage().GetPinNodeID(value.ID)
+	nodeID, err := cs.GetStorage().GetPinNodeID(value.ID)
 	if err != nil {
 		return fmt.Errorf("pin not found: %w", err)
 	}
 
 	// 验证 Pin 存在且可写
-	pin, err := s.cs.GetStorage().GetPinByID(value.ID)
+	pin, err := cs.GetStorage().GetPinByID(value.ID)
 	if err != nil {
 		return fmt.Errorf("pin not found: %w", err)
 	}
@@ -64,26 +56,26 @@ func (s *PinWriteService) SetWrite(value dt.PinValue, realtime bool) error {
 		return fmt.Errorf("invalid value for Pin.Type")
 	}
 
-	err = s.cs.GetStorage().SetPinWrite(value)
+	err = cs.GetStorage().SetPinWrite(value)
 	if err != nil {
 		return fmt.Errorf("setPinWrite failed: %w", err)
 	}
 
 	// 通知节点有新的 Pin 写入
-	if err := s.cs.NotifyPinWrite(nodeID, pin.ID, value.Value, realtime); err != nil {
-		s.cs.Logger().Sugar().Warnf("NotifyPinWrite failed: %v", err)
+	if err := cs.NotifyPinWrite(nodeID, pin.ID, value.Value, realtime); err != nil {
+		cs.Logger().Sugar().Warnf("NotifyPinWrite failed: %v", err)
 	}
 
 	return nil
 }
 
-func (s *PinWriteService) DeleteWrite(pinID string) error {
+func (cs *CoreService) DeletePinWrite(pinID string) error {
 	// basic validation
 	if pinID == "" {
 		return fmt.Errorf("please supply valid Pin.Id")
 	}
 
-	err := s.cs.GetStorage().DeletePinWrite(pinID)
+	err := cs.GetStorage().DeletePinWrite(pinID)
 	if err != nil {
 		return fmt.Errorf("deletePinWrite failed: %w", err)
 	}

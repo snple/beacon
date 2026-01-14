@@ -35,7 +35,7 @@ func TestQueenAuthFailure(t *testing.T) {
 
 	nodeID := "test-node-auth-fail"
 	// 设置一个正确的密钥
-	if err := coreService.GetNode().SetSecret(nodeID, "correct-secret"); err != nil {
+	if err := coreService.SetNodeSecret(nodeID, "correct-secret"); err != nil {
 		coreService.Stop()
 		t.Fatalf("Failed to set node secret: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestCoreStopWithActiveEdge(t *testing.T) {
 
 	nodeID := "test-node-core-stop"
 	secret := "test-secret"
-	if err := coreService.GetNode().SetSecret(nodeID, secret); err != nil {
+	if err := coreService.SetNodeSecret(nodeID, secret); err != nil {
 		coreService.Stop()
 		t.Fatalf("Failed to set node secret: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestEdgeStopWithActiveConnection(t *testing.T) {
 
 	nodeID := "test-node-edge-stop"
 	secret := "test-secret"
-	if err := coreService.GetNode().SetSecret(nodeID, secret); err != nil {
+	if err := coreService.SetNodeSecret(nodeID, secret); err != nil {
 		coreService.Stop()
 		t.Fatalf("Failed to set node secret: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestIsNodeOnlineAfterReconnect(t *testing.T) {
 
 	nodeID := "test-node-reconnect-status"
 	secret := "test-secret"
-	if err := coreService.GetNode().SetSecret(nodeID, secret); err != nil {
+	if err := coreService.SetNodeSecret(nodeID, secret); err != nil {
 		coreService.Stop()
 		t.Fatalf("Failed to set node secret: %v", err)
 	}
@@ -445,7 +445,7 @@ func TestConcurrentConnections(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		nodeID := fmt.Sprintf("test-node-concurrent-%d", i)
 		secret := fmt.Sprintf("secret-%d", i)
-		if err := coreService.GetNode().SetSecret(nodeID, secret); err != nil {
+		if err := coreService.SetNodeSecret(nodeID, secret); err != nil {
 			coreService.Stop()
 			t.Fatalf("Failed to set node secret: %v", err)
 		}
