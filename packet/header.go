@@ -1,0 +1,226 @@
+package packet
+
+import (
+	"encoding/binary"
+	"errors"
+	"io"
+)
+
+var (
+	ErrPacketTooLarge    = errors.New("packet too large")
+	ErrMalformedPacket   = errors.New("malformed packet")
+	ErrInvalidQoS        = errors.New("invalid QoS level")
+	ErrInvalidPacketType = errors.New("invalid packet type")
+)
+
+// FixedHeader 固定头部
+type FixedHeader struct {
+	Type      PacketType // 数据包类型 (8 bit)
+	Remaining uint32     // 剩余长度
+}
+
+// Encode 编码固定头部
+func (h *FixedHeader) Encode(w io.Writer) error {
+	// 第一个字节: 类型 (8 bit)
+	if _, err := w.Write([]byte{byte(h.Type)}); err != nil {
+		return err
+	}
+
+	// 剩余长度 (固定4字节)
+	return EncodeUint32(w, h.Remaining)
+}
+
+// Decode 解码固定头部
+func (h *FixedHeader) Decode(r io.Reader) error {
+	// 一次性读取固定头部的5个字节
+	var buf [5]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return err
+	}
+
+	h.Type = PacketType(buf[0])
+	if h.Type == RESERVED {
+		return ErrInvalidPacketType
+	}
+
+	// 剩余长度 (固定4字节，大端序)
+	h.Remaining = binary.BigEndian.Uint32(buf[1:])
+	return nil
+}
+
+// Size 返回固定头部编码后的大小
+func (h *FixedHeader) Size() int {
+	return 5 // 1字节类型 + 4字节剩余长度
+}
+
+// EncodeVariableInt 编码可变长度整数
+func EncodeVariableInt(w io.Writer, value uint32) error {
+	if value > MaxVariableIntValue {
+		return ErrPacketTooLarge
+	}
+
+	for {
+		encodedByte := byte(value % 128)
+		value /= 128
+		if value > 0 {
+			encodedByte |= 0x80
+		}
+		if _, err := w.Write([]byte{encodedByte}); err != nil {
+			return err
+		}
+		if value == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+// DecodeVariableInt 解码可变长度整数
+func DecodeVariableInt(r io.Reader) (uint32, error) {
+	var value uint32
+	var multiplier uint32 = 1
+	var encodedByte [1]byte
+
+	for range 4 {
+		if _, err := io.ReadFull(r, encodedByte[:]); err != nil {
+			return 0, err
+		}
+		value += uint32(encodedByte[0]&127) * multiplier
+		if encodedByte[0]&128 == 0 {
+			return value, nil
+		}
+		multiplier *= 128
+	}
+
+	return 0, ErrMalformedPacket
+}
+
+// VariableIntSize 返回可变长度整数编码后的大小
+func VariableIntSize(value uint32) int {
+	if value < 128 {
+		return 1
+	} else if value < 16384 {
+		return 2
+	} else if value < 2097152 {
+		return 3
+	}
+	return 4
+}
+
+// EncodeString 编码 UTF-8 字符串
+func EncodeString(w io.Writer, s string) error {
+	length := uint16(len(s))
+	if err := binary.Write(w, binary.BigEndian, length); err != nil {
+		return err
+	}
+	if length > 0 {
+		_, err := w.Write([]byte(s))
+		return err
+	}
+	return nil
+}
+
+// DecodeString 解码 UTF-8 字符串
+func DecodeString(r io.Reader) (string, error) {
+	var length uint16
+	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+		return "", err
+	}
+	if length == 0 {
+		return "", nil
+	}
+
+	data := make([]byte, length)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// EncodeBinary 编码二进制数据
+func EncodeBinary(w io.Writer, data []byte) error {
+	length := uint16(len(data))
+	if err := binary.Write(w, binary.BigEndian, length); err != nil {
+		return err
+	}
+	if length > 0 {
+		_, err := w.Write(data)
+		return err
+	}
+	return nil
+}
+
+// DecodeBinary 解码二进制数据
+func DecodeBinary(r io.Reader) ([]byte, error) {
+	var length uint16
+	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+		return nil, err
+	}
+	if length == 0 {
+		return nil, nil
+	}
+
+	data := make([]byte, length)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// EncodeUint16 编码 uint16
+func EncodeUint16(w io.Writer, v uint16) error {
+	return binary.Write(w, binary.BigEndian, v)
+}
+
+// DecodeUint16 解码 uint16
+func DecodeUint16(r io.Reader) (uint16, error) {
+	var v uint16
+	err := binary.Read(r, binary.BigEndian, &v)
+	return v, err
+}
+
+// EncodeUint32 编码 uint32
+func EncodeUint32(w io.Writer, v uint32) error {
+	return binary.Write(w, binary.BigEndian, v)
+}
+
+// DecodeUint32 解码 uint32
+func DecodeUint32(r io.Reader) (uint32, error) {
+	var v uint32
+	err := binary.Read(r, binary.BigEndian, &v)
+	return v, err
+}
+
+// EncodeInt64 编码 int64
+func EncodeInt64(w io.Writer, v int64) error {
+	return binary.Write(w, binary.BigEndian, v)
+}
+
+// EncodeUint64 编码 uint64
+func EncodeUint64(w io.Writer, v uint64) error {
+	return binary.Write(w, binary.BigEndian, v)
+}
+
+// DecodeInt64 解码 int64
+func DecodeInt64(r io.Reader) (int64, error) {
+	var v int64
+	err := binary.Read(r, binary.BigEndian, &v)
+	return v, err
+}
+
+// DecodeUint64 解码 uint64
+func DecodeUint64(r io.Reader) (uint64, error) {
+	var v uint64
+	err := binary.Read(r, binary.BigEndian, &v)
+	return v, err
+}
+
+// StringSize 返回编码后字符串的大小
+func StringSize(s string) int {
+	return 2 + len(s)
+}
+
+// BinarySize 返回编码后二进制数据的大小
+func BinarySize(data []byte) int {
+	return 2 + len(data)
+}
