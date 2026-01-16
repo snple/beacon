@@ -369,3 +369,46 @@ func TestStorageDeleteAllForClient(t *testing.T) {
 		t.Errorf("Expected 2 messages for client2, got %d", len(msgs2))
 	}
 }
+
+func TestStoragePacketIDSeed(t *testing.T) {
+	config := StorageConfig{
+		DataDir:          "", // InMemory 模式
+		Enabled:          true,
+		ValueLogFileSize: 1024,
+		GCInterval:       0,
+	}
+
+	store, err := NewMessageStore(config)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	seed0, err := store.PacketIDSeed("c1")
+	if err != nil {
+		t.Fatalf("PacketIDSeed: %v", err)
+	}
+	if seed0 != uint16(minPacketID) {
+		t.Fatalf("seed=%d, want %d", seed0, uint16(minPacketID))
+	}
+
+	if err := store.SetPacketIDSeed("c1", 10); err != nil {
+		t.Fatalf("SetPacketIDSeed: %v", err)
+	}
+	seed1, err := store.PacketIDSeed("c1")
+	if err != nil {
+		t.Fatalf("PacketIDSeed: %v", err)
+	}
+	if seed1 != 10 {
+		t.Fatalf("seed=%d, want 10", seed1)
+	}
+
+	// Non-monotonic: seed may decrease (wrap or explicit override)
+	if err := store.SetPacketIDSeed("c1", 2); err != nil {
+		t.Fatalf("SetPacketIDSeed: %v", err)
+	}
+	seed2, _ := store.PacketIDSeed("c1")
+	if seed2 != 2 {
+		t.Fatalf("seed=%d, want 2", seed2)
+	}
+}

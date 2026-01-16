@@ -174,6 +174,71 @@ func TestMessageStoreGetAll(t *testing.T) {
 	}
 }
 
+func TestMessageStorePacketIDSeed(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+
+	cfg := StoreConfig{
+		Enabled:    true,
+		DataDir:    "",
+		SyncWrites: false,
+		GCInterval: 0,
+		Logger:     logger,
+	}
+
+	store, err := NewMessageStore(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	seed0, err := store.PacketIDSeed()
+	if err != nil {
+		t.Fatalf("PacketIDSeed: %v", err)
+	}
+	if seed0 != uint16(minPacketID) {
+		t.Fatalf("seed=%d, want %d", seed0, uint16(minPacketID))
+	}
+
+	if err := store.Save(&StoredMessage{PacketID: 10, Topic: "t", Payload: []byte("x"), QoS: packet.QoS1, EnqueueTime: time.Now().Unix()}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	seed1, err := store.PacketIDSeed()
+	if err != nil {
+		t.Fatalf("PacketIDSeed: %v", err)
+	}
+	if seed1 != 10 {
+		t.Fatalf("seed=%d, want 10", seed1)
+	}
+
+	// Seed follows the latest stored/allocated PacketID (non-monotonic to support wrap).
+	if err := store.Save(&StoredMessage{PacketID: 3, Topic: "t", Payload: []byte("x"), QoS: packet.QoS1, EnqueueTime: time.Now().Unix()}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	seed2, _ := store.PacketIDSeed()
+	if seed2 != 3 {
+		t.Fatalf("seed=%d, want 3", seed2)
+	}
+
+	if err := store.SetPacketIDSeed(1); err != nil {
+		t.Fatalf("set seed: %v", err)
+	}
+	seed2b, _ := store.PacketIDSeed()
+	if seed2b != 1 {
+		t.Fatalf("seed=%d, want 1", seed2b)
+	}
+
+	if err := store.Clear(); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	seed3, err := store.PacketIDSeed()
+	if err != nil {
+		t.Fatalf("PacketIDSeed: %v", err)
+	}
+	if seed3 != uint16(minPacketID) {
+		t.Fatalf("seed=%d, want %d", seed3, uint16(minPacketID))
+	}
+}
+
 // TestMessageStoreGetBatch 测试批量获取消息
 func TestMessageStoreGetBatch(t *testing.T) {
 	logger, _ := zap.NewDevelopment()

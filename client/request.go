@@ -270,7 +270,9 @@ func (c *Client) Request(ctx context.Context, action string, payload []byte, opt
 		return nil, NewRequestTimeoutError(opts.Timeout)
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-c.ctx.Done():
+	case <-c.connCtx.Done():
+		return nil, ErrNotConnected
+	case <-c.rootCtx.Done():
 		return nil, ErrClientClosed
 	}
 }

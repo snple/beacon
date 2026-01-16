@@ -110,7 +110,13 @@ func NewClient(conn net.Conn, connect *packet.ConnectPacket, core *Core) *Client
 	// 从属性中提取认证信息和特性
 	c.extractConnectProperties(connect, core)
 
-	c.nextPacketID.Store(minPacketID)
+	seed := uint32(minPacketID)
+	if core != nil && core.messageStore != nil {
+		if s, err := core.messageStore.PacketIDSeed(c.ID); err == nil {
+			seed = uint32(s)
+		}
+	}
+	c.nextPacketID.Store(seed)
 
 	return c
 }
@@ -249,12 +255,28 @@ func (c *Client) handleDisconnect(p *packet.DisconnectPacket) error {
 
 // allocatePacketID 分配新的 PacketID
 func (c *Client) allocatePacketID() uint16 {
-	id := c.nextPacketID.Add(1)
-	if id == 0 || id > maxPacketID {
-		c.nextPacketID.Store(minPacketID)
-		return minPacketID
+	for range maxPacketID {
+		id := c.nextPacketID.Add(1)
+		if id == 0 || id > maxPacketID {
+			c.nextPacketID.Store(minPacketID)
+			id = minPacketID
+		}
+
+		pid := uint16(id)
+		c.qosMu.Lock()
+		_, inPending := c.pendingAck[pid]
+		c.qosMu.Unlock()
+		if inPending {
+			continue
+		}
+
+		if c.core != nil && c.core.messageStore != nil {
+			_ = c.core.messageStore.SetPacketIDSeed(c.ID, pid)
+		}
+		return pid
 	}
-	return uint16(id)
+
+	return 0
 }
 
 // WritePacket 发送数据包

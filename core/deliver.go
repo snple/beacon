@@ -261,24 +261,34 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 //   - QoS0: 直接丢弃
 //   - QoS1: 已持久化，等待重传机制处理
 func (c *Client) DeliverWithQoS(msg *Message, qos packet.QoS) error {
+	// 注意：msg 可能会被多个订阅者共享（同一条广播消息）。
+	// 对于 QoS1，我们必须为“每个目标客户端”分配独立的 PacketID，不能直接修改共享的 msg。
+	deliverMsg := msg
+	if qos == packet.QoS1 {
+		m := *msg // shallow copy
+		m.PacketID = c.allocatePacketID()
+		deliverMsg = &m
+	}
+
 	// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
-	if msg.ExpiryTime > 0 && time.Now().Unix() > msg.ExpiryTime {
+	if deliverMsg.ExpiryTime > 0 && time.Now().Unix() > deliverMsg.ExpiryTime {
 		c.core.stats.MessagesDropped.Add(1)
 		return nil
 	}
 
 	// QoS 1: 先持久化到存储（确保不丢失）
 	if qos == packet.QoS1 && c.core.messageStore != nil {
-		if err := c.core.messageStore.Save(c.ID, msg); err != nil {
+		if err := c.core.messageStore.Save(c.ID, deliverMsg); err != nil {
 			c.core.logger.Error("Failed to persist QoS1 message",
 				zap.String("clientID", c.ID),
-				zap.String("topic", msg.Topic),
+				zap.String("topic", deliverMsg.Topic),
 				zap.Error(err))
 			return err
 		}
 		c.core.logger.Debug("QoS1 message persisted",
 			zap.String("clientID", c.ID),
-			zap.String("topic", msg.Topic))
+			zap.String("topic", deliverMsg.Topic),
+			zap.Uint16("packetID", deliverMsg.PacketID))
 	}
 
 	// 如果客户端关闭，直接返回
@@ -295,7 +305,7 @@ func (c *Client) DeliverWithQoS(msg *Message, qos packet.QoS) error {
 	}
 
 	// 尝试放入发送队列
-	if c.sendQueue.TryEnqueue(msg, qos, false) {
+	if c.sendQueue.TryEnqueue(deliverMsg, qos, false) {
 		// 成功入队，触发发送协程
 		c.triggerSend()
 		return nil
@@ -316,7 +326,8 @@ func (c *Client) DeliverWithQoS(msg *Message, qos packet.QoS) error {
 	// QoS1: 已持久化，等待重传机制处理
 	c.core.logger.Debug("QoS1 message queued for retransmit (queue full)",
 		zap.String("clientID", c.ID),
-		zap.String("topic", msg.Topic))
+		zap.String("topic", deliverMsg.Topic),
+		zap.Uint16("packetID", deliverMsg.PacketID))
 	return nil
 }
 
@@ -378,7 +389,10 @@ func (c *Client) sendMessage(msg *Message, qos packet.QoS, dup bool) error {
 	pub.Dup = dup
 
 	if qos > 0 {
-		pub.PacketID = c.allocatePacketID()
+		if msg.PacketID == 0 {
+			msg.PacketID = c.allocatePacketID()
+		}
+		pub.PacketID = msg.PacketID
 	}
 
 	// 设置属性

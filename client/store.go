@@ -3,6 +3,7 @@ package client
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -213,6 +214,62 @@ func outgoingPrefix() []byte {
 	return []byte("outgoing:")
 }
 
+func packetIDSeedKey() []byte {
+	return []byte("meta:packet_id_seed")
+}
+
+func encodePacketIDSeed(seed uint16) []byte {
+	var b [2]byte
+	binary.BigEndian.PutUint16(b[:], seed)
+	return b[:]
+}
+
+func decodePacketIDSeed(b []byte) (uint16, bool) {
+	if len(b) != 2 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint16(b), true
+}
+
+// PacketIDSeed returns the stored PacketID seed for allocation.
+// It is used to reduce collisions after restart/reconnect without scanning the whole store.
+func (ms *MessageStore) PacketIDSeed() (uint16, error) {
+	if ms == nil || ms.db == nil {
+		return uint16(minPacketID), nil
+	}
+
+	var seed uint16 = uint16(minPacketID)
+	err := ms.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(packetIDSeedKey())
+		if err != nil {
+			if err == badger.ErrKeyNotFound {
+				return nil
+			}
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			if s, ok := decodePacketIDSeed(val); ok {
+				seed = s
+			}
+			return nil
+		})
+	})
+	return seed, err
+}
+
+
+// SetPacketIDSeed stores the last allocated PacketID.
+// It is used to resume allocation after restart/reconnect without scanning the whole store.
+// Best-effort semantics: callers may ignore the returned error.
+func (ms *MessageStore) SetPacketIDSeed(seed uint16) error {
+	if ms == nil || ms.db == nil {
+		return nil
+	}
+	return ms.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(packetIDSeedKey(), encodePacketIDSeed(seed))
+	})
+}
+
 // Save 保存消息到存储
 func (ms *MessageStore) Save(msg *StoredMessage) error {
 	key := messageKey(msg.PacketID)
@@ -239,6 +296,9 @@ func (ms *MessageStore) Save(msg *StoredMessage) error {
 	if err != nil {
 		return fmt.Errorf("failed to save message: %w", err)
 	}
+
+	// Best-effort update for PacketID seed metadata.
+	_ = ms.SetPacketIDSeed(msg.PacketID)
 
 	ms.logger.Debug("Message saved",
 		zap.Uint16("packetID", msg.PacketID),
@@ -492,6 +552,13 @@ func (ms *MessageStore) Clear() error {
 
 	ms.logger.Info("Cleared all persisted messages",
 		zap.Int("count", len(keysToDelete)))
+
+	// Reset PacketID seed for a clean session.
+	if ms != nil && ms.db != nil {
+		_ = ms.db.Update(func(txn *badger.Txn) error {
+			return txn.Set(packetIDSeedKey(), encodePacketIDSeed(uint16(minPacketID)))
+		})
+	}
 
 	return nil
 }

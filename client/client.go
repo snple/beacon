@@ -83,11 +83,13 @@ type WillMessage struct {
 
 // Client 客户端
 type Client struct {
-	options *ClientOptions
-	conn    net.Conn
-	reader  *bufio.Reader
-	writer  *bufio.Writer
-	writeMu sync.Mutex
+	options   *ClientOptions
+	conn      net.Conn
+	reader    *bufio.Reader
+	writer    *bufio.Writer
+	writeMu   sync.Mutex
+	connMu    sync.RWMutex
+	connectMu sync.Mutex
 
 	// 状态
 	connected      atomic.Bool
@@ -108,13 +110,18 @@ type Client struct {
 
 	// QoS 状态
 	pendingAck   map[uint16]chan error
+	// 已持久化但尚未完成 ACK 的 PacketID（避免队列满时只写入 store 却没进入 pendingAck 的冲突）
+	storedPacketIDs map[uint16]struct{}
 	pendingAckMu sync.Mutex
 
 	// 生命周期
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
+	connCtx    context.Context
+	connCancel context.CancelFunc
+	connWG     sync.WaitGroup
+	closeOnce  sync.Once
+	connLostCh chan error
 
 	// 流量控制
 	sendWindow uint16      // core 的接收窗口大小（客户端的发送窗口）
@@ -178,7 +185,7 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	}
 	opts.applyDefaults()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	rootCtx, rootCancel := context.WithCancel(context.Background())
 
 	// 使用用户提供的 logger，或创建默认 logger
 	logger := opts.Logger
@@ -191,10 +198,19 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 		subscribedTopics:  make(map[string]bool),
 		registeredActions: make(map[string]bool),
 		pendingAck:        make(map[uint16]chan error),
-		ctx:               ctx,
-		cancel:            cancel,
+		storedPacketIDs:   make(map[uint16]struct{}),
+		rootCtx:           rootCtx,
+		rootCancel:        rootCancel,
+		connLostCh:        make(chan error, 1),
 		logger:            logger,
 	}
+
+	// 初始 connCtx 设为已取消状态：任何等待连接生命周期的逻辑会立刻退出。
+	c.connCtx, c.connCancel = context.WithCancel(rootCtx)
+	c.connCancel()
+
+	// 启动统一的重连循环（内部会检查 autoReconnect 开关）
+	go c.reconnectLoop()
 
 	// 初始化消息存储
 	if opts.StoreConfig != nil && opts.StoreConfig.Enabled {
@@ -221,10 +237,17 @@ func New() (*Client, error) {
 func (c *Client) close(err error) error {
 	c.closeOnce.Do(func() {
 		c.connected.Store(false)
-		c.cancel()
+		if c.connCancel != nil {
+			c.connCancel()
+		}
 
-		if c.conn != nil {
-			c.conn.Close()
+		// 不要把 conn/reader/writer 置为 nil：其他连接协程可能仍在读这些字段。
+		// 只关闭底层连接并依赖 connected/connCtx 来让协程退出。
+		c.connMu.RLock()
+		conn := c.conn
+		c.connMu.RUnlock()
+		if conn != nil {
+			_ = conn.Close()
 		}
 
 		// 清理等待中的 pendingRequests，让它们立即返回错误
@@ -251,23 +274,18 @@ func (c *Client) close(err error) error {
 		c.pendingAck = make(map[uint16]chan error) // 重置 map
 		c.pendingAckMu.Unlock()
 
-		// 在新协程中等待并执行回调和重连
-		go func() {
-			c.wg.Wait()
+		// 调用 OnDisconnect 钩子（不等待 connWG，避免 receiveLoop 中死锁）
+		c.options.Hooks.callOnDisconnect(&DisconnectContext{
+			ClientID: c.clientID,
+			Packet:   nil,
+			Err:      err,
+		})
 
-			// 调用 OnDisconnect 钩子
-			c.options.Hooks.callOnDisconnect(&DisconnectContext{
-				ClientID: c.clientID,
-				Packet:   nil, // 客户端主动断开或网络错误时没有 DISCONNECT 包
-				Err:      err,
-			})
-
-			// 检查是否需要自动重连
-			if c.autoReconnect.Load() && !c.reconnecting.Load() {
-				c.reconnectWG.Add(1)
-				go c.reconnect()
-			}
-		}()
+		// 通知重连循环
+		select {
+		case c.connLostCh <- err:
+		default:
+		}
 	})
 	return nil
 }
@@ -278,6 +296,10 @@ func (c *Client) Close() error {
 	c.autoReconnect.Store(false)
 
 	err := c.Disconnect()
+	// 关闭整个客户端生命周期
+	if c.rootCancel != nil {
+		c.rootCancel()
+	}
 
 	// 关闭消息存储
 	if c.store != nil {
@@ -335,16 +357,37 @@ func (c *Client) ForceClose() error {
 
 // allocatePacketID 分配新的 PacketID
 func (c *Client) allocatePacketID() uint16 {
-	id := c.nextPacketID.Add(1)
-	if id == 0 || id > maxPacketID {
-		c.nextPacketID.Store(minPacketID)
-		id = minPacketID
+	// PacketID 分配策略（MQTT 风格）：
+	// - nextPacketID 自增（带回绕）
+	// - 仅检查内存中的 in-flight 集合（pendingAck + storedPacketIDs），避免每次触碰持久化存储。
+	for range maxPacketID {
+		id := c.nextPacketID.Add(1)
+		if id == 0 || id > maxPacketID {
+			c.nextPacketID.Store(minPacketID)
+			id = minPacketID
+		}
+
+		pid := uint16(id)
+		c.pendingAckMu.Lock()
+		_, inPending := c.pendingAck[pid]
+		_, inStored := c.storedPacketIDs[pid]
+		c.pendingAckMu.Unlock()
+		if inPending || inStored {
+			continue
+		}
+
+		// Best-effort persist the latest allocated PacketID seed (used on next start/reconnect).
+		if c.store != nil {
+			_ = c.store.SetPacketIDSeed(pid)
+		}
+		return pid
 	}
-	return uint16(id)
+
+	return 0
 }
 
 func (c *Client) receiveLoop() {
-	defer c.wg.Done()
+	defer c.connWG.Done()
 
 	for c.connected.Load() {
 		// 设置读取超时
@@ -428,7 +471,7 @@ func (c *Client) HasSubscription(topic string) bool {
 }
 
 func (c *Client) keepAliveLoop() {
-	defer c.wg.Done()
+	defer c.connWG.Done()
 
 	interval := time.Duration(c.keepAlive) * time.Second
 	ticker := time.NewTicker(interval)
@@ -436,7 +479,7 @@ func (c *Client) keepAliveLoop() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.connCtx.Done():
 			return
 		case <-ticker.C:
 			if !c.connected.Load() {
@@ -479,10 +522,17 @@ func (c *Client) writePacket(pkt packet.Packet) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	if err := packet.WritePacket(c.writer, pkt); err != nil {
+	c.connMu.RLock()
+	w := c.writer
+	c.connMu.RUnlock()
+	if w == nil {
+		return ErrNotConnected
+	}
+
+	if err := packet.WritePacket(w, pkt); err != nil {
 		return err
 	}
-	return c.writer.Flush()
+	return w.Flush()
 }
 
 // matchTopic 检查主题是否匹配模式

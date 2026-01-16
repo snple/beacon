@@ -15,21 +15,15 @@ import (
 
 // Connect 连接到 core
 func (c *Client) Connect() error {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
 	if c.connected.Load() {
 		return ErrAlreadyConnected
 	}
 
-	// 如果之前已经连接过（cancel 不为 nil），等待旧的 goroutines 完全退出
-	// 这确保在重连时不会与旧的 goroutines 产生竞争
-	if c.cancel != nil {
-		c.wg.Wait()
-	}
-
-	// 重置状态（支持重连）
-	c.closeOnce = sync.Once{}
-	c.ctx, c.cancel = context.WithCancel(context.Background())
-	c.pendingAck = make(map[uint16]chan error)
-	c.pendingRequests = make(map[uint32]chan *Response)
+	// 等待上一轮连接相关协程退出，避免复用同一个 Client 时产生并发读写。
+	c.connWG.Wait()
 
 	// 解析地址
 	address := c.options.Core
@@ -43,7 +37,7 @@ func (c *Client) Connect() error {
 	var conn net.Conn
 	var err error
 
-	ctx, cancel := context.WithTimeout(c.ctx, c.options.ConnectTimeout)
+	ctx, cancel := context.WithTimeout(c.rootCtx, c.options.ConnectTimeout)
 	defer cancel()
 
 	dialer := &net.Dialer{}
@@ -61,9 +55,8 @@ func (c *Client) Connect() error {
 		return NewConnectionError("connect", err)
 	}
 
-	c.conn = conn
-	c.reader = bufio.NewReader(conn)
-	c.writer = bufio.NewWriter(conn)
+	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
 
 	// 发送 CONNECT
 	connect := packet.NewConnectPacket()
@@ -116,14 +109,18 @@ func (c *Client) Connect() error {
 		connect.WillPacket = willPkt
 	}
 
-	if err := c.writePacket(connect); err != nil {
+	if err := packet.WritePacket(writer, connect); err != nil {
+		conn.Close()
+		return NewConnectionError("send CONNECT", err)
+	}
+	if err := writer.Flush(); err != nil {
 		conn.Close()
 		return NewConnectionError("send CONNECT", err)
 	}
 
 	// 等待 CONNACK
 	conn.SetReadDeadline(time.Now().Add(c.options.ConnectTimeout))
-	pkt, err := packet.ReadPacket(c.reader)
+	pkt, err := packet.ReadPacket(reader)
 	if err != nil {
 		conn.Close()
 		return NewConnectionError("read CONNACK", err)
@@ -141,8 +138,28 @@ func (c *Client) Connect() error {
 	}
 	conn.SetReadDeadline(time.Time{})
 
+	// 握手成功后，再切换 Client 的连接状态（避免 Connect 失败导致内部状态被污染）。
+	c.closeOnce = sync.Once{}
+	c.connCtx, c.connCancel = context.WithCancel(c.rootCtx)
+
+	c.connMu.Lock()
+	c.conn = conn
+	c.reader = reader
+	c.writer = writer
+	c.connMu.Unlock()
+
 	// 保存 sessionPresent 状态（服务端是否恢复了会话）
 	c.sessionPresent = connack.SessionPresent
+
+	// CleanSession=true 表示不恢复旧会话，客户端侧也应丢弃未确认的持久化 QoS1 消息。
+	if c.options.CleanSession && c.store != nil {
+		if err := c.store.Clear(); err != nil {
+			c.logger.Warn("Failed to clear persisted messages for clean session", zap.Error(err))
+		}
+		c.pendingAckMu.Lock()
+		clear(c.storedPacketIDs)
+		c.pendingAckMu.Unlock()
+	}
 
 	// 保存分配的 Client ID
 	c.clientID = c.options.ClientID
@@ -172,17 +189,28 @@ func (c *Client) Connect() error {
 	}
 
 	c.connected.Store(true)
-	c.nextPacketID.Store(minPacketID)
+
+	// 初始化 PacketID 序列。
+	// 对嵌入式设备来说，遍历所有持久化消息可能非常昂贵；这里改为从 store 的元数据读取种子值（O(1)）。
+	seed := uint16(minPacketID)
+	if c.store != nil {
+		if s, err := c.store.PacketIDSeed(); err == nil {
+			seed = s
+		} else {
+			c.logger.Warn("Failed to load packet id seed from store", zap.Error(err))
+		}
+	}
+	c.nextPacketID.Store(uint32(seed))
 
 	// 启用自动重连（只要 Connect 成功一次就启用）
 	c.autoReconnect.Store(true)
 
 	// 启动接收协程
-	c.wg.Add(1)
+	c.connWG.Add(1)
 	go c.receiveLoop()
 
 	// 启动心跳协程
-	c.wg.Add(1)
+	c.connWG.Add(1)
 	go c.keepAliveLoop()
 
 	// 启动发送队列处理协程（如果启用了流控）
@@ -193,7 +221,7 @@ func (c *Client) Connect() error {
 
 	// 启动重传协程（用于重传持久化的 QoS1 消息）
 	if c.store != nil {
-		c.wg.Add(1)
+		c.connWG.Add(1)
 		go c.retransmitLoop()
 	}
 
@@ -218,8 +246,6 @@ func (c *Client) DisconnectWithReason(reason packet.ReasonCode) error {
 	c.autoReconnect.Store(false)
 
 	if !c.connected.Load() {
-		// 即使未连接，也要等待重连协程完成
-		c.reconnectWG.Wait()
 		return nil
 	}
 
@@ -227,127 +253,5 @@ func (c *Client) DisconnectWithReason(reason packet.ReasonCode) error {
 	disconnect := packet.NewDisconnectPacket(reason)
 	_ = c.writePacket(disconnect)
 
-	err := c.close(nil)
-
-	// 等待重连协程完成
-	c.reconnectWG.Wait()
-
-	return err
-}
-
-// reconnect 自动重连逻辑（使用指数退避策略）
-func (c *Client) reconnect() {
-	defer c.reconnectWG.Done()
-
-	c.reconnecting.Store(true)
-	defer c.reconnecting.Store(false)
-
-	// 指数退避参数
-	initialDelay := 1 * time.Second
-	maxDelay := 60 * time.Second
-	currentDelay := initialDelay
-
-	// 保存订阅信息以便重连后恢复
-	c.subscribedTopicsMu.RLock()
-	savedTopics := make([]string, 0, len(c.subscribedTopics))
-	for topic := range c.subscribedTopics {
-		savedTopics = append(savedTopics, topic)
-	}
-	c.subscribedTopicsMu.RUnlock()
-
-	c.logger.Info("Starting automatic reconnection",
-		zap.Duration("initialDelay", initialDelay),
-		zap.Duration("maxDelay", maxDelay))
-
-	for {
-		// 检查是否应该停止重连
-		if !c.autoReconnect.Load() {
-			c.logger.Info("Automatic reconnection disabled, stopping")
-			return
-		}
-
-		// 等待退避时间
-		c.logger.Info("Waiting before reconnection attempt",
-			zap.Duration("delay", currentDelay))
-		time.Sleep(currentDelay)
-
-		// 如果在等待期间 autoReconnect 被禁用，停止重连
-		if !c.autoReconnect.Load() {
-			c.logger.Info("Automatic reconnection disabled during backoff, stopping")
-			return
-		}
-
-		c.logger.Info("Attempting to reconnect...")
-
-		// 临时禁用 autoReconnect，防止 Connect 失败时触发嵌套重连
-		c.autoReconnect.Store(false)
-
-		// 尝试重新连接
-		err := c.Connect()
-		if err != nil {
-			c.logger.Warn("Reconnection failed",
-				zap.Error(err),
-				zap.Duration("nextRetry", currentDelay*2))
-
-			// 重新启用 autoReconnect 以便继续重试
-			c.autoReconnect.Store(true)
-
-			// 增加退避时间（指数退避）
-			currentDelay *= 2
-			if currentDelay > maxDelay {
-				currentDelay = maxDelay
-			}
-			continue
-		}
-
-		// 重连成功，Connect() 内部已设置 autoReconnect = true
-		c.logger.Info("Reconnection successful",
-			zap.Bool("sessionPresent", c.sessionPresent))
-
-		// 根据 sessionPresent 决定是否需要重新订阅/注册
-		// sessionPresent=true 表示服务端已恢复会话（订阅和 action 注册都保留了）
-		// sessionPresent=false 表示服务端没有旧会话，需要重新订阅/注册
-		if c.sessionPresent {
-			c.logger.Info("Session restored by server, skipping re-subscribe/re-register")
-
-			// 虽然服务端保留了订阅，但客户端仍需恢复本地订阅记录
-			c.subscribedTopicsMu.Lock()
-			for _, topic := range savedTopics {
-				c.subscribedTopics[topic] = true
-			}
-			c.subscribedTopicsMu.Unlock()
-		} else {
-			// 服务端没有会话，需要重新订阅
-			if len(savedTopics) > 0 {
-				c.logger.Info("Restoring subscriptions",
-					zap.Int("count", len(savedTopics)))
-				if err := c.Subscribe(savedTopics...); err != nil {
-					c.logger.Warn("Failed to restore subscriptions", zap.Error(err))
-				} else {
-					c.logger.Info("Subscriptions restored successfully")
-				}
-			}
-
-			// 重新注册已注册的 actions
-			c.actionsMu.RLock()
-			actions := make([]string, 0, len(c.registeredActions))
-			for action := range c.registeredActions {
-				actions = append(actions, action)
-			}
-			c.actionsMu.RUnlock()
-
-			if len(actions) > 0 {
-				c.logger.Info("Re-registering actions",
-					zap.Int("count", len(actions)))
-				if err := c.RegisterMultiple(actions); err != nil {
-					c.logger.Warn("Failed to re-register actions", zap.Error(err))
-				} else {
-					c.logger.Info("Actions re-registered successfully")
-				}
-			}
-		}
-
-		// 重连成功，退出重连循环
-		return
-	}
+	return c.close(nil)
 }

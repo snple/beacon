@@ -8,7 +8,7 @@ import (
 
 // retransmitLoop 重传协程，定期检查并重传未确认的 QoS1 消息
 func (c *Client) retransmitLoop() {
-	defer c.wg.Done()
+	defer c.connWG.Done()
 
 	// 连接成功后，首先尝试重传持久化的消息
 	c.triggerRetransmit()
@@ -18,7 +18,7 @@ func (c *Client) retransmitLoop() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.connCtx.Done():
 			return
 		case <-ticker.C:
 			if !c.connected.Load() {

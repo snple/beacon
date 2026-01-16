@@ -107,6 +107,10 @@ func (c *Client) publishMessage(msg *Message, qos packet.QoS, timeout time.Durat
 					zap.Uint16("packetID", msg.PacketID),
 					zap.Error(err))
 				// 即使持久化失败，仍然尝试发送
+			} else {
+				c.pendingAckMu.Lock()
+				c.storedPacketIDs[msg.PacketID] = struct{}{}
+				c.pendingAckMu.Unlock()
 			}
 		}
 	}
@@ -156,8 +160,8 @@ func (c *Client) publishMessage(msg *Message, qos packet.QoS, timeout time.Durat
 				delete(c.pendingAck, msg.PacketID)
 				c.pendingAckMu.Unlock()
 				return ErrPublishTimeout
-			case <-c.ctx.Done():
-				return c.ctx.Err()
+			case <-c.connCtx.Done():
+				return ErrNotConnected
 			}
 		}
 
@@ -182,7 +186,7 @@ func (c *Client) processSendQueue() {
 
 	for c.connected.Load() {
 		select {
-		case <-c.ctx.Done():
+		case <-c.connCtx.Done():
 			return
 		default:
 		}
@@ -312,14 +316,14 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 		delete(c.pendingAck, sub.PacketID)
 		c.pendingAckMu.Unlock()
 		return ErrSubscribeTimeout
-	case <-c.ctx.Done():
+	case <-c.connCtx.Done():
 		// 取消，回滚订阅
 		c.subscribedTopicsMu.Lock()
 		for _, topic := range topics {
 			delete(c.subscribedTopics, topic)
 		}
 		c.subscribedTopicsMu.Unlock()
-		return c.ctx.Err()
+		return ErrNotConnected
 	}
 }
 
@@ -362,8 +366,8 @@ func (c *Client) Unsubscribe(topics ...string) error {
 		delete(c.pendingAck, unsub.PacketID)
 		c.pendingAckMu.Unlock()
 		return ErrUnsubscribeTimeout
-	case <-c.ctx.Done():
-		return c.ctx.Err()
+	case <-c.connCtx.Done():
+		return ErrNotConnected
 	}
 }
 
@@ -464,6 +468,11 @@ func (c *Client) handlePuback(p *packet.PubackPacket) {
 				zap.Error(delErr))
 		}
 	}
+
+	// 无论持久化删除是否成功，都释放本地的 storedPacketIDs 记录。
+	c.pendingAckMu.Lock()
+	delete(c.storedPacketIDs, p.PacketID)
+	c.pendingAckMu.Unlock()
 
 	c.handleAck(p.PacketID, err)
 }

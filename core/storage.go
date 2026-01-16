@@ -3,6 +3,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -19,14 +20,14 @@ type StoredMessage struct {
 	// 消息标识
 	ID       string `nson:"id"`        // 消息唯一标识 (格式: msg:{clientID}:{packetID})
 	ClientID string `nson:"client_id"` // 客户端 ID
-	PacketID uint32 `nson:"packet_id"` // 数据包 ID
+	PacketID uint16 `nson:"packet_id"` // 数据包 ID
 
 	// 基础消息属性
-	Topic    string `nson:"topic"`
-	Payload  []byte `nson:"payload,omitempty"`
-	QoS      int32  `nson:"qos"`
-	Retain   bool   `nson:"retain"`
-	Priority int32  `nson:"priority"`
+	Topic    string          `nson:"topic"`
+	Payload  []byte          `nson:"payload,omitempty"`
+	QoS      packet.QoS      `nson:"qos"`
+	Retain   bool            `nson:"retain"`
+	Priority packet.Priority `nson:"priority"`
 
 	// 消息元数据
 	TraceID        string            `nson:"trace_id,omitempty"`
@@ -121,6 +122,7 @@ func storedToMessage(stored *StoredMessage) *Message {
 		Payload:         stored.Payload,
 		QoS:             packet.QoS(stored.QoS),
 		Retain:          stored.Retain,
+		PacketID:        uint16(stored.PacketID),
 		Timestamp:       stored.Timestamp,
 		ExpiryTime:      stored.ExpiryTime,
 		TraceID:         stored.TraceID,
@@ -131,7 +133,7 @@ func storedToMessage(stored *StoredMessage) *Message {
 		ResponseTopic:   stored.ResponseTopic,
 		CorrelationData: stored.CorrelationData,
 	}
-	if stored.Priority != int32(packet.PriorityNormal) {
+	if stored.Priority != packet.PriorityNormal {
 		p := packet.Priority(stored.Priority)
 		msg.Priority = &p
 	}
@@ -239,6 +241,59 @@ func messageKey(clientID string, packetID uint16) string {
 	return fmt.Sprintf("msg:%s:%d", clientID, packetID)
 }
 
+func packetIDSeedKey(clientID string) []byte {
+	return fmt.Appendf(nil, "meta:packet_id_seed:%s", clientID)
+}
+
+func encodePacketIDSeed(seed uint16) []byte {
+	var b [2]byte
+	binary.BigEndian.PutUint16(b[:], seed)
+	return b[:]
+}
+
+func decodePacketIDSeed(b []byte) (uint16, bool) {
+	if len(b) != 2 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint16(b), true
+}
+
+// PacketIDSeed returns the stored PacketID seed for a client.
+// It is used to resume outbound PacketID allocation after restart without scanning the whole store.
+func (ms *MessageStore) PacketIDSeed(clientID string) (uint16, error) {
+	if ms == nil || ms.db == nil {
+		return uint16(minPacketID), nil
+	}
+
+	var seed uint16 = uint16(minPacketID)
+	err := ms.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(packetIDSeedKey(clientID))
+		if err != nil {
+			if err == badger.ErrKeyNotFound {
+				return nil
+			}
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			if s, ok := decodePacketIDSeed(val); ok {
+				seed = s
+			}
+			return nil
+		})
+	})
+	return seed, err
+}
+
+// SetPacketIDSeed stores the last allocated PacketID for a client (best-effort).
+func (ms *MessageStore) SetPacketIDSeed(clientID string, seed uint16) error {
+	if ms == nil || ms.db == nil {
+		return nil
+	}
+	return ms.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(packetIDSeedKey(clientID), encodePacketIDSeed(seed))
+	})
+}
+
 // clientPrefix 生成客户端消息前缀
 func clientPrefix(clientID string) []byte {
 	return fmt.Appendf(nil, "msg:%s:", clientID)
@@ -256,12 +311,12 @@ func (ms *MessageStore) Save(clientID string, msg *Message) error {
 	stored := &StoredMessage{
 		ID:              msgID,
 		ClientID:        clientID,
-		PacketID:        uint32(msg.PacketID),
+		PacketID:        uint16(msg.PacketID),
 		Topic:           msg.Topic,
 		Payload:         msg.Payload,
-		QoS:             int32(msg.QoS),
+		QoS:             msg.QoS,
 		Retain:          msg.Retain,
-		Priority:        int32(priority),
+		Priority:        priority,
 		TraceID:         msg.TraceID,
 		ContentType:     msg.ContentType,
 		Timestamp:       msg.Timestamp,
@@ -386,6 +441,9 @@ func (ms *MessageStore) DeleteAllForClient(clientID string) error {
 	ms.logger.Info("Cleared persisted messages for client (CleanSession)",
 		zap.String("clientID", clientID),
 		zap.Int("count", len(keysToDelete)))
+
+	// Reset PacketID seed for a clean session.
+	_ = ms.SetPacketIDSeed(clientID, uint16(minPacketID))
 
 	return nil
 }
@@ -658,9 +716,9 @@ func (ms *MessageStore) SaveRetainMessage(topic string, msg *Message) error {
 		ID:             topic,
 		Topic:          msg.Topic,
 		Payload:        msg.Payload,
-		QoS:            int32(msg.QoS),
+		QoS:            msg.QoS,
 		Retain:         true,
-		Priority:       int32(priority),
+		Priority:       priority,
 		TraceID:        msg.TraceID,
 		ContentType:    msg.ContentType,
 		Timestamp:      msg.Timestamp,
