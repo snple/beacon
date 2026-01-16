@@ -3,6 +3,7 @@ package core
 import (
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"go.uber.org/zap"
 )
 
@@ -38,13 +39,24 @@ func (c *Core) cleanupExpiredMessages() {
 
 	// 在锁外清理每个客户端的过期消息
 	for _, client := range clients {
-		count := client.CleanupExpired(now)
+		count := client.cleanupExpired(now)
 		expiredCount += count
 	}
 
 	if expiredCount > 0 {
 		c.logger.Debug("Cleaned up expired messages", zap.Int("count", expiredCount))
 		c.stats.MessagesDropped.Add(int64(expiredCount))
+	}
+
+	// 清理持久化存储中的过期消息
+	if c.messageStore != nil {
+		count, err := c.messageStore.cleanupExpired()
+		if err != nil {
+			c.logger.Warn("Failed to cleanup expired messages from store", zap.Error(err))
+		} else if count > 0 {
+			c.logger.Debug("Cleaned up expired messages from store", zap.Int("count", count))
+			c.stats.MessagesDropped.Add(int64(count))
+		}
 	}
 }
 
@@ -91,8 +103,8 @@ func (c *Core) cleanupExpiredSessions() {
 	}
 }
 
-// CleanupExpired 清理过期消息，返回清理数量
-func (c *Client) CleanupExpired(now int64) int {
+// cleanupExpired 清理过期消息，返回清理数量
+func (c *Client) cleanupExpired(now int64) int {
 	expiredCount := 0
 
 	// 清理 pendingAck 中的过期消息
@@ -124,4 +136,70 @@ func (c *Client) clearPersistedMessages() {
 			zap.String("clientID", c.ID),
 			zap.Error(err))
 	}
+}
+
+// cleanupExpired 清理过期消息
+func (ms *messageStore) cleanupExpired() (int, error) {
+	count := 0
+	keysToDelete := make([][]byte, 0)
+
+	err := ms.db.View(func(txn *badger.Txn) error {
+		prefix := []byte("msg:")
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = prefix
+
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		now := time.Now().Unix()
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+
+			err := item.Value(func(val []byte) error {
+				var msg StoredMessage
+
+				err := decodeStoredMessage(&msg, val)
+				if err != nil {
+					ms.logger.Warn("Failed to decode message",
+						zap.String("key", string(item.Key())),
+						zap.Error(err))
+					return nil // 跳过损坏的消息
+				}
+
+				// 检查是否过期
+				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil &&
+					msg.Message.Packet.Properties.ExpiryTime > 0 && now > msg.Message.Packet.Properties.ExpiryTime {
+					keyCopy := make([]byte, len(item.Key()))
+					copy(keyCopy, item.Key())
+					keysToDelete = append(keysToDelete, keyCopy)
+				}
+
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return 0, err
+	}
+
+	// 批量删除过期消息
+	if len(keysToDelete) > 0 {
+		err = ms.db.Update(func(txn *badger.Txn) error {
+			for _, key := range keysToDelete {
+				if err := txn.Delete(key); err != nil {
+					return err
+				}
+				count++
+			}
+			return nil
+		})
+	}
+
+	return count, err
 }
