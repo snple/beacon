@@ -33,7 +33,7 @@ type Core struct {
 	offlineSessionsMu sync.Mutex
 
 	// 订阅管理
-	subscriptions *SubscriptionTree
+	subscriptions *subscriptionTree
 
 	// 消息队列 (按优先级)
 	queues [4]*messageQueue
@@ -42,14 +42,14 @@ type Core struct {
 	msgNotify chan struct{}
 
 	// 保留消息
-	retainStore *RetainStore
+	retainStore *retainStore
 
 	// 消息持久化存储
 	messageStore *messageStore
 
 	// REQUEST/RESPONSE 支持（轮询模式）
-	actionRegistry   *ActionRegistry // action 注册表
-	requestTracker   *RequestTracker // 请求追踪器
+	actionRegistry   *actionRegistry // action 注册表
+	requestTracker   *requestTracker // 请求追踪器
 	requestQueue     chan *Request
 	requestQueueMu   sync.Mutex
 	requestQueueInit bool // 请求队列是否已初始化
@@ -110,16 +110,16 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		logger:          opts.Logger,
 		clients:         make(map[string]*Client),
 		offlineSessions: make(map[string]time.Time),
-		subscriptions:   NewSubscriptionTree(),
-		retainStore:     NewRetainStore(),
-		actionRegistry:  NewActionRegistry(),
+		subscriptions:   newSubscriptionTree(),
+		retainStore:     newRetainStore(),
+		actionRegistry:  newActionRegistry(),
 		msgNotify:       make(chan struct{}, 1),
 		ctx:             ctx,
 		cancel:          cancel,
 	}
 
 	// 初始化请求追踪器（需要 core 引用）
-	b.requestTracker = NewRequestTracker(b)
+	b.requestTracker = newRequestTracker(b)
 
 	// 初始化消息持久化存储
 	if err := b.initMessageStore(); err != nil {
@@ -473,13 +473,8 @@ func (c *Core) GetClientSubscriptions(clientID string) ([]ClientSubscriptionInfo
 }
 
 // GetTopicSubscribers 获取订阅指定主题的所有客户端
-func (c *Core) GetTopicSubscribers(topic string) []string {
-	subscribers := c.subscriptions.Match(topic)
-	clientIDs := make([]string, 0, len(subscribers))
-	for _, sub := range subscribers {
-		clientIDs = append(clientIDs, sub.ClientID)
-	}
-	return clientIDs
+func (c *Core) GetTopicSubscribers(topic string) map[string]packet.QoS {
+	return c.subscriptions.match(topic)
 }
 
 // GetOnlineClientsCount 获取在线客户端数量

@@ -109,7 +109,7 @@ func (c *Core) deliver(msg Message) {
 		return
 	}
 
-	subscribers := c.subscriptions.Match(msg.Packet.Topic)
+	subscribers := c.subscriptions.match(msg.Packet.Topic)
 
 	// 一次性获取所有需要的客户端，减少锁竞争
 	c.clientsMu.RLock()
@@ -118,10 +118,10 @@ func (c *Core) deliver(msg Message) {
 		qos    packet.QoS
 	}
 	clients := make([]clientWithQoS, 0, len(subscribers))
-	for _, sub := range subscribers {
-		if client, ok := c.clients[sub.ClientID]; ok {
+	for clientID, subQoS := range subscribers {
+		if client, ok := c.clients[clientID]; ok {
 			// 确定发送 QoS (取订阅 QoS 和消息 QoS 的较小值)
-			qos := min(sub.QoS, msg.QoS)
+			qos := min(subQoS, msg.QoS)
 			clients = append(clients, clientWithQoS{client: client, qos: qos})
 		}
 	}

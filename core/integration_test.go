@@ -1797,3 +1797,346 @@ func TestManagement_GetTopicSubscribers(t *testing.T) {
 		t.Errorf("Expected 2 subscribers, got %d", len(subscribers))
 	}
 }
+
+// ============================================================================
+// 保留消息高级测试
+// ============================================================================
+
+// TestRetain_EmptyPayloadClear 测试空载荷清除保留消息
+func TestRetain_EmptyPayloadClear(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := core.GetAddress()
+
+	publisher := testSetupClient(t, addr, "pub-retain-clear", nil)
+	defer publisher.Close()
+
+	retainOpts := client.NewPublishOptions().WithRetain(true)
+
+	// 发布保留消息
+	err := publisher.Publish("retain/clear", []byte("data"), retainOpts)
+	if err != nil {
+		t.Fatalf("Failed to publish: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 发布空载荷保留消息（应该清除）
+	err = publisher.Publish("retain/clear", []byte{}, retainOpts)
+	if err != nil {
+		t.Fatalf("Failed to publish empty: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 新订阅者不应收到任何保留消息
+	subscriber := testSetupClient(t, addr, "sub-retain-clear", nil)
+	defer subscriber.Close()
+
+	msgCh := make(chan *client.Message, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		msg, err := subscriber.PollMessage(ctx, 1*time.Second)
+		if err == nil {
+			msgCh <- msg
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	err = subscriber.Subscribe("retain/clear")
+	if err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	// 不应收到任何消息
+	select {
+	case msg := <-msgCh:
+		t.Errorf("Should not receive message, got: %s", string(msg.Packet.Payload))
+	case <-time.After(2 * time.Second):
+		// 正确：超时表示没有收到消息
+	}
+}
+
+// TestRetain_MultiLevelWildcard 测试多层通配符
+func TestRetain_MultiLevelWildcard(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := core.GetAddress()
+
+	publisher := testSetupClient(t, addr, "pub-retain-multi", nil)
+	defer publisher.Close()
+
+	retainOpts := client.NewPublishOptions().WithRetain(true)
+
+	// 发布多个层级的保留消息
+	topics := []string{
+		"home/room1/temperature",
+		"home/room1/humidity",
+		"home/room2/temperature",
+		"home/room2/humidity",
+		"home/room3/light/brightness",
+		"home/room3/light/color",
+	}
+
+	for i, topic := range topics {
+		err := publisher.Publish(topic, []byte{byte('a' + i)}, retainOpts)
+		if err != nil {
+			t.Fatalf("Failed to publish to %s: %v", topic, err)
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 使用 ** 订阅所有
+	subscriber := testSetupClient(t, addr, "sub-retain-multi", nil)
+	defer subscriber.Close()
+
+	msgCh := make(chan *client.Message, 10)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 6; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			msg, err := subscriber.PollMessage(ctx, 4*time.Second)
+			cancel()
+			if err != nil {
+				return
+			}
+			msgCh <- msg
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	err := subscriber.Subscribe("home/**")
+	if err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	// 应收到所有6个保留消息
+	received := 0
+	timeout := time.After(5 * time.Second)
+	for received < 6 {
+		select {
+		case <-msgCh:
+			received++
+		case <-timeout:
+			t.Fatalf("Timeout waiting for messages, received %d of 6", received)
+		}
+	}
+
+	if received != 6 {
+		t.Errorf("Expected 6 messages, got %d", received)
+	}
+}
+
+// TestRetain_QoSDowngrade 测试保留消息的 QoS 降级
+func TestRetain_QoSDowngrade(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := core.GetAddress()
+
+	publisher := testSetupClient(t, addr, "pub-retain-qos", nil)
+	defer publisher.Close()
+
+	// 发布 QoS1 保留消息
+	retainOpts := client.NewPublishOptions().WithRetain(true).WithQoS(packet.QoS1)
+	err := publisher.Publish("retain/qos", []byte("qos1 message"), retainOpts)
+	if err != nil {
+		t.Fatalf("Failed to publish: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 订阅者使用 QoS0 订阅
+	subscriber := testSetupClient(t, addr, "sub-retain-qos", nil)
+	defer subscriber.Close()
+
+	msgCh := make(chan *client.Message, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
+		if err != nil {
+			errCh <- err
+		} else {
+			msgCh <- msg
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// QoS0 订阅
+	subOpts := client.NewSubscribeOptions().WithQoS(packet.QoS0)
+	err = subscriber.SubscribeWithOptions([]string{"retain/qos"}, subOpts)
+	if err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	// 应收到 QoS0 的消息（降级）
+	select {
+	case msg := <-msgCh:
+		if string(msg.Packet.Payload) != "qos1 message" {
+			t.Errorf("Payload mismatch: got %s", string(msg.Packet.Payload))
+		}
+		// QoS 应该被降级为 0
+		if msg.Packet.QoS != packet.QoS0 {
+			t.Errorf("Expected QoS0, got QoS%d", msg.Packet.QoS)
+		}
+	case err := <-errCh:
+		t.Fatalf("Failed to receive: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for message")
+	}
+}
+
+// TestRetain_Persistence 测试保留消息持久化
+func TestRetain_Persistence(t *testing.T) {
+	// 创建临时目录用于持久化
+	tmpDir := t.TempDir()
+
+	opts := NewCoreOptions().
+		WithRetainEnabled(true).
+		WithStorageDir(tmpDir)
+
+	core := testSetupCore(t, opts)
+	addr := core.GetAddress()
+
+	publisher := testSetupClient(t, addr, "pub-persist", nil)
+
+	retainOpts := client.NewPublishOptions().WithRetain(true)
+	err := publisher.Publish("persist/topic", []byte("persistent data"), retainOpts)
+	if err != nil {
+		t.Fatalf("Failed to publish: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	publisher.Close()
+	core.Stop()
+
+	// 重启 core
+	core2 := testSetupCore(t, opts)
+	defer core2.Stop()
+
+	addr2 := core2.GetAddress()
+
+	// 新订阅者应收到持久化的保留消息
+	subscriber := testSetupClient(t, addr2, "sub-persist", nil)
+	defer subscriber.Close()
+
+	msgCh := make(chan *client.Message, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
+		if err != nil {
+			errCh <- err
+		} else {
+			msgCh <- msg
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	err = subscriber.Subscribe("persist/topic")
+	if err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	select {
+	case msg := <-msgCh:
+		if string(msg.Packet.Payload) != "persistent data" {
+			t.Errorf("Payload mismatch: got %s", string(msg.Packet.Payload))
+		}
+	case err := <-errCh:
+		t.Fatalf("Failed to receive: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for persisted message")
+	}
+}
+
+// TestRetain_ConcurrentPublish 测试并发发布保留消息
+func TestRetain_ConcurrentPublish(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := core.GetAddress()
+
+	// 创建多个发布者
+	numPublishers := 10
+	var wg sync.WaitGroup
+	wg.Add(numPublishers)
+
+	retainOpts := client.NewPublishOptions().WithRetain(true)
+
+	for i := 0; i < numPublishers; i++ {
+		go func(id int) {
+			defer wg.Done()
+			publisher := testSetupClient(t, addr, "pub-concurrent-"+string(rune('a'+id)), nil)
+			defer publisher.Close()
+
+			topic := "concurrent/test/" + string(rune('a'+id))
+			err := publisher.Publish(topic, []byte{byte(id)}, retainOpts)
+			if err != nil {
+				t.Errorf("Publisher %d failed: %v", id, err)
+			}
+
+			time.Sleep(100 * time.Millisecond)
+		}(i)
+	}
+
+	wg.Wait()
+	time.Sleep(200 * time.Millisecond)
+
+	// 订阅所有并验证
+	subscriber := testSetupClient(t, addr, "sub-concurrent", nil)
+	defer subscriber.Close()
+
+	msgCh := make(chan *client.Message, 20)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < numPublishers; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			msg, err := subscriber.PollMessage(ctx, 4*time.Second)
+			cancel()
+			if err != nil {
+				return
+			}
+			msgCh <- msg
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	err := subscriber.Subscribe("concurrent/**")
+	if err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	received := 0
+	timeout := time.After(10 * time.Second)
+	for received < numPublishers {
+		select {
+		case <-msgCh:
+			received++
+		case <-timeout:
+			t.Fatalf("Timeout, received %d of %d messages", received, numPublishers)
+		}
+	}
+
+	if received != numPublishers {
+		t.Errorf("Expected %d messages, got %d", numPublishers, received)
+	}
+}

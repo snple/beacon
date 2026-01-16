@@ -229,7 +229,10 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 
 			for _, msg := range retained {
 				// !!! 因为 retained 保存进去是指针，所以这里需要解引用再传递
-				c.deliver(*msg)
+				copiedMsg := *msg
+				// 应用 QoS 降级：取订阅 QoS 和消息 QoS 的较小值
+				copiedMsg.QoS = min(sub.Options.QoS, copiedMsg.QoS)
+				c.deliver(copiedMsg)
 			}
 		}
 	}

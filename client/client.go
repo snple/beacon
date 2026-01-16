@@ -53,7 +53,7 @@ type Message struct {
 }
 
 func (m *Message) IsExpired() bool {
-	if m.Packet != nil || m.Packet.Properties != nil || m.Packet.Properties.ExpiryTime == 0 {
+	if m.Packet == nil || m.Packet.Properties == nil || m.Packet.Properties.ExpiryTime == 0 {
 		return false
 	}
 	return time.Now().Unix() > m.Packet.Properties.ExpiryTime

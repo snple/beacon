@@ -19,22 +19,22 @@ type ActionHandler struct {
 	RequestsSent atomic.Uint64 // 已发送的请求数（用于轮询负载均衡）
 }
 
-// ActionRegistry action 注册表
-type ActionRegistry struct {
+// actionRegistry action 注册表
+type actionRegistry struct {
 	// action -> handlers
 	actions map[string][]*ActionHandler
 	mu      sync.RWMutex
 }
 
-// NewActionRegistry 创建新的 action 注册表
-func NewActionRegistry() *ActionRegistry {
-	return &ActionRegistry{
+// newActionRegistry 创建新的 action 注册表
+func newActionRegistry() *actionRegistry {
+	return &actionRegistry{
 		actions: make(map[string][]*ActionHandler),
 	}
 }
 
 // Register 注册 action
-func (r *ActionRegistry) Register(clientID string, actions []string, concurrency uint16) map[string]packet.ReasonCode {
+func (r *actionRegistry) Register(clientID string, actions []string, concurrency uint16) map[string]packet.ReasonCode {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -76,7 +76,7 @@ func (r *ActionRegistry) Register(clientID string, actions []string, concurrency
 }
 
 // Unregister 注销 action
-func (r *ActionRegistry) Unregister(clientID string, actions []string) map[string]packet.ReasonCode {
+func (r *actionRegistry) Unregister(clientID string, actions []string) map[string]packet.ReasonCode {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -111,7 +111,7 @@ func (r *ActionRegistry) Unregister(clientID string, actions []string) map[strin
 }
 
 // UnregisterClient 注销客户端的所有 actions
-func (r *ActionRegistry) UnregisterClient(clientID string) []string {
+func (r *actionRegistry) UnregisterClient(clientID string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -137,7 +137,7 @@ func (r *ActionRegistry) UnregisterClient(clientID string) []string {
 
 // SelectHandler 选择一个处理者
 // targetClientID 为空时，选择接收窗口最大的客户端
-func (r *ActionRegistry) SelectHandler(action string, targetClientID string, getClient func(string) *Client) (string, packet.ReasonCode) {
+func (r *actionRegistry) SelectHandler(action string, targetClientID string, getClient func(string) *Client) (string, packet.ReasonCode) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -191,7 +191,7 @@ func (r *ActionRegistry) SelectHandler(action string, targetClientID string, get
 }
 
 // GetHandlers 获取 action 的所有处理者
-func (r *ActionRegistry) GetHandlers(action string) []*ActionHandler {
+func (r *actionRegistry) GetHandlers(action string) []*ActionHandler {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -202,7 +202,7 @@ func (r *ActionRegistry) GetHandlers(action string) []*ActionHandler {
 }
 
 // GetClientActions 获取客户端注册的所有 actions
-func (r *ActionRegistry) GetClientActions(clientID string) []string {
+func (r *actionRegistry) GetClientActions(clientID string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -219,12 +219,12 @@ func (r *ActionRegistry) GetClientActions(clientID string) []string {
 }
 
 // GetActionsForClient 获取客户端注册的所有 actions（别名）
-func (r *ActionRegistry) GetActionsForClient(clientID string) []string {
+func (r *actionRegistry) GetActionsForClient(clientID string) []string {
 	return r.GetClientActions(clientID)
 }
 
 // Count 返回注册的 action 总数
-func (r *ActionRegistry) Count() int {
+func (r *actionRegistry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.actions)
@@ -274,9 +274,9 @@ type requestKey struct {
 	ClientRequestID uint32
 }
 
-// RequestTracker 请求追踪器
+// requestTracker 请求追踪器
 // 使用 Core 生成的全局唯一 ID 来追踪请求，解决客户端 RequestID 冲突问题
-type RequestTracker struct {
+type requestTracker struct {
 	// coreRequestID -> PendingRequest（主索引，用于超时处理）
 	requests map[uint32]*PendingRequest
 
@@ -294,9 +294,9 @@ type RequestTracker struct {
 	coreWaiters coreRequestWaiters
 }
 
-// NewRequestTracker 创建请求追踪器
-func NewRequestTracker(core *Core) *RequestTracker {
-	t := &RequestTracker{
+// newRequestTracker 创建请求追踪器
+func newRequestTracker(core *Core) *requestTracker {
+	t := &requestTracker{
 		requests:    make(map[uint32]*PendingRequest),
 		clientIndex: make(map[requestKey]uint32),
 		core:        core,
@@ -311,7 +311,7 @@ func NewRequestTracker(core *Core) *RequestTracker {
 
 // Track 追踪请求（从客户端收到的 REQUEST 包）
 // 返回 coreRequestID 用于后续响应路由
-func (t *RequestTracker) Track(req *packet.RequestPacket, targetClientID string) uint32 {
+func (t *requestTracker) Track(req *packet.RequestPacket, targetClientID string) uint32 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -356,7 +356,7 @@ func (t *RequestTracker) Track(req *packet.RequestPacket, targetClientID string)
 }
 
 // CompleteByCoreID 通过 coreRequestID 完成请求
-func (t *RequestTracker) CompleteByCoreID(coreRequestID uint32) *PendingRequest {
+func (t *requestTracker) CompleteByCoreID(coreRequestID uint32) *PendingRequest {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -376,7 +376,7 @@ func (t *RequestTracker) CompleteByCoreID(coreRequestID uint32) *PendingRequest 
 }
 
 // CompleteByClientID 通过客户端 ID 和 RequestID 完成请求
-func (t *RequestTracker) CompleteByClientID(sourceClientID string, clientRequestID uint32) *PendingRequest {
+func (t *requestTracker) CompleteByClientID(sourceClientID string, clientRequestID uint32) *PendingRequest {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -399,7 +399,7 @@ func (t *RequestTracker) CompleteByClientID(sourceClientID string, clientRequest
 }
 
 // sendTimeoutResponse 发送超时响应
-func (t *RequestTracker) sendTimeoutResponse(pr *PendingRequest) {
+func (t *requestTracker) sendTimeoutResponse(pr *PendingRequest) {
 	// 检查并删除请求
 	t.mu.Lock()
 	existing, exists := t.requests[pr.CoreRequestID]
@@ -445,14 +445,14 @@ func (t *RequestTracker) sendTimeoutResponse(pr *PendingRequest) {
 }
 
 // Count 返回等待中的请求数量
-func (t *RequestTracker) Count() int {
+func (t *requestTracker) Count() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.requests)
 }
 
 // Cleanup 清理指定客户端的所有请求
-func (t *RequestTracker) Cleanup(clientID string) {
+func (t *requestTracker) Cleanup(clientID string) {
 	// 收集需要清理的请求
 	t.mu.Lock()
 	toCleanup := make([]*PendingRequest, 0)
@@ -523,7 +523,7 @@ type coreRequestWaiters struct {
 }
 
 // GenerateRequestID 生成一个新的请求 ID（用于 core 发送的请求）
-func (t *RequestTracker) GenerateRequestID() uint32 {
+func (t *requestTracker) GenerateRequestID() uint32 {
 	// 为了避免与客户端的请求 ID 冲突，core 生成的请求 ID 使用高位
 	// 正常的客户端请求 ID 范围是 1-65535 (uint16)
 	// 为了简化，我们使用 coreRequestID 作为返回值
@@ -533,21 +533,21 @@ func (t *RequestTracker) GenerateRequestID() uint32 {
 }
 
 // RegisterResponseWaiter 注册一个响应等待器
-func (t *RequestTracker) RegisterResponseWaiter(requestID uint32, respCh chan *Response) {
+func (t *requestTracker) RegisterResponseWaiter(requestID uint32, respCh chan *Response) {
 	t.coreWaiters.mu.Lock()
 	defer t.coreWaiters.mu.Unlock()
 	t.coreWaiters.waiters[requestID] = respCh
 }
 
 // UnregisterResponseWaiter 注销响应等待器
-func (t *RequestTracker) UnregisterResponseWaiter(requestID uint32) {
+func (t *requestTracker) UnregisterResponseWaiter(requestID uint32) {
 	t.coreWaiters.mu.Lock()
 	defer t.coreWaiters.mu.Unlock()
 	delete(t.coreWaiters.waiters, requestID)
 }
 
 // GetResponseWaiter 获取响应等待器
-func (t *RequestTracker) GetResponseWaiter(requestID uint32) chan *Response {
+func (t *requestTracker) GetResponseWaiter(requestID uint32) chan *Response {
 	t.coreWaiters.mu.RLock()
 	defer t.coreWaiters.mu.RUnlock()
 	return t.coreWaiters.waiters[requestID]

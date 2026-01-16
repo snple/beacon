@@ -19,22 +19,22 @@ func newRetainNode() *retainNode {
 	}
 }
 
-// RetainStore 保留消息存储 - 使用树结构优化匹配
-type RetainStore struct {
+// retainStore 保留消息存储 - 使用树结构优化匹配
+type retainStore struct {
 	root  *retainNode
 	count int
 	mu    sync.RWMutex
 }
 
-// NewRetainStore 创建新的保留消息存储
-func NewRetainStore() *RetainStore {
-	return &RetainStore{
+// NewretainStore 创建新的保留消息存储
+func newRetainStore() *retainStore {
+	return &retainStore{
 		root: newRetainNode(),
 	}
 }
 
 // Set 设置保留消息 - 使用树结构存储
-func (s *RetainStore) set(topic string, msg *Message) error {
+func (s *retainStore) set(topic string, msg *Message) error {
 	if msg == nil || msg.Packet == nil || !msg.Packet.Retain {
 		// 如果消息为 nil 或 Retain 标志为 false，则不存储
 		return ErrInvalidRetainMessage
@@ -73,7 +73,7 @@ func (s *RetainStore) set(topic string, msg *Message) error {
 }
 
 // Get 获取保留消息
-func (s *RetainStore) get(topic string) *Message {
+func (s *retainStore) get(topic string) *Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -101,7 +101,7 @@ func (s *RetainStore) get(topic string) *Message {
 
 // MatchForSubscription 获取与主题模式匹配的保留消息，支持 RetainHandling 选项
 // retainHandling: 0 = 总是发送, 1 = 仅新订阅发送, 2 = 不发送
-func (s *RetainStore) matchForSubscription(topic string, isNewSubscription bool, retainAsPublished bool,
+func (s *retainStore) matchForSubscription(topic string, isNewSubscription bool, retainAsPublished bool,
 	retainHandling uint8) []*Message {
 	// retainHandling == 2: 不发送保留消息
 	if retainHandling == 2 {
@@ -132,7 +132,7 @@ func (s *RetainStore) matchForSubscription(topic string, isNewSubscription bool,
 
 	return msgs
 }
-func (s *RetainStore) remove(topic string) {
+func (s *retainStore) remove(topic string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -162,7 +162,7 @@ func (s *RetainStore) remove(topic string) {
 }
 
 // Match 匹配主题模式，返回所有匹配的保留消息 - 树遍历优化
-func (s *RetainStore) match(pattern string) []*Message {
+func (s *retainStore) match(pattern string) []*Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -171,7 +171,7 @@ func (s *RetainStore) match(pattern string) []*Message {
 	return result
 }
 
-func (s *RetainStore) matchNode(node *retainNode, pattern string, startIdx int, result []*Message) []*Message {
+func (s *retainStore) matchNode(node *retainNode, pattern string, startIdx int, result []*Message) []*Message {
 	if startIdx >= len(pattern) {
 		// 到达模式末尾，收集当前节点的消息
 		if node.message != nil {
@@ -212,7 +212,7 @@ func (s *RetainStore) matchNode(node *retainNode, pattern string, startIdx int, 
 }
 
 // collectAll 收集节点及所有子节点的消息
-func (s *RetainStore) collectAll(node *retainNode, result []*Message) []*Message {
+func (s *retainStore) collectAll(node *retainNode, result []*Message) []*Message {
 	if node.message != nil {
 		result = append(result, node.message)
 	}
@@ -223,7 +223,7 @@ func (s *RetainStore) collectAll(node *retainNode, result []*Message) []*Message
 }
 
 // Clear 清除所有保留消息
-func (s *RetainStore) clear() {
+func (s *retainStore) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.root = newRetainNode()

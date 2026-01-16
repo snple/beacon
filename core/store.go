@@ -651,7 +651,7 @@ func decodeStoredMessage(msg *StoredMessage, data []byte) error {
 	}
 
 	// 将 Map 反序列化为结构体
-	if err := nson.Unmarshal(m, &msg); err != nil {
+	if err := nson.Unmarshal(m, msg); err != nil {
 		return fmt.Errorf("nson unmarshal failed: %w", err)
 	}
 
