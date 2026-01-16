@@ -16,16 +16,12 @@ import (
 // StoredMessage 持久化存储的消息格式
 type StoredMessage struct {
 	// 消息标识
-	ID       string `nson:"id"`  // 消息唯一标识 (格式: msg:{clientID}:{packetID})
+	ID       string `nson:"id"`  // 消息唯一标识
 	ClientID string `nson:"cid"` // 客户端 ID
 	PacketID uint16 `nson:"pid"` // 数据包 ID（冗余字段，便于索引/过滤）
 
 	// 原始 Message 包（视为只读）
 	Message *Message `nson:"m"`
-
-	// 时间相关（非协议字段，仅用于调试/观察）
-	DeliveredAt   int64 `nson:"deliv_at"` // 投递时间戳（Unix 秒）
-	DeliveryCount int32 `nson:"deliv_cn"` // 投递次数
 }
 
 // StorageConfig 存储配置
@@ -190,12 +186,28 @@ func (ms *messageStore) runGC() {
 
 // messageKey 生成消息存储 key
 // 格式: msg:{clientID}:{packetID}
-func messageKey(clientID string, packetID uint16) string {
-	return fmt.Sprintf("msg:%s:%d", clientID, packetID)
+func messageKey(clientID string, packetID uint16) []byte {
+	return fmt.Appendf(nil, "msg:%s:%d", clientID, packetID)
 }
 
+// messagePrefix 返回所有发送消息的前缀
+func messagePrefix() []byte {
+	return []byte("msg:")
+}
+
+// packetIDSeedKey 生成 PacketID 种子存储 key
 func packetIDSeedKey(clientID string) []byte {
-	return fmt.Appendf(nil, "meta:packet_id_seed:%s", clientID)
+	return fmt.Appendf(nil, "meta:pid_seed:%s", clientID)
+}
+
+// retainKey 生成保留消息存储 key
+func retainKey(topic string) []byte {
+	return fmt.Appendf(nil, "retain:%s", topic)
+}
+
+// retainKeyPrefix 返回保留消息前缀
+func retainKeyPrefix() []byte {
+	return []byte("retain:")
 }
 
 func encodePacketIDSeed(seed uint16) []byte {
@@ -218,7 +230,7 @@ func (ms *messageStore) packetIDSeed(clientID string) (uint16, error) {
 		return uint16(minPacketID), nil
 	}
 
-	var seed uint16 = uint16(minPacketID)
+	var seed = uint16(minPacketID)
 	err := ms.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(packetIDSeedKey(clientID))
 		if err != nil {
@@ -257,22 +269,19 @@ func clientPrefix(clientID string) []byte {
 // 注意：
 // - baseMsg 视为只读共享内容
 // - packetID/qos 是投递层字段，会写入存储的 packet 副本
-func (ms *messageStore) save(clientID string, baseMsg *Message) error {
-	if baseMsg == nil || baseMsg.PacketID == 0 || baseMsg.Packet == nil {
+func (ms *messageStore) save(clientID string, msg *Message) error {
+	if msg == nil || msg.PacketID == 0 || msg.Packet == nil {
 		return fmt.Errorf("nil message")
 	}
 
-	msgID := messageKey(clientID, baseMsg.PacketID)
+	key := messageKey(clientID, msg.PacketID)
 
 	stored := &StoredMessage{
-		ID:       msgID,
+		ID:       fmt.Sprintf("msg:%s:%d", clientID, msg.PacketID),
 		ClientID: clientID,
-		PacketID: baseMsg.PacketID,
+		PacketID: msg.PacketID,
 
-		Message: baseMsg,
-
-		DeliveredAt:   0,
-		DeliveryCount: 0,
+		Message: msg,
 	}
 
 	data, err := encodeStoredMessage(stored)
@@ -281,8 +290,6 @@ func (ms *messageStore) save(clientID string, baseMsg *Message) error {
 	}
 
 	err = ms.db.Update(func(txn *badger.Txn) error {
-		key := []byte(msgID)
-
 		entry := badger.NewEntry(key, data)
 		// 如果消息有过期时间，设置 TTL
 		if stored.Message.Packet.Properties != nil && stored.Message.Packet.Properties.ExpiryTime > 0 {
@@ -301,8 +308,8 @@ func (ms *messageStore) save(clientID string, baseMsg *Message) error {
 
 	ms.logger.Debug("Message saved",
 		zap.String("clientID", clientID),
-		zap.String("msgID", msgID),
-		zap.String("topic", baseMsg.Packet.Topic))
+		zap.String("msgID", stored.ID),
+		zap.String("topic", msg.Packet.Topic))
 
 	return nil
 }
@@ -387,60 +394,7 @@ func (ms *messageStore) deleteAllForClient(clientID string) error {
 		zap.String("clientID", clientID),
 		zap.Int("count", len(keysToDelete)))
 
-	// Reset PacketID seed for a clean session.
-	_ = ms.setPacketIDSeed(clientID, uint16(minPacketID))
-
 	return nil
-}
-
-// GetPendingMessages 获取客户端所有待投递的消息
-// 用于 core 重启后恢复消息
-func (ms *messageStore) getPendingMessages(clientID string) ([]StoredMessage, error) {
-	var messages []StoredMessage
-
-	err := ms.db.View(func(txn *badger.Txn) error {
-		prefix := clientPrefix(clientID)
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = prefix
-
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-
-			err := item.Value(func(val []byte) error {
-				var msg StoredMessage
-
-				err := decodeStoredMessage(&msg, val)
-				if err != nil {
-					ms.logger.Warn("Failed to decode message",
-						zap.String("key", string(item.Key())),
-						zap.Error(err))
-					return nil // 跳过损坏的消息
-				}
-
-				// 检查是否过期
-				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil && msg.Message.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() > msg.Message.Packet.Properties.ExpiryTime {
-					return nil
-				}
-
-				messages = append(messages, msg)
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pending messages: %w", err)
-	}
-
-	return messages, nil
 }
 
 // getPendingMessagesBatch 获取客户端待投递消息（限制数量）
@@ -476,8 +430,7 @@ func (ms *messageStore) getPendingMessagesBatch(clientID string, limit int, excl
 				}
 
 				// 检查是否过期
-				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil &&
-					msg.Message.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() > msg.Message.Packet.Properties.ExpiryTime {
+				if msg.Message.IsExpired() {
 					return nil
 				}
 
@@ -504,57 +457,6 @@ func (ms *messageStore) getPendingMessagesBatch(clientID string, limit int, excl
 	return messages, nil
 }
 
-// getAllPendingMessages 获取所有客户端的待投递消息
-// 用于 core 重启后恢复
-func (ms *messageStore) getAllPendingMessages() (map[string][]StoredMessage, error) {
-	result := make(map[string][]StoredMessage)
-
-	err := ms.db.View(func(txn *badger.Txn) error {
-		prefix := []byte("msg:")
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = prefix
-
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-
-			err := item.Value(func(val []byte) error {
-				var msg StoredMessage
-				err := decodeStoredMessage(&msg, val)
-
-				if err != nil {
-					ms.logger.Warn("Failed to decode message",
-						zap.String("key", string(item.Key())),
-						zap.Error(err))
-					return nil // 跳过损坏的消息
-				}
-
-				// 检查是否过期
-				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil &&
-					msg.Message.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() > msg.Message.Packet.Properties.ExpiryTime {
-					return nil
-				}
-
-				result[msg.ClientID] = append(result[msg.ClientID], msg)
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to get all pending messages: %w", err)
-	}
-
-	return result, nil
-}
-
 // Stats 存储统计信息
 type StorageStats struct {
 	TotalMessages   int64
@@ -567,7 +469,7 @@ func (ms *messageStore) getStats() (*StorageStats, error) {
 	stats := &StorageStats{}
 
 	err := ms.db.View(func(txn *badger.Txn) error {
-		prefix := []byte("msg:")
+		prefix := messagePrefix()
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = prefix
 		opts.PrefetchValues = false // 只计数，不需要值
@@ -605,9 +507,6 @@ func (ms *messageStore) saveRetainMessage(topic string, msg *Message) error {
 		PacketID: 0,
 
 		Message: msg,
-
-		DeliveredAt:   0,
-		DeliveryCount: 0,
 	}
 
 	data, err := encodeStoredMessage(stored)
@@ -616,7 +515,7 @@ func (ms *messageStore) saveRetainMessage(topic string, msg *Message) error {
 	}
 
 	return ms.db.Update(func(txn *badger.Txn) error {
-		key := []byte("retain:" + topic)
+		key := retainKey(topic)
 		entry := badger.NewEntry(key, data)
 
 		if stored.Message.Packet != nil && stored.Message.Packet.Properties != nil && stored.Message.Packet.Properties.ExpiryTime > 0 {
@@ -633,7 +532,7 @@ func (ms *messageStore) saveRetainMessage(topic string, msg *Message) error {
 // deleteRetainMessage 删除保留消息
 func (ms *messageStore) deleteRetainMessage(topic string) error {
 	return ms.db.Update(func(txn *badger.Txn) error {
-		key := []byte("retain:" + topic)
+		key := retainKey(topic)
 		return txn.Delete(key)
 	})
 }
@@ -643,7 +542,7 @@ func (ms *messageStore) getRetainMessages(topicFilter string) ([]StoredMessage, 
 	var messages []StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
-		prefix := []byte("retain:")
+		prefix := retainKeyPrefix()
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = prefix
 
@@ -687,7 +586,7 @@ func (ms *messageStore) getAllRetainMessages() ([]StoredMessage, error) {
 	var messages []StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
-		prefix := []byte("retain:")
+		prefix := retainKeyPrefix()
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = prefix
 

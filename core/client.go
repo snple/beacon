@@ -57,8 +57,8 @@ type Client struct {
 	nextPacketID atomic.Uint32
 
 	// QoS 状态 (只需要 QoS 0/1)
-	pendingAck map[uint16]pendingMessage // QoS 1: 等待客户端 ACK 的消息
-	qosMu      sync.Mutex
+	pendingAck   map[uint16]pendingMessage // QoS 1: 等待客户端 ACK 的消息
+	pendingAckMu sync.Mutex
 
 	// 消息发送
 	processing atomic.Bool // true: 正在处理客户端消息
@@ -262,9 +262,9 @@ func (c *Client) allocatePacketID() uint16 {
 		}
 
 		pid := uint16(id)
-		c.qosMu.Lock()
+		c.pendingAckMu.Lock()
 		_, inPending := c.pendingAck[pid]
-		c.qosMu.Unlock()
+		c.pendingAckMu.Unlock()
 		if inPending {
 			continue
 		}

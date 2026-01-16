@@ -42,23 +42,30 @@ func (c *Client) Publish(topic string, payload []byte, opts *PublishOptions) err
 		expiryTime = time.Now().Unix() + int64(opts.Expiry)
 	}
 
-	// 构建消息
-	msg := &Message{
-		Topic:           topic,
-		Payload:         payload,
-		QoS:             opts.QoS,
-		Retain:          opts.Retain,
-		Priority:        opts.Priority,
-		TraceID:         opts.TraceID,
-		ContentType:     opts.ContentType,
-		ExpiryTime:      expiryTime,
-		UserProperties:  opts.UserProperties,
-		TargetClientID:  opts.TargetClientID,
-		ResponseTopic:   opts.ResponseTopic,
-		CorrelationData: opts.CorrelationData,
+	pkg := packet.NewPublishPacket(topic, payload)
+	pkg.QoS = opts.QoS
+	pkg.Retain = opts.Retain
+
+	// 过期时间和元数据
+	pkg.Properties.ExpiryTime = expiryTime
+	pkg.Properties.ContentType = opts.ContentType
+	pkg.Properties.Priority = &opts.Priority
+	pkg.Properties.TraceID = opts.TraceID
+
+	// 请求-响应模式属性
+	pkg.Properties.TargetClientID = opts.TargetClientID
+	pkg.Properties.ResponseTopic = opts.ResponseTopic
+	pkg.Properties.CorrelationData = opts.CorrelationData
+
+	// 用户属性
+	pkg.Properties.UserProperties = opts.UserProperties
+
+	msg := Message{
+		Packet:    pkg,
+		Timestamp: time.Now().Unix(),
 	}
 
-	return c.publishMessage(msg, opts.QoS, timeout)
+	return c.publishMessage(msg, timeout)
 }
 
 func (c *Client) PublishToClient(targetClientID, topic string, payload []byte, opts *PublishOptions) error {
@@ -78,98 +85,71 @@ func (c *Client) PublishToCore(topic string, payload []byte, opts *PublishOption
 }
 
 // publishMessage 内部发布消息方法
-func (c *Client) publishMessage(msg *Message, qos packet.QoS, timeout time.Duration) error {
+func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
+	if !c.connected.Load() {
+		return ErrNotConnected
+	}
+
 	// QoS 1: 分配 PacketID
-	if qos == packet.QoS1 {
-		msg.PacketID = c.allocatePacketID()
+	if msg.Packet.QoS == packet.QoS1 {
+		c.logger.Debug("Publishing QoS1 message",
+			zap.String("topic", msg.Packet.Topic),
+			zap.String("traceID", msg.Packet.Properties.TraceID))
+
+		msg.Packet.PacketID = c.allocatePacketID()
 
 		// QoS 1: 先持久化到存储（确保不丢失）
 		if c.store != nil {
-			storedMsg := &StoredMessage{
-				PacketID:        msg.PacketID,
-				Topic:           msg.Topic,
-				Payload:         msg.Payload,
-				QoS:             msg.QoS,
-				Retain:          msg.Retain,
-				Priority:        msg.Priority,
-				TraceID:         msg.TraceID,
-				ContentType:     msg.ContentType,
-				UserProperties:  msg.UserProperties,
-				ExpiryTime:      msg.ExpiryTime,
-				EnqueueTime:     time.Now().Unix(),
-				TargetClientID:  msg.TargetClientID,
-				ResponseTopic:   msg.ResponseTopic,
-				CorrelationData: msg.CorrelationData,
-			}
-			if err := c.store.Save(storedMsg); err != nil {
+			if err := c.store.save(&msg); err != nil {
 				c.logger.Error("Failed to persist QoS1 message",
-					zap.String("topic", msg.Topic),
-					zap.Uint16("packetID", msg.PacketID),
+					zap.String("topic", msg.Packet.Topic),
+					zap.Uint16("packetID", msg.Packet.PacketID),
 					zap.Error(err))
-				// 即使持久化失败，仍然尝试发送
-			} else {
-				c.pendingAckMu.Lock()
-				c.storedPacketIDs[msg.PacketID] = struct{}{}
-				c.pendingAckMu.Unlock()
 			}
 		}
-	}
-
-	// 构建队列消息
-	queueMsg := &QueuedMessage{
-		Message:     msg,
-		QoS:         qos,
-		EnqueueTime: time.Now().Unix(),
 	}
 
 	// 尝试放入发送队列
-	if c.sendQueue != nil {
-		if !c.sendQueue.TryEnqueue(queueMsg) {
-			// 队列已满
-			if qos == packet.QoS0 {
-				// QoS0: 直接丢弃
-				c.logger.Warn("Send queue full, QoS0 message dropped",
-					zap.String("topic", msg.Topic),
-					zap.Int("queueUsed", c.sendQueue.Used()),
-					zap.Int("queueCapacity", c.sendQueue.Capacity()))
-				return ErrSendQueueFull
-			}
-			// QoS1: 等待重传机制处理
-			c.logger.Debug("Send queue full, QoS1 message queued for retransmit",
-				zap.String("topic", msg.Topic),
-				zap.Uint16("packetID", msg.PacketID))
-			return nil // 不返回错误
+	if !c.sendQueue.tryEnqueue(&msg) {
+		// 队列已满
+		if msg.Packet.QoS == packet.QoS0 {
+			// QoS0: 直接丢弃
+			c.logger.Warn("Send queue full, QoS0 message dropped",
+				zap.String("topic", msg.Packet.Topic))
+			return ErrSendQueueFull
 		}
-
-		// 触发发送协程
-		c.triggerSend()
-
-		// QoS 1: 等待确认
-		if qos == packet.QoS1 {
-			ch := make(chan error, 1)
-			c.pendingAckMu.Lock()
-			c.pendingAck[msg.PacketID] = ch
-			c.pendingAckMu.Unlock()
-
-			timeoutCh := time.After(timeout)
-			select {
-			case err := <-ch:
-				return err
-			case <-timeoutCh:
-				c.pendingAckMu.Lock()
-				delete(c.pendingAck, msg.PacketID)
-				c.pendingAckMu.Unlock()
-				return ErrPublishTimeout
-			case <-c.connCtx.Done():
-				return ErrNotConnected
-			}
-		}
-
-		return nil
+		// QoS1: 等待重传机制处理
+		c.logger.Debug("Send queue full, QoS1 message queued for retransmit",
+			zap.String("topic", msg.Packet.Topic),
+			zap.Uint16("packetID", msg.Packet.PacketID))
+		return nil // 不返回错误
 	}
 
-	// 没有发送队列（不应该发生），直接发送
-	return c.sendMessageDirect(msg)
+	// 触发发送协程
+	c.triggerSend()
+
+	// QoS 1: 等待确认
+	if msg.Packet.QoS == packet.QoS1 {
+		ch := make(chan error, 1)
+		c.pendingAckMu.Lock()
+		c.pendingAck[msg.Packet.PacketID] = ch
+		c.pendingAckMu.Unlock()
+
+		timeoutCh := time.After(timeout)
+		select {
+		case err := <-ch:
+			return err
+		case <-timeoutCh:
+			c.pendingAckMu.Lock()
+			delete(c.pendingAck, msg.Packet.PacketID)
+			c.pendingAckMu.Unlock()
+			return ErrPublishTimeout
+		case <-c.connCtx.Done():
+			return ErrNotConnected
+		}
+	}
+
+	return nil
 }
 
 // triggerSend 触发发送协程（非阻塞）
@@ -192,48 +172,28 @@ func (c *Client) processSendQueue() {
 		}
 
 		// 尝试从队列取消息
-		qm, ok := c.sendQueue.TryDequeue()
+		msg, ok := c.sendQueue.tryDequeue()
 		if !ok {
 			// 队列为空，退出
 			return
 		}
 
 		// 检查消息是否过期
-		if qm.Message.ExpiryTime > 0 && time.Now().Unix() > qm.Message.ExpiryTime {
+		if msg.IsExpired() {
 			c.logger.Debug("Message expired, dropping",
-				zap.String("topic", qm.Message.Topic),
-				zap.Uint16("packetID", qm.Message.PacketID))
+				zap.String("topic", msg.Packet.Topic),
+				zap.Uint16("packetID", msg.Packet.PacketID))
 			continue
 		}
 
 		// 发送消息
-		if err := c.sendMessage(qm); err != nil {
+		if err := c.sendMessage(msg); err != nil {
 			c.logger.Warn("Failed to send message from queue",
 				zap.Error(err),
-				zap.String("topic", qm.Message.Topic),
-				zap.Uint16("packetID", qm.Message.PacketID))
+				zap.String("topic", msg.Packet.Topic),
+				zap.Uint16("packetID", msg.Packet.PacketID))
 		}
 	}
-}
-
-// sendMessageDirect 直接发送消息到 core（不经过队列）
-func (c *Client) sendMessageDirect(msg *Message) error {
-	pub := packet.NewPublishPacket(msg.Topic, msg.Payload)
-	pub.QoS = msg.QoS
-	pub.Retain = msg.Retain
-	pub.PacketID = msg.PacketID
-
-	// 属性
-	pub.Properties.Priority = &msg.Priority
-	pub.Properties.TraceID = msg.TraceID
-	pub.Properties.ContentType = msg.ContentType
-	pub.Properties.ExpiryTime = msg.ExpiryTime
-	pub.Properties.UserProperties = msg.UserProperties
-	pub.Properties.TargetClientID = msg.TargetClientID
-	pub.Properties.ResponseTopic = msg.ResponseTopic
-	pub.Properties.CorrelationData = msg.CorrelationData
-
-	return c.writePacket(pub)
 }
 
 // Subscribe 订阅主题（轮询模式，通过 PollMessage 获取消息）
@@ -241,7 +201,7 @@ func (c *Client) sendMessageDirect(msg *Message) error {
 // 用法：
 //
 //	err := c.Subscribe("topic1", "topic2")
-//	// 然后通过 PollMessage 获取消息
+//	然后通过 PollMessage 获取消息
 func (c *Client) Subscribe(topics ...string) error {
 	return c.SubscribeWithOptions(topics, nil)
 }
@@ -389,27 +349,8 @@ func (c *Client) handlePublish(p *packet.PublishPacket) {
 		return
 	}
 
-	// 钩子通过后，创建消息
-	msg := &Message{
-		Topic:    p.Topic,
-		Payload:  p.Payload,
-		QoS:      p.QoS,
-		Retain:   p.Retain,
-		PacketID: p.PacketID,
-	}
-
-	if p.Properties != nil {
-		if p.Properties.Priority != nil {
-			msg.Priority = *p.Properties.Priority
-		}
-		msg.TraceID = p.Properties.TraceID
-		msg.ContentType = p.Properties.ContentType
-		msg.ExpiryTime = p.Properties.ExpiryTime
-		msg.UserProperties = p.Properties.UserProperties
-		msg.TargetClientID = p.Properties.TargetClientID
-		msg.SourceClientID = p.Properties.SourceClientID
-		msg.ResponseTopic = p.Properties.ResponseTopic
-		msg.CorrelationData = p.Properties.CorrelationData
+	msg := Message{
+		Packet: p,
 	}
 
 	// 轮询模式：检查是否有消息队列，如果有则放入队列
@@ -468,11 +409,6 @@ func (c *Client) handlePuback(p *packet.PubackPacket) {
 				zap.Error(delErr))
 		}
 	}
-
-	// 无论持久化删除是否成功，都释放本地的 storedPacketIDs 记录。
-	c.pendingAckMu.Lock()
-	delete(c.storedPacketIDs, p.PacketID)
-	c.pendingAckMu.Unlock()
 
 	c.handleAck(p.PacketID, err)
 }

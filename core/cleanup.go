@@ -27,7 +27,6 @@ func (c *Core) expiredCleanupLoop() {
 
 // cleanupExpiredMessages 清理所有客户端的过期消息
 func (c *Core) cleanupExpiredMessages() {
-	now := time.Now().Unix()
 	expiredCount := 0
 
 	c.clientsMu.RLock()
@@ -39,7 +38,7 @@ func (c *Core) cleanupExpiredMessages() {
 
 	// 在锁外清理每个客户端的过期消息
 	for _, client := range clients {
-		count := client.cleanupExpired(now)
+		count := client.cleanupExpired()
 		expiredCount += count
 	}
 
@@ -104,14 +103,13 @@ func (c *Core) cleanupExpiredSessions() {
 }
 
 // cleanupExpired 清理过期消息，返回清理数量
-func (c *Client) cleanupExpired(now int64) int {
+func (c *Client) cleanupExpired() int {
 	expiredCount := 0
 
 	// 清理 pendingAck 中的过期消息
-	c.qosMu.Lock()
+	c.pendingAckMu.Lock()
 	for packetID, pending := range c.pendingAck {
-		if pending.msg.Packet != nil && pending.msg.Packet.Properties != nil &&
-			pending.msg.Packet.Properties.ExpiryTime > 0 && now > pending.msg.Packet.Properties.ExpiryTime {
+		if pending.msg.IsExpired() {
 			// 删除持久化
 			if c.core.messageStore != nil {
 				c.core.messageStore.delete(c.ID, pending.msg.Packet.PacketID)
@@ -120,7 +118,7 @@ func (c *Client) cleanupExpired(now int64) int {
 			expiredCount++
 		}
 	}
-	c.qosMu.Unlock()
+	c.pendingAckMu.Unlock()
 
 	return expiredCount
 }
@@ -151,7 +149,6 @@ func (ms *messageStore) cleanupExpired() (int, error) {
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
-		now := time.Now().Unix()
 		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
 			item := it.Item()
 
@@ -167,8 +164,7 @@ func (ms *messageStore) cleanupExpired() (int, error) {
 				}
 
 				// 检查是否过期
-				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil &&
-					msg.Message.Packet.Properties.ExpiryTime > 0 && now > msg.Message.Packet.Properties.ExpiryTime {
+				if msg.Message.IsExpired() {
 					keyCopy := make([]byte, len(item.Key()))
 					copy(keyCopy, item.Key())
 					keysToDelete = append(keysToDelete, keyCopy)

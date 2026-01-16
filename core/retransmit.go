@@ -73,7 +73,7 @@ func (c *Client) loadPersistedMessages() int {
 
 	// 计算可加载的消息数量
 	// 使用可用容量的 60% 避免队列立即饱和
-	available := c.sendQueue.getAvailable()
+	available := c.sendQueue.available()
 	if available == 0 {
 		return 0
 	}
@@ -89,12 +89,12 @@ func (c *Client) loadPersistedMessages() int {
 	}
 
 	// 构建排除列表（已在 pendingAck 中的消息）
-	c.qosMu.Lock()
+	c.pendingAckMu.Lock()
 	excludePacketIDs := make(map[uint16]bool, len(c.pendingAck))
 	for packetID := range c.pendingAck {
 		excludePacketIDs[packetID] = true
 	}
-	c.qosMu.Unlock()
+	c.pendingAckMu.Unlock()
 
 	// 从持久化存储加载消息
 	messages, err := c.core.messageStore.getPendingMessagesBatch(c.ID, loadCount, excludePacketIDs)
@@ -108,10 +108,15 @@ func (c *Client) loadPersistedMessages() int {
 	sent := 0
 	for _, stored := range messages {
 		// 检查消息是否过期
-		if stored.Message.Packet != nil && stored.Message.Packet.Properties != nil &&
-			stored.Message.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() > stored.Message.Packet.Properties.ExpiryTime {
+		if stored.Message.IsExpired() {
 			// 删除过期消息
 			c.core.messageStore.delete(c.ID, stored.PacketID)
+
+			c.core.logger.Debug("Expired message deleted from store",
+				zap.String("clientID", c.ID),
+				zap.Uint16("packetID", stored.PacketID),
+				zap.String("topic", stored.Message.Packet.Topic))
+
 			continue
 		}
 
@@ -137,7 +142,7 @@ func (c *Client) loadPersistedMessages() int {
 		c.core.logger.Debug("Loaded pending messages",
 			zap.String("clientID", c.ID),
 			zap.Int("count", sent),
-			zap.Int("queueAvailable", c.sendQueue.getAvailable()))
+			zap.Int("queueAvailable", c.sendQueue.available()))
 	}
 
 	return sent
@@ -154,11 +159,10 @@ func (c *Client) retransmitUnackedMessages() int {
 	var toResend []*pendingMessage
 	var expiredPacketIDs []uint16
 
-	c.qosMu.Lock()
+	c.pendingAckMu.Lock()
 	for packetID, pending := range c.pendingAck {
 		// 检查是否过期
-		if pending.msg.Packet != nil && pending.msg.Packet.Properties != nil &&
-			pending.msg.Packet.Properties.ExpiryTime > 0 && now > pending.msg.Packet.Properties.ExpiryTime {
+		if pending.msg.IsExpired() {
 			expiredPacketIDs = append(expiredPacketIDs, packetID)
 			continue
 		}
@@ -180,7 +184,7 @@ func (c *Client) retransmitUnackedMessages() int {
 		delete(c.pendingAck, packetID)
 		c.core.stats.MessagesDropped.Add(1)
 	}
-	c.qosMu.Unlock()
+	c.pendingAckMu.Unlock()
 
 	// 尝试将需要重传的消息放入队列
 	for _, item := range toResend {

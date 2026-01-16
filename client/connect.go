@@ -153,12 +153,10 @@ func (c *Client) Connect() error {
 
 	// CleanSession=true 表示不恢复旧会话，客户端侧也应丢弃未确认的持久化 QoS1 消息。
 	if c.options.CleanSession && c.store != nil {
-		if err := c.store.Clear(); err != nil {
+		if err := c.store.clear(); err != nil {
 			c.logger.Warn("Failed to clear persisted messages for clean session", zap.Error(err))
 		}
-		c.pendingAckMu.Lock()
-		clear(c.storedPacketIDs)
-		c.pendingAckMu.Unlock()
+
 	}
 
 	// 保存分配的 Client ID
@@ -183,9 +181,9 @@ func (c *Client) Connect() error {
 
 	// 初始化发送队列
 	if c.sendQueue == nil {
-		c.sendQueue = NewSendQueue(int(c.sendWindow))
+		c.sendQueue = newSendQueue(int(c.sendWindow))
 	} else {
-		c.sendQueue.UpdateCapacity(int(c.sendWindow))
+		c.sendQueue.updateCapacity(int(c.sendWindow))
 	}
 
 	c.connected.Store(true)
@@ -212,12 +210,6 @@ func (c *Client) Connect() error {
 	// 启动心跳协程
 	c.connWG.Add(1)
 	go c.keepAliveLoop()
-
-	// 启动发送队列处理协程（如果启用了流控）
-	if c.sendQueue != nil {
-		c.logger.Debug("Send queue initialized",
-			zap.Int("capacity", c.sendQueue.Capacity()))
-	}
 
 	// 启动重传协程（用于重传持久化的 QoS1 消息）
 	if c.store != nil {

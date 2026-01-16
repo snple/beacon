@@ -3,6 +3,7 @@ package core
 import (
 	"container/heap"
 	"sync"
+	"time"
 
 	"github.com/snple/beacon/packet"
 )
@@ -28,6 +29,13 @@ type Message struct {
 	Timestamp int64 `nson:"ts"`
 }
 
+func (m *Message) IsExpired() bool {
+	if m.Packet != nil || m.Packet.Properties != nil || m.Packet.Properties.ExpiryTime == 0 {
+		return false
+	}
+	return time.Now().Unix() > m.Packet.Properties.ExpiryTime
+}
+
 // messageNode 链表节点
 type messageNode struct {
 	msg  *Message
@@ -45,7 +53,7 @@ type messageQueue struct {
 }
 
 // NewMessageQueue 创建新的消息队列
-func NewMessageQueue(priority packet.Priority, maxSize int) *messageQueue {
+func newMessageQueue(priority packet.Priority, maxSize int) *messageQueue {
 	return &messageQueue{
 		priority: priority,
 		maxSize:  maxSize,

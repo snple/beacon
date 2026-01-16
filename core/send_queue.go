@@ -37,15 +37,6 @@ func (q *sendQueue) tryEnqueue(msg *Message) bool {
 	}
 }
 
-// Dequeue 从队列中取出消息（阻塞）
-func (q *sendQueue) dequeue() (*Message, bool) {
-	qm, ok := <-q.queue
-	if ok {
-		q.used.Add(-1)
-	}
-	return qm, ok
-}
-
 // TryDequeue 尝试从队列中取出消息（非阻塞）
 func (q *sendQueue) tryDequeue() (*Message, bool) {
 	select {
@@ -58,30 +49,10 @@ func (q *sendQueue) tryDequeue() (*Message, bool) {
 }
 
 // Available 返回队列可用空间
-func (q *sendQueue) getAvailable() int {
+func (q *sendQueue) available() int {
 	used := int(q.used.Load())
 	available := max(q.capacity-used, 0)
 	return available
-}
-
-// Used 返回队列当前使用量
-func (q *sendQueue) getUsed() int {
-	return int(q.used.Load())
-}
-
-// Capacity 返回队列容量
-func (q *sendQueue) getCapacity() int {
-	return q.capacity
-}
-
-// IsFull 检查队列是否已满
-func (q *sendQueue) isFull() bool {
-	return q.getAvailable() == 0
-}
-
-// IsEmpty 检查队列是否为空
-func (q *sendQueue) isEmpty() bool {
-	return q.getUsed() == 0
 }
 
 // Close 关闭队列
@@ -94,5 +65,5 @@ func (q *sendQueue) usageRatio() float64 {
 	if q.capacity == 0 {
 		return 0
 	}
-	return float64(q.getUsed()) / float64(q.getCapacity())
+	return float64(q.used.Load()) / float64(q.capacity)
 }

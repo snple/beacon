@@ -106,9 +106,9 @@ func (c *Client) enqueueRequest(p *packet.RequestPacket) error {
 //	    // 处理消息
 //	    fmt.Printf("Received message on topic %s: %s\n", msg.Topic, msg.Payload)
 //	}
-func (c *Core) PollMessage(ctx context.Context, timeout time.Duration) (Message, error) {
+func (c *Core) PollMessage(ctx context.Context, timeout time.Duration) (*Message, error) {
 	if !c.running.Load() {
-		return Message{}, ErrCoreNotRunning
+		return nil, ErrCoreNotRunning
 	}
 
 	// 延迟初始化消息队列（仅第一次调用时）
@@ -125,14 +125,14 @@ func (c *Core) PollMessage(ctx context.Context, timeout time.Duration) (Message,
 
 	select {
 	case msg := <-c.messageQueue:
-		return msg, nil
+		return &msg, nil
 	case <-pollCtx.Done():
 		if pollCtx.Err() == context.DeadlineExceeded {
-			return Message{}, NewPollTimeoutError(timeout)
+			return nil, NewPollTimeoutError(timeout)
 		}
-		return Message{}, pollCtx.Err()
+		return nil, pollCtx.Err()
 	case <-c.ctx.Done():
-		return Message{}, ErrCoreShutdown
+		return nil, ErrCoreShutdown
 	}
 }
 

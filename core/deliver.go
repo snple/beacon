@@ -258,6 +258,7 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 	pub.Properties.ContentType = options.ContentType
 	pub.Properties.ResponseTopic = options.ResponseTopic
 	pub.Properties.CorrelationData = options.CorrelationData
+
 	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
 
 	if options.Expiry > 0 {
@@ -291,8 +292,7 @@ func (c *Client) deliver(msg Message) error {
 	}
 
 	// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
-	if msg.Packet.Properties != nil && msg.Packet.Properties.ExpiryTime > 0 &&
-		time.Now().Unix() > msg.Packet.Properties.ExpiryTime {
+	if msg.IsExpired() {
 		c.core.stats.MessagesDropped.Add(1)
 		return nil
 	}
@@ -337,9 +337,8 @@ func (c *Client) deliver(msg Message) error {
 		// QoS0: 直接丢弃
 		c.core.logger.Debug("QoS0 message dropped, send queue full",
 			zap.String("clientID", c.ID),
-			zap.String("topic", msg.Packet.Topic),
-			zap.Int("queueUsed", c.sendQueue.getUsed()),
-			zap.Int("queueCapacity", c.sendQueue.getCapacity()))
+			zap.String("topic", msg.Packet.Topic))
+
 		c.core.stats.MessagesDropped.Add(1)
 		return errors.New("send queue full")
 	}
@@ -430,12 +429,12 @@ func (c *Client) sendMessage(msg Message) error {
 	// 发送成功后处理 QoS 1
 	if pub.QoS == packet.QoS1 {
 		// 加入 pendingAck 等待确认
-		c.qosMu.Lock()
+		c.pendingAckMu.Lock()
 		c.pendingAck[pub.PacketID] = pendingMessage{
 			msg:        &msg,
 			lastSentAt: time.Now().Unix(),
 		}
-		c.qosMu.Unlock()
+		c.pendingAckMu.Unlock()
 	}
 	// QoS 0: 发送后即清理，无需等待确认
 

@@ -65,7 +65,7 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 	}
 
 	// 如果消息已经过期，直接丢弃
-	if msg.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() >= msg.Packet.Properties.ExpiryTime {
+	if msg.IsExpired() {
 		c.core.logger.Debug("Message expired upon arrival",
 			zap.String("clientID", c.ID),
 			zap.String("topic", pub.Topic))
@@ -106,12 +106,12 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 
 // handlePuback 处理 QoS 1 确认 - 客户端已收到消息
 func (c *Client) handlePuback(p *packet.PubackPacket) error {
-	c.qosMu.Lock()
+	c.pendingAckMu.Lock()
 	pending, ok := c.pendingAck[p.PacketID]
 	if ok {
 		delete(c.pendingAck, p.PacketID)
 	}
-	c.qosMu.Unlock()
+	c.pendingAckMu.Unlock()
 
 	if ok {
 		c.core.logger.Debug("Message acknowledged",

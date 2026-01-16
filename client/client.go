@@ -36,29 +36,27 @@ const (
 	retransmitBatchSize = 50 // 每次从持久化加载的最大消息数
 )
 
-// Message 接收到的消息
+// Message 内部消息表示
+//
+// 设计原则：
+// - 内容层：直接引用原始 *packet.PublishPacket（视为只读、可共享）
+// - 投递层（PacketID/QoS/Dup）由发送队列/持久化层单独管理
 type Message struct {
-	// 基础消息属性
-	Topic    string
-	Payload  []byte
-	QoS      packet.QoS
-	Retain   bool
-	PacketID uint16
+	// 原始 PUBLISH 包（视为只读）
+	Packet *packet.PublishPacket `nson:"pkt"`
 
-	// 消息元数据
-	Priority       packet.Priority
-	TraceID        string
-	ContentType    string
-	UserProperties map[string]string
+	// 固定头部标志
+	Dup bool `nson:"dup"` // 重发标志
 
-	// 时间相关
-	ExpiryTime int64 // 消息过期时间戳（Unix 秒），0 表示不过期
+	// 时间相关（非协议字段，仅用于调试/观察）
+	Timestamp int64 `nson:"ts"`
+}
 
-	// 请求-响应模式属性
-	TargetClientID  string // 目标客户端ID
-	SourceClientID  string // 来源客户端ID，标识发送者
-	ResponseTopic   string // 响应主题
-	CorrelationData []byte // 关联数据
+func (m *Message) IsExpired() bool {
+	if m.Packet != nil || m.Packet.Properties != nil || m.Packet.Properties.ExpiryTime == 0 {
+		return false
+	}
+	return time.Now().Unix() > m.Packet.Properties.ExpiryTime
 }
 
 // WillMessage 遗嘱消息（连接异常断开时由 core 代发）
@@ -110,8 +108,6 @@ type Client struct {
 
 	// QoS 状态
 	pendingAck   map[uint16]chan error
-	// 已持久化但尚未完成 ACK 的 PacketID（避免队列满时只写入 store 却没进入 pendingAck 的冲突）
-	storedPacketIDs map[uint16]struct{}
 	pendingAckMu sync.Mutex
 
 	// 生命周期
@@ -125,7 +121,7 @@ type Client struct {
 
 	// 流量控制
 	sendWindow uint16      // core 的接收窗口大小（客户端的发送窗口）
-	sendQueue  *SendQueue  // 发送队列（基于 core 的 ReceiveWindow）
+	sendQueue  *sendQueue  // 发送队列（基于 core 的 ReceiveWindow）
 	processing atomic.Bool // true: 正在处理发送队列
 
 	// REQUEST/RESPONSE 支持
@@ -137,7 +133,7 @@ type Client struct {
 	requestQueueInit bool // 请求队列是否已初始化
 
 	// 消息轮询
-	messageQueue     chan *Message // 轮询模式：接收消息的队列
+	messageQueue     chan Message // 轮询模式：接收消息的队列
 	messageQueueMu   sync.Mutex
 	messageQueueInit bool // 消息队列是否已初始化
 
@@ -153,7 +149,7 @@ type Client struct {
 	lastPingSent atomic.Int64  // 最近一次发送 PING 的本地时间戳（Unix 纳秒）
 
 	// QoS1 消息持久化
-	store          *MessageStore // 消息持久化存储
+	store          *messageStore // 消息持久化存储
 	retransmitting atomic.Bool   // true: 正在重传消息
 
 	// 日志
@@ -198,7 +194,6 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 		subscribedTopics:  make(map[string]bool),
 		registeredActions: make(map[string]bool),
 		pendingAck:        make(map[uint16]chan error),
-		storedPacketIDs:   make(map[uint16]struct{}),
 		rootCtx:           rootCtx,
 		rootCancel:        rootCancel,
 		connLostCh:        make(chan error, 1),
@@ -217,7 +212,7 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 		if opts.StoreConfig.Logger == nil {
 			opts.StoreConfig.Logger = logger
 		}
-		store, err := NewMessageStore(*opts.StoreConfig)
+		store, err := newMessageStore(*opts.StoreConfig)
 		if err != nil {
 			logger.Error("Failed to initialize message store", zap.Error(err))
 			return nil, err
@@ -333,16 +328,6 @@ func (c *Client) GetSendWindow() uint16 {
 	return c.sendWindow
 }
 
-// GetSendQueue 返回发送队列（用于监控）
-func (c *Client) GetSendQueue() *SendQueue {
-	return c.sendQueue
-}
-
-// GetMessageStore 返回消息存储（用于监控和测试）
-func (c *Client) GetMessageStore() *MessageStore {
-	return c.store
-}
-
 // GetLogger 返回客户端使用的日志记录器
 func (c *Client) GetLogger() *zap.Logger {
 	return c.logger
@@ -370,15 +355,14 @@ func (c *Client) allocatePacketID() uint16 {
 		pid := uint16(id)
 		c.pendingAckMu.Lock()
 		_, inPending := c.pendingAck[pid]
-		_, inStored := c.storedPacketIDs[pid]
 		c.pendingAckMu.Unlock()
-		if inPending || inStored {
+		if inPending {
 			continue
 		}
 
 		// Best-effort persist the latest allocated PacketID seed (used on next start/reconnect).
 		if c.store != nil {
-			_ = c.store.SetPacketIDSeed(pid)
+			_ = c.store.setPacketIDSeed(pid)
 		}
 		return pid
 	}
@@ -499,23 +483,8 @@ func (c *Client) keepAliveLoop() {
 }
 
 // sendMessage 发送消息到 core
-func (c *Client) sendMessage(qm *QueuedMessage) error {
-	pub := packet.NewPublishPacket(qm.Message.Topic, qm.Message.Payload)
-	pub.QoS = qm.Message.QoS
-	pub.Retain = qm.Message.Retain
-	pub.PacketID = qm.Message.PacketID
-
-	// 设置属性
-	pub.Properties.Priority = &qm.Message.Priority
-	pub.Properties.TraceID = qm.Message.TraceID
-	pub.Properties.ContentType = qm.Message.ContentType
-	pub.Properties.ExpiryTime = qm.Message.ExpiryTime
-	pub.Properties.UserProperties = qm.Message.UserProperties
-	pub.Properties.TargetClientID = qm.Message.TargetClientID
-	pub.Properties.ResponseTopic = qm.Message.ResponseTopic
-	pub.Properties.CorrelationData = qm.Message.CorrelationData
-
-	return c.writePacket(pub)
+func (c *Client) sendMessage(msg *Message) error {
+	return c.writePacket(msg.Packet)
 }
 
 func (c *Client) writePacket(pkt packet.Packet) error {

@@ -159,7 +159,7 @@ func (c *Core) initMessageStore() error {
 // initPriorityQueues 初始化优先级队列
 func (c *Core) initPriorityQueues() {
 	for i := range c.queues {
-		c.queues[i] = NewMessageQueue(packet.Priority(i), priorityQueueCapacity)
+		c.queues[i] = newMessageQueue(packet.Priority(i), priorityQueueCapacity)
 	}
 }
 
@@ -381,9 +381,9 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 	client.subsMu.RUnlock()
 
 	// 获取 ACK 信息
-	client.qosMu.Lock()
+	client.pendingAckMu.Lock()
 	pendingAck := len(client.pendingAck)
-	client.qosMu.Unlock()
+	client.pendingAckMu.Unlock()
 
 	info := &ClientInfo{
 		ClientID:      client.ID,

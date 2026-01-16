@@ -55,7 +55,7 @@ func (c *Client) processRetransmit() {
 	c.pendingAckMu.Unlock()
 
 	// 计算可加载的消息数量（使用发送队列可用容量的 60%）
-	available := c.sendQueue.Available()
+	available := c.sendQueue.available()
 	if available == 0 {
 		return
 	}
@@ -87,49 +87,28 @@ func (c *Client) processRetransmit() {
 		}
 
 		// 检查消息是否过期
-		if stored.ExpiryTime > 0 && time.Now().Unix() > stored.ExpiryTime {
+		if stored.Message.IsExpired() {
 			// 删除过期消息
 			c.store.Delete(stored.PacketID)
+
 			c.logger.Debug("Expired message deleted from store",
 				zap.Uint16("packetID", stored.PacketID),
-				zap.String("topic", stored.Topic))
+				zap.String("topic", stored.Message.Packet.Topic))
+
 			continue
 		}
 
 		// 转换为 Message
-		msg := &Message{
-			Topic:           stored.Topic,
-			Payload:         stored.Payload,
-			QoS:             stored.QoS,
-			Retain:          stored.Retain,
-			PacketID:        stored.PacketID,
-			Priority:        stored.Priority,
-			TraceID:         stored.TraceID,
-			ContentType:     stored.ContentType,
-			UserProperties:  stored.UserProperties,
-			ExpiryTime:      stored.ExpiryTime,
-			TargetClientID:  stored.TargetClientID,
-			ResponseTopic:   stored.ResponseTopic,
-			CorrelationData: stored.CorrelationData,
-		}
-
-		// 构建队列消息
-		queueMsg := &QueuedMessage{
-			Message:     msg,
-			QoS:         stored.QoS,
-			EnqueueTime: stored.EnqueueTime,
-		}
+		msg := stored.Message
+		msg.Dup = true // 标记为重发
 
 		// 尝试放入发送队列
-		if !c.sendQueue.TryEnqueue(queueMsg) {
+		if !c.sendQueue.tryEnqueue(msg) {
 			// 队列已满，停止加载
 			c.logger.Debug("Send queue full during retransmit, stopping",
 				zap.Int("sent", sent))
 			break
 		}
-
-		// 更新最后发送时间
-		c.store.UpdateLastSentTime(stored.PacketID)
 
 		sent++
 	}
@@ -139,6 +118,6 @@ func (c *Client) processRetransmit() {
 		c.triggerSend()
 		c.logger.Debug("Retransmit completed",
 			zap.Int("count", sent),
-			zap.Int("queueAvailable", c.sendQueue.Available()))
+			zap.Int("queueAvailable", c.sendQueue.available()))
 	}
 }

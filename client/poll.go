@@ -30,7 +30,7 @@ func (c *Client) PollMessage(ctx context.Context, timeout time.Duration) (*Messa
 	// 延迟初始化消息队列（仅第一次调用时）
 	c.messageQueueMu.Lock()
 	if !c.messageQueueInit {
-		c.messageQueue = make(chan *Message, c.options.MessageQueueSize)
+		c.messageQueue = make(chan Message, c.options.MessageQueueSize)
 		c.messageQueueInit = true
 	}
 	c.messageQueueMu.Unlock()
@@ -41,7 +41,7 @@ func (c *Client) PollMessage(ctx context.Context, timeout time.Duration) (*Messa
 
 	select {
 	case msg := <-c.messageQueue:
-		return msg, nil
+		return &msg, nil
 	case <-pollCtx.Done():
 		if pollCtx.Err() == context.DeadlineExceeded {
 			return nil, NewPollTimeoutError(timeout)

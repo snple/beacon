@@ -407,12 +407,12 @@ func (c *Client) RestoreSession(old *Client) {
 	c.subsMu.RUnlock()
 
 	// 迁移 pendingAck（等待确认的消息）
-	old.qosMu.Lock()
-	c.qosMu.Lock()
+	old.pendingAckMu.Lock()
+	c.pendingAckMu.Lock()
 	maps.Copy(c.pendingAck, old.pendingAck)
 	old.pendingAck = make(map[uint16]pendingMessage)
-	c.qosMu.Unlock()
-	old.qosMu.Unlock()
+	c.pendingAckMu.Unlock()
+	old.pendingAckMu.Unlock()
 
 	// 迁移 packetID
 	c.nextPacketID.Store(old.nextPacketID.Load())
@@ -429,9 +429,9 @@ func (c *Client) HasSession() bool {
 	hasSubs := len(c.subscriptions) > 0
 	c.subsMu.RUnlock()
 
-	c.qosMu.Lock()
+	c.pendingAckMu.Lock()
 	hasPending := len(c.pendingAck) > 0
-	c.qosMu.Unlock()
+	c.pendingAckMu.Unlock()
 
 	return hasSubs || hasPending
 }
@@ -442,9 +442,9 @@ func (c *Client) GetSessionInfo() (subscriptions int, pendingAck int) {
 	subscriptions = len(c.subscriptions)
 	c.subsMu.RUnlock()
 
-	c.qosMu.Lock()
+	c.pendingAckMu.Lock()
 	pendingAck = len(c.pendingAck)
-	c.qosMu.Unlock()
+	c.pendingAckMu.Unlock()
 
 	return subscriptions, pendingAck
 }

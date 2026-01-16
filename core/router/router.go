@@ -296,7 +296,7 @@ func (r *Router) messageLoop() {
 			continue
 		}
 
-		r.dispatchMessage(&msg)
+		r.dispatchMessage(msg)
 	}
 }
 
@@ -346,16 +346,16 @@ func (r *Router) dispatchMessage(msg *core.Message) {
 			continue
 		}
 
+		clientId := ""
+		if msg != nil && msg.Packet.Properties != nil {
+			clientId = msg.Packet.Properties.SourceClientID
+		}
+
 		ctx := &MessageContext{
-			Message: msg,
-			ClientID: func() string {
-				if msg != nil && msg.Packet.Properties != nil {
-					return msg.Packet.Properties.SourceClientID
-				}
-				return ""
-			}(),
-			Params: params,
-			router: r,
+			Message:  msg,
+			ClientID: clientId,
+			Params:   params,
+			router:   r,
 		}
 
 		// 构建中间件链
