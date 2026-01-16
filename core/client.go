@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
@@ -58,7 +57,7 @@ type Client struct {
 	nextPacketID atomic.Uint32
 
 	// QoS 状态 (只需要 QoS 0/1)
-	pendingAck map[uint16]*pendingMessage // QoS 1: 等待客户端 ACK 的消息
+	pendingAck map[uint16]pendingMessage // QoS 1: 等待客户端 ACK 的消息
 	qosMu      sync.Mutex
 
 	// 消息发送
@@ -66,7 +65,7 @@ type Client struct {
 	// 流量控制
 	retransmitting atomic.Bool // true: 正在重传消息
 	sendWindow     uint16      // 客户端接收窗口大小(core 发送窗口)
-	sendQueue      *SendQueue  // 发送队列（基于客户端的 ReceiveWindow）
+	sendQueue      *sendQueue  // 发送队列（基于客户端的 ReceiveWindow）
 
 	// 生命周期
 	closed    atomic.Bool
@@ -86,7 +85,7 @@ func NewClient(conn net.Conn, connect *packet.ConnectPacket, core *Core) *Client
 		CleanSession:  connect.Flags.CleanSession,
 		ConnectedAt:   time.Now(),
 		subscriptions: make(map[string]packet.SubscribeOptions),
-		pendingAck:    make(map[uint16]*pendingMessage),
+		pendingAck:    make(map[uint16]pendingMessage),
 		closeCh:       make(chan struct{}),
 	}
 
@@ -97,10 +96,10 @@ func NewClient(conn net.Conn, connect *packet.ConnectPacket, core *Core) *Client
 
 	// 创建发送队列（基于客户端的接收窗口）
 	if c.sendWindow > 0 {
-		c.sendQueue = NewSendQueue(int(c.sendWindow))
+		c.sendQueue = newSendQueue(int(c.sendWindow))
 	} else {
 		// 如果客户端未指定接收窗口，使用默认值
-		c.sendQueue = NewSendQueue(100)
+		c.sendQueue = newSendQueue(100)
 		c.sendWindow = 100
 	}
 
@@ -112,7 +111,7 @@ func NewClient(conn net.Conn, connect *packet.ConnectPacket, core *Core) *Client
 
 	seed := uint32(minPacketID)
 	if core != nil && core.messageStore != nil {
-		if s, err := core.messageStore.PacketIDSeed(c.ID); err == nil {
+		if s, err := core.messageStore.packetIDSeed(c.ID); err == nil {
 			seed = uint32(s)
 		}
 	}
@@ -270,8 +269,10 @@ func (c *Client) allocatePacketID() uint16 {
 			continue
 		}
 
-		if c.core != nil && c.core.messageStore != nil {
-			_ = c.core.messageStore.SetPacketIDSeed(c.ID, pid)
+		if c.core.messageStore != nil {
+			if err := c.core.messageStore.setPacketIDSeed(c.ID, pid); err != nil {
+				c.core.logger.Debug("Failed to set PacketID seed", zap.String("clientID", c.ID), zap.Error(err))
+			}
 		}
 		return pid
 	}
@@ -307,7 +308,7 @@ func (c *Client) Close(reason packet.ReasonCode) {
 
 		// 关闭发送队列
 		if c.sendQueue != nil {
-			c.sendQueue.Close()
+			c.sendQueue.close()
 		}
 
 		// 发送 DISCONNECT (如果不是正常断开)

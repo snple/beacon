@@ -20,9 +20,8 @@ import (
 
 // MessageContext 消息上下文（类似 HTTP Request）
 type MessageContext struct {
-	Message  *core.Message     // 原始消息
-	Topic    string            // 主题
-	Payload  []byte            // 负载
+	Message *core.Message // 原始消息
+
 	ClientID string            // 发送者客户端 ID
 	Params   map[string]string // 主题参数（来自通配符匹配）
 
@@ -297,7 +296,7 @@ func (r *Router) messageLoop() {
 			continue
 		}
 
-		r.dispatchMessage(msg)
+		r.dispatchMessage(&msg)
 	}
 }
 
@@ -342,18 +341,21 @@ func (r *Router) dispatchMessage(msg *core.Message) {
 
 	// 查找匹配的处理器
 	for _, route := range handlers {
-		params, matched := route.matcher.match(msg.Topic)
+		params, matched := route.matcher.match(msg.Packet.Topic)
 		if !matched {
 			continue
 		}
 
 		ctx := &MessageContext{
-			Message:  msg,
-			Topic:    msg.Topic,
-			Payload:  msg.Payload,
-			ClientID: msg.SourceClientID,
-			Params:   params,
-			router:   r,
+			Message: msg,
+			ClientID: func() string {
+				if msg != nil && msg.Packet.Properties != nil {
+					return msg.Packet.Properties.SourceClientID
+				}
+				return ""
+			}(),
+			Params: params,
+			router: r,
 		}
 
 		// 构建中间件链

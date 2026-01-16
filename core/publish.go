@@ -8,21 +8,21 @@ import (
 	"go.uber.org/zap"
 )
 
-func (c *Client) handlePublish(p *packet.PublishPacket) error {
+func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 	// 验证主题名（发布时不允许通配符）
-	if !packet.ValidateTopicName(p.Topic) {
-		c.core.logger.Warn("Invalid topic name", zap.String("clientID", c.ID), zap.String("topic", p.Topic))
-		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonTopicNameInvalid)
+	if !packet.ValidateTopicName(pub.Topic) {
+		c.core.logger.Warn("Invalid topic name", zap.String("clientID", c.ID), zap.String("topic", pub.Topic))
+		if pub.QoS == packet.QoS1 {
+			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonTopicNameInvalid)
 			c.WritePacket(puback)
 		}
 		return nil
 	}
 
 	// 验证 QoS (只支持 0 和 1)
-	if !p.QoS.IsValid() {
-		c.core.logger.Warn("Invalid QoS level", zap.String("clientID", c.ID), zap.Uint8("qos", uint8(p.QoS)))
-		puback := packet.NewPubackPacket(p.PacketID, packet.ReasonQoSNotSupported)
+	if !pub.QoS.IsValid() {
+		c.core.logger.Warn("Invalid QoS level", zap.String("clientID", c.ID), zap.Uint8("qos", uint8(pub.QoS)))
+		puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonQoSNotSupported)
 		c.WritePacket(puback)
 		return nil // 忽略无效 QoS 的消息
 	}
@@ -30,55 +30,47 @@ func (c *Client) handlePublish(p *packet.PublishPacket) error {
 	// 先调用 OnPublish 钩子（此时可以访问原始 packet）
 	pubCtx := &PublishContext{
 		ClientID: c.ID,
-		Packet:   p,
+		Packet:   pub,
 	}
 
 	if err := c.core.options.Hooks.callOnPublish(pubCtx); err != nil {
 		c.core.logger.Debug("MessageHandler.OnPublish error",
 			zap.String("clientID", c.ID),
-			zap.String("topic", p.Topic),
+			zap.String("topic", pub.Topic),
 			zap.Error(err))
 		return nil
 	}
 
-	// 创建内部消息
-	msg := &Message{
-		Topic:     p.Topic,
-		Payload:   p.Payload,
-		QoS:       p.QoS,
-		Retain:    p.Retain,
-		PacketID:  p.PacketID,
+	// 由于后面要填充 SourceClientID，需要检查 Properties 是否为 nil
+	if pub.Properties == nil {
+		pub.Properties = packet.NewPublishProperties()
+	}
+
+	// 填充 SourceClientID（发送者标识，由 core 填充确保可信）
+	pub.Properties.SourceClientID = c.ID
+
+	// 如果客户端没有指定过期时间或者指定了错误的值，使用 core 默认值
+	if pub.Properties.ExpiryTime <= 0 && c.core.options.DefaultMessageExpiry > 0 {
+		expiry := time.Now().Add(c.core.options.DefaultMessageExpiry)
+		pub.Properties.ExpiryTime = expiry.Unix()
+	}
+
+	msg := Message{
+		Packet:    pub,
+		Dup:       false,
+		QoS:       pub.QoS,
+		Retain:    pub.Retain,
+		PacketID:  pub.PacketID,
 		Timestamp: time.Now().Unix(),
 	}
 
-	// 提取属性
-	if p.Properties != nil {
-		msg.Priority = p.Properties.Priority
-		msg.TraceID = p.Properties.TraceID
-		msg.ContentType = p.Properties.ContentType
-		msg.ExpiryTime = p.Properties.ExpiryTime
-		msg.UserProperties = p.Properties.UserProperties
-		msg.TargetClientID = p.Properties.TargetClientID
-		msg.ResponseTopic = p.Properties.ResponseTopic
-		msg.CorrelationData = p.Properties.CorrelationData
-	}
-
-	// 自动填充 SourceClientID（发送者标识，由 core 填充确保可信）
-	msg.SourceClientID = c.ID
-
-	// 如果客户端没有指定过期时间或者指定了错误的值，使用 core 默认值
-	if msg.ExpiryTime <= 0 && c.core.options.DefaultMessageExpiry > 0 {
-		expiry := time.Now().Add(c.core.options.DefaultMessageExpiry)
-		msg.ExpiryTime = expiry.Unix()
-	}
-
 	// 如果消息已经过期，直接丢弃
-	if msg.ExpiryTime > 0 && time.Now().Unix() >= msg.ExpiryTime {
+	if msg.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() >= msg.Packet.Properties.ExpiryTime {
 		c.core.logger.Debug("Message expired upon arrival",
 			zap.String("clientID", c.ID),
-			zap.String("topic", p.Topic))
-		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonMessageExpired)
+			zap.String("topic", pub.Topic))
+		if pub.QoS == packet.QoS1 {
+			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonMessageExpired)
 			c.WritePacket(puback)
 		}
 		return nil
@@ -88,21 +80,21 @@ func (c *Client) handlePublish(p *packet.PublishPacket) error {
 	// 1. TargetClientID="core": 投递给轮询队列（供 PollMessage 使用）
 	// 2. TargetClientID="": 普通发布（广播给所有匹配订阅的客户端）
 	// 3. 其他值: 定向发布给指定客户端
-	if msg.TargetClientID == packet.TargetToCore {
+	if msg.Packet.Properties.TargetClientID == packet.TargetToCore {
 		// 将消息放入轮询队列（供 PollMessage 使用）
-		return c.enqueueMessage(p, msg)
+		return c.enqueueMessage(msg)
 	}
 
 	// QoS 0: 直接发布
 	// QoS 1: 发布并发送 PUBACK
-	c.core.Publish(msg)
+	c.core.publish(msg)
 
-	if p.QoS == packet.QoS1 {
-		puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
+	if msg.QoS == packet.QoS1 {
+		puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonSuccess)
 		if err := c.WritePacket(puback); err != nil {
 			c.core.logger.Warn("Failed to send PUBACK",
 				zap.String("clientID", c.ID),
-				zap.Uint16("packetID", p.PacketID),
+				zap.Uint16("packetID", msg.PacketID),
 				zap.Error(err))
 
 			return err
@@ -125,12 +117,12 @@ func (c *Client) handlePuback(p *packet.PubackPacket) error {
 		c.core.logger.Debug("Message acknowledged",
 			zap.String("clientID", c.ID),
 			zap.Uint16("packetID", p.PacketID),
-			zap.String("topic", pending.msg.Topic),
+			zap.String("topic", pending.msg.Packet.Topic),
 			zap.Uint8("reasonCode", uint8(p.ReasonCode)))
 
 		// 收到 PUBACK 即表示消息已送达，删除持久化消息
 		if c.core.messageStore != nil {
-			if err := c.core.messageStore.Delete(c.ID, pending.packetID); err != nil {
+			if err := c.core.messageStore.delete(c.ID, pending.msg.PacketID); err != nil {
 				c.core.logger.Warn("Failed to delete acknowledged message from storage",
 					zap.String("clientID", c.ID),
 					zap.Error(err))
@@ -219,10 +211,10 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 	// 这样客户端收到 SUBACK 后才会注册 handler，然后才能处理保留消息
 	for i, sub := range validSubs {
 		// 使用 MatchForSubscription 获取保留消息
-		retained := c.core.retainStore.MatchForSubscription(
+		retained := c.core.retainStore.matchForSubscription(
 			sub.Topic,
-			sub.Options.RetainAsPublished,
 			isNewSubs[i],
+			sub.Options.RetainAsPublished,
 			sub.Options.RetainHandling,
 		)
 
@@ -234,8 +226,10 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 				zap.Bool("isNewSubscription", isNewSubs[i]),
 				zap.Uint8("retainHandling", sub.Options.RetainHandling),
 				zap.Bool("retainAsPublished", sub.Options.RetainAsPublished))
+
 			for _, msg := range retained {
-				c.Deliver(msg)
+				// !!! 因为 retained 保存进去是指针，所以这里需要解引用再传递
+				c.deliver(*msg)
 			}
 		}
 	}

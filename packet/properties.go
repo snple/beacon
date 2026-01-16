@@ -517,22 +517,22 @@ func (p *ConnackProperties) Decode(r io.Reader) error {
 // 使用位掩码优化编码，减少字节开销
 type PublishProperties struct {
 	// 过期时间 (Unix 秒级时间戳，0 会使用core默认值)
-	ExpiryTime int64
+	ExpiryTime int64 `nson:"exp"` // 过期时间
 
 	// 消息格式
-	ContentType string // MIME 类型
+	ContentType string `nson:"ctype"` // MIME 类型
 
-	Priority *Priority // 消息优先级
-	TraceID  string    // 分布式追踪 ID
+	Priority *Priority `nson:"prio"`  // 消息优先级
+	TraceID  string    `nson:"trace"` // 分布式追踪 ID
 
 	// 请求-响应模式
-	TargetClientID  string // 目标客户端ID，用于点对点消息
-	SourceClientID  string // 来源客户端ID，标识发送者
-	ResponseTopic   string // 响应主题，接收方可往此主题发回响应
-	CorrelationData []byte // 关联数据，用于匹配请求和响应
+	TargetClientID  string `nson:"tgt"`  // 目标客户端ID，用于点对点消息
+	SourceClientID  string `nson:"src"`  // 来源客户端ID，标识发送者
+	ResponseTopic   string `nson:"resp"` // 响应主题，接收方可往此主题发回响应
+	CorrelationData []byte `nson:"corr"` // 关联数据，用于匹配请求和响应
 
 	// 用户属性
-	UserProperties map[string]string
+	UserProperties map[string]string `nson:"uprops"` // 用户属性
 }
 
 // PublishProperties 位掩码常量

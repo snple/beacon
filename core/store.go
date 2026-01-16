@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/snple/beacon/packet"
-
 	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"go.uber.org/zap"
@@ -18,36 +16,16 @@ import (
 // StoredMessage 持久化存储的消息格式
 type StoredMessage struct {
 	// 消息标识
-	ID       string `nson:"id"`        // 消息唯一标识 (格式: msg:{clientID}:{packetID})
-	ClientID string `nson:"client_id"` // 客户端 ID
-	PacketID uint16 `nson:"packet_id"` // 数据包 ID
+	ID       string `nson:"id"`  // 消息唯一标识 (格式: msg:{clientID}:{packetID})
+	ClientID string `nson:"cid"` // 客户端 ID
+	PacketID uint16 `nson:"pid"` // 数据包 ID（冗余字段，便于索引/过滤）
 
-	// 基础消息属性
-	Topic    string          `nson:"topic"`
-	Payload  []byte          `nson:"payload,omitempty"`
-	QoS      packet.QoS      `nson:"qos"`
-	Retain   bool            `nson:"retain"`
-	Priority packet.Priority `nson:"priority"`
+	// 原始 Message 包（视为只读）
+	Message *Message `nson:"m"`
 
-	// 消息元数据
-	TraceID        string            `nson:"trace_id,omitempty"`
-	ContentType    string            `nson:"content_type,omitempty"`
-	UserProperties map[string]string `nson:"user_properties,omitempty"`
-
-	// 时间相关
-	Timestamp     int64 `nson:"timestamp"`      // 消息时间戳（Unix 秒）
-	ExpiryTime    int64 `nson:"expiry_time"`    // 消息过期时间戳（Unix 秒），0 表示不过期
-	DeliveredAt   int64 `nson:"delivered_at"`   // 投递时间戳（Unix 秒）
-	DeliveryCount int32 `nson:"delivery_count"` // 投递次数
-
-	// 投递状态
-	Delivered bool `nson:"delivered"`
-
-	// 请求-响应模式属性
-	TargetClientID  string `nson:"target_client_id,omitempty"`
-	SourceClientID  string `nson:"source_client_id,omitempty"`
-	ResponseTopic   string `nson:"response_topic,omitempty"`
-	CorrelationData []byte `nson:"correlation_data,omitempty"`
+	// 时间相关（非协议字段，仅用于调试/观察）
+	DeliveredAt   int64 `nson:"deliv_at"` // 投递时间戳（Unix 秒）
+	DeliveryCount int32 `nson:"deliv_cn"` // 投递次数
 }
 
 // StorageConfig 存储配置
@@ -103,9 +81,9 @@ func (c *StorageConfig) Validate() error {
 	return nil
 }
 
-// MessageStore 消息持久化存储
+// messageStore 消息持久化存储
 // 用于存储 QoS=1 的消息，确保 core 重启后消息不丢失
-type MessageStore struct {
+type messageStore struct {
 	db     *badger.DB
 	config StorageConfig
 	logger *zap.Logger
@@ -115,33 +93,8 @@ type MessageStore struct {
 	wg      sync.WaitGroup
 }
 
-// storedToMessage 将存储的消息转换为内部消息格式
-func storedToMessage(stored *StoredMessage) *Message {
-	msg := &Message{
-		Topic:           stored.Topic,
-		Payload:         stored.Payload,
-		QoS:             packet.QoS(stored.QoS),
-		Retain:          stored.Retain,
-		PacketID:        uint16(stored.PacketID),
-		Timestamp:       stored.Timestamp,
-		ExpiryTime:      stored.ExpiryTime,
-		TraceID:         stored.TraceID,
-		ContentType:     stored.ContentType,
-		UserProperties:  stored.UserProperties,
-		TargetClientID:  stored.TargetClientID,
-		SourceClientID:  stored.SourceClientID,
-		ResponseTopic:   stored.ResponseTopic,
-		CorrelationData: stored.CorrelationData,
-	}
-	if stored.Priority != packet.PriorityNormal {
-		p := packet.Priority(stored.Priority)
-		msg.Priority = &p
-	}
-	return msg
-}
-
 // NewMessageStore 创建消息存储
-func NewMessageStore(config StorageConfig) (*MessageStore, error) {
+func newMessageStore(config StorageConfig) (*messageStore, error) {
 	if !config.Enabled {
 		return nil, nil
 	}
@@ -172,7 +125,7 @@ func NewMessageStore(config StorageConfig) (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to open badger db: %w", err)
 	}
 
-	ms := &MessageStore{
+	ms := &messageStore{
 		db:      db,
 		config:  config,
 		logger:  config.Logger,
@@ -198,7 +151,7 @@ func NewMessageStore(config StorageConfig) (*MessageStore, error) {
 }
 
 // Close 关闭存储
-func (ms *MessageStore) Close() error {
+func (ms *messageStore) close() error {
 	close(ms.closeCh)
 	ms.wg.Wait()
 
@@ -209,7 +162,7 @@ func (ms *MessageStore) Close() error {
 }
 
 // gcLoop 定期运行 GC
-func (ms *MessageStore) gcLoop() {
+func (ms *messageStore) gcLoop() {
 	defer ms.wg.Done()
 
 	ticker := time.NewTicker(ms.config.GCInterval)
@@ -226,7 +179,7 @@ func (ms *MessageStore) gcLoop() {
 }
 
 // runGC 执行垃圾回收
-func (ms *MessageStore) runGC() {
+func (ms *messageStore) runGC() {
 	for {
 		err := ms.db.RunValueLogGC(0.5)
 		if err != nil {
@@ -260,7 +213,7 @@ func decodePacketIDSeed(b []byte) (uint16, bool) {
 
 // PacketIDSeed returns the stored PacketID seed for a client.
 // It is used to resume outbound PacketID allocation after restart without scanning the whole store.
-func (ms *MessageStore) PacketIDSeed(clientID string) (uint16, error) {
+func (ms *messageStore) packetIDSeed(clientID string) (uint16, error) {
 	if ms == nil || ms.db == nil {
 		return uint16(minPacketID), nil
 	}
@@ -285,7 +238,7 @@ func (ms *MessageStore) PacketIDSeed(clientID string) (uint16, error) {
 }
 
 // SetPacketIDSeed stores the last allocated PacketID for a client (best-effort).
-func (ms *MessageStore) SetPacketIDSeed(clientID string, seed uint16) error {
+func (ms *messageStore) setPacketIDSeed(clientID string, seed uint16) error {
 	if ms == nil || ms.db == nil {
 		return nil
 	}
@@ -299,35 +252,27 @@ func clientPrefix(clientID string) []byte {
 	return fmt.Appendf(nil, "msg:%s:", clientID)
 }
 
-// Save 保存消息到存储
-func (ms *MessageStore) Save(clientID string, msg *Message) error {
-	msgID := messageKey(clientID, msg.PacketID)
-
-	priority := packet.PriorityNormal
-	if msg.Priority != nil {
-		priority = *msg.Priority
+// Save 保存一条“面向某个 client 的出站投递消息”（QoS1）。
+//
+// 注意：
+// - baseMsg 视为只读共享内容
+// - packetID/qos 是投递层字段，会写入存储的 packet 副本
+func (ms *messageStore) save(clientID string, baseMsg *Message) error {
+	if baseMsg == nil || baseMsg.PacketID == 0 || baseMsg.Packet == nil {
+		return fmt.Errorf("nil message")
 	}
 
+	msgID := messageKey(clientID, baseMsg.PacketID)
+
 	stored := &StoredMessage{
-		ID:              msgID,
-		ClientID:        clientID,
-		PacketID:        uint16(msg.PacketID),
-		Topic:           msg.Topic,
-		Payload:         msg.Payload,
-		QoS:             msg.QoS,
-		Retain:          msg.Retain,
-		Priority:        priority,
-		TraceID:         msg.TraceID,
-		ContentType:     msg.ContentType,
-		Timestamp:       msg.Timestamp,
-		ExpiryTime:      msg.ExpiryTime,
-		Delivered:       false,
-		DeliveryCount:   0,
-		UserProperties:  msg.UserProperties,
-		TargetClientID:  msg.TargetClientID,
-		SourceClientID:  msg.SourceClientID,
-		ResponseTopic:   msg.ResponseTopic,
-		CorrelationData: msg.CorrelationData,
+		ID:       msgID,
+		ClientID: clientID,
+		PacketID: baseMsg.PacketID,
+
+		Message: baseMsg,
+
+		DeliveredAt:   0,
+		DeliveryCount: 0,
 	}
 
 	data, err := encodeStoredMessage(stored)
@@ -340,8 +285,8 @@ func (ms *MessageStore) Save(clientID string, msg *Message) error {
 
 		entry := badger.NewEntry(key, data)
 		// 如果消息有过期时间，设置 TTL
-		if msg.ExpiryTime > 0 {
-			ttl := time.Until(time.Unix(msg.ExpiryTime, 0))
+		if stored.Message.Packet.Properties != nil && stored.Message.Packet.Properties.ExpiryTime > 0 {
+			ttl := time.Until(time.Unix(stored.Message.Packet.Properties.ExpiryTime, 0))
 			if ttl > 0 {
 				entry = entry.WithTTL(ttl)
 			}
@@ -357,13 +302,13 @@ func (ms *MessageStore) Save(clientID string, msg *Message) error {
 	ms.logger.Debug("Message saved",
 		zap.String("clientID", clientID),
 		zap.String("msgID", msgID),
-		zap.String("topic", msg.Topic))
+		zap.String("topic", baseMsg.Packet.Topic))
 
 	return nil
 }
 
 // CountMessages 统计客户端消息数量
-func (ms *MessageStore) CountMessages(clientID string) (int, error) {
+func (ms *messageStore) countMessages(clientID string) (int, error) {
 	count := 0
 
 	err := ms.db.View(func(txn *badger.Txn) error {
@@ -386,7 +331,7 @@ func (ms *MessageStore) CountMessages(clientID string) (int, error) {
 }
 
 // Delete 删除消息 (客户端 ACK 后调用)
-func (ms *MessageStore) Delete(clientID string, packetID uint16) error {
+func (ms *messageStore) delete(clientID string, packetID uint16) error {
 	return ms.db.Update(func(txn *badger.Txn) error {
 		key := []byte(messageKey(clientID, packetID))
 		return txn.Delete(key)
@@ -394,7 +339,7 @@ func (ms *MessageStore) Delete(clientID string, packetID uint16) error {
 }
 
 // DeleteAllForClient 删除客户端所有消息 (CleanSession=true 时调用)
-func (ms *MessageStore) DeleteAllForClient(clientID string) error {
+func (ms *messageStore) deleteAllForClient(clientID string) error {
 	prefix := clientPrefix(clientID)
 	var keysToDelete [][]byte
 
@@ -443,15 +388,15 @@ func (ms *MessageStore) DeleteAllForClient(clientID string) error {
 		zap.Int("count", len(keysToDelete)))
 
 	// Reset PacketID seed for a clean session.
-	_ = ms.SetPacketIDSeed(clientID, uint16(minPacketID))
+	_ = ms.setPacketIDSeed(clientID, uint16(minPacketID))
 
 	return nil
 }
 
 // GetPendingMessages 获取客户端所有待投递的消息
 // 用于 core 重启后恢复消息
-func (ms *MessageStore) GetPendingMessages(clientID string) ([]*StoredMessage, error) {
-	var messages []*StoredMessage
+func (ms *messageStore) getPendingMessages(clientID string) ([]StoredMessage, error) {
+	var messages []StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
 		prefix := clientPrefix(clientID)
@@ -465,7 +410,9 @@ func (ms *MessageStore) GetPendingMessages(clientID string) ([]*StoredMessage, e
 			item := it.Item()
 
 			err := item.Value(func(val []byte) error {
-				msg, err := decodeStoredMessage(val)
+				var msg StoredMessage
+
+				err := decodeStoredMessage(&msg, val)
 				if err != nil {
 					ms.logger.Warn("Failed to decode message",
 						zap.String("key", string(item.Key())),
@@ -474,7 +421,7 @@ func (ms *MessageStore) GetPendingMessages(clientID string) ([]*StoredMessage, e
 				}
 
 				// 检查是否过期
-				if msg.ExpiryTime > 0 && time.Now().Unix() > msg.ExpiryTime {
+				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil && msg.Message.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() > msg.Message.Packet.Properties.ExpiryTime {
 					return nil
 				}
 
@@ -496,11 +443,11 @@ func (ms *MessageStore) GetPendingMessages(clientID string) ([]*StoredMessage, e
 	return messages, nil
 }
 
-// GetPendingMessagesBatch 获取客户端待投递消息（限制数量）
+// getPendingMessagesBatch 获取客户端待投递消息（限制数量）
 // limit: 最大获取数量
 // excludeIDs: 需要排除的消息 ID（已在 pendingAck 中）
-func (ms *MessageStore) GetPendingMessagesBatch(clientID string, limit int, excludeIDs map[uint16]bool) ([]*StoredMessage, error) {
-	var messages []*StoredMessage
+func (ms *messageStore) getPendingMessagesBatch(clientID string, limit int, excludeIDs map[uint16]bool) ([]StoredMessage, error) {
+	var messages []StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
 		prefix := clientPrefix(clientID)
@@ -518,7 +465,9 @@ func (ms *MessageStore) GetPendingMessagesBatch(clientID string, limit int, excl
 			item := it.Item()
 
 			err := item.Value(func(val []byte) error {
-				msg, err := decodeStoredMessage(val)
+				var msg StoredMessage
+
+				err := decodeStoredMessage(&msg, val)
 				if err != nil {
 					ms.logger.Warn("Failed to decode message",
 						zap.String("key", string(item.Key())),
@@ -527,12 +476,13 @@ func (ms *MessageStore) GetPendingMessagesBatch(clientID string, limit int, excl
 				}
 
 				// 检查是否过期
-				if msg.ExpiryTime > 0 && time.Now().Unix() > msg.ExpiryTime {
+				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil &&
+					msg.Message.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() > msg.Message.Packet.Properties.ExpiryTime {
 					return nil
 				}
 
 				// 排除已在 pendingAck 中的消息
-				if excludeIDs != nil && excludeIDs[uint16(msg.PacketID)] {
+				if excludeIDs != nil && excludeIDs[msg.PacketID] {
 					return nil
 				}
 
@@ -554,10 +504,10 @@ func (ms *MessageStore) GetPendingMessagesBatch(clientID string, limit int, excl
 	return messages, nil
 }
 
-// GetAllPendingMessages 获取所有客户端的待投递消息
+// getAllPendingMessages 获取所有客户端的待投递消息
 // 用于 core 重启后恢复
-func (ms *MessageStore) GetAllPendingMessages() (map[string][]*StoredMessage, error) {
-	result := make(map[string][]*StoredMessage)
+func (ms *messageStore) getAllPendingMessages() (map[string][]StoredMessage, error) {
+	result := make(map[string][]StoredMessage)
 
 	err := ms.db.View(func(txn *badger.Txn) error {
 		prefix := []byte("msg:")
@@ -571,7 +521,9 @@ func (ms *MessageStore) GetAllPendingMessages() (map[string][]*StoredMessage, er
 			item := it.Item()
 
 			err := item.Value(func(val []byte) error {
-				msg, err := decodeStoredMessage(val)
+				var msg StoredMessage
+				err := decodeStoredMessage(&msg, val)
+
 				if err != nil {
 					ms.logger.Warn("Failed to decode message",
 						zap.String("key", string(item.Key())),
@@ -580,7 +532,8 @@ func (ms *MessageStore) GetAllPendingMessages() (map[string][]*StoredMessage, er
 				}
 
 				// 检查是否过期
-				if msg.ExpiryTime > 0 && time.Now().Unix() > msg.ExpiryTime {
+				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil &&
+					msg.Message.Packet.Properties.ExpiryTime > 0 && time.Now().Unix() > msg.Message.Packet.Properties.ExpiryTime {
 					return nil
 				}
 
@@ -602,8 +555,8 @@ func (ms *MessageStore) GetAllPendingMessages() (map[string][]*StoredMessage, er
 	return result, nil
 }
 
-// CleanupExpired 清理过期消息
-func (ms *MessageStore) CleanupExpired() (int, error) {
+// cleanupExpired 清理过期消息
+func (ms *messageStore) cleanupExpired() (int, error) {
 	count := 0
 	keysToDelete := make([][]byte, 0)
 
@@ -620,13 +573,19 @@ func (ms *MessageStore) CleanupExpired() (int, error) {
 			item := it.Item()
 
 			err := item.Value(func(val []byte) error {
-				msg, err := decodeStoredMessage(val)
+				var msg StoredMessage
+
+				err := decodeStoredMessage(&msg, val)
 				if err != nil {
+					ms.logger.Warn("Failed to decode message",
+						zap.String("key", string(item.Key())),
+						zap.Error(err))
 					return nil // 跳过损坏的消息
 				}
 
 				// 检查是否过期
-				if msg.ExpiryTime > 0 && now > msg.ExpiryTime {
+				if msg.Message.Packet != nil && msg.Message.Packet.Properties != nil &&
+					msg.Message.Packet.Properties.ExpiryTime > 0 && now > msg.Message.Packet.Properties.ExpiryTime {
 					keyCopy := make([]byte, len(item.Key()))
 					copy(keyCopy, item.Key())
 					keysToDelete = append(keysToDelete, keyCopy)
@@ -669,8 +628,8 @@ type StorageStats struct {
 	StorageSize     int64
 }
 
-// GetStats 获取存储统计信息
-func (ms *MessageStore) GetStats() (*StorageStats, error) {
+// getStats 获取存储统计信息
+func (ms *messageStore) getStats() (*StorageStats, error) {
 	stats := &StorageStats{}
 
 	err := ms.db.View(func(txn *badger.Txn) error {
@@ -700,30 +659,21 @@ func (ms *MessageStore) GetStats() (*StorageStats, error) {
 	return stats, nil
 }
 
-// SaveRetainMessage 保存保留消息
-func (ms *MessageStore) SaveRetainMessage(topic string, msg *Message) error {
-	if msg == nil || len(msg.Payload) == 0 {
-		// 空 payload 删除保留消息
-		return ms.DeleteRetainMessage(topic)
-	}
-
-	priority := packet.PriorityNormal
-	if msg.Priority != nil {
-		priority = *msg.Priority
+// saveRetainMessage 保存保留消息
+func (ms *messageStore) saveRetainMessage(topic string, msg *Message) error {
+	if msg == nil || msg.Packet == nil || len(msg.Packet.Payload) == 0 {
+		return ErrInvalidRetainMessage
 	}
 
 	stored := &StoredMessage{
-		ID:             topic,
-		Topic:          msg.Topic,
-		Payload:        msg.Payload,
-		QoS:            msg.QoS,
-		Retain:         true,
-		Priority:       priority,
-		TraceID:        msg.TraceID,
-		ContentType:    msg.ContentType,
-		Timestamp:      msg.Timestamp,
-		ExpiryTime:     msg.ExpiryTime,
-		UserProperties: msg.UserProperties,
+		ID:       topic,
+		ClientID: "",
+		PacketID: 0,
+
+		Message: msg,
+
+		DeliveredAt:   0,
+		DeliveryCount: 0,
 	}
 
 	data, err := encodeStoredMessage(stored)
@@ -735,8 +685,8 @@ func (ms *MessageStore) SaveRetainMessage(topic string, msg *Message) error {
 		key := []byte("retain:" + topic)
 		entry := badger.NewEntry(key, data)
 
-		if msg.ExpiryTime > 0 {
-			ttl := time.Until(time.Unix(msg.ExpiryTime, 0))
+		if stored.Message.Packet != nil && stored.Message.Packet.Properties != nil && stored.Message.Packet.Properties.ExpiryTime > 0 {
+			ttl := time.Until(time.Unix(stored.Message.Packet.Properties.ExpiryTime, 0))
 			if ttl > 0 {
 				entry = entry.WithTTL(ttl)
 			}
@@ -746,17 +696,17 @@ func (ms *MessageStore) SaveRetainMessage(topic string, msg *Message) error {
 	})
 }
 
-// DeleteRetainMessage 删除保留消息
-func (ms *MessageStore) DeleteRetainMessage(topic string) error {
+// deleteRetainMessage 删除保留消息
+func (ms *messageStore) deleteRetainMessage(topic string) error {
 	return ms.db.Update(func(txn *badger.Txn) error {
 		key := []byte("retain:" + topic)
 		return txn.Delete(key)
 	})
 }
 
-// GetRetainMessages 获取匹配主题的保留消息
-func (ms *MessageStore) GetRetainMessages(topicFilter string) ([]*StoredMessage, error) {
-	var messages []*StoredMessage
+// getRetainMessages 获取匹配主题的保留消息
+func (ms *messageStore) getRetainMessages(topicFilter string) ([]StoredMessage, error) {
+	var messages []StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
 		prefix := []byte("retain:")
@@ -770,13 +720,18 @@ func (ms *MessageStore) GetRetainMessages(topicFilter string) ([]*StoredMessage,
 			item := it.Item()
 
 			err := item.Value(func(val []byte) error {
-				msg, err := decodeStoredMessage(val)
+				var msg StoredMessage
+
+				err := decodeStoredMessage(&msg, val)
 				if err != nil {
+					ms.logger.Warn("Failed to decode message",
+						zap.String("key", string(item.Key())),
+						zap.Error(err))
 					return nil // 跳过损坏的消息
 				}
 
 				// 检查主题是否匹配 (简化的通配符匹配)
-				if topicMatches(msg.Topic, topicFilter) {
+				if msg.Message.Packet != nil && topicMatches(msg.Message.Packet.Topic, topicFilter) {
 					messages = append(messages, msg)
 				}
 
@@ -793,9 +748,9 @@ func (ms *MessageStore) GetRetainMessages(topicFilter string) ([]*StoredMessage,
 	return messages, err
 }
 
-// GetAllRetainMessages 获取所有保留消息
-func (ms *MessageStore) GetAllRetainMessages() ([]*StoredMessage, error) {
-	var messages []*StoredMessage
+// getAllRetainMessages 获取所有保留消息
+func (ms *messageStore) getAllRetainMessages() ([]StoredMessage, error) {
+	var messages []StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
 		prefix := []byte("retain:")
@@ -809,8 +764,12 @@ func (ms *MessageStore) GetAllRetainMessages() ([]*StoredMessage, error) {
 			item := it.Item()
 
 			err := item.Value(func(val []byte) error {
-				msg, err := decodeStoredMessage(val)
+				var msg StoredMessage
+				err := decodeStoredMessage(&msg, val)
 				if err != nil {
+					ms.logger.Warn("Failed to decode message",
+						zap.String("key", string(item.Key())),
+						zap.Error(err))
 					return nil // 跳过损坏的消息
 				}
 
@@ -834,7 +793,6 @@ func topicMatches(topic, filter string) bool {
 	return matchTopic(filter, topic)
 }
 
-// encodeStoredMessage 编码存储的消息（使用 nson）
 func encodeStoredMessage(msg *StoredMessage) ([]byte, error) {
 	// 使用 nson.Marshal 将结构体转为 Map
 	m, err := nson.Marshal(msg)
@@ -851,20 +809,18 @@ func encodeStoredMessage(msg *StoredMessage) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// decodeStoredMessage 解码存储的消息（使用 nson）
-func decodeStoredMessage(data []byte) (*StoredMessage, error) {
+func decodeStoredMessage(msg *StoredMessage, data []byte) error {
 	// 将字节解码为 Map
 	buf := bytes.NewBuffer(data)
 	m, err := nson.DecodeMap(buf)
 	if err != nil {
-		return nil, fmt.Errorf("nson decode failed: %w", err)
+		return fmt.Errorf("nson decode failed: %w", err)
 	}
 
 	// 将 Map 反序列化为结构体
-	var msg StoredMessage
 	if err := nson.Unmarshal(m, &msg); err != nil {
-		return nil, fmt.Errorf("nson unmarshal failed: %w", err)
+		return fmt.Errorf("nson unmarshal failed: %w", err)
 	}
 
-	return &msg, nil
+	return nil
 }

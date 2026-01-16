@@ -77,7 +77,7 @@ func (c *Core) cleanupExpiredSessions() {
 
 			// 清理持久化消息
 			if c.messageStore != nil {
-				if err := c.messageStore.DeleteAllForClient(clientID); err != nil {
+				if err := c.messageStore.deleteAllForClient(clientID); err != nil {
 					c.logger.Warn("Failed to cleanup expired session messages",
 						zap.String("clientID", clientID),
 						zap.Error(err))
@@ -98,10 +98,11 @@ func (c *Client) CleanupExpired(now int64) int {
 	// 清理 pendingAck 中的过期消息
 	c.qosMu.Lock()
 	for packetID, pending := range c.pendingAck {
-		if pending.msg.ExpiryTime > 0 && now > pending.msg.ExpiryTime {
+		if pending.msg.Packet != nil && pending.msg.Packet.Properties != nil &&
+			pending.msg.Packet.Properties.ExpiryTime > 0 && now > pending.msg.Packet.Properties.ExpiryTime {
 			// 删除持久化
 			if c.core.messageStore != nil {
-				c.core.messageStore.Delete(c.ID, pending.packetID)
+				c.core.messageStore.delete(c.ID, pending.msg.Packet.PacketID)
 			}
 			delete(c.pendingAck, packetID)
 			expiredCount++
@@ -118,7 +119,7 @@ func (c *Client) clearPersistedMessages() {
 		return
 	}
 
-	if err := c.core.messageStore.DeleteAllForClient(c.ID); err != nil {
+	if err := c.core.messageStore.deleteAllForClient(c.ID); err != nil {
 		c.core.logger.Error("Failed to clear persisted messages",
 			zap.String("clientID", c.ID),
 			zap.Error(err))

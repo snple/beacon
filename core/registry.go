@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
@@ -259,7 +258,7 @@ func validateActionName(action string) bool {
 
 // PendingRequest 等待响应的请求
 type PendingRequest struct {
-	CoreRequestID   uint64 // core 生成的全局唯一 ID
+	CoreRequestID   uint32 // core 生成的全局唯一 ID
 	ClientRequestID uint32 // 客户端原始 RequestID（用于响应时还原）
 	SourceClientID  string // 请求来源客户端
 	TargetClientID  string // 处理请求的客户端
@@ -279,15 +278,15 @@ type requestKey struct {
 // 使用 Core 生成的全局唯一 ID 来追踪请求，解决客户端 RequestID 冲突问题
 type RequestTracker struct {
 	// coreRequestID -> PendingRequest（主索引，用于超时处理）
-	requests map[uint64]*PendingRequest
+	requests map[uint32]*PendingRequest
 
 	// (sourceClientID, clientRequestID) -> coreRequestID（辅助索引，用于响应路由）
-	clientIndex map[requestKey]uint64
+	clientIndex map[requestKey]uint32
 
 	mu sync.RWMutex
 
 	// 全局唯一 ID 生成器
-	nextCoreRequestID atomic.Uint64
+	nextCoreRequestID atomic.Uint32
 
 	core *Core
 
@@ -298,11 +297,11 @@ type RequestTracker struct {
 // NewRequestTracker 创建请求追踪器
 func NewRequestTracker(core *Core) *RequestTracker {
 	t := &RequestTracker{
-		requests:    make(map[uint64]*PendingRequest),
-		clientIndex: make(map[requestKey]uint64),
+		requests:    make(map[uint32]*PendingRequest),
+		clientIndex: make(map[requestKey]uint32),
 		core:        core,
 		coreWaiters: coreRequestWaiters{
-			waiters: make(map[uint64]chan *Response),
+			waiters: make(map[uint32]chan *Response),
 		},
 	}
 	// 从 1 开始，0 保留用于表示无效 ID
@@ -312,7 +311,7 @@ func NewRequestTracker(core *Core) *RequestTracker {
 
 // Track 追踪请求（从客户端收到的 REQUEST 包）
 // 返回 coreRequestID 用于后续响应路由
-func (t *RequestTracker) Track(req *packet.RequestPacket, targetClientID string) uint64 {
+func (t *RequestTracker) Track(req *packet.RequestPacket, targetClientID string) uint32 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -357,7 +356,7 @@ func (t *RequestTracker) Track(req *packet.RequestPacket, targetClientID string)
 }
 
 // CompleteByCoreID 通过 coreRequestID 完成请求
-func (t *RequestTracker) CompleteByCoreID(coreRequestID uint64) *PendingRequest {
+func (t *RequestTracker) CompleteByCoreID(coreRequestID uint32) *PendingRequest {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -408,7 +407,7 @@ func (t *RequestTracker) sendTimeoutResponse(pr *PendingRequest) {
 		// 请求已经被其他地方处理了（正常响应或取消）
 		t.mu.Unlock()
 		t.core.logger.Debug("Request already completed, skipping timeout response",
-			zap.Uint64("coreRequestID", pr.CoreRequestID))
+			zap.Uint32("coreRequestID", pr.CoreRequestID))
 		return
 	}
 
@@ -417,7 +416,7 @@ func (t *RequestTracker) sendTimeoutResponse(pr *PendingRequest) {
 		// 这种情况理论上不应该发生，但为了安全起见
 		t.mu.Unlock()
 		t.core.logger.Warn("Request instance mismatch in timeout handler",
-			zap.Uint64("coreRequestID", pr.CoreRequestID))
+			zap.Uint32("coreRequestID", pr.CoreRequestID))
 		return
 	}
 
@@ -483,7 +482,7 @@ func (t *RequestTracker) Cleanup(clientID string) {
 		if pr.SourceClientID == clientID {
 			// 源客户端断开
 			t.core.logger.Debug("Request cancelled due to source client disconnect",
-				zap.Uint64("coreRequestID", pr.CoreRequestID),
+				zap.Uint32("coreRequestID", pr.CoreRequestID),
 				zap.String("sourceClientID", clientID),
 				zap.String("targetClientID", pr.TargetClientID))
 
@@ -519,7 +518,7 @@ func (t *RequestTracker) Cleanup(clientID string) {
 
 // coreRequestWaiters 存储从 core 发送的请求的响应等待器
 type coreRequestWaiters struct {
-	waiters map[uint64]chan *Response
+	waiters map[uint32]chan *Response
 	mu      sync.RWMutex
 }
 
@@ -537,19 +536,19 @@ func (t *RequestTracker) GenerateRequestID() uint32 {
 func (t *RequestTracker) RegisterResponseWaiter(requestID uint32, respCh chan *Response) {
 	t.coreWaiters.mu.Lock()
 	defer t.coreWaiters.mu.Unlock()
-	t.coreWaiters.waiters[uint64(requestID)] = respCh
+	t.coreWaiters.waiters[requestID] = respCh
 }
 
 // UnregisterResponseWaiter 注销响应等待器
 func (t *RequestTracker) UnregisterResponseWaiter(requestID uint32) {
 	t.coreWaiters.mu.Lock()
 	defer t.coreWaiters.mu.Unlock()
-	delete(t.coreWaiters.waiters, uint64(requestID))
+	delete(t.coreWaiters.waiters, requestID)
 }
 
 // GetResponseWaiter 获取响应等待器
 func (t *RequestTracker) GetResponseWaiter(requestID uint32) chan *Response {
 	t.coreWaiters.mu.RLock()
 	defer t.coreWaiters.mu.RUnlock()
-	return t.coreWaiters.waiters[uint64(requestID)]
+	return t.coreWaiters.waiters[requestID]
 }

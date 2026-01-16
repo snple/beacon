@@ -38,7 +38,6 @@ type PublishContext struct {
 type DeliverContext struct {
 	ClientID string                // 订阅者客户端 ID
 	Packet   *packet.PublishPacket // 原始 PUBLISH 包（引用，不要修改）
-	QoS      packet.QoS            // 投递 QoS
 }
 
 // MessageHandlerFunc 函数类型适配器，用于简化只需实现部分方法的场景

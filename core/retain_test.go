@@ -8,13 +8,11 @@ import (
 
 func TestRetainStoreMatchForSubscription(t *testing.T) {
 	store := NewRetainStore()
-	msg := &Message{
-		Topic:   "test/topic",
-		Payload: []byte("retained message"),
-		Retain:  true,
-		QoS:     packet.QoS1,
-	}
-	store.Set("test/topic", msg)
+	pub := packet.NewPublishPacket("test/topic", []byte("retained message"))
+	pub.Retain = true
+	pub.QoS = packet.QoS1
+	msg := &Message{Packet: pub, Timestamp: 0}
+	store.set("test/topic", msg)
 
 	tests := []struct {
 		name              string
@@ -33,11 +31,11 @@ func TestRetainStoreMatchForSubscription(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-msgs := store.MatchForSubscription("test/topic", tt.retainAsPublished, tt.isNewSubscription, tt.retainHandling)
-if len(msgs) != tt.expectMsgCount {
-t.Errorf("Count mismatch: got %d, want %d", len(msgs), tt.expectMsgCount)
-}
-if tt.expectMsgCount > 0 && msgs[0].Retain != tt.expectRetainFlag {
+			msgs := store.matchForSubscription("test/topic", tt.retainAsPublished, tt.isNewSubscription, tt.retainHandling)
+			if len(msgs) != tt.expectMsgCount {
+				t.Errorf("Count mismatch: got %d, want %d", len(msgs), tt.expectMsgCount)
+			}
+			if tt.expectMsgCount > 0 && msgs[0].Retain != tt.expectRetainFlag {
 				t.Errorf("Retain flag mismatch: got %v, want %v", msgs[0].Retain, tt.expectRetainFlag)
 			}
 		})

@@ -25,3 +25,7 @@ require (
 	golang.org/x/sys v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+replace (
+	github.com/danclive/nson-go => ../nson-go
+)

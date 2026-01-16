@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
@@ -194,7 +193,7 @@ func (c *Core) authenticateClient(conn net.Conn, connect *packet.ConnectPacket) 
 		Packet:     connect,
 	}
 
-	if err := c.options.Hooks.AuthHandler.OnConnect(authCtx); err != nil {
+	if err := c.options.Hooks.callAuthOnConnect(authCtx); err != nil {
 		c.logger.Debug("Authentication failed", zap.String("clientID", connect.ClientID), zap.Error(err))
 		c.sendConnack(conn, false, packet.ReasonNotAuthorized, nil)
 		conn.Close()
@@ -262,7 +261,7 @@ func (c *Core) registerClient(conn net.Conn, connect *packet.ConnectPacket) (*Cl
 		c.subscriptions.RemoveClient(clientID)
 		// 清理旧客户端的持久化消息
 		if c.messageStore != nil {
-			c.messageStore.DeleteAllForClient(clientID)
+			c.messageStore.deleteAllForClient(clientID)
 		}
 		c.clients[clientID] = newClient
 		return newClient, false
@@ -378,7 +377,7 @@ func (c *Core) removeClient(client *Client) {
 
 	// 清理持久化消息（如果 CleanSession 或会话过期）
 	if c.messageStore != nil {
-		if err := c.messageStore.DeleteAllForClient(client.ID); err != nil {
+		if err := c.messageStore.deleteAllForClient(client.ID); err != nil {
 			c.logger.Warn("Failed to cleanup client messages",
 				zap.String("clientID", client.ID),
 				zap.Error(err))
@@ -411,7 +410,7 @@ func (c *Client) RestoreSession(old *Client) {
 	old.qosMu.Lock()
 	c.qosMu.Lock()
 	maps.Copy(c.pendingAck, old.pendingAck)
-	old.pendingAck = make(map[uint16]*pendingMessage)
+	old.pendingAck = make(map[uint16]pendingMessage)
 	c.qosMu.Unlock()
 	old.qosMu.Unlock()
 

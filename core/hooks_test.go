@@ -90,7 +90,6 @@ func TestMessageHandlerFunc_OnDeliver(t *testing.T) {
 			ctx := &DeliverContext{
 				ClientID: "test-client",
 				Packet:   packet.NewPublishPacket("test/topic", []byte("test")),
-				QoS:      packet.QoS0,
 			}
 			result := handler.OnDeliver(ctx)
 			if result != tt.expectResult {

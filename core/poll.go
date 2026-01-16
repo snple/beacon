@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
@@ -107,15 +106,15 @@ func (c *Client) enqueueRequest(p *packet.RequestPacket) error {
 //	    // 处理消息
 //	    fmt.Printf("Received message on topic %s: %s\n", msg.Topic, msg.Payload)
 //	}
-func (c *Core) PollMessage(ctx context.Context, timeout time.Duration) (*Message, error) {
+func (c *Core) PollMessage(ctx context.Context, timeout time.Duration) (Message, error) {
 	if !c.running.Load() {
-		return nil, ErrCoreNotRunning
+		return Message{}, ErrCoreNotRunning
 	}
 
 	// 延迟初始化消息队列（仅第一次调用时）
 	c.messageQueueMu.Lock()
 	if !c.messageQueueInit {
-		c.messageQueue = make(chan *Message, c.options.MessageQueueSize)
+		c.messageQueue = make(chan Message, c.options.MessageQueueSize)
 		c.messageQueueInit = true
 	}
 	c.messageQueueMu.Unlock()
@@ -129,18 +128,18 @@ func (c *Core) PollMessage(ctx context.Context, timeout time.Duration) (*Message
 		return msg, nil
 	case <-pollCtx.Done():
 		if pollCtx.Err() == context.DeadlineExceeded {
-			return nil, NewPollTimeoutError(timeout)
+			return Message{}, NewPollTimeoutError(timeout)
 		}
-		return nil, pollCtx.Err()
+		return Message{}, pollCtx.Err()
 	case <-c.ctx.Done():
-		return nil, ErrCoreShutdown
+		return Message{}, ErrCoreShutdown
 	}
 }
 
 // enqueueMessage 处理发送给 core 的请求（路径1：TargetClientID == "core"）
 // enqueueMessage 将消息放入轮询队列（供 PollMessage 使用）
 // 如果队列已初始化且未满，消息将被放入队列；否则丢弃
-func (c *Client) enqueueMessage(p *packet.PublishPacket, msg *Message) error {
+func (c *Client) enqueueMessage(msg Message) error {
 	c.core.messageQueueMu.Lock()
 	if !c.core.messageQueueInit {
 		c.core.messageQueueMu.Unlock()
@@ -152,12 +151,12 @@ func (c *Client) enqueueMessage(p *packet.PublishPacket, msg *Message) error {
 	select {
 	case c.core.messageQueue <- msg:
 		// 消息已入队
-		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
+		if msg.QoS == packet.QoS1 {
+			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonSuccess)
 			if err := c.WritePacket(puback); err != nil {
 				c.core.logger.Warn("Failed to send PUBACK",
 					zap.String("clientID", c.ID),
-					zap.Uint16("packetID", p.PacketID),
+					zap.Uint16("packetID", msg.PacketID),
 					zap.Error(err))
 
 				return err
@@ -167,16 +166,16 @@ func (c *Client) enqueueMessage(p *packet.PublishPacket, msg *Message) error {
 	default:
 		// 队列已满，丢弃消息（可以在这里添加日志或统计）
 		c.core.logger.Debug("Message queue full, dropping message",
-			zap.String("topic", msg.Topic))
+			zap.String("topic", msg.Packet.Topic))
 
 		// 对于 QoS 1，仍需发送 PUBACK
-		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonServerBusy)
+		if msg.QoS == packet.QoS1 {
+			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonServerBusy)
 			puback.Properties.ReasonString = "core request queue full"
 			if err := c.WritePacket(puback); err != nil {
 				c.core.logger.Warn("Failed to send PUBACK",
 					zap.String("clientID", c.ID),
-					zap.Uint16("packetID", p.PacketID),
+					zap.Uint16("packetID", msg.PacketID),
 					zap.Error(err))
 
 				return err

@@ -8,29 +8,24 @@ import (
 )
 
 // Message 内部消息表示
+//
+// 设计原则：
+// - 内容层：直接引用原始 *packet.PublishPacket（视为只读、可共享）
+// - 投递层（PacketID/QoS/Dup）由发送队列/持久化层单独管理
 type Message struct {
-	// 基础消息属性
-	Topic    string
-	Payload  []byte
-	QoS      packet.QoS
-	Retain   bool
-	PacketID uint16
+	// 原始 PUBLISH 包（视为只读）
+	Packet *packet.PublishPacket `nson:"pkt"`
 
-	// 消息元数据
-	Priority       *packet.Priority
-	TraceID        string
-	ContentType    string
-	UserProperties map[string]string // 用户属性
+	// 固定头部标志
+	Dup    bool       `nson:"dup"` // 重发标志
+	QoS    packet.QoS `nson:"qos"` // 服务质量
+	Retain bool       `nson:"ret"` // 保留标志
 
-	// 时间相关
-	Timestamp  int64
-	ExpiryTime int64
+	// 发送相关
+	PacketID uint16 `nson:"pid"` // 分配的包 ID（仅 QoS 1 有效）
 
-	// 请求-响应模式属性
-	TargetClientID  string // 目标客户端ID，用于点对点消息
-	SourceClientID  string // 来源客户端ID，标识发送者
-	ResponseTopic   string // 响应主题，接收方可往此主题发回响应
-	CorrelationData []byte // 关联数据，用于匹配请求和响应
+	// 时间相关（非协议字段，仅用于调试/观察）
+	Timestamp int64 `nson:"ts"`
 }
 
 // messageNode 链表节点
@@ -40,7 +35,7 @@ type messageNode struct {
 }
 
 // MessageQueue 基于链表的高效消息队列
-type MessageQueue struct {
+type messageQueue struct {
 	priority packet.Priority
 	head     *messageNode
 	tail     *messageNode
@@ -50,15 +45,15 @@ type MessageQueue struct {
 }
 
 // NewMessageQueue 创建新的消息队列
-func NewMessageQueue(priority packet.Priority, maxSize int) *MessageQueue {
-	return &MessageQueue{
+func NewMessageQueue(priority packet.Priority, maxSize int) *messageQueue {
+	return &messageQueue{
 		priority: priority,
 		maxSize:  maxSize,
 	}
 }
 
 // Push 添加消息到队列 O(1)
-func (q *MessageQueue) Push(msg *Message) bool {
+func (q *messageQueue) push(msg *Message) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -79,7 +74,7 @@ func (q *MessageQueue) Push(msg *Message) bool {
 }
 
 // Pop 从队列取出消息 O(1)
-func (q *MessageQueue) Pop() *Message {
+func (q *messageQueue) pop() *Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -97,7 +92,7 @@ func (q *MessageQueue) Pop() *Message {
 }
 
 // Len 返回队列长度 O(1)
-func (q *MessageQueue) Len() int {
+func (q *messageQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.size
@@ -158,8 +153,8 @@ func (pq *PriorityQueue) Enqueue(msg *Message) {
 	defer pq.mu.Unlock()
 
 	priority := int(packet.PriorityNormal)
-	if msg.Priority != nil {
-		priority = int(*msg.Priority)
+	if msg != nil && msg.Packet.Properties != nil && msg.Packet.Properties.Priority != nil {
+		priority = int(*msg.Packet.Properties.Priority)
 	}
 
 	item := &priorityItem{

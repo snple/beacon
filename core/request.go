@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
@@ -542,6 +541,7 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 	if p.TargetClientID != "" {
 		// 指定了目标客户端，检查是否存在
 		targetClientID = p.TargetClientID
+
 		c.core.clientsMu.RLock()
 		client := c.core.clients[targetClientID]
 		c.core.clientsMu.RUnlock()
@@ -625,7 +625,7 @@ func (c *Client) handleResponse(p *packet.ResponsePacket) error {
 		zap.Uint8("reasonCode", uint8(p.ReasonCode)))
 
 	// p.RequestID 在此场景中实际上是 coreRequestID
-	coreRequestID := uint64(p.RequestID)
+	coreRequestID := p.RequestID
 
 	// 首先检查这是否是 core-initiated 请求的响应
 	// core-initiated 请求的 TargetClientID 会被设置为 "core"（因为源客户端设置为了 "core"）
@@ -638,7 +638,7 @@ func (c *Client) handleResponse(p *packet.ResponsePacket) error {
 	if pr == nil {
 		c.core.logger.Warn("Response for unknown request",
 			zap.String("clientID", c.ID),
-			zap.Uint64("coreRequestID", coreRequestID))
+			zap.Uint32("coreRequestID", coreRequestID))
 		return nil
 	}
 
@@ -647,7 +647,7 @@ func (c *Client) handleResponse(p *packet.ResponsePacket) error {
 		c.core.logger.Warn("Response from wrong client",
 			zap.String("clientID", c.ID),
 			zap.String("expectedClient", pr.TargetClientID),
-			zap.Uint64("coreRequestID", coreRequestID))
+			zap.Uint32("coreRequestID", coreRequestID))
 		return nil
 	}
 
@@ -659,7 +659,7 @@ func (c *Client) handleResponse(p *packet.ResponsePacket) error {
 	if sourceClient == nil {
 		c.core.logger.Debug("Source client not found",
 			zap.String("sourceClientID", pr.SourceClientID),
-			zap.Uint64("coreRequestID", coreRequestID))
+			zap.Uint32("coreRequestID", coreRequestID))
 		return nil
 	}
 
@@ -689,12 +689,12 @@ func (c *Client) handleResponse(p *packet.ResponsePacket) error {
 }
 
 // handlecoreInitiatedResponse 处理来自客户端对 core-initiated 请求的响应
-func (c *Client) handlecoreInitiatedResponse(p *packet.ResponsePacket, coreRequestID uint64) error {
+func (c *Client) handlecoreInitiatedResponse(p *packet.ResponsePacket, coreRequestID uint32) error {
 	// 获取响应等待器
-	respCh := c.core.requestTracker.GetResponseWaiter(uint32(coreRequestID))
+	respCh := c.core.requestTracker.GetResponseWaiter(coreRequestID)
 	if respCh == nil {
 		c.core.logger.Debug("No waiter for core-initiated response",
-			zap.Uint64("requestID", coreRequestID))
+			zap.Uint32("requestID", coreRequestID))
 		return nil
 	}
 
@@ -714,10 +714,10 @@ func (c *Client) handlecoreInitiatedResponse(p *packet.ResponsePacket, coreReque
 	select {
 	case respCh <- result:
 		c.core.logger.Debug("Sent core-initiated response to waiter",
-			zap.Uint64("requestID", coreRequestID))
+			zap.Uint32("requestID", coreRequestID))
 	default:
 		c.core.logger.Warn("Response waiter channel full or closed",
-			zap.Uint64("requestID", coreRequestID))
+			zap.Uint32("requestID", coreRequestID))
 	}
 
 	return nil

@@ -8,21 +8,21 @@ import (
 // PublishPacket PUBLISH 数据包
 type PublishPacket struct {
 	// 固定头部标志
-	Dup    bool // 重发标志
-	QoS    QoS  // 服务质量
-	Retain bool // 保留标志
+	Dup    bool `nson:"dup"` // 重发标志
+	QoS    QoS  `nson:"qos"` // 服务质量
+	Retain bool `nson:"ret"` // 保留标志
 
 	// 主题名
-	Topic string
+	Topic string `nson:"topic"`
 
 	// 包标识符 (QoS > 0 时存在)
-	PacketID uint16
+	PacketID uint16 `nson:"pid"`
 
 	// 属性
-	Properties *PublishProperties
+	Properties *PublishProperties `nson:"props"`
 
 	// 载荷（如果 Compression != None，则为压缩后的数据）
-	Payload []byte
+	Payload []byte `nson:"payload"`
 }
 
 // NewPublishPacket 创建新的 PUBLISH 包
@@ -102,9 +102,9 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) error {
 	if _, err := io.ReadFull(r, flags[:]); err != nil {
 		return err
 	}
-	p.QoS = QoS(flags[0] & 0x01)       // Bit 0: QoS
-	p.Retain = flags[0]&0x02 != 0     // Bit 1: Retain
-	p.Dup = flags[0]&0x04 != 0         // Bit 2: Dup
+	p.QoS = QoS(flags[0] & 0x01)  // Bit 0: QoS
+	p.Retain = flags[0]&0x02 != 0 // Bit 1: Retain
+	p.Dup = flags[0]&0x04 != 0    // Bit 2: Dup
 
 	// 主题名
 	var err error

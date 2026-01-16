@@ -36,7 +36,7 @@ type Core struct {
 	subscriptions *SubscriptionTree
 
 	// 消息队列 (按优先级)
-	queues [4]*MessageQueue
+	queues [4]*messageQueue
 
 	// 消息通知 channel
 	msgNotify chan struct{}
@@ -45,7 +45,7 @@ type Core struct {
 	retainStore *RetainStore
 
 	// 消息持久化存储
-	messageStore *MessageStore
+	messageStore *messageStore
 
 	// REQUEST/RESPONSE 支持（轮询模式）
 	actionRegistry   *ActionRegistry // action 注册表
@@ -55,7 +55,7 @@ type Core struct {
 	requestQueueInit bool // 请求队列是否已初始化
 
 	// MESSAGE 轮询支持
-	messageQueue     chan *Message
+	messageQueue     chan Message
 	messageQueueMu   sync.Mutex
 	messageQueueInit bool // 消息队列是否已初始化
 
@@ -148,7 +148,7 @@ func (c *Core) initMessageStore() error {
 		c.options.StorageConfig.Logger = c.options.Logger
 	}
 
-	store, err := NewMessageStore(c.options.StorageConfig)
+	store, err := newMessageStore(c.options.StorageConfig)
 	if err != nil {
 		return fmt.Errorf("failed to initialize message store: %w", err)
 	}
@@ -247,7 +247,7 @@ func (c *Core) Stop() error {
 
 	// 最后关闭消息存储（确保客户端清理完成后再关闭）
 	if c.messageStore != nil {
-		c.messageStore.Close()
+		c.messageStore.close()
 	}
 
 	c.logger.Info("core stopped")
@@ -261,13 +261,13 @@ func (c *Core) recoverMessages() {
 	}
 
 	// 只恢复保留消息到内存 (数量通常较少)
-	retainMsgs, err := c.messageStore.GetAllRetainMessages()
+	retainMsgs, err := c.messageStore.getAllRetainMessages()
 	if err != nil {
 		c.logger.Error("Failed to recover retain messages", zap.Error(err))
 	} else {
 		for _, stored := range retainMsgs {
-			msg := storedToMessage(stored)
-			c.retainStore.Set(msg.Topic, msg)
+			msg := stored.Message
+			c.retainStore.set(msg.Packet.Topic, msg)
 		}
 		if len(retainMsgs) > 0 {
 			c.logger.Info("Recovered retain messages", zap.Int("count", len(retainMsgs)))
@@ -275,7 +275,7 @@ func (c *Core) recoverMessages() {
 	}
 
 	// 统计待投递消息数量 (不加载到内存，客户端重连时按需加载)
-	stats, err := c.messageStore.GetStats()
+	stats, err := c.messageStore.getStats()
 	if err != nil {
 		c.logger.Error("Failed to get storage stats", zap.Error(err))
 	} else if stats.TotalMessages > 0 {
@@ -301,7 +301,7 @@ func (c *Core) Unsubscribe(clientID, topic string) {
 
 // GetRetainedMessages 获取与主题模式匹配的保留消息
 func (c *Core) GetRetainedMessages(topic string) []*Message {
-	return c.retainStore.Match(topic)
+	return c.retainStore.match(topic)
 }
 
 // GetStats 获取统计信息快照

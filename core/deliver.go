@@ -10,22 +10,29 @@ import (
 )
 
 // Publish 发布消息 (内部使用)
-func (c *Core) Publish(msg *Message) {
+func (c *Core) publish(msg Message) {
 	// 处理保留消息
 	if msg.Retain && c.options.RetainEnabled {
-		if len(msg.Payload) == 0 {
-			c.retainStore.Remove(msg.Topic)
+		if len(msg.Packet.Payload) == 0 {
+			c.retainStore.remove(msg.Packet.Topic)
 			// 从持久化存储中删除
 			if c.messageStore != nil {
-				c.messageStore.DeleteRetainMessage(msg.Topic)
+				c.messageStore.deleteRetainMessage(msg.Packet.Topic)
 			}
 		} else {
-			c.retainStore.Set(msg.Topic, msg)
+			// !!! 这里存储进去的是指针，以避免重复拷贝
+			if err := c.retainStore.set(msg.Packet.Topic, &msg); err != nil {
+				c.logger.Error("Failed to set retain message",
+					zap.String("topic", msg.Packet.Topic),
+					zap.Error(err))
+			}
+
 			// 持久化保留消息
 			if c.messageStore != nil {
-				if err := c.messageStore.SaveRetainMessage(msg.Topic, msg); err != nil {
+				// !!! 这里存储进去的是指针，以避免重复拷贝
+				if err := c.messageStore.saveRetainMessage(msg.Packet.Topic, &msg); err != nil {
 					c.logger.Error("Failed to persist retain message",
-						zap.String("topic", msg.Topic),
+						zap.String("topic", msg.Packet.Topic),
 						zap.Error(err))
 				}
 			}
@@ -34,10 +41,13 @@ func (c *Core) Publish(msg *Message) {
 
 	// 加入优先级队列
 	priority := packet.PriorityNormal
-	if msg.Priority != nil {
-		priority = *msg.Priority
+	if msg.Packet.Properties != nil && msg.Packet.Properties.Priority != nil {
+		priority = *msg.Packet.Properties.Priority
 	}
-	c.queues[priority].Push(msg)
+
+	// 放入对应优先级的队列
+	// !!! 这里把指针放了进去
+	c.queues[priority].push(&msg)
 
 	// 通知 dispatchLoop 有新消息 (非阻塞)
 	select {
@@ -77,8 +87,9 @@ func (c *Core) dispatchLoop() {
 				processed := false
 				// 按优先级从高到低处理消息
 				for i := len(c.queues) - 1; i >= 0; i-- {
-					if msg := c.queues[i].Pop(); msg != nil {
-						c.deliverMessage(msg)
+					if msg := c.queues[i].pop(); msg != nil {
+						// !!! 因为 push 放进去的是指针，所以这里解引用
+						c.deliver(*msg)
 						processed = true
 						break // 保证高优先级优先
 					}
@@ -91,14 +102,14 @@ func (c *Core) dispatchLoop() {
 	}
 }
 
-func (c *Core) deliverMessage(msg *Message) {
+func (c *Core) deliver(msg Message) {
 	// 如果指定了 TargetClientID，直接投递给目标客户端
-	if msg.TargetClientID != "" {
+	if msg.Packet.Properties != nil && msg.Packet.Properties.TargetClientID != "" {
 		c.deliverToTarget(msg)
 		return
 	}
 
-	subscribers := c.subscriptions.Match(msg.Topic)
+	subscribers := c.subscriptions.Match(msg.Packet.Topic)
 
 	// 一次性获取所有需要的客户端，减少锁竞争
 	c.clientsMu.RLock()
@@ -123,18 +134,21 @@ func (c *Core) deliverMessage(msg *Message) {
 			continue
 		}
 
-		// 直接调用 DeliverWithQoS，持久化逻辑在其中统一处理
-		if err := cq.client.DeliverWithQoS(msg, cq.qos); err != nil {
-			if cq.qos == packet.QoS0 {
+		copiedMsg := msg       // 复制消息，不过 PublishPacket 仍是指针，没有深拷贝
+		copiedMsg.QoS = cq.qos // 设置实际发送的 QoS
+
+		// 直接调用 Deliver，持久化逻辑在其中统一处理
+		if err := cq.client.deliver(copiedMsg); err != nil {
+			if copiedMsg.QoS == packet.QoS0 {
 				c.logger.Debug("QoS0 message delivery failed",
 					zap.String("clientID", cq.client.ID),
-					zap.String("topic", msg.Topic),
+					zap.String("topic", copiedMsg.Packet.Topic),
 					zap.Error(err))
 				c.stats.MessagesDropped.Add(1)
 			} else {
 				c.logger.Debug("QoS1 message delivery failed",
 					zap.String("clientID", cq.client.ID),
-					zap.String("topic", msg.Topic),
+					zap.String("topic", copiedMsg.Packet.Topic),
 					zap.Error(err))
 			}
 		}
@@ -142,8 +156,15 @@ func (c *Core) deliverMessage(msg *Message) {
 }
 
 // deliverToTarget 投递消息给指定的目标客户端
-func (c *Core) deliverToTarget(msg *Message) {
-	targetID := msg.TargetClientID
+func (c *Core) deliverToTarget(msg Message) {
+	if msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID == "" {
+		c.logger.Debug("No target client ID specified for targeted delivery",
+			zap.String("topic", msg.Packet.Topic))
+
+		return
+	}
+
+	targetID := msg.Packet.Properties.TargetClientID
 
 	// 先尝试普通客户端
 	c.clientsMu.RLock()
@@ -153,49 +174,53 @@ func (c *Core) deliverToTarget(msg *Message) {
 	if exists {
 		if client.IsClosed() {
 			c.stats.MessagesDropped.Add(1)
+
+			c.logger.Debug("Target client is closed",
+				zap.String("targetClientID", targetID),
+				zap.String("topic", msg.Packet.Topic))
 			return
 		}
 
-		// OnDeliver 钩子在 DeliverWithQoS 内部调用（那里有完整的 PublishPacket）
-		if err := client.DeliverWithQoS(msg, msg.QoS); err != nil {
+		if err := client.deliver(msg); err != nil {
 			c.logger.Debug("Target delivery failed",
 				zap.String("targetClientID", targetID),
-				zap.String("topic", msg.Topic),
+				zap.String("topic", msg.Packet.Topic),
 				zap.Error(err))
 			if msg.QoS == packet.QoS0 {
 				c.stats.MessagesDropped.Add(1)
 			}
 		}
+
 		return
 	}
 
 	// 目标客户端不存在
 	c.logger.Debug("Target client not found",
 		zap.String("targetClientID", targetID),
-		zap.String("topic", msg.Topic))
+		zap.String("topic", msg.Packet.Topic))
 	c.stats.MessagesDropped.Add(1)
 }
 
 // PublishToClient 向指定客户端发送消息
 // 如果客户端在线但未订阅该主题，仍然会将消息投递给该客户端
 func (c *Core) PublishToClient(clientID string, topic string, payload []byte, options PublishOptions) error {
-	msg := &Message{
-		Topic:           topic,
-		Payload:         payload,
-		QoS:             options.QoS,
-		Retain:          options.Retain,
-		Timestamp:       time.Now().Unix(),
-		Priority:        options.Priority,
-		TraceID:         options.TraceID,
-		ContentType:     options.ContentType,
-		TargetClientID:  options.TargetClientID,
-		ResponseTopic:   options.ResponseTopic,
-		CorrelationData: options.CorrelationData,
+	pub := packet.NewPublishPacket(topic, payload)
+	pub.QoS = options.QoS
+	pub.Retain = options.Retain
+	if options.Priority != nil {
+		pub.Properties.Priority = options.Priority
 	}
+	pub.Properties.TraceID = options.TraceID
+	pub.Properties.ContentType = options.ContentType
+	pub.Properties.TargetClientID = options.TargetClientID
+	pub.Properties.ResponseTopic = options.ResponseTopic
+	pub.Properties.CorrelationData = options.CorrelationData
+
+	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
 
 	if options.Expiry > 0 {
 		expiryTime := time.Now().Add(time.Duration(options.Expiry) * time.Second)
-		msg.ExpiryTime = expiryTime.Unix()
+		msg.Packet.Properties.ExpiryTime = expiryTime.Unix()
 	}
 
 	c.clientsMu.RLock()
@@ -206,7 +231,7 @@ func (c *Core) PublishToClient(clientID string, topic string, payload []byte, op
 		if client.IsClosed() {
 			return NewClientClosedError(clientID)
 		}
-		return client.DeliverWithQoS(msg, options.QoS)
+		return client.deliver(msg)
 	}
 
 	return NewClientNotFoundError(clientID)
@@ -223,27 +248,26 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 	}
 	c.clientsMu.RUnlock()
 
-	msg := &Message{
-		Topic:           topic,
-		Payload:         payload,
-		QoS:             options.QoS,
-		Retain:          options.Retain,
-		Timestamp:       time.Now().Unix(),
-		Priority:        options.Priority,
-		TraceID:         options.TraceID,
-		ContentType:     options.ContentType,
-		ResponseTopic:   options.ResponseTopic,
-		CorrelationData: options.CorrelationData,
+	pub := packet.NewPublishPacket(topic, payload)
+	pub.QoS = options.QoS
+	pub.Retain = options.Retain
+	if options.Priority != nil {
+		pub.Properties.Priority = options.Priority
 	}
+	pub.Properties.TraceID = options.TraceID
+	pub.Properties.ContentType = options.ContentType
+	pub.Properties.ResponseTopic = options.ResponseTopic
+	pub.Properties.CorrelationData = options.CorrelationData
+	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
 
 	if options.Expiry > 0 {
 		expiryTime := time.Now().Add(time.Duration(options.Expiry) * time.Second)
-		msg.ExpiryTime = expiryTime.Unix()
+		msg.Packet.Properties.ExpiryTime = expiryTime.Unix()
 	}
 
 	successCount := 0
 	for _, client := range clients {
-		if err := client.DeliverWithQoS(msg, options.QoS); err == nil {
+		if err := client.deliver(msg); err == nil {
 			successCount++
 		}
 	}
@@ -251,7 +275,7 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 	return successCount
 }
 
-// DeliverWithQoS 向客户端发送消息，指定 QoS
+// deliver 向客户端发送消息
 // 流控策略：
 // 1. 检查消息是否过期
 // 2. QoS1 消息先持久化
@@ -260,43 +284,40 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 //   - 失败（队列满）：
 //   - QoS0: 直接丢弃
 //   - QoS1: 已持久化，等待重传机制处理
-func (c *Client) DeliverWithQoS(msg *Message, qos packet.QoS) error {
-	// 注意：msg 可能会被多个订阅者共享（同一条广播消息）。
-	// 对于 QoS1，我们必须为“每个目标客户端”分配独立的 PacketID，不能直接修改共享的 msg。
-	deliverMsg := msg
-	if qos == packet.QoS1 {
-		m := *msg // shallow copy
-		m.PacketID = c.allocatePacketID()
-		deliverMsg = &m
+func (c *Client) deliver(msg Message) error {
+	// PacketID 属于“投递层字段”，必须对每个目标客户端独立分配，且不能写回原始 PublishPacket 。
+	if msg.QoS == packet.QoS1 {
+		msg.PacketID = c.allocatePacketID()
 	}
 
 	// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
-	if deliverMsg.ExpiryTime > 0 && time.Now().Unix() > deliverMsg.ExpiryTime {
+	if msg.Packet.Properties != nil && msg.Packet.Properties.ExpiryTime > 0 &&
+		time.Now().Unix() > msg.Packet.Properties.ExpiryTime {
 		c.core.stats.MessagesDropped.Add(1)
 		return nil
 	}
 
 	// QoS 1: 先持久化到存储（确保不丢失）
-	if qos == packet.QoS1 && c.core.messageStore != nil {
-		if err := c.core.messageStore.Save(c.ID, deliverMsg); err != nil {
+	if msg.QoS == packet.QoS1 && c.core.messageStore != nil {
+		if err := c.core.messageStore.save(c.ID, &msg); err != nil {
 			c.core.logger.Error("Failed to persist QoS1 message",
 				zap.String("clientID", c.ID),
-				zap.String("topic", deliverMsg.Topic),
+				zap.String("topic", msg.Packet.Topic),
 				zap.Error(err))
 			return err
 		}
 		c.core.logger.Debug("QoS1 message persisted",
 			zap.String("clientID", c.ID),
-			zap.String("topic", deliverMsg.Topic),
-			zap.Uint16("packetID", deliverMsg.PacketID))
+			zap.String("topic", msg.Packet.Topic),
+			zap.Uint16("packetID", msg.PacketID))
 	}
 
 	// 如果客户端关闭，直接返回
 	if c.closed.Load() {
-		if qos == packet.QoS0 {
+		if msg.QoS == packet.QoS0 {
 			c.core.logger.Debug("QoS0 message dropped, client closed",
 				zap.String("clientID", c.ID),
-				zap.String("topic", msg.Topic))
+				zap.String("topic", msg.Packet.Topic))
 			c.core.stats.MessagesDropped.Add(1)
 			return errors.New("client closed")
 		}
@@ -305,20 +326,20 @@ func (c *Client) DeliverWithQoS(msg *Message, qos packet.QoS) error {
 	}
 
 	// 尝试放入发送队列
-	if c.sendQueue.TryEnqueue(deliverMsg, qos, false) {
+	if c.sendQueue.tryEnqueue(&msg) {
 		// 成功入队，触发发送协程
 		c.triggerSend()
 		return nil
 	}
 
 	// 队列已满
-	if qos == packet.QoS0 {
+	if msg.QoS == packet.QoS0 {
 		// QoS0: 直接丢弃
 		c.core.logger.Debug("QoS0 message dropped, send queue full",
 			zap.String("clientID", c.ID),
-			zap.String("topic", msg.Topic),
-			zap.Int("queueUsed", c.sendQueue.Used()),
-			zap.Int("queueCapacity", c.sendQueue.Capacity()))
+			zap.String("topic", msg.Packet.Topic),
+			zap.Int("queueUsed", c.sendQueue.getUsed()),
+			zap.Int("queueCapacity", c.sendQueue.getCapacity()))
 		c.core.stats.MessagesDropped.Add(1)
 		return errors.New("send queue full")
 	}
@@ -326,14 +347,9 @@ func (c *Client) DeliverWithQoS(msg *Message, qos packet.QoS) error {
 	// QoS1: 已持久化，等待重传机制处理
 	c.core.logger.Debug("QoS1 message queued for retransmit (queue full)",
 		zap.String("clientID", c.ID),
-		zap.String("topic", deliverMsg.Topic),
-		zap.Uint16("packetID", deliverMsg.PacketID))
+		zap.String("topic", msg.Packet.Topic),
+		zap.Uint16("packetID", msg.PacketID))
 	return nil
-}
-
-// Deliver 向客户端发送消息（使用消息原始 QoS）
-func (c *Client) Deliver(msg *Message) error {
-	return c.DeliverWithQoS(msg, msg.QoS)
 }
 
 // triggerSend 触发发送协程（非阻塞）
@@ -350,22 +366,23 @@ func (c *Client) processSendQueue() {
 
 	for !c.closed.Load() {
 		// 尝试从队列取消息
-		qm, ok := c.sendQueue.TryDequeue()
+		msg, ok := c.sendQueue.tryDequeue()
 		if !ok {
 			// 队列已空
 			break
 		}
 
 		// 发送消息
-		if err := c.sendMessage(qm.Message, qm.QoS, qm.Dup); err != nil {
+		// !!! 这里解引用 msg 指针，因为 tryEnqueue 内部使用了指针
+		if err := c.sendMessage(*msg); err != nil {
 			c.core.logger.Debug("Failed to send message from queue",
 				zap.String("clientID", c.ID),
-				zap.String("topic", qm.Message.Topic),
+				zap.String("topic", msg.Packet.Topic),
 				zap.Error(err))
 
 			// 如果是 QoS1 且持久化失败，则已经在持久化层有备份
 			// 如果是 QoS0，则丢弃
-			if qm.QoS == packet.QoS0 {
+			if msg.QoS == packet.QoS0 {
 				c.core.stats.MessagesDropped.Add(1)
 			}
 		}
@@ -374,61 +391,48 @@ func (c *Client) processSendQueue() {
 
 // pendingMessage 等待确认的消息
 type pendingMessage struct {
-	msg        *Message
-	qos        packet.QoS
-	packetID   uint16
-	lastSentAt int64 // 最后发送时间（Unix 时间戳）
+	msg        *Message // 最终的 PUBLISH 包（只读）
+	lastSentAt int64    // 最后发送时间（Unix 时间戳）
 }
 
 // sendMessage 发送消息到客户端
-func (c *Client) sendMessage(msg *Message, qos packet.QoS, dup bool) error {
-	// 创建 PUBLISH 包
-	pub := packet.NewPublishPacket(msg.Topic, msg.Payload)
-	pub.QoS = qos
-	pub.Retain = msg.Retain
-	pub.Dup = dup
-
-	if qos > 0 {
-		if msg.PacketID == 0 {
-			msg.PacketID = c.allocatePacketID()
-		}
-		pub.PacketID = msg.PacketID
+func (c *Client) sendMessage(msg Message) error {
+	// 基于只读 PublishPacket 构造一次性出站 packet
+	if msg.Packet == nil {
+		return ErrInvalidMessage
 	}
 
-	// 设置属性
-	pub.Properties.Priority = msg.Priority
-	pub.Properties.TraceID = msg.TraceID
-	pub.Properties.ContentType = msg.ContentType
-	pub.Properties.ExpiryTime = msg.ExpiryTime
-	pub.Properties.UserProperties = msg.UserProperties
-	pub.Properties.TargetClientID = msg.TargetClientID
-	pub.Properties.SourceClientID = msg.SourceClientID
-	pub.Properties.ResponseTopic = msg.ResponseTopic
-	pub.Properties.CorrelationData = msg.CorrelationData
+	// 构建最终发送的 PUBLISH 包
+	pub := *msg.Packet
+	pub.Dup = msg.Dup
+	pub.QoS = msg.QoS
+	pub.Dup = msg.Dup
+	if msg.QoS > 0 {
+		pub.PacketID = msg.PacketID
+	} else {
+		pub.PacketID = 0
+	}
 
 	// 调用 OnDeliver 钩子，检查是否允许投递
 	deliverCtx := &DeliverContext{
 		ClientID: c.ID,
-		Packet:   pub,
-		QoS:      qos,
+		Packet:   &pub,
 	}
 	if !c.core.options.Hooks.callOnDeliver(deliverCtx) {
-		return errors.New("delivery rejected by OnDeliver hook") // 钩子拒绝投递
+		return ErrDeliveryRejected // 钩子拒绝投递
 	}
 
 	// 先发送消息
-	if err := c.WritePacket(pub); err != nil {
+	if err := c.WritePacket(&pub); err != nil {
 		return err
 	}
 
 	// 发送成功后处理 QoS 1
-	if qos == packet.QoS1 {
+	if pub.QoS == packet.QoS1 {
 		// 加入 pendingAck 等待确认
 		c.qosMu.Lock()
-		c.pendingAck[pub.PacketID] = &pendingMessage{
-			msg:        msg,
-			qos:        qos,
-			packetID:   pub.PacketID,
+		c.pendingAck[pub.PacketID] = pendingMessage{
+			msg:        &msg,
 			lastSentAt: time.Now().Unix(),
 		}
 		c.qosMu.Unlock()
