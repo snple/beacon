@@ -3,6 +3,8 @@ package core
 import (
 	"strings"
 	"sync"
+
+	"github.com/snple/beacon/packet"
 )
 
 // retainNode 保留消息树节点
@@ -165,17 +167,17 @@ func (s *RetainStore) match(pattern string) []*Message {
 	defer s.mu.RUnlock()
 
 	var result []*Message
-	s.matchNode(s.root, pattern, 0, result)
+	result = s.matchNode(s.root, pattern, 0, result)
 	return result
 }
 
-func (s *RetainStore) matchNode(node *retainNode, pattern string, startIdx int, result []*Message) {
+func (s *RetainStore) matchNode(node *retainNode, pattern string, startIdx int, result []*Message) []*Message {
 	if startIdx >= len(pattern) {
 		// 到达模式末尾，收集当前节点的消息
 		if node.message != nil {
 			result = append(result, node.message)
 		}
-		return
+		return result
 	}
 
 	// 找下一个分隔符
@@ -192,37 +194,32 @@ func (s *RetainStore) matchNode(node *retainNode, pattern string, startIdx int, 
 	}
 
 	switch part {
-	case "#":
-		// # 匹配当前节点及所有子节点
-		s.collectAll(node, result)
-	case "+":
-		// + 匹配当前层级的所有子节点
+	case packet.TopicWildcardMulti: // **
+		// ** 匹配当前节点及所有子节点
+		result = s.collectAll(node, result)
+	case packet.TopicWildcardSingle: // *
+		// * 匹配当前层级的所有子节点
 		for _, child := range node.children {
-			s.matchNode(child, pattern, nextIdx, result)
+			result = s.matchNode(child, pattern, nextIdx, result)
 		}
 	default:
 		// 精确匹配
 		if child := node.children[part]; child != nil {
-			s.matchNode(child, pattern, nextIdx, result)
+			result = s.matchNode(child, pattern, nextIdx, result)
 		}
 	}
+	return result
 }
 
 // collectAll 收集节点及所有子节点的消息
-func (s *RetainStore) collectAll(node *retainNode, result []*Message) {
+func (s *RetainStore) collectAll(node *retainNode, result []*Message) []*Message {
 	if node.message != nil {
 		result = append(result, node.message)
 	}
 	for _, child := range node.children {
-		s.collectAll(child, result)
+		result = s.collectAll(child, result)
 	}
-}
-
-// Count 返回保留消息数量 O(1)
-func (s *RetainStore) getCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.count
+	return result
 }
 
 // Clear 清除所有保留消息
@@ -234,7 +231,7 @@ func (s *RetainStore) clear() {
 }
 
 // matchTopic 检查主题是否匹配模式 (保留用于其他场景)
-// 支持 + (单层通配符) 和 # (多层通配符)
+// 支持 * (单层通配符) 和 ** (多层通配符)
 func matchTopic(pattern, topic string) bool {
 	pi, ti := 0, 0
 	plen, tlen := len(pattern), len(topic)
@@ -263,9 +260,9 @@ func matchTopic(pattern, topic string) bool {
 		}
 
 		switch pPart {
-		case "#":
+		case packet.TopicWildcardMulti: // **
 			return true
-		case "+":
+		case packet.TopicWildcardSingle: // *
 			// 匹配当前层级
 		default:
 			if pPart != tPart {
@@ -282,8 +279,8 @@ func matchTopic(pattern, topic string) bool {
 		return true
 	}
 
-	// 模式以 # 结尾可以匹配空
-	if pi < plen && pattern[pi:] == "#" {
+	// 模式以 ** 结尾可以匹配空
+	if pi < plen && pattern[pi:] == packet.TopicWildcardMulti {
 		return true
 	}
 

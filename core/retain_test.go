@@ -11,7 +11,7 @@ func TestRetainStoreMatchForSubscription(t *testing.T) {
 	pub := packet.NewPublishPacket("test/topic", []byte("retained message"))
 	pub.Retain = true
 	pub.QoS = packet.QoS1
-	msg := &Message{Packet: pub, Timestamp: 0}
+	msg := &Message{Packet: pub, Retain: true, Timestamp: 0}
 	store.set("test/topic", msg)
 
 	tests := []struct {
@@ -31,7 +31,7 @@ func TestRetainStoreMatchForSubscription(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msgs := store.matchForSubscription("test/topic", tt.retainAsPublished, tt.isNewSubscription, tt.retainHandling)
+			msgs := store.matchForSubscription("test/topic", tt.isNewSubscription, tt.retainAsPublished, tt.retainHandling)
 			if len(msgs) != tt.expectMsgCount {
 				t.Errorf("Count mismatch: got %d, want %d", len(msgs), tt.expectMsgCount)
 			}

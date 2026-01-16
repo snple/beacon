@@ -27,9 +27,6 @@ func (c *Client) publishWill() {
 	pub.Retain = c.WillPacket.Retain
 
 	if c.WillPacket.Properties != nil {
-		props := *c.WillPacket.Properties // shallow copy: avoid mutating WillPacket
-		pub.Properties = &props
-	} else {
 		pub.Properties = packet.NewPublishProperties()
 	}
 
