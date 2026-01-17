@@ -13,7 +13,19 @@ func (c *Client) extractWillMessage(connect *packet.ConnectPacket) {
 	if !connect.Flags.Will {
 		return
 	}
-	c.WillPacket = connect.WillPacket
+
+	pub := connect.WillPacket
+
+	if pub.Properties == nil {
+		pub.Properties = packet.NewPublishProperties()
+	}
+
+	// 填充 SourceClientID（发送者标识，由 core 填充确保可信）
+	pub.Properties.SourceClientID = c.ID
+
+	// !!! will 消息的超时时间由客户端掉线时确定
+
+	c.WillPacket = pub
 }
 
 // publishWill 发布遗嘱消息
@@ -22,22 +34,12 @@ func (c *Client) publishWill() {
 		return
 	}
 
-	pub := packet.NewPublishPacket(c.WillPacket.Topic, c.WillPacket.Payload)
-	pub.QoS = c.WillPacket.QoS
-	pub.Retain = c.WillPacket.Retain
+	// !!! 遗嘱消息没比要复制
+	pub := c.WillPacket
 
-	if c.WillPacket.Properties != nil {
-		pub.Properties = packet.NewPublishProperties()
-	}
-
-	// 自动填充 SourceClientID（发送者标识，由 core 填充确保可信）
-	pub.Properties.SourceClientID = c.ID
-
-	// 如果没有设置过期时间，使用默认值
-	if pub.Properties.ExpiryTime <= 0 && c.core.options.DefaultMessageExpiry > 0 {
-		expiry := time.Now().Add(c.core.options.DefaultMessageExpiry)
-		pub.Properties.ExpiryTime = expiry.Unix()
-	}
+	// !!! 遗嘱消息的超时时间由客户端掉线时确定
+	expiry := time.Now().Add(c.core.options.DefaultMessageExpiry)
+	pub.Properties.ExpiryTime = expiry.Unix()
 
 	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
 
@@ -51,7 +53,7 @@ func (c *Client) publishWill() {
 	c.WillPacket = nil
 }
 
-// ClearWill 清除遗嘱消息（正常断开时调用）
-func (c *Client) ClearWill() {
+// clearWill 清除遗嘱消息（正常断开时调用）
+func (c *Client) clearWill() {
 	c.WillPacket = nil
 }

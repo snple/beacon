@@ -322,7 +322,7 @@ func (c *Core) handleClientDisconnect(client *Client) {
 
 	// 正常断开：清除遗嘱消息
 	if isNormalDisconnect {
-		client.ClearWill()
+		client.clearWill()
 	}
 
 	// 检查是否需要保留会话

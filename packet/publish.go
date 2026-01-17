@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 )
 
@@ -32,6 +33,23 @@ func NewPublishPacket(topic string, payload []byte) *PublishPacket {
 		Payload:    payload,
 		QoS:        QoS0,
 		Properties: NewPublishProperties(),
+	}
+}
+
+// Copy 复制 PUBACK 包, 浅拷贝 Properties
+func (p *PublishPacket) Copy() PublishPacket {
+	if p == nil {
+		return PublishPacket{}
+	}
+
+	return PublishPacket{
+		Dup:        p.Dup,
+		QoS:        p.QoS,
+		Retain:     p.Retain,
+		Topic:      p.Topic,
+		PacketID:   p.PacketID,
+		Properties: p.Properties,
+		Payload:    p.Payload,
 	}
 }
 
@@ -146,6 +164,11 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) error {
 	return err
 }
 
+func (p *PublishPacket) String() string {
+	return fmt.Sprintf("PUBLISH Topic=%s PacketID=%d QoS=%d Retain=%t Dup=%t Properties=%v PayloadLen=%d",
+		p.Topic, p.PacketID, p.QoS, p.Retain, p.Dup, p.Properties, len(p.Payload))
+}
+
 // PubackPacket PUBACK 数据包
 type PubackPacket struct {
 	PacketID   uint16
@@ -228,4 +251,9 @@ func (p *PubackPacket) Decode(r io.Reader, header FixedHeader) error {
 	}
 
 	return nil
+}
+
+func (p *PubackPacket) String() string {
+	return fmt.Sprintf("PUBACK PacketID=%d ReasonCode=%d Properties=%v",
+		p.PacketID, p.ReasonCode, p.Properties)
 }

@@ -29,11 +29,28 @@ type Message struct {
 	Timestamp int64 `nson:"ts"`
 }
 
+// IsExpired 检查消息是否已过期
 func (m *Message) IsExpired() bool {
 	if m.Packet == nil || m.Packet.Properties == nil || m.Packet.Properties.ExpiryTime == 0 {
 		return false
 	}
 	return time.Now().Unix() > m.Packet.Properties.ExpiryTime
+}
+
+// Copy 复制消息结构体（浅拷贝 Packet 指针）
+func (m *Message) Copy() Message {
+	if m == nil {
+		return Message{}
+	}
+
+	return Message{
+		Packet:    m.Packet,
+		Dup:       m.Dup,
+		QoS:       m.QoS,
+		Retain:    m.Retain,
+		PacketID:  m.PacketID,
+		Timestamp: m.Timestamp,
+	}
 }
 
 // messageNode 链表节点

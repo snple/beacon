@@ -210,31 +210,14 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 	// 在 SUBACK 之后发送保留消息
 	// 这样客户端收到 SUBACK 后才会注册 handler，然后才能处理保留消息
 	for i, sub := range validSubs {
-		// 使用 MatchForSubscription 获取保留消息
-		retained := c.core.retainStore.matchForSubscription(
+		// 逐条发送保留消息，避免一次性加载所有消息到内存
+		c.sendRetainedMessages(
 			sub.Topic,
 			isNewSubs[i],
 			sub.Options.RetainAsPublished,
 			sub.Options.RetainHandling,
+			sub.Options.QoS,
 		)
-
-		if len(retained) > 0 {
-			c.core.logger.Debug("Sending retained messages",
-				zap.String("clientID", c.ID),
-				zap.String("topic", sub.Topic),
-				zap.Int("count", len(retained)),
-				zap.Bool("isNewSubscription", isNewSubs[i]),
-				zap.Uint8("retainHandling", sub.Options.RetainHandling),
-				zap.Bool("retainAsPublished", sub.Options.RetainAsPublished))
-
-			for _, msg := range retained {
-				// !!! 因为 retained 保存进去是指针，所以这里需要解引用再传递
-				copiedMsg := *msg
-				// 应用 QoS 降级：取订阅 QoS 和消息 QoS 的较小值
-				copiedMsg.QoS = min(sub.Options.QoS, copiedMsg.QoS)
-				c.deliver(copiedMsg)
-			}
-		}
 	}
 
 	return nil
@@ -283,4 +266,62 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 	}
 
 	return c.WritePacket(unsuback)
+}
+
+// sendRetainedMessages 逐条发送订阅时的保留消息
+// 避免一次性加载所有消息到内存
+func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
+	retainAsPublished bool, retainHandling uint8, subQoS packet.QoS) {
+	// retainHandling == 2: 不发送保留消息
+	if retainHandling == 2 {
+		return
+	}
+
+	// retainHandling == 1: 仅新订阅时发送
+	if retainHandling == 1 && !isNewSubscription {
+		return
+	}
+
+	// 获取匹配的主题列表（只是索引，不包含消息体）
+	topics := c.core.retainStore.matchTopics(topic)
+	if len(topics) == 0 {
+		return
+	}
+
+	if c.core.messageStore == nil {
+		return
+	}
+
+	c.core.logger.Debug("Sending retained messages",
+		zap.String("clientID", c.ID),
+		zap.String("topic", topic),
+		zap.Int("count", len(topics)),
+		zap.Bool("isNewSubscription", isNewSubscription),
+		zap.Uint8("retainHandling", retainHandling),
+		zap.Bool("retainAsPublished", retainAsPublished))
+
+	// 逐条从 messageStore 获取消息并发送
+	for _, t := range topics {
+		msg, err := c.core.messageStore.getRetainMessage(t)
+		if err != nil {
+			c.core.logger.Debug("Failed to get retain message from store",
+				zap.String("topic", t),
+				zap.Error(err))
+			continue
+		}
+		if msg == nil {
+			continue
+		}
+
+		// !!! 这里可以不复制消息，直接修改 Retain 和 QoS 后投递，因为消息是从持久化存储中读取的，不会影响其他地方 !!!
+
+		// 根据 retainAsPublished 设置 Retain 标志
+		if !retainAsPublished {
+			msg.Retain = false
+		}
+
+		// 应用 QoS 降级：取订阅 QoS 和消息 QoS 的较小值
+		msg.QoS = min(subQoS, msg.QoS)
+		c.deliver(msg)
+	}
 }

@@ -3,14 +3,21 @@ package core
 import (
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/snple/beacon/packet"
 )
 
+// retainEntry 保留消息索引条目（仅存储索引信息，不存储消息本身）
+type retainEntry struct {
+	topic      string // 消息主题
+	expiryTime int64  // 过期时间 (Unix 时间戳，0 表示永不过期)
+}
+
 // retainNode 保留消息树节点
 type retainNode struct {
 	children map[string]*retainNode
-	message  *Message // 该节点的保留消息
+	entry    *retainEntry // 该节点的保留消息索引
 }
 
 func newRetainNode() *retainNode {
@@ -19,7 +26,8 @@ func newRetainNode() *retainNode {
 	}
 }
 
-// retainStore 保留消息存储 - 使用树结构优化匹配
+// retainStore 保留消息索引存储 - 使用树结构优化匹配
+// 设计原则：只存储 topic 索引和过期时间，消息内容存储在 messageStore
 type retainStore struct {
 	root  *retainNode
 	count int
@@ -33,10 +41,10 @@ func newRetainStore() *retainStore {
 	}
 }
 
-// Set 设置保留消息 - 使用树结构存储
-func (s *retainStore) set(topic string, msg *Message) error {
-	if msg == nil || msg.Packet == nil || !msg.Packet.Retain {
-		// 如果消息为 nil 或 Retain 标志为 false，则不存储
+// set 设置保留消息索引
+// 参数 expiryTime: 过期时间 (Unix 时间戳，0 表示永不过期)
+func (s *retainStore) set(topic string, expiryTime int64) error {
+	if topic == "" {
 		return ErrInvalidRetainMessage
 	}
 
@@ -63,17 +71,47 @@ func (s *retainStore) set(topic string, msg *Message) error {
 		node = node.children[part]
 	}
 
-	if node.message == nil {
+	if node.entry == nil {
 		s.count++
 	}
 
-	node.message = msg
+	node.entry = &retainEntry{
+		topic:      topic,
+		expiryTime: expiryTime,
+	}
 
 	return nil
 }
 
-// Get 获取保留消息
-func (s *retainStore) get(topic string) *Message {
+// exists 检查主题是否存在保留消息索引
+func (s *retainStore) exists(topic string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	node := s.root
+	startIdx := 0
+	for startIdx < len(topic) {
+		endIdx := strings.IndexByte(topic[startIdx:], '/')
+		var part string
+		if endIdx == -1 {
+			part = topic[startIdx:]
+			startIdx = len(topic)
+		} else {
+			endIdx += startIdx
+			part = topic[startIdx:endIdx]
+			startIdx = endIdx + 1
+		}
+
+		node = node.children[part]
+		if node == nil {
+			return false
+		}
+	}
+	return node.entry != nil
+}
+
+// getEntry 获取保留消息索引条目
+func (s *retainStore) getEntry(topic string) *retainEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -96,42 +134,21 @@ func (s *retainStore) get(topic string) *Message {
 			return nil
 		}
 	}
-	return node.message
+	return node.entry
 }
 
-// MatchForSubscription 获取与主题模式匹配的保留消息，支持 RetainHandling 选项
-// retainHandling: 0 = 总是发送, 1 = 仅新订阅发送, 2 = 不发送
-func (s *retainStore) matchForSubscription(topic string, isNewSubscription bool, retainAsPublished bool,
-	retainHandling uint8) []*Message {
-	// retainHandling == 2: 不发送保留消息
-	if retainHandling == 2 {
-		return nil
-	}
+// matchTopics 匹配主题模式，返回所有匹配的主题列表
+// 同时过滤掉已过期的条目
+func (s *retainStore) matchTopics(pattern string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	// retainHandling == 1: 仅新订阅时发送
-	if retainHandling == 1 && !isNewSubscription {
-		return nil
-	}
-
-	// retainHandling == 0: 总是发送 (默认)
-	msgs := s.match(topic)
-
-	// 根据 retainAsPublished 设置 Retain 标志
-	if !retainAsPublished {
-		// retainAsPublished == false: 发送时清除 Retain 标志
-		for i := range msgs {
-			msgs[i] = &Message{
-				Packet:    msgs[i].Packet,
-				Dup:       msgs[i].Dup,
-				QoS:       msgs[i].QoS,
-				Retain:    false,
-				Timestamp: msgs[i].Timestamp,
-			}
-		}
-	}
-
-	return msgs
+	now := time.Now().Unix()
+	var result []string
+	result = s.matchNodeTopics(s.root, pattern, 0, result, now)
+	return result
 }
+
 func (s *retainStore) remove(topic string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,27 +172,18 @@ func (s *retainStore) remove(topic string) {
 			return
 		}
 	}
-	if node.message != nil {
-		node.message = nil
+	if node.entry != nil {
+		node.entry = nil
 		s.count--
 	}
 }
 
-// Match 匹配主题模式，返回所有匹配的保留消息 - 树遍历优化
-func (s *retainStore) match(pattern string) []*Message {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var result []*Message
-	result = s.matchNode(s.root, pattern, 0, result)
-	return result
-}
-
-func (s *retainStore) matchNode(node *retainNode, pattern string, startIdx int, result []*Message) []*Message {
+// matchNodeTopics 递归匹配节点，返回主题列表
+func (s *retainStore) matchNodeTopics(node *retainNode, pattern string, startIdx int, result []string, now int64) []string {
 	if startIdx >= len(pattern) {
-		// 到达模式末尾，收集当前节点的消息
-		if node.message != nil {
-			result = append(result, node.message)
+		// 到达模式末尾，收集当前节点的主题
+		if node.entry != nil && !s.isExpired(node.entry, now) {
+			result = append(result, node.entry.topic)
 		}
 		return result
 	}
@@ -196,30 +204,61 @@ func (s *retainStore) matchNode(node *retainNode, pattern string, startIdx int, 
 	switch part {
 	case packet.TopicWildcardMulti: // **
 		// ** 匹配当前节点及所有子节点
-		result = s.collectAll(node, result)
+		result = s.collectAllTopics(node, result, now)
 	case packet.TopicWildcardSingle: // *
 		// * 匹配当前层级的所有子节点
 		for _, child := range node.children {
-			result = s.matchNode(child, pattern, nextIdx, result)
+			result = s.matchNodeTopics(child, pattern, nextIdx, result, now)
 		}
 	default:
 		// 精确匹配
 		if child := node.children[part]; child != nil {
-			result = s.matchNode(child, pattern, nextIdx, result)
+			result = s.matchNodeTopics(child, pattern, nextIdx, result, now)
 		}
 	}
 	return result
 }
 
-// collectAll 收集节点及所有子节点的消息
-func (s *retainStore) collectAll(node *retainNode, result []*Message) []*Message {
-	if node.message != nil {
-		result = append(result, node.message)
+// collectAllTopics 收集节点及所有子节点的主题
+func (s *retainStore) collectAllTopics(node *retainNode, result []string, now int64) []string {
+	if node.entry != nil && !s.isExpired(node.entry, now) {
+		result = append(result, node.entry.topic)
 	}
 	for _, child := range node.children {
-		result = s.collectAll(child, result)
+		result = s.collectAllTopics(child, result, now)
 	}
 	return result
+}
+
+// isExpired 检查条目是否过期
+func (s *retainStore) isExpired(entry *retainEntry, now int64) bool {
+	if entry == nil || entry.expiryTime == 0 {
+		return false
+	}
+	return now > entry.expiryTime
+}
+
+// cleanupExpired 清理过期的保留消息索引，返回清理的数量和已清理的主题列表
+func (s *retainStore) cleanupExpired() (int, []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	var expiredTopics []string
+	s.cleanupExpiredNode(s.root, now, &expiredTopics)
+	s.count -= len(expiredTopics)
+	return len(expiredTopics), expiredTopics
+}
+
+// cleanupExpiredNode 递归清理过期节点
+func (s *retainStore) cleanupExpiredNode(node *retainNode, now int64, expiredTopics *[]string) {
+	if node.entry != nil && s.isExpired(node.entry, now) {
+		*expiredTopics = append(*expiredTopics, node.entry.topic)
+		node.entry = nil
+	}
+	for _, child := range node.children {
+		s.cleanupExpiredNode(child, now, expiredTopics)
+	}
 }
 
 // Clear 清除所有保留消息

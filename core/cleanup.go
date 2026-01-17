@@ -20,6 +20,7 @@ func (c *Core) expiredCleanupLoop() {
 			return
 		case <-ticker.C:
 			c.cleanupExpiredMessages()
+			c.cleanupExpiredRetainMessages()
 			c.cleanupExpiredSessions()
 		}
 	}
@@ -55,6 +56,26 @@ func (c *Core) cleanupExpiredMessages() {
 		} else if count > 0 {
 			c.logger.Debug("Cleaned up expired messages from store", zap.Int("count", count))
 			c.stats.MessagesDropped.Add(int64(count))
+		}
+	}
+}
+
+// cleanupExpiredRetainMessages 清理过期的保留消息
+func (c *Core) cleanupExpiredRetainMessages() {
+	// 清理 retainStore 中的过期索引
+	count, expiredTopics := c.retainStore.cleanupExpired()
+	if count > 0 {
+		c.logger.Debug("Cleaned up expired retain message index", zap.Int("count", count))
+
+		// 同时从 messageStore 中删除对应的消息
+		if c.messageStore != nil {
+			for _, topic := range expiredTopics {
+				if err := c.messageStore.deleteRetainMessage(topic); err != nil {
+					c.logger.Warn("Failed to delete expired retain message from store",
+						zap.String("topic", topic),
+						zap.Error(err))
+				}
+			}
 		}
 	}
 }

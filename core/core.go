@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
@@ -254,36 +253,6 @@ func (c *Core) Stop() error {
 	return nil
 }
 
-// recoverMessages 恢复持久化的消息
-func (c *Core) recoverMessages() {
-	if c.messageStore == nil {
-		return
-	}
-
-	// 只恢复保留消息到内存 (数量通常较少)
-	retainMsgs, err := c.messageStore.getAllRetainMessages()
-	if err != nil {
-		c.logger.Error("Failed to recover retain messages", zap.Error(err))
-	} else {
-		for _, stored := range retainMsgs {
-			msg := stored.Message
-			c.retainStore.set(msg.Packet.Topic, msg)
-		}
-		if len(retainMsgs) > 0 {
-			c.logger.Info("Recovered retain messages", zap.Int("count", len(retainMsgs)))
-		}
-	}
-
-	// 统计待投递消息数量 (不加载到内存，客户端重连时按需加载)
-	stats, err := c.messageStore.getStats()
-	if err != nil {
-		c.logger.Error("Failed to get storage stats", zap.Error(err))
-	} else if stats.TotalMessages > 0 {
-		c.logger.Info("Pending messages in storage (lazy load on client reconnect)",
-			zap.Int64("count", stats.TotalMessages))
-	}
-}
-
 // Subscribe 订阅主题
 func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 	isNew := c.subscriptions.Add(clientID, sub.Topic, sub.Options.QoS)
@@ -300,8 +269,33 @@ func (c *Core) Unsubscribe(clientID, topic string) {
 }
 
 // GetRetainedMessages 获取与主题模式匹配的保留消息
+// 从 messageStore 中按需加载消息内容
 func (c *Core) GetRetainedMessages(topic string) []*Message {
-	return c.retainStore.match(topic)
+	// 获取匹配的主题列表
+	topics := c.retainStore.matchTopics(topic)
+	if len(topics) == 0 {
+		return nil
+	}
+
+	// 从 messageStore 加载消息
+	if c.messageStore == nil {
+		return nil
+	}
+
+	messages := make([]*Message, 0, len(topics))
+	for _, t := range topics {
+		msg, err := c.messageStore.getRetainMessage(t)
+		if err != nil {
+			c.logger.Debug("Failed to get retain message from store",
+				zap.String("topic", t),
+				zap.Error(err))
+			continue
+		}
+		if msg != nil {
+			messages = append(messages, msg)
+		}
+	}
+	return messages
 }
 
 // GetStats 获取统计信息快照

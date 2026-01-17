@@ -537,6 +537,37 @@ func (ms *messageStore) deleteRetainMessage(topic string) error {
 	})
 }
 
+// getRetainMessage 获取单个保留消息
+func (ms *messageStore) getRetainMessage(topic string) (*Message, error) {
+	var msg *Message
+
+	err := ms.db.View(func(txn *badger.Txn) error {
+		key := retainKey(topic)
+		item, err := txn.Get(key)
+		if err != nil {
+			if err == badger.ErrKeyNotFound {
+				return nil
+			}
+			return err
+		}
+
+		return item.Value(func(val []byte) error {
+			var stored StoredMessage
+			if err := decodeStoredMessage(&stored, val); err != nil {
+				return err
+			}
+			// 检查是否过期
+			if stored.Message != nil && stored.Message.IsExpired() {
+				return nil
+			}
+			msg = stored.Message
+			return nil
+		})
+	})
+
+	return msg, err
+}
+
 // getRetainMessages 获取匹配主题的保留消息
 func (ms *messageStore) getRetainMessages(topicFilter string) ([]StoredMessage, error) {
 	var messages []StoredMessage
@@ -581,11 +612,16 @@ func (ms *messageStore) getRetainMessages(topicFilter string) ([]StoredMessage, 
 	return messages, err
 }
 
-// getAllRetainMessages 获取所有保留消息
-func (ms *messageStore) getAllRetainMessages() ([]StoredMessage, error) {
-	var messages []StoredMessage
+// RetainMessageInfo 保留消息的索引信息（不包含消息体）
+type RetainMessageInfo struct {
+	Topic      string
+	ExpiryTime int64
+}
 
-	err := ms.db.View(func(txn *badger.Txn) error {
+// iterateRetainMessageIndex 流式遍历保留消息索引，避免一次性加载所有消息到内存
+// callback 返回 false 时停止遍历
+func (ms *messageStore) iterateRetainMessageIndex(callback func(info RetainMessageInfo) bool) error {
+	return ms.db.View(func(txn *badger.Txn) error {
 		prefix := retainKeyPrefix()
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = prefix
@@ -596,28 +632,46 @@ func (ms *messageStore) getAllRetainMessages() ([]StoredMessage, error) {
 		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
 			item := it.Item()
 
+			var shouldContinue bool
 			err := item.Value(func(val []byte) error {
 				var msg StoredMessage
 				err := decodeStoredMessage(&msg, val)
 				if err != nil {
-					ms.logger.Warn("Failed to decode message",
+					ms.logger.Warn("Failed to decode message during iteration",
 						zap.String("key", string(item.Key())),
 						zap.Error(err))
-					return nil // 跳过损坏的消息
+					shouldContinue = true // 跳过损坏的消息，继续遍历
+					return nil
 				}
 
-				messages = append(messages, msg)
+				if msg.Message == nil || msg.Message.Packet == nil {
+					shouldContinue = true
+					return nil
+				}
+
+				var expiryTime int64
+				if msg.Message.Packet.Properties != nil {
+					expiryTime = msg.Message.Packet.Properties.ExpiryTime
+				}
+
+				info := RetainMessageInfo{
+					Topic:      msg.Message.Packet.Topic,
+					ExpiryTime: expiryTime,
+				}
+
+				shouldContinue = callback(info)
 				return nil
 			})
 			if err != nil {
 				return err
 			}
+			if !shouldContinue {
+				break
+			}
 		}
 
 		return nil
 	})
-
-	return messages, err
 }
 
 // topicMatches 检查主题是否匹配过滤器

@@ -4,7 +4,7 @@ package packet
 const ProtocolVersion uint8 = 1
 
 // ProtocolName 协议名称
-const ProtocolName = "MXTP"
+const ProtocolName = "MX"
 
 // PacketType 数据包类型
 type PacketType uint8
