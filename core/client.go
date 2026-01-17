@@ -254,30 +254,21 @@ func (c *Client) handleDisconnect(p *packet.DisconnectPacket) error {
 
 // allocatePacketID 分配新的 PacketID
 func (c *Client) allocatePacketID() uint16 {
-	for range maxPacketID {
-		id := c.nextPacketID.Add(1)
-		if id == 0 || id > maxPacketID {
-			c.nextPacketID.Store(minPacketID)
-			id = minPacketID
-		}
-
-		pid := uint16(id)
-		c.pendingAckMu.Lock()
-		_, inPending := c.pendingAck[pid]
-		c.pendingAckMu.Unlock()
-		if inPending {
-			continue
-		}
-
-		if c.core.messageStore != nil {
-			if err := c.core.messageStore.setPacketIDSeed(c.ID, pid); err != nil {
-				c.core.logger.Debug("Failed to set PacketID seed", zap.String("clientID", c.ID), zap.Error(err))
-			}
-		}
-		return pid
+	id := c.nextPacketID.Add(1)
+	if id == 0 || id > maxPacketID {
+		c.nextPacketID.Store(minPacketID)
+		id = minPacketID
 	}
 
-	return 0
+	pid := uint16(id)
+
+	if c.core.messageStore != nil {
+		if err := c.core.messageStore.setPacketIDSeed(c.ID, pid); err != nil {
+			c.core.logger.Error("Failed to set PacketID seed", zap.String("clientID", c.ID), zap.Error(err))
+		}
+	}
+
+	return pid
 }
 
 // WritePacket 发送数据包

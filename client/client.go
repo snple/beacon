@@ -342,32 +342,22 @@ func (c *Client) ForceClose() error {
 
 // allocatePacketID 分配新的 PacketID
 func (c *Client) allocatePacketID() uint16 {
-	// PacketID 分配策略（MQTT 风格）：
-	// - nextPacketID 自增（带回绕）
-	// - 仅检查内存中的 in-flight 集合（pendingAck + storedPacketIDs），避免每次触碰持久化存储。
-	for range maxPacketID {
-		id := c.nextPacketID.Add(1)
-		if id == 0 || id > maxPacketID {
-			c.nextPacketID.Store(minPacketID)
-			id = minPacketID
-		}
-
-		pid := uint16(id)
-		c.pendingAckMu.Lock()
-		_, inPending := c.pendingAck[pid]
-		c.pendingAckMu.Unlock()
-		if inPending {
-			continue
-		}
-
-		// Best-effort persist the latest allocated PacketID seed (used on next start/reconnect).
-		if c.store != nil {
-			_ = c.store.setPacketIDSeed(pid)
-		}
-		return pid
+	id := c.nextPacketID.Add(1)
+	if id == 0 || id > maxPacketID {
+		c.nextPacketID.Store(minPacketID)
+		id = minPacketID
 	}
 
-	return 0
+	pid := uint16(id)
+
+	// Best-effort persist the latest allocated PacketID seed (used on next start/reconnect).
+	if c.store != nil {
+		if err := c.store.setPacketIDSeed(pid); err != nil {
+			c.logger.Error("Failed to set PacketID seed", zap.String("clientID", c.clientID), zap.Error(err))
+		}
+	}
+
+	return pid
 }
 
 func (c *Client) receiveLoop() {
