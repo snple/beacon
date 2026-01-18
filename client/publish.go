@@ -76,14 +76,6 @@ func (c *Client) PublishToClient(targetClientID, topic string, payload []byte, o
 	return c.Publish(topic, payload, opts.WithTargetClientID(targetClientID))
 }
 
-func (c *Client) PublishToCore(topic string, payload []byte, opts *PublishOptions) error {
-	if opts == nil {
-		opts = NewPublishOptions()
-	}
-
-	return c.Publish(topic, payload, opts.WithTargetClientID(packet.TargetToCore))
-}
-
 // publishMessage 内部发布消息方法
 func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 	if !c.connected.Load() {
@@ -349,27 +341,9 @@ func (c *Client) handlePublish(p *packet.PublishPacket) {
 		return
 	}
 
-	msg := Message{
+	msg := &Message{
 		Packet: p,
 	}
-
-	// 轮询模式：检查是否有消息队列，如果有则放入队列
-	c.messageQueueMu.Lock()
-	if c.messageQueue == nil {
-		c.messageQueueMu.Unlock()
-
-		// 没有消息队列，记录警告并丢弃消息
-		c.logger.Warn("Message received but no queue available",
-			zap.String("topic", p.Topic))
-
-		// QoS 1: 仍然发送 ACK（避免重传）
-		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
-			c.writePacket(puback)
-		}
-		return
-	}
-	c.messageQueueMu.Unlock()
 
 	// 非阻塞尝试放入队列
 	select {

@@ -27,21 +27,13 @@ func (c *Client) PollMessage(ctx context.Context, timeout time.Duration) (*Messa
 		return nil, ErrNotConnected
 	}
 
-	// 延迟初始化消息队列（仅第一次调用时）
-	c.messageQueueMu.Lock()
-	if !c.messageQueueInit {
-		c.messageQueue = make(chan Message, c.options.MessageQueueSize)
-		c.messageQueueInit = true
-	}
-	c.messageQueueMu.Unlock()
-
 	// 创建超时上下文
 	pollCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	select {
 	case msg := <-c.messageQueue:
-		return &msg, nil
+		return msg, nil
 	case <-pollCtx.Done():
 		if pollCtx.Err() == context.DeadlineExceeded {
 			return nil, NewPollTimeoutError(timeout)
@@ -61,14 +53,6 @@ func (c *Client) PollRequest(ctx context.Context, timeout time.Duration) (*Reque
 	if !c.connected.Load() {
 		return nil, ErrNotConnected
 	}
-
-	// 延迟初始化请求队列（仅第一次调用时）
-	c.requestQueueMu.Lock()
-	if !c.requestQueueInit {
-		c.requestQueue = make(chan *Request, c.options.RequestQueueSize)
-		c.requestQueueInit = true
-	}
-	c.requestQueueMu.Unlock()
 
 	// 创建超时上下文
 	pollCtx, cancel := context.WithTimeout(ctx, timeout)

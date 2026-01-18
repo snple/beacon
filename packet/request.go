@@ -254,9 +254,7 @@ func (p *ResponsePacket) Decode(r io.Reader, header FixedHeader) error {
 // RequestProperties REQUEST 专用属性
 // 使用位掩码优化编码，减少字节开销
 type RequestProperties struct {
-	// 超时时间（相对时间，单位：秒，0 表示永不超时）
-	// core 收到请求后计算绝对过期时间 = now + Timeout
-	// 使用相对时间避免客户端和 core 时间不同步的问题
+	// 超时时间,相对时间，由调用方决定如何使用
 	Timeout uint32
 
 	// 追踪 ID

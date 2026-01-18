@@ -146,8 +146,7 @@ type RequestHandler interface {
 // RequestContext 请求上下文
 // 使用原始 packet 引用，避免数据拷贝
 type RequestContext struct {
-	ClientID string                // 客户端 ID
-	Packet   *packet.RequestPacket // 原始 REQUEST 包（引用，不要修改）
+	Packet *packet.RequestPacket // 原始 REQUEST 包（引用，不要修改）
 }
 
 // RequestHandlerFunc 函数类型适配器

@@ -125,17 +125,13 @@ type Client struct {
 	processing atomic.Bool // true: 正在处理发送队列
 
 	// REQUEST/RESPONSE 支持
-	nextRequestID    atomic.Uint32             // 请求ID生成器
-	pendingRequests  map[uint32]chan *Response // requestID -> response channel
-	pendingReqMu     sync.Mutex                // 保护 pendingRequests
-	requestQueue     chan *Request             // 轮询模式：接收请求的队列
-	requestQueueMu   sync.Mutex
-	requestQueueInit bool // 请求队列是否已初始化
+	nextRequestID   atomic.Uint32             // 请求ID生成器
+	pendingRequests map[uint32]chan *Response // requestID -> response channel
+	pendingReqMu    sync.Mutex                // 保护 pendingRequests
 
-	// 消息轮询
-	messageQueue     chan Message // 轮询模式：接收消息的队列
-	messageQueueMu   sync.Mutex
-	messageQueueInit bool // 消息队列是否已初始化
+	// 轮询模式
+	requestQueue chan *Request // 轮询模式：接收请求的队列
+	messageQueue chan *Message // 轮询模式：接收消息的队列
 
 	// 自动重连
 	autoReconnect atomic.Bool    // 是否启用自动重连
@@ -198,6 +194,9 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 		rootCancel:        rootCancel,
 		connLostCh:        make(chan error, 1),
 		logger:            logger,
+
+		messageQueue: make(chan *Message, opts.MessageQueueSize),
+		requestQueue: make(chan *Request, opts.RequestQueueSize),
 	}
 
 	// 初始 connCtx 设为已取消状态：任何等待连接生命周期的逻辑会立刻退出。
@@ -250,7 +249,9 @@ func (c *Client) close(err error) error {
 		for _, ch := range c.pendingRequests {
 			select {
 			case ch <- &Response{
-				ReasonCode: packet.ReasonImplementationError,
+				Packet: &packet.ResponsePacket{
+					ReasonCode: packet.ReasonServerShuttingDown,
+				},
 			}:
 			default:
 			}
@@ -338,6 +339,16 @@ func (c *Client) GetLogger() *zap.Logger {
 // 注意：这是一个测试辅助方法，生产环境请使用 Disconnect() 或 Close()
 func (c *Client) ForceClose() error {
 	return c.close(nil)
+}
+
+// CleanupExpired 清理已过期的持久化消息
+// 消息重发时会自动清理过期消息，一般不需要手动调用此方法
+func (c *Client) CleanupExpired() (int, error) {
+	if c.store == nil {
+		return 0, nil
+	}
+
+	return c.store.cleanupExpired()
 }
 
 // allocatePacketID 分配新的 PacketID

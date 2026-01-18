@@ -28,6 +28,8 @@ var (
 
 	// ErrResultNil 响应结果为空
 	ErrResultNil = errors.New("result cannot be nil")
+
+	ErrActionEmpty = errors.New("action cannot be empty")
 )
 
 // 订阅/注册相关错误

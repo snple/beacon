@@ -47,16 +47,7 @@ type Core struct {
 	messageStore *messageStore
 
 	// REQUEST/RESPONSE 支持（轮询模式）
-	actionRegistry   *actionRegistry // action 注册表
-	requestTracker   *requestTracker // 请求追踪器
-	requestQueue     chan *Request
-	requestQueueMu   sync.Mutex
-	requestQueueInit bool // 请求队列是否已初始化
-
-	// MESSAGE 轮询支持
-	messageQueue     chan Message
-	messageQueueMu   sync.Mutex
-	messageQueueInit bool // 消息队列是否已初始化
+	actionRegistry *actionRegistry // action 注册表
 
 	// 统计信息
 	stats Stats
@@ -116,9 +107,6 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		ctx:             ctx,
 		cancel:          cancel,
 	}
-
-	// 初始化请求追踪器（需要 core 引用）
-	b.requestTracker = newRequestTracker(b)
 
 	// 初始化消息持久化存储
 	if err := b.initMessageStore(); err != nil {

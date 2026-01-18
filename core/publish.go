@@ -76,15 +76,6 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 		return nil
 	}
 
-	// 根据 TargetClientID 处理消息投递
-	// 1. TargetClientID="core": 投递给轮询队列（供 PollMessage 使用）
-	// 2. TargetClientID="": 普通发布（广播给所有匹配订阅的客户端）
-	// 3. 其他值: 定向发布给指定客户端
-	if msg.Packet.Properties.TargetClientID == packet.TargetToCore {
-		// 将消息放入轮询队列（供 PollMessage 使用）
-		return c.enqueueMessage(msg)
-	}
-
 	// QoS 0: 直接发布
 	// QoS 1: 发布并发送 PUBACK
 	c.core.publish(msg)

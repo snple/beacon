@@ -292,7 +292,6 @@ type RequestContext struct {
 type ResponseContext struct {
 	ClientID string                 // 目标客户端 ID
 	Packet   *packet.ResponsePacket // 原始 RESPONSE 包（引用，不要修改）
-	Action   string                 // 原请求 action（便于日志，不需要再查询）
 }
 
 // RequestHandlerFunc 函数类型适配器

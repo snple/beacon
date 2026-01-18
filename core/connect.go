@@ -64,14 +64,6 @@ func (c *Core) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// 处理 Client ID
-	if connect.ClientID == packet.TargetToCore {
-		c.logger.Debug("Client ID cannot be 'core'", zap.String("remote", conn.RemoteAddr().String()))
-		c.sendConnack(conn, false, packet.ReasonClientIDNotValid, nil)
-		conn.Close()
-		return
-	}
-
 	assignedClientID := c.handleClientID(connect)
 
 	// 认证
@@ -371,9 +363,6 @@ func (c *Core) removeClient(client *Client) {
 			zap.String("clientID", client.ID),
 			zap.Strings("actions", actions))
 	}
-
-	// 清理请求追踪
-	c.requestTracker.Cleanup(client.ID)
 
 	// 清理持久化消息（如果 CleanSession 或会话过期）
 	if c.messageStore != nil {

@@ -20,8 +20,7 @@ import (
 
 // MessageContext 路由消息上下文（类似 HTTP Request）
 type MessageContext struct {
-	Message *client.Message // 原始消息
-
+	Message  *client.Message   // 原始消息
 	ClientID string            // 发送者客户端 ID
 	Params   map[string]string // 主题参数（来自通配符匹配）
 
@@ -32,12 +31,7 @@ type MessageContext struct {
 // RequestContext 路由请求上下文（类似 HTTP Request）
 type RequestContext struct {
 	Request   *client.Request   // 原始请求
-	Action    string            // Action 名称
-	Payload   []byte            // 负载
-	ClientID  string            // 发送者客户端 ID
 	Params    map[string]string // Action 参数（来自通配符匹配）
-	TraceID   string            // 追踪 ID
-	Timeout   uint32            // 超时时间（秒）
 	responded bool              // 是否已响应
 
 	// 内部
@@ -428,7 +422,7 @@ func (r *Router) dispatchRequest(req *client.Request) {
 	var params map[string]string
 
 	for _, route := range handlers {
-		p, matched := route.matcher.match(req.Action)
+		p, matched := route.matcher.match(req.Packet.Action)
 		if matched {
 			matchedRoute = route
 			params = p
@@ -437,20 +431,15 @@ func (r *Router) dispatchRequest(req *client.Request) {
 	}
 
 	ctx := &RequestContext{
-		Request:  req,
-		Action:   req.Action,
-		Payload:  req.Payload,
-		ClientID: req.SourceClientID,
-		Params:   params,
-		TraceID:  req.TraceID,
-		Timeout:  req.Timeout,
-		router:   r,
+		Request: req,
+		Params:  params,
+		router:  r,
 	}
 
 	if matchedRoute == nil {
 		// 未找到处理器，返回错误
-		r.logger.Debug("No handler found for action", zap.String("action", req.Action))
-		ctx.RespondError(packet.ReasonUnspecifiedError, "action not found: "+req.Action)
+		r.logger.Debug("No handler found for action", zap.String("action", req.Packet.Action))
+		ctx.RespondError(packet.ReasonUnspecifiedError, "action not found: "+req.Packet.Action)
 		return
 	}
 
@@ -459,7 +448,7 @@ func (r *Router) dispatchRequest(req *client.Request) {
 
 	// 如果处理器没有响应，返回默认错误
 	if !ctx.responded {
-		r.logger.Warn("Handler did not respond", zap.String("action", req.Action))
+		r.logger.Warn("Handler did not respond", zap.String("action", req.Packet.Action))
 		ctx.RespondError(packet.ReasonUnspecifiedError, "handler did not respond")
 	}
 }

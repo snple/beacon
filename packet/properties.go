@@ -516,7 +516,7 @@ func (p *ConnackProperties) Decode(r io.Reader) error {
 // PublishProperties PUBLISH 消息专用属性
 // 使用位掩码优化编码，减少字节开销
 type PublishProperties struct {
-	// 过期时间 (Unix 秒级时间戳，0 会使用core默认值)
+	// 过期时间 (Unix 秒级时间戳，0 会使用 core 默认值)
 	ExpiryTime int64 `nson:"exp"` // 过期时间
 
 	// 消息格式

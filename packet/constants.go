@@ -199,7 +199,7 @@ const (
 	ReasonRequestCancelled   ReasonCode = 0xC4 // 请求被取消
 	ReasonDuplicateAction    ReasonCode = 0xC5 // Action 已被注册
 	ReasonActionInvalid      ReasonCode = 0xC6 // Action 名称无效
-	ReasonReceiveWindowFull  ReasonCode = 0xC7 // 接收窗口已满
+	ReasonBadRequest         ReasonCode = 0xC7 // 错误的请求
 )
 
 func (r ReasonCode) String() string {
@@ -317,8 +317,8 @@ func (r ReasonCode) String() string {
 		return "Duplicate action"
 	case ReasonActionInvalid:
 		return "Action invalid"
-	case ReasonReceiveWindowFull:
-		return "Receive window full"
+	case ReasonBadRequest:
+		return "Bad request"
 
 	default:
 		return "Unknown reason"
@@ -348,6 +348,3 @@ const (
 	TopicWildcardSingle = "*"  // 单层通配符 (替代 MQTT 的 +)
 	TopicWildcardMulti  = "**" // 多层通配符 (替代 MQTT 的 #)
 )
-
-// Target to core, 用于 client 向 core 发布消息
-const TargetToCore = "core"

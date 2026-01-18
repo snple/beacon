@@ -454,7 +454,6 @@ func TestRequestHandlerFunc_OnResponse(t *testing.T) {
 	ctx := &ResponseContext{
 		ClientID: "test-client",
 		Packet:   respPacket,
-		Action:   "user.get",
 	}
 	handler.OnResponse(ctx)
 
@@ -463,9 +462,6 @@ func TestRequestHandlerFunc_OnResponse(t *testing.T) {
 	}
 	if capturedCtx.ClientID != "test-client" {
 		t.Errorf("ClientID = %q, want %q", capturedCtx.ClientID, "test-client")
-	}
-	if capturedCtx.Action != "user.get" {
-		t.Errorf("Action = %q, want %q", capturedCtx.Action, "user.get")
 	}
 }
 
@@ -801,7 +797,6 @@ func TestHooks_CallOnResponse(t *testing.T) {
 	ctx := &ResponseContext{
 		ClientID: "test-client",
 		Packet:   respPacket,
-		Action:   "user.get",
 	}
 	hooks.callOnResponse(ctx)
 

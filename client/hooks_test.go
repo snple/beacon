@@ -215,8 +215,7 @@ func TestRequestHandlerFunc_OnRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reqPkt := packet.NewRequestPacket(1, "test.action", nil)
 			ctx := &RequestContext{
-				ClientID: "test-client",
-				Packet:   reqPkt,
+				Packet: reqPkt,
 			}
 			result := tt.handler.OnRequest(ctx)
 			if result != tt.expectResult {
@@ -414,7 +413,7 @@ func TestHooks_CallOnRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reqPkt := packet.NewRequestPacket(1, "test.action", nil)
-			ctx := &RequestContext{ClientID: "test-client", Packet: reqPkt}
+			ctx := &RequestContext{Packet: reqPkt}
 			result := tt.hooks.callOnRequest(ctx)
 			if result != tt.expectResult {
 				t.Errorf("callOnRequest() = %v, want %v", result, tt.expectResult)

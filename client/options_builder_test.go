@@ -127,32 +127,6 @@ func TestSubscribeOptionsBuilder(t *testing.T) {
 	}
 }
 
-// TestRequestOptionsBuilder 测试 RequestOptions Builder 模式
-func TestRequestOptionsBuilder(t *testing.T) {
-	opts := NewRequestOptions().
-		WithTargetClientID("target-client").
-		WithTimeout(10*time.Second).
-		WithTraceID("req-trace-123").
-		WithContentType("application/octet-stream").
-		WithUserProperty("req-key", "req-value")
-
-	if opts.TargetClientID != "target-client" {
-		t.Errorf("expected targetClientID target-client, got %s", opts.TargetClientID)
-	}
-	if opts.Timeout != 10*time.Second {
-		t.Errorf("expected timeout 10s, got %v", opts.Timeout)
-	}
-	if opts.TraceID != "req-trace-123" {
-		t.Errorf("expected traceID req-trace-123, got %s", opts.TraceID)
-	}
-	if opts.ContentType != "application/octet-stream" {
-		t.Errorf("expected contentType application/octet-stream, got %s", opts.ContentType)
-	}
-	if opts.UserProperties["req-key"] != "req-value" {
-		t.Errorf("expected UserProperties[req-key]=req-value, got %s", opts.UserProperties["req-key"])
-	}
-}
-
 // TestClientOptionsDefaults 测试默认值
 func TestClientOptionsDefaults(t *testing.T) {
 	opts := NewClientOptions()
@@ -195,15 +169,6 @@ func TestPublishOptionsDefaults(t *testing.T) {
 	}
 }
 
-// TestRequestOptionsDefaults 测试 RequestOptions 默认值
-func TestRequestOptionsDefaults(t *testing.T) {
-	opts := NewRequestOptions()
-
-	if opts.Timeout != 30*time.Second {
-		t.Errorf("expected default timeout 30s, got %v", opts.Timeout)
-	}
-}
-
 // TestClientOptionsWithHooks 测试 ClientOptions 带钩子
 func TestClientOptionsWithHooks(t *testing.T) {
 	connectCalled := false
@@ -241,23 +206,23 @@ func TestRequestBuilderPattern(t *testing.T) {
 		WithContentType("text/plain").
 		WithUserProperty("key1", "value1")
 
-	if req.Action != "test-action" {
-		t.Errorf("expected action test-action, got %s", req.Action)
+	if req.Packet.Action != "test-action" {
+		t.Errorf("expected action test-action, got %s", req.Packet.Action)
 	}
-	if string(req.Payload) != "payload" {
-		t.Errorf("expected payload 'payload', got %s", string(req.Payload))
+	if string(req.Packet.Payload) != "payload" {
+		t.Errorf("expected payload 'payload', got %s", string(req.Packet.Payload))
 	}
-	if req.Timeout != 60 {
-		t.Errorf("expected timeout 60, got %d", req.Timeout)
+	if req.Packet.Properties.Timeout != 60 {
+		t.Errorf("expected timeout 60, got %d", req.Packet.Properties.Timeout)
 	}
-	if req.TraceID != "req-trace" {
-		t.Errorf("expected traceID req-trace, got %s", req.TraceID)
+	if req.Packet.Properties.TraceID != "req-trace" {
+		t.Errorf("expected traceID req-trace, got %s", req.Packet.Properties.TraceID)
 	}
-	if req.ContentType != "text/plain" {
-		t.Errorf("expected contentType text/plain, got %s", req.ContentType)
+	if req.Packet.Properties.ContentType != "text/plain" {
+		t.Errorf("expected contentType text/plain, got %s", req.Packet.Properties.ContentType)
 	}
-	if req.UserProperties["key1"] != "value1" {
-		t.Errorf("expected UserProperties[key1]=value1, got %s", req.UserProperties["key1"])
+	if req.Packet.Properties.UserProperties["key1"] != "value1" {
+		t.Errorf("expected UserProperties[key1]=value1, got %s", req.Packet.Properties.UserProperties["key1"])
 	}
 }
 
@@ -271,17 +236,17 @@ func TestResponseBuilderPattern(t *testing.T) {
 	if !resp.IsSuccess() {
 		t.Error("expected response to be success")
 	}
-	if string(resp.Payload) != "response data" {
-		t.Errorf("expected payload 'response data', got %s", string(resp.Payload))
+	if string(resp.Packet.Payload) != "response data" {
+		t.Errorf("expected payload 'response data', got %s", string(resp.Packet.Payload))
 	}
-	if resp.TraceID != "resp-trace" {
-		t.Errorf("expected traceID resp-trace, got %s", resp.TraceID)
+	if resp.Packet.Properties.TraceID != "resp-trace" {
+		t.Errorf("expected traceID resp-trace, got %s", resp.Packet.Properties.TraceID)
 	}
-	if resp.ContentType != "application/json" {
-		t.Errorf("expected contentType application/json, got %s", resp.ContentType)
+	if resp.Packet.Properties.ContentType != "application/json" {
+		t.Errorf("expected contentType application/json, got %s", resp.Packet.Properties.ContentType)
 	}
-	if resp.UserProperties["resp-key"] != "resp-value" {
-		t.Errorf("expected UserProperties[resp-key]=resp-value, got %s", resp.UserProperties["resp-key"])
+	if resp.Packet.Properties.UserProperties["resp-key"] != "resp-value" {
+		t.Errorf("expected UserProperties[resp-key]=resp-value, got %s", resp.Packet.Properties.UserProperties["resp-key"])
 	}
 }
 
@@ -293,14 +258,14 @@ func TestErrorResponse(t *testing.T) {
 	if resp.IsSuccess() {
 		t.Error("expected response to be failure")
 	}
-	if resp.ReasonCode != packet.ReasonNotAuthorized {
-		t.Errorf("expected ReasonNotAuthorized, got %v", resp.ReasonCode)
+	if resp.Packet.ReasonCode != packet.ReasonNotAuthorized {
+		t.Errorf("expected ReasonNotAuthorized, got %v", resp.Packet.ReasonCode)
 	}
-	if resp.ReasonString != "permission denied" {
-		t.Errorf("expected reasonString 'permission denied', got %s", resp.ReasonString)
+	if resp.Packet.Properties.ReasonString != "permission denied" {
+		t.Errorf("expected reasonString 'permission denied', got %s", resp.Packet.Properties.ReasonString)
 	}
-	if resp.TraceID != "error-trace" {
-		t.Errorf("expected traceID error-trace, got %s", resp.TraceID)
+	if resp.Packet.Properties.TraceID != "error-trace" {
+		t.Errorf("expected traceID error-trace, got %s", resp.Packet.Properties.TraceID)
 	}
 	if resp.Error() != "permission denied" {
 		t.Errorf("expected Error() 'permission denied', got %s", resp.Error())
@@ -399,17 +364,6 @@ func TestPublishOptionsUserPropertiesChaining(t *testing.T) {
 	opts := NewPublishOptions().
 		WithUserProperty("pub1", "val1").
 		WithUserProperty("pub2", "val2")
-
-	if len(opts.UserProperties) != 2 {
-		t.Errorf("expected 2 user properties, got %d", len(opts.UserProperties))
-	}
-}
-
-// TestRequestOptionsUserPropertiesChaining 测试 RequestOptions UserProperties 链式调用
-func TestRequestOptionsUserPropertiesChaining(t *testing.T) {
-	opts := NewRequestOptions().
-		WithUserProperty("req1", "val1").
-		WithUserProperty("req2", "val2")
 
 	if len(opts.UserProperties) != 2 {
 		t.Errorf("expected 2 user properties, got %d", len(opts.UserProperties))
