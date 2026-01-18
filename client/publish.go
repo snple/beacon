@@ -19,17 +19,13 @@ import (
 //	        WithTraceID("trace-123"),
 //	)
 func (c *Client) Publish(topic string, payload []byte, opts *PublishOptions) error {
-	if !c.connected.Load() {
-		return ErrNotConnected
-	}
-
 	if opts == nil {
 		opts = NewPublishOptions()
 	}
 
 	// 确定超时时间：优先使用选项指定的，否则使用配置默认值
 	timeout := opts.Timeout
-	if timeout == 0 {
+	if timeout == 0 && c.options != nil {
 		timeout = c.options.PublishTimeout
 	}
 	if timeout == 0 {
@@ -77,94 +73,161 @@ func (c *Client) PublishToClient(targetClientID, topic string, payload []byte, o
 }
 
 // publishMessage 内部发布消息方法
+//
+// 流程：
+// 1. QoS=1: 分配 PacketID 并持久化（离线也可以）
+// 2. 获取连接，如果没有连接：
+//   - QoS=0: 返回错误（无法缓存）
+//   - QoS=1: 返回成功（已持久化，等待重传）
+//
+// 3. 尝试入队，如果队列满：
+//   - QoS=0: 返回错误
+//   - QoS=1: 返回成功（已持久化，等待重传）
+//
+// 4. 入队成功：触发发送
+// 5. QoS=1: 等待 ACK（仅首次发布，重传不等待）
 func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
-	if !c.connected.Load() {
-		return ErrNotConnected
-	}
-
-	// QoS 1: 分配 PacketID
+	// QoS 1: 分配 PacketID 并持久化
 	if msg.Packet.QoS == packet.QoS1 {
 		c.logger.Debug("Publishing QoS1 message",
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("traceID", msg.Packet.Properties.TraceID))
 
+		// 分配 PacketID（使用 Client 级别的生成器，支持离线）
 		msg.Packet.PacketID = c.allocatePacketID()
+		if msg.Packet.PacketID == 0 {
+			return ErrNotConnected // PacketID 分配失败
+		}
 
-		// QoS 1: 先持久化到存储（确保不丢失）
+		// 持久化到存储（确保不丢失）
 		if c.store != nil {
 			if err := c.store.save(&msg); err != nil {
 				c.logger.Error("Failed to persist QoS1 message",
 					zap.String("topic", msg.Packet.Topic),
 					zap.Uint16("packetID", msg.Packet.PacketID),
 					zap.Error(err))
+				return err
 			}
 		}
 	}
 
+	// 获取当前连接
+	conn := c.getConn()
+
+	// 如果没有连接
+	if conn == nil {
+		if msg.Packet.QoS == packet.QoS0 {
+			// QoS0: 无法缓存，直接失败
+			c.logger.Warn("Not connected, QoS0 message dropped",
+				zap.String("topic", msg.Packet.Topic))
+			return ErrNotConnected
+		}
+		// QoS1: 已持久化，等待重连后由重传机制处理
+		c.logger.Debug("Not connected, QoS1 message queued for retransmit",
+			zap.String("topic", msg.Packet.Topic),
+			zap.Uint16("packetID", msg.Packet.PacketID))
+		return nil
+	}
+
 	// 尝试放入发送队列
-	if !c.sendQueue.tryEnqueue(&msg) {
+	if !conn.sendQueue.tryEnqueue(&msg) {
 		// 队列已满
 		if msg.Packet.QoS == packet.QoS0 {
-			// QoS0: 直接丢弃
+			// QoS0: 丢弃
 			c.logger.Warn("Send queue full, QoS0 message dropped",
 				zap.String("topic", msg.Packet.Topic))
 			return ErrSendQueueFull
 		}
-		// QoS1: 等待重传机制处理
+		// QoS1: 已持久化，等待重传机制处理
 		c.logger.Debug("Send queue full, QoS1 message queued for retransmit",
 			zap.String("topic", msg.Packet.Topic),
 			zap.Uint16("packetID", msg.Packet.PacketID))
-		return nil // 不返回错误
+		return nil
 	}
 
-	// 触发发送协程
+	// 消息已入队，触发发送
 	c.triggerSend()
 
-	// QoS 1: 等待确认
+	// QoS1: 等待 ACK（仅对首次发布的消息）
 	if msg.Packet.QoS == packet.QoS1 {
-		ch := make(chan error, 1)
-		c.pendingAckMu.Lock()
-		c.pendingAck[msg.Packet.PacketID] = ch
-		c.pendingAckMu.Unlock()
-
-		timeoutCh := time.After(timeout)
-		select {
-		case err := <-ch:
-			return err
-		case <-timeoutCh:
-			c.pendingAckMu.Lock()
-			delete(c.pendingAck, msg.Packet.PacketID)
-			c.pendingAckMu.Unlock()
-			return ErrPublishTimeout
-		case <-c.connCtx.Done():
-			return ErrNotConnected
-		}
+		return c.waitForPublishAck(conn, msg.Packet.PacketID, timeout)
 	}
 
 	return nil
 }
 
+// waitForPublishAck 等待 QoS1 消息的 PUBACK
+//
+// 注意：
+// 1. 仅对首次发布的消息调用（重传消息不等待）
+// 2. 如果超时或连接断开，消息仍在持久化中，会被重传机制处理
+// 3. 使用 defer 确保 pendingAck 始终被清理
+func (c *Client) waitForPublishAck(conn *Conn, packetID uint16, timeout time.Duration) error {
+	// 创建等待通道
+	waitCh := make(chan error, 1)
+
+	conn.pendingAckMu.Lock()
+	conn.pendingAck[packetID] = waitCh
+	conn.pendingAckMu.Unlock()
+
+	// 确保退出时清理 pendingAck
+	defer func() {
+		conn.pendingAckMu.Lock()
+		delete(conn.pendingAck, packetID)
+		conn.pendingAckMu.Unlock()
+	}()
+
+	timeoutCh := time.After(timeout)
+	select {
+	case err := <-waitCh:
+		// 收到 PUBACK
+		return err
+	case <-timeoutCh:
+		// 超时：消息仍在持久化中，会被重传
+		c.logger.Warn("Publish ACK timeout, message will be retransmitted",
+			zap.Uint16("packetID", packetID))
+		return ErrPublishTimeout
+	case <-conn.ctx.Done():
+		// 连接断开：消息在持久化中，会被重传
+		c.logger.Debug("Connection lost while waiting for ACK, message will be retransmitted",
+			zap.Uint16("packetID", packetID))
+		return ErrNotConnected
+	case <-c.rootCtx.Done():
+		// 客户端关闭
+		return ErrNotConnected
+	}
+}
+
 // triggerSend 触发发送协程（非阻塞）
 // 使用 processing 标志避免重复启动
 func (c *Client) triggerSend() {
-	if c.processing.CompareAndSwap(false, true) {
+	conn := c.getConn()
+	if conn == nil {
+		return
+	}
+	if conn.processing.CompareAndSwap(false, true) {
 		go c.processSendQueue()
 	}
 }
 
 // processSendQueue 处理发送队列中的消息
 func (c *Client) processSendQueue() {
-	defer c.processing.Store(false)
+	// 获取当前连接
+	conn := c.getConn()
+	if conn == nil {
+		return
+	}
+	defer conn.processing.Store(false)
 
-	for c.connected.Load() {
-		select {
-		case <-c.connCtx.Done():
+	for {
+		// 检查连接是否仍然有效
+		if conn.IsClosed() {
+			// 连接已关闭，退出（消息留在队列中，等待重连后发送）
 			return
-		default:
 		}
 
 		// 尝试从队列取消息
-		msg, ok := c.sendQueue.tryDequeue()
+		msg, ok := conn.sendQueue.tryDequeue()
 		if !ok {
 			// 队列为空，退出
 			return
@@ -184,16 +247,12 @@ func (c *Client) processSendQueue() {
 				zap.Error(err),
 				zap.String("topic", msg.Packet.Topic),
 				zap.Uint16("packetID", msg.Packet.PacketID))
+			// 发送失败，消息已出队，QoS1 消息会在持久化存储中，重传机制会处理
 		}
 	}
 }
 
 // Subscribe 订阅主题（轮询模式，通过 PollMessage 获取消息）
-//
-// 用法：
-//
-//	err := c.Subscribe("topic1", "topic2")
-//	然后通过 PollMessage 获取消息
 func (c *Client) Subscribe(topics ...string) error {
 	return c.SubscribeWithOptions(topics, nil)
 }
@@ -212,71 +271,45 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 		opts = NewSubscribeOptions()
 	}
 
+	conn := c.getConn()
+	if conn == nil {
+		return ErrNotConnected
+	}
+
 	sub := packet.NewSubscribePacket(c.allocatePacketID())
 	for _, topic := range topics {
 		sub.AddSubscription(topic, opts.QoS)
 	}
 
-	// **重要**: 在发送 SUBSCRIBE 之前就记录主题
-	// 这样当服务端发送保留消息时，消息队列已经就绪
-	// 如果 SUBACK 失败，我们再回滚
+	// 先记录订阅
 	c.subscribedTopicsMu.Lock()
 	for _, topic := range topics {
 		c.subscribedTopics[topic] = true
 	}
 	c.subscribedTopicsMu.Unlock()
 
-	// 等待确认
-	ch := make(chan error, 1)
-	c.pendingAckMu.Lock()
-	c.pendingAck[sub.PacketID] = ch
-	c.pendingAckMu.Unlock()
-
-	if err := c.writePacket(sub); err != nil {
-		// 发送失败，回滚订阅
+	if err := conn.writePacket(sub); err != nil {
+		// 发送失败，回滚
 		c.subscribedTopicsMu.Lock()
 		for _, topic := range topics {
 			delete(c.subscribedTopics, topic)
 		}
 		c.subscribedTopicsMu.Unlock()
-		c.pendingAckMu.Lock()
-		delete(c.pendingAck, sub.PacketID)
-		c.pendingAckMu.Unlock()
 		return err
 	}
 
-	select {
-	case err := <-ch:
-		if err != nil {
-			// SUBACK 失败，回滚订阅
-			c.subscribedTopicsMu.Lock()
-			for _, topic := range topics {
-				delete(c.subscribedTopics, topic)
-			}
-			c.subscribedTopicsMu.Unlock()
-			return err
-		}
-		return nil
-	case <-time.After(30 * time.Second):
-		// 超时，回滚订阅
+	// 等待确认
+	if err := conn.waitAck(sub.PacketID, 30*time.Second); err != nil {
+		// 确认失败，回滚
 		c.subscribedTopicsMu.Lock()
 		for _, topic := range topics {
 			delete(c.subscribedTopics, topic)
 		}
 		c.subscribedTopicsMu.Unlock()
-		c.pendingAckMu.Lock()
-		delete(c.pendingAck, sub.PacketID)
-		c.pendingAckMu.Unlock()
-		return ErrSubscribeTimeout
-	case <-c.connCtx.Done():
-		// 取消，回滚订阅
-		c.subscribedTopicsMu.Lock()
-		for _, topic := range topics {
-			delete(c.subscribedTopics, topic)
-		}
-		c.subscribedTopicsMu.Unlock()
-		return ErrNotConnected
+		return err
 	}
+
+	return nil
 }
 
 // Unsubscribe 取消订阅
@@ -285,145 +318,28 @@ func (c *Client) Unsubscribe(topics ...string) error {
 		return ErrNotConnected
 	}
 
+	conn := c.getConn()
+	if conn == nil {
+		return ErrNotConnected
+	}
+
 	unsub := packet.NewUnsubscribePacket(c.allocatePacketID())
 	unsub.Topics = topics
 
-	// 等待确认
-	ch := make(chan error, 1)
-	c.pendingAckMu.Lock()
-	c.pendingAck[unsub.PacketID] = ch
-	c.pendingAckMu.Unlock()
-
-	if err := c.writePacket(unsub); err != nil {
-		c.pendingAckMu.Lock()
-		delete(c.pendingAck, unsub.PacketID)
-		c.pendingAckMu.Unlock()
+	if err := conn.writePacket(unsub); err != nil {
 		return err
 	}
 
-	select {
-	case err := <-ch:
-		if err != nil {
-			return err
-		}
-		// 确认成功后移除订阅记录
-		c.subscribedTopicsMu.Lock()
-		for _, topic := range topics {
-			delete(c.subscribedTopics, topic)
-		}
-		c.subscribedTopicsMu.Unlock()
-		return nil
-	case <-time.After(30 * time.Second):
-		c.pendingAckMu.Lock()
-		delete(c.pendingAck, unsub.PacketID)
-		c.pendingAckMu.Unlock()
-		return ErrUnsubscribeTimeout
-	case <-c.connCtx.Done():
-		return ErrNotConnected
-	}
-}
-
-func (c *Client) handlePublish(p *packet.PublishPacket) {
-	// 调用 OnPublish 钩子（先检查钩子，避免不必要的数据拷贝）
-	if !c.options.Hooks.callOnPublish(&PublishContext{
-		ClientID: c.clientID,
-		Packet:   p,
-	}) {
-		// 钩子返回 false，丢弃消息
-		c.logger.Debug("Message rejected by hook",
-			zap.String("topic", p.Topic))
-
-		// QoS 1: 仍然发送 ACK（避免重传）
-		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
-			c.writePacket(puback)
-		}
-		return
+	if err := conn.waitAck(unsub.PacketID, 30*time.Second); err != nil {
+		return err
 	}
 
-	msg := &Message{
-		Packet: p,
+	// 确认成功后移除订阅记录
+	c.subscribedTopicsMu.Lock()
+	for _, topic := range topics {
+		delete(c.subscribedTopics, topic)
 	}
+	c.subscribedTopicsMu.Unlock()
 
-	// 非阻塞尝试放入队列
-	select {
-	case c.messageQueue <- msg:
-		// 成功放入队列
-		c.logger.Debug("Enqueued message for polling",
-			zap.String("topic", p.Topic))
-
-		// QoS 1: 成功入队后发送 ACK
-		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
-			c.writePacket(puback)
-		}
-	default:
-		// 队列已满
-		c.logger.Warn("Message queue full, message dropped",
-			zap.String("topic", p.Topic))
-
-		// QoS 1: 不发送 ACK，让 core 重传
-		// QoS 0: 直接丢弃
-	}
-}
-
-// handlePuback 处理 PUBACK
-func (c *Client) handlePuback(p *packet.PubackPacket) {
-	// 将 ReasonCode 转换为 error 传递给调用者
-	var err error
-	if p.ReasonCode != packet.ReasonSuccess {
-		err = NewPublishWarningError(p.ReasonCode.String())
-	}
-
-	// 从持久化存储中删除已确认的消息
-	if c.store != nil {
-		if delErr := c.store.Delete(p.PacketID); delErr != nil {
-			c.logger.Warn("Failed to delete persisted message after ACK",
-				zap.Uint16("packetID", p.PacketID),
-				zap.Error(delErr))
-		}
-	}
-
-	c.handleAck(p.PacketID, err)
-}
-
-// handleSuback 处理 SUBACK
-func (c *Client) handleSuback(p *packet.SubackPacket) {
-	var err error
-	// 检查是否有任何订阅失败
-	for i, code := range p.ReasonCodes {
-		if code != packet.ReasonSuccess && code != packet.ReasonCode(packet.QoS0) &&
-			code != packet.ReasonCode(packet.QoS1) {
-			err = NewSubscriptionError(i, code.String())
-			break
-		}
-	}
-	c.handleAck(p.PacketID, err)
-}
-
-// handleUnsuback 处理 UNSUBACK
-func (c *Client) handleUnsuback(p *packet.UnsubackPacket) {
-	var err error
-	// 检查是否有任何取消订阅失败
-	for i, code := range p.ReasonCodes {
-		if code != packet.ReasonSuccess {
-			err = NewUnsubscriptionError(i, code.String())
-			break
-		}
-	}
-	c.handleAck(p.PacketID, err)
-}
-
-func (c *Client) handleAck(packetID uint16, err error) {
-	c.pendingAckMu.Lock()
-	ch, ok := c.pendingAck[packetID]
-	if ok {
-		delete(c.pendingAck, packetID)
-	}
-	c.pendingAckMu.Unlock()
-
-	if ok {
-		ch <- err
-		close(ch)
-	}
+	return nil
 }

@@ -21,7 +21,7 @@ func (c *Client) handleAuth(p *packet.AuthPacket) {
 
 	// 调用 OnAuth 钩子（直接传递原始 packet）
 	authCtx := &AuthContext{
-		ClientID: c.clientID,
+		ClientID: c.ClientID(),
 		Packet:   p,
 	}
 	continueAuth, responseData, err := c.options.Hooks.callOnAuth(authCtx)

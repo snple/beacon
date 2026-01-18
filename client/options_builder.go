@@ -190,7 +190,14 @@ func (o *ClientOptions) WithWill(will *WillMessage) *ClientOptions {
 
 // WithWillSimple 便捷设置遗嘱消息（最常用字段）
 func (o *ClientOptions) WithWillSimple(topic string, payload []byte, qos packet.QoS, retain bool) *ClientOptions {
-	o.Will = &WillMessage{Topic: topic, Payload: payload, QoS: qos, Retain: retain}
+	o.Will = &WillMessage{
+		Packet: &packet.PublishPacket{
+			Topic:   topic,
+			Payload: payload,
+			QoS:     qos,
+			Retain:  retain,
+		},
+	}
 	return o
 }
 

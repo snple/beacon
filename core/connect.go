@@ -403,13 +403,35 @@ func (c *Client) restoreSession(old *Client) {
 	c.pendingAckMu.Unlock()
 	old.pendingAckMu.Unlock()
 
+	// 迁移 sendQueue（尽力而为，包括 QoS 0 和 QoS 1 未发送的消息）
+	// 从旧队列中取出所有消息，放入新队列
+	migratedCount := 0
+	for {
+		msg, ok := old.sendQueue.tryDequeue()
+		if !ok {
+			break // 队列已空
+		}
+		// 尝试放入新队列，如果新队列满了则停止迁移
+		if c.sendQueue.tryEnqueue(msg) {
+			migratedCount++
+		} else {
+			// 新队列已满，剩余消息丢弃
+			// QoS 1 的消息会在持久化存储中，后续会被重传机制处理
+			c.core.logger.Debug("New sendQueue full during migration, remaining messages not migrated",
+				zap.String("clientID", c.ID),
+				zap.Int("migrated", migratedCount))
+			break
+		}
+	}
+
 	// 迁移 packetID
 	c.nextPacketID.Store(old.nextPacketID.Load())
 
 	c.core.logger.Debug("Session restored from previous client",
 		zap.String("clientID", c.ID),
 		zap.Int("subscriptions", len(c.subscriptions)),
-		zap.Int("pendingAck", len(c.pendingAck)))
+		zap.Int("pendingAck", len(c.pendingAck)),
+		zap.Int("sendQueueMigrated", migratedCount))
 }
 
 // HasSession 检查客户端是否有需要保留的会话

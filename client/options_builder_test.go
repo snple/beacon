@@ -274,10 +274,15 @@ func TestErrorResponse(t *testing.T) {
 
 // TestPollMessageNotConnected 测试未连接时 PollMessage
 func TestPollMessageNotConnected(t *testing.T) {
-	client := &Client{}
+	client, err := NewWithOptions(NewClientOptions())
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
 	client.connected.Store(false)
 
-	_, err := client.PollMessage(context.Background(), time.Second)
+	_, err = client.PollMessage(context.Background(), time.Second)
 	if err == nil {
 		t.Error("expected error when not connected")
 	}
@@ -288,10 +293,15 @@ func TestPollMessageNotConnected(t *testing.T) {
 
 // TestSubscribeNotConnected 测试未连接时 Subscribe
 func TestSubscribeNotConnected(t *testing.T) {
-	client := &Client{}
+	client, err := NewWithOptions(NewClientOptions())
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
 	client.connected.Store(false)
 
-	err := client.Subscribe("topic1", "topic2")
+	err = client.Subscribe("topic1", "topic2")
 	if err == nil {
 		t.Error("expected error when not connected")
 	}
@@ -302,11 +312,16 @@ func TestSubscribeNotConnected(t *testing.T) {
 
 // TestSubscribeWithOptionsNotConnected 测试未连接时 SubscribeWithOptions
 func TestSubscribeWithOptionsNotConnected(t *testing.T) {
-	client := &Client{}
+	client, err := NewWithOptions(NewClientOptions())
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
 	client.connected.Store(false)
 
 	opts := NewSubscribeOptions().WithQoS(packet.QoS1)
-	err := client.SubscribeWithOptions([]string{"topic1"}, opts)
+	err = client.SubscribeWithOptions([]string{"topic1"}, opts)
 	if err == nil {
 		t.Error("expected error when not connected")
 	}
@@ -314,10 +329,15 @@ func TestSubscribeWithOptionsNotConnected(t *testing.T) {
 
 // TestSubscribeWithEmptyTopics 测试空主题列表
 func TestSubscribeWithEmptyTopics(t *testing.T) {
-	client := &Client{}
+	client, err := NewWithOptions(NewClientOptions())
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
 	client.connected.Store(true)
 
-	err := client.SubscribeWithOptions([]string{}, nil)
+	err = client.SubscribeWithOptions([]string{}, nil)
 	if err == nil {
 		t.Error("expected error with empty topics")
 	}
@@ -328,13 +348,29 @@ func TestSubscribeWithEmptyTopics(t *testing.T) {
 
 // TestPublishWithOptionsNotConnected 测试未连接时 PublishWithOptions
 func TestPublishWithOptionsNotConnected(t *testing.T) {
-	client := &Client{}
+	// 使用 NewWithOptions 正确创建客户端，确保所有字段都被初始化
+	client, err := NewWithOptions(NewClientOptions())
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
 	client.connected.Store(false)
 
-	opts := NewPublishOptions().WithQoS(packet.QoS1)
-	err := client.Publish("topic", []byte("payload"), opts)
+	// QoS0: 离线时应该失败（无持久化）
+	opts := NewPublishOptions().WithQoS(packet.QoS0)
+	err = client.Publish("topic", []byte("payload"), opts)
 	if err == nil {
-		t.Error("expected error when not connected")
+		t.Error("expected error for QoS0 when not connected")
+	}
+
+	// QoS1: 离线时应该成功（消息会被持久化并在重连后重传）
+	// 注意：这个测试中 client 没有初始化 store，所以实际上不会持久化
+	// 但代码逻辑允许 QoS1 在离线时发布
+	opts = NewPublishOptions().WithQoS(packet.QoS1)
+	err = client.Publish("topic", []byte("payload"), opts)
+	if err != nil {
+		t.Errorf("QoS1 should succeed when not connected (for offline publish), got %v", err)
 	}
 }
 

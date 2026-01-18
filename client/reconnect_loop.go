@@ -6,14 +6,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// reconnectLoop listens for connection-loss signals from close() and performs
+// reconnectLoop listens for connection-loss signals from onConnectionLost() and performs
 // automatic reconnection with exponential backoff.
 //
 // Design goals:
-// - Reconnect is transport-level (TCP/TLS) reconnection.
-// - Client-side state (subscriptions/actions registry, persisted QoS1 store) is preserved.
-// - In-flight waits are unblocked on disconnect by close(); reconnect does not try to
-//   keep synchronous callers waiting across a disconnect.
+//   - Reconnect is transport-level (TCP/TLS) reconnection.
+//   - Client-side state (subscriptions/actions registry, sendQueue, persisted QoS1 store) is preserved.
+//   - sendQueue remains intact across reconnections, allowing offline message buffering.
+//   - In-flight waits are unblocked on disconnect by Connection.close(); reconnect does not try to
+//     keep synchronous callers waiting across a disconnect.
 func (c *Client) reconnectLoop() {
 	initialDelay := 1 * time.Second
 	maxDelay := 60 * time.Second
@@ -55,9 +56,17 @@ func (c *Client) reconnectLoop() {
 			}
 			c.actionsMu.RUnlock()
 
+			// 获取当前队列数量
+			var queuedMessages int
+			conn := c.getConn()
+			if conn != nil {
+				queuedMessages = int(conn.sendQueue.used.Load())
+			}
+
 			c.logger.Info("Starting automatic reconnection",
 				zap.Duration("initialDelay", initialDelay),
-				zap.Duration("maxDelay", maxDelay))
+				zap.Duration("maxDelay", maxDelay),
+				zap.Int("queuedMessages", queuedMessages))
 
 			currentDelay := initialDelay
 			for {
@@ -94,11 +103,20 @@ func (c *Client) reconnectLoop() {
 				}
 
 				// Connected.
+				conn := c.getConn()
+				sessionPresent := false
+				queuedMessages := 0
+				if conn != nil {
+					sessionPresent = conn.sessionPresent
+					queuedMessages = int(conn.sendQueue.used.Load())
+				}
+
 				c.logger.Info("Reconnection successful",
-					zap.Bool("sessionPresent", c.sessionPresent))
+					zap.Bool("sessionPresent", sessionPresent),
+					zap.Int("queuedMessages", queuedMessages))
 
 				// If the server did not restore the session, re-subscribe and re-register.
-				if !c.sessionPresent {
+				if !sessionPresent {
 					if len(savedTopics) > 0 {
 						if err := c.Subscribe(savedTopics...); err != nil {
 							c.logger.Warn("Failed to restore subscriptions", zap.Error(err))

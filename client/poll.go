@@ -39,7 +39,7 @@ func (c *Client) PollMessage(ctx context.Context, timeout time.Duration) (*Messa
 			return nil, NewPollTimeoutError(timeout)
 		}
 		return nil, pollCtx.Err()
-	case <-c.connCtx.Done():
+	case <-c.rootCtx.Done():
 		return nil, ErrNotConnected
 	case <-c.rootCtx.Done():
 		return nil, ErrClientClosed
@@ -67,8 +67,6 @@ func (c *Client) PollRequest(ctx context.Context, timeout time.Duration) (*Reque
 			return nil, NewPollTimeoutError(timeout)
 		}
 		return nil, pollCtx.Err()
-	case <-c.connCtx.Done():
-		return nil, ErrNotConnected
 	case <-c.rootCtx.Done():
 		return nil, ErrClientClosed
 	}

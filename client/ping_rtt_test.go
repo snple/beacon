@@ -1,23 +1,51 @@
 package client
 
 import (
+	"bufio"
+	"context"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/snple/beacon/packet"
+	"go.uber.org/zap"
 )
 
-func TestClient_PongSeqUpdatesRTT(t *testing.T) {
-	c := &Client{}
+// mockConn 是一个模拟的 net.Conn
+type mockConn struct {
+	net.Conn
+}
+
+func (m *mockConn) Close() error                       { return nil }
+func (m *mockConn) Read(b []byte) (n int, err error)   { return 0, nil }
+func (m *mockConn) Write(b []byte) (n int, err error)  { return len(b), nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
+func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
+
+func TestConnection_PongSeqUpdatesRTT(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	client := &Client{
+		rootCtx: context.Background(),
+		logger:  logger,
+	}
+
+	conn := &Conn{
+		client: client,
+		conn:   &mockConn{},
+		reader: bufio.NewReader(&mockConn{}),
+		writer: bufio.NewWriter(&mockConn{}),
+		logger: logger,
+	}
 
 	seq := uint32(123)
 	now := time.Now().UnixNano()
-	c.lastPingSeq.Store(seq)
-	c.lastPingSent.Store(now - int64(2*time.Millisecond))
+	conn.lastPingSeq.Store(seq)
+	conn.lastPingSent.Store(now - int64(2*time.Millisecond))
 
-	c.handlePacket(&packet.PongPacket{Seq: seq})
+	conn.handlePong(&packet.PongPacket{Seq: seq})
 
-	rtt := c.LastRTT()
+	rtt := conn.LastRTT()
 	if rtt <= 0 {
 		t.Fatalf("expected rtt > 0, got %v", rtt)
 	}

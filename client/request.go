@@ -309,8 +309,6 @@ func (c *Client) Request(ctx context.Context, req *Request) (*Response, error) {
 		return nil, NewRequestTimeoutError(timeout)
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-c.connCtx.Done():
-		return nil, ErrNotConnected
 	case <-c.rootCtx.Done():
 		return nil, ErrClientClosed
 	}

@@ -17,7 +17,7 @@ func (c *Client) handleTrace(p *packet.TracePacket) {
 
 	// 调用 OnTrace 钩子（直接传递原始 packet）
 	c.options.Hooks.callOnTrace(&TraceContext{
-		ClientID: c.clientID,
+		ClientID: c.ClientID(),
 		Packet:   p,
 	})
 }
@@ -28,7 +28,7 @@ func (c *Client) SendTrace(traceID, event string, details map[string]string) err
 		return ErrNotConnected
 	}
 
-	trace := packet.NewTracePacket(traceID, event, c.clientID)
+	trace := packet.NewTracePacket(traceID, event, c.ClientID())
 	trace.Timestamp = uint64(time.Now().UnixMilli())
 	trace.Details = details
 
