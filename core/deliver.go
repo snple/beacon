@@ -362,7 +362,9 @@ func (c *Client) sendMessage(msg *Message) error {
 
 	// 发送成功后处理 QoS 1
 	if pub.QoS == packet.QoS1 {
-		// 加入 pendingAck 等待确认
+		// 加入或更新 pendingAck 等待确认
+		// 注意：如果是重传的消息，pendingAck 中可能已经存在该记录
+		// 此时需要更新 lastSentAt 为实际发送时间
 		c.pendingAckMu.Lock()
 		c.pendingAck[pub.PacketID] = pendingMessage{
 			msg:        msg,

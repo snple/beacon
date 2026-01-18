@@ -36,7 +36,7 @@ type CoreOptions struct {
 	DefaultRequestTimeout time.Duration // 默认请求超时（默认 30 秒）
 
 	// QoS 重传
-	RetransmitInterval time.Duration // QoS 1 消息重传间隔（默认 5 秒）
+	RetransmitInterval time.Duration // QoS 1 消息重传间隔（默认 30 秒）
 
 	// 钩子处理器
 	Hooks Hooks // 钩子集合（包含认证处理器）

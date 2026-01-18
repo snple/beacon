@@ -260,7 +260,7 @@ func (c *Core) registerClient(conn net.Conn, connect *packet.ConnectPacket) (*Cl
 	}
 
 	// CleanSession=false: 恢复会话
-	newClient.RestoreSession(existingClient)
+	newClient.restoreSession(existingClient)
 	c.clients[clientID] = newClient
 
 	c.logger.Info("Session restored",
@@ -378,9 +378,9 @@ func (c *Core) removeClient(client *Client) {
 	c.logger.Info("Client session removed", zap.String("clientID", client.ID))
 }
 
-// RestoreSession 从旧客户端恢复会话数据
+// restoreSession 从旧客户端恢复会话数据
 // 由 core 在 registerClient 时同步调用，无需异步通道
-func (c *Client) RestoreSession(old *Client) {
+func (c *Client) restoreSession(old *Client) {
 	// 迁移订阅
 	old.subsMu.RLock()
 	c.subsMu.Lock()

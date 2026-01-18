@@ -188,11 +188,12 @@ func (c *Client) retransmitUnackedMessages() int {
 
 	// 尝试将需要重传的消息放入队列
 	for _, item := range toResend {
+		// !!! 这里可以直接修改原消息，既然走到这一步，消息已经在重发状态 !!!
 		msg := item.msg
 		msg.Dup = true // 标记为重发
 
-		if c.sendQueue.tryEnqueue(item.msg) {
-			// 成功入队，触发发送协程
+		if c.sendQueue.tryEnqueue(msg) {
+			// 触发发送协程
 			c.triggerSend()
 
 			sent++
@@ -200,11 +201,6 @@ func (c *Client) retransmitUnackedMessages() int {
 			// 队列已满，停止重传
 			break
 		}
-	}
-
-	// 如果有消息加入队列，触发发送
-	if sent > 0 {
-		c.triggerSend()
 	}
 
 	return sent
