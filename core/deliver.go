@@ -10,7 +10,7 @@ import (
 )
 
 // Publish 发布消息 (内部使用)
-func (c *Core) publish(msg Message) {
+func (c *Core) publish(msg Message) bool {
 	// 处理保留消息
 	if msg.Retain && c.options.RetainEnabled {
 		if len(msg.Packet.Payload) == 0 {
@@ -54,7 +54,14 @@ func (c *Core) publish(msg Message) {
 
 	// 放入对应优先级的队列
 	// !!! 这里把指针放了进去
-	c.queues[priority].push(&msg)
+	if !c.queues[priority].push(&msg) {
+		// 队列满了，丢弃消息
+		c.logger.Debug("Message dropped, dispatch queue full",
+			zap.String("topic", msg.Packet.Topic))
+		c.stats.MessagesDropped.Add(1)
+
+		return false
+	}
 
 	// 通知 dispatchLoop 有新消息 (非阻塞)
 	select {
@@ -64,6 +71,8 @@ func (c *Core) publish(msg Message) {
 	}
 
 	c.stats.MessagesReceived.Add(1)
+
+	return true
 }
 
 // PublishOptions 发布选项
@@ -136,16 +145,14 @@ func (c *Core) deliver(msg *Message) {
 
 	// 在锁外发送消息给普通客户端
 	for _, cq := range clients {
-		if cq.client.IsClosed() {
-			c.stats.MessagesDropped.Add(1)
-			continue
-		}
-
 		// !!! 这里要复制消息，因为不同客户端的 QoS 可能不同，不能影响原消息 !!!
 		copiedMsg := msg.Copy() // 复制消息，不过 PublishPacket 仍是指针，没有深拷贝
 		copiedMsg.QoS = cq.qos  // 设置实际发送的 QoS
 
 		// 直接调用 Deliver，持久化逻辑在其中统一处理
+		// 注意：不要在这里检查 IsClosed()，因为：
+		// 1. QoS1消息即使客户端离线也需要持久化
+		// 2. client.deliver() 内部会处理离线情况
 		if err := cq.client.deliver(&copiedMsg); err != nil {
 			if copiedMsg.QoS == packet.QoS0 {
 				c.logger.Debug("QoS0 message delivery failed",
@@ -180,15 +187,8 @@ func (c *Core) deliverToTarget(msg *Message) {
 	c.clientsMu.RUnlock()
 
 	if exists {
-		if client.IsClosed() {
-			c.stats.MessagesDropped.Add(1)
-
-			c.logger.Debug("Target client is closed",
-				zap.String("targetClientID", targetID),
-				zap.String("topic", msg.Packet.Topic))
-			return
-		}
-
+		// 直接调用deliver，不要在这里检查IsClosed
+		// QoS1消息即使客户端离线也需要持久化
 		if err := client.deliver(msg); err != nil {
 			c.logger.Debug("Target delivery failed",
 				zap.String("targetClientID", targetID),
@@ -221,7 +221,7 @@ func (c *Core) deliverToTarget(msg *Message) {
 func (c *Client) deliver(msg *Message) error {
 	// PacketID 属于“投递层字段”，必须对每个目标客户端独立分配，且不能写回原始 PublishPacket 。
 	if msg.QoS == packet.QoS1 {
-		msg.PacketID = c.allocatePacketID()
+		msg.PacketID = c.session.allocatePacketID()
 	}
 
 	// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
@@ -250,15 +250,21 @@ func (c *Client) deliver(msg *Message) error {
 	conn := c.conn
 	c.connMu.RUnlock()
 
-	if conn == nil || conn.IsClosed() {
+	if conn == nil {
 		if msg.QoS == packet.QoS0 {
 			c.core.logger.Debug("QoS0 message dropped, client closed",
 				zap.String("clientID", c.ID),
 				zap.String("topic", msg.Packet.Topic))
 			c.core.stats.MessagesDropped.Add(1)
-			return errors.New("client closed")
+
+			return ErrClientClosed
 		}
-		// QoS1: 后续会持久化，重连后重传
+		// QoS1: 已经持久化，重连后重传
+		c.core.logger.Debug("QoS1 message queued for retransmit, client closed",
+			zap.String("clientID", c.ID),
+			zap.String("topic", msg.Packet.Topic),
+			zap.Uint16("packetID", msg.PacketID))
+
 		return nil
 	}
 
@@ -322,7 +328,7 @@ func (c *Client) sendMessage(msg *Message) error {
 	}
 
 	// 先发送消息
-	if err := c.WritePacket(&pub); err != nil {
+	if err := c.writePacket(&pub); err != nil {
 		return err
 	}
 
@@ -372,7 +378,7 @@ func (c *Core) PublishToClient(clientID string, topic string, payload []byte, op
 	c.clientsMu.RUnlock()
 
 	if exists {
-		if client.IsClosed() {
+		if client.Closed() {
 			return NewClientClosedError(clientID)
 		}
 		return client.deliver(&msg)
@@ -386,7 +392,7 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 	c.clientsMu.RLock()
 	clients := make([]*Client, 0, len(c.clients))
 	for _, client := range c.clients {
-		if !client.IsClosed() {
+		if !client.Closed() {
 			clients = append(clients, client)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snple/beacon/packet"
@@ -33,15 +34,15 @@ type Client struct {
 	session *session
 
 	// 连接层（当前 TCP 连接）
-	conn    *Conn
-	oldConn *Conn // 会话恢复时暂存旧连接，用于迁移 sendQueue
+	conn    *conn
+	oldConn *conn // 会话恢复时暂存旧连接，用于迁移 sendQueue
 	connMu  sync.RWMutex
 
 	// Core 引用
 	core *Core
 
-	// 生命周期
-	closeOnce sync.Once
+	// 其他状态
+	skipHandle atomic.Bool // true: 跳过断开处理（会话被接管时）
 }
 
 // newClient 创建新的客户端（全新会话）
@@ -76,35 +77,29 @@ func (c *Client) attachConn(netConn net.Conn, connect *packet.ConnectPacket) {
 		c.oldConn = c.conn
 	}
 	c.conn = conn
-	// 重置 closeOnce，允许新连接关闭
-	c.closeOnce = sync.Once{}
+	// 重置跳过断开处理标志
+	c.skipHandle.Store(false)
 	c.connMu.Unlock()
 }
 
-// Serve 开始处理客户端消息（委托给 Conn）
-func (c *Client) Serve() {
+// serve 开始处理客户端消息（委托给 Conn）
+func (c *Client) serve() {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
 
 	if conn != nil {
-		// 处理持久化消息
-		if !c.session.keep {
-			// KeepSession=false: 清空该客户端在 BadgerDB 中的旧消息
-			c.core.cleanupClient(c.ID)
-		}
-
-		conn.Serve()
+		conn.serve()
 	}
 }
 
-// WritePacket 发送数据包（委托给 Conn）
-func (c *Client) WritePacket(pkt packet.Packet) error {
+// writePacket 发送数据包（委托给 Conn）
+func (c *Client) writePacket(pkt packet.Packet) error {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
 
-	if conn == nil || conn.IsClosed() {
+	if conn == nil || conn.closed.Load() {
 		return errors.New("client not connected")
 	}
 
@@ -112,21 +107,32 @@ func (c *Client) WritePacket(pkt packet.Packet) error {
 }
 
 // Close 关闭客户端连接
-// cleanup: true 表示执行清理逻辑，false 表示跳过清理（会话被接管时）
-func (c *Client) Close(reason packet.ReasonCode, cleanup bool) {
-	c.closeOnce.Do(func() {
-		c.connMu.RLock()
-		conn := c.conn
-		c.connMu.RUnlock()
+func (c *Client) Close(reason packet.ReasonCode) {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
 
-		if conn != nil {
-			conn.close(reason, cleanup)
-		}
-	})
+	if conn != nil {
+		conn.close(reason)
+	}
+}
+
+// closeAndSkipHandle 关闭客户端连接且跳过断开处理
+// 用于会话被接管时
+func (c *Client) closeAndSkipHandle(reason packet.ReasonCode) {
+	c.skipHandle.Store(true)
+
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn != nil {
+		conn.close(reason)
+	}
 }
 
 // IsClosed 检查客户端是否已关闭
-func (c *Client) IsClosed() bool {
+func (c *Client) Closed() bool {
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
@@ -134,7 +140,7 @@ func (c *Client) IsClosed() bool {
 	if conn == nil {
 		return true
 	}
-	return conn.IsClosed()
+	return conn.closed.Load()
 }
 
 // KeepSession 返回是否保持会话
@@ -164,7 +170,7 @@ func (c *Client) KeepAlive() uint16 {
 	c.connMu.RUnlock()
 
 	if conn != nil {
-		return conn.KeepAlive
+		return conn.keepAlive
 	}
 	return 0
 }
@@ -176,7 +182,7 @@ func (c *Client) TraceID() string {
 	c.connMu.RUnlock()
 
 	if conn != nil {
-		return conn.TraceID
+		return conn.traceID
 	}
 	return ""
 }
@@ -188,7 +194,7 @@ func (c *Client) ConnectedAt() time.Time {
 	c.connMu.RUnlock()
 
 	if conn != nil {
-		return conn.ConnectedAt
+		return conn.connectedAt
 	}
 	return time.Time{}
 }
@@ -200,23 +206,7 @@ func (c *Client) DisconnectPacket() *packet.DisconnectPacket {
 	c.connMu.RUnlock()
 
 	if conn != nil {
-		return conn.DisconnectPacket
+		return conn.disconnectPacket
 	}
 	return nil
-}
-
-// allocatePacketID 分配新的 PacketID
-func (c *Client) allocatePacketID() uint16 {
-	return c.session.allocatePacketID()
-}
-
-// triggerSend 触发发送协程（委托给 Conn）
-func (c *Client) triggerSend() {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn != nil && !conn.IsClosed() {
-		conn.triggerSend()
-	}
 }

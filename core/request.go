@@ -36,7 +36,7 @@ func (c *Client) handleRegister(p *packet.RegisterPacket) error {
 	}
 
 	regack := packet.NewRegackPacket(regResults)
-	return c.WritePacket(regack)
+	return c.writePacket(regack)
 }
 
 // handleUnregister 处理 UNREGISTER 包
@@ -58,7 +58,7 @@ func (c *Client) handleUnregister(p *packet.UnregisterPacket) error {
 	}
 
 	unregack := packet.NewUnregackPacket(unregResults)
-	return c.WritePacket(unregack)
+	return c.writePacket(unregack)
 }
 
 // handleRequest 处理 REQUEST 包
@@ -81,7 +81,7 @@ func (c *Client) handleRequest(p *packet.RequestPacket) error {
 			zap.Error(err))
 		resp := packet.NewResponsePacket(p.RequestID, c.ID, packet.ReasonNotAuthorized, nil)
 		resp.Properties.ReasonString = err.Error()
-		return c.WritePacket(resp)
+		return c.writePacket(resp)
 	}
 
 	// 验证 Action 名称
@@ -93,7 +93,7 @@ func (c *Client) handleRequest(p *packet.RequestPacket) error {
 			nil,
 		)
 		resp.Properties.ReasonString = fmt.Sprintf("Invalid action name: %s", p.Action)
-		return c.WritePacket(resp)
+		return c.writePacket(resp)
 	}
 
 	// 填充 SourceClientID（由 core 填充，确保可信）
@@ -146,7 +146,7 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 		case packet.ReasonNoAvailableHandler:
 			resp.Properties.ReasonString = fmt.Sprintf("No available handler for action: %s", p.Action)
 		}
-		return c.WritePacket(resp)
+		return c.writePacket(resp)
 	}
 
 	// 获取目标客户端并发送请求
@@ -158,15 +158,15 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 		// 目标客户端已断开
 		resp := packet.NewResponsePacket(p.RequestID, c.ID, packet.ReasonClientNotFound, nil)
 		resp.Properties.ReasonString = "Target client not found"
-		return c.WritePacket(resp)
+		return c.writePacket(resp)
 	}
 
 	// 直接转发请求包，保持原始 RequestID 和 SourceClientID
-	if err := targetClient.WritePacket(p); err != nil {
+	if err := targetClient.writePacket(p); err != nil {
 		// 发送失败，返回错误响应
 		resp := packet.NewResponsePacket(p.RequestID, c.ID, packet.ReasonClientNotFound, nil)
 		resp.Properties.ReasonString = "Target client disconnected"
-		return c.WritePacket(resp)
+		return c.writePacket(resp)
 	}
 
 	return nil
@@ -201,5 +201,5 @@ func (c *Client) handleResponse(p *packet.ResponsePacket) error {
 	c.core.options.Hooks.callOnResponse(respCtx)
 
 	// 直接转发响应包，保持原始 RequestID
-	return targetClient.WritePacket(p)
+	return targetClient.writePacket(p)
 }

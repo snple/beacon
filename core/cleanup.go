@@ -19,9 +19,69 @@ func (c *Core) expiredCleanupLoop() {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
+			c.cleanupExpiredSessions()
 			c.cleanupExpiredMessages()
 			c.cleanupExpiredRetainMessages()
-			c.cleanupExpiredSessions()
+		}
+	}
+}
+
+// cleanupExpiredSessions 清理过期的离线会话
+func (c *Core) cleanupExpiredSessions() {
+	now := time.Now()
+
+	// 收集过期的会话 ID
+	c.offlineSessionsMu.Lock()
+	expiredIDs := make([]string, 0)
+	for clientID, expiryTime := range c.offlineSessions {
+		if now.After(expiryTime) {
+			expiredIDs = append(expiredIDs, clientID)
+			delete(c.offlineSessions, clientID)
+		}
+	}
+	c.offlineSessionsMu.Unlock()
+
+	// 清理过期会话
+	for _, clientID := range expiredIDs {
+		c.clientsMu.Lock()
+		client, exists := c.clients[clientID]
+		if exists && client.Closed() {
+			// 只清理已关闭的客户端（离线状态）
+			delete(c.clients, clientID)
+			c.clientsMu.Unlock()
+
+			// 清理客户端相关资源
+			c.cleanupClient(clientID)
+
+			c.logger.Info("Expired session removed", zap.String("clientID", clientID))
+		} else {
+			c.clientsMu.Unlock()
+		}
+	}
+}
+
+// cleanupClient 清理客户端相关资源
+func (c *Core) cleanupClient(clientID string) {
+	// 清理订阅
+	subCount := c.subTree.unsubscribeClient(clientID)
+	if subCount > 0 {
+		c.stats.SubscriptionsCount.Add(-int64(subCount))
+	}
+
+	// 清理注册的 actions
+	actions := c.actionRegistry.unregisterClient(clientID)
+	if len(actions) > 0 {
+		c.logger.Debug("Unregistered actions on disconnect",
+			zap.String("clientID", clientID),
+			zap.Strings("actions", actions))
+	}
+
+	// 清理持久化消息（如果 CleanSession 或会话过期）
+	if c.messageStore != nil {
+		if err := c.messageStore.deleteAllForClient(clientID); err != nil {
+			c.logger.Warn("Failed to cleanup client messages",
+				zap.String("clientID", clientID),
+				zap.Error(err))
 		}
 	}
 }
@@ -80,66 +140,6 @@ func (c *Core) cleanupExpiredRetainMessages() {
 	}
 }
 
-// cleanupExpiredSessions 清理过期的离线会话
-func (c *Core) cleanupExpiredSessions() {
-	now := time.Now()
-
-	// 收集过期的会话 ID
-	c.offlineSessionsMu.Lock()
-	expiredIDs := make([]string, 0)
-	for clientID, expiryTime := range c.offlineSessions {
-		if now.After(expiryTime) {
-			expiredIDs = append(expiredIDs, clientID)
-			delete(c.offlineSessions, clientID)
-		}
-	}
-	c.offlineSessionsMu.Unlock()
-
-	// 清理过期会话
-	for _, clientID := range expiredIDs {
-		c.clientsMu.Lock()
-		client, exists := c.clients[clientID]
-		if exists && client.IsClosed() {
-			// 只清理已关闭的客户端（离线状态）
-			delete(c.clients, clientID)
-			c.clientsMu.Unlock()
-
-			// 清理客户端相关资源
-			c.cleanupClient(clientID)
-
-			c.logger.Info("Expired session removed", zap.String("clientID", clientID))
-		} else {
-			c.clientsMu.Unlock()
-		}
-	}
-}
-
-// cleanupClient 清理客户端相关资源
-func (c *Core) cleanupClient(clientID string) {
-	// 清理订阅
-	subCount := c.subTree.unsubscribeClient(clientID)
-	if subCount > 0 {
-		c.stats.SubscriptionsCount.Add(-int64(subCount))
-	}
-
-	// 清理注册的 actions
-	actions := c.actionRegistry.unregisterClient(clientID)
-	if len(actions) > 0 {
-		c.logger.Debug("Unregistered actions on disconnect",
-			zap.String("clientID", clientID),
-			zap.Strings("actions", actions))
-	}
-
-	// 清理持久化消息（如果 CleanSession 或会话过期）
-	if c.messageStore != nil {
-		if err := c.messageStore.deleteAllForClient(clientID); err != nil {
-			c.logger.Warn("Failed to cleanup client messages",
-				zap.String("clientID", clientID),
-				zap.Error(err))
-		}
-	}
-}
-
 // cleanupExpired 清理过期消息，返回清理数量
 func (c *Client) cleanupExpired() int {
 	expiredCount := 0
@@ -159,19 +159,6 @@ func (c *Client) cleanupExpired() int {
 	c.session.pendingAckMu.Unlock()
 
 	return expiredCount
-}
-
-// clearPersistedMessages 清空该客户端的持久化消息 (CleanSession=true)
-func (c *Client) clearPersistedMessages() {
-	if c.core.messageStore == nil {
-		return
-	}
-
-	if err := c.core.messageStore.deleteAllForClient(c.ID); err != nil {
-		c.core.logger.Error("Failed to clear persisted messages",
-			zap.String("clientID", c.ID),
-			zap.Error(err))
-	}
 }
 
 // cleanupExpired 清理过期消息

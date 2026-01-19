@@ -52,13 +52,13 @@ func (c *Client) processRetransmit() {
 		return
 	}
 
-	// 计算可加载的消息数量（使用发送队列可用容量的 60%）
+	// 计算可加载的消息数量（使用发送队列可用容量的 50%）
 	available := conn.sendQueue.available()
 	if available == 0 {
 		return
 	}
 
-	loadCount := int(float64(available) * 0.6)
+	loadCount := int(float64(available) * 0.5)
 	if loadCount == 0 {
 		loadCount = 1
 	}

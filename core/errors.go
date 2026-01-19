@@ -13,9 +13,6 @@ var (
 
 	// ErrCoreAlreadyRunning core 已在运行
 	ErrCoreAlreadyRunning = errors.New("core already running")
-
-	// ErrCoreShutdown core 关闭中
-	ErrCoreShutdown = errors.New("core shutdown")
 )
 
 // 轮询相关错误

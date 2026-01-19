@@ -29,7 +29,7 @@ func (c *Core) triggerRetransmit() {
 	c.clientsMu.RLock()
 	clients := make([]*Client, 0, len(c.clients))
 	for _, client := range c.clients {
-		if !client.IsClosed() {
+		if !client.Closed() {
 			clients = append(clients, client)
 		}
 	}
@@ -72,12 +72,12 @@ func (c *Client) loadPersistedMessages() int {
 	}
 
 	// 计算可加载的消息数量
-	// 使用可用容量的 60% 避免队列立即饱和
+	// 使用可用容量的 50% 避免队列立即饱和
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
 
-	if conn == nil || conn.IsClosed() {
+	if conn == nil || conn.closed.Load() {
 		return 0
 	}
 
@@ -86,7 +86,7 @@ func (c *Client) loadPersistedMessages() int {
 		return 0
 	}
 
-	loadCount := int(float64(available) * 0.6)
+	loadCount := int(float64(available) * 0.5)
 	if loadCount == 0 {
 		loadCount = 1
 	}
@@ -199,7 +199,7 @@ func (c *Client) retransmitUnackedMessages() int {
 	conn := c.conn
 	c.connMu.RUnlock()
 
-	if conn == nil || conn.IsClosed() {
+	if conn == nil || conn.closed.Load() {
 		return sent
 	}
 

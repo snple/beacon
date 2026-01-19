@@ -179,7 +179,7 @@ const (
 	ReasonReceiveMaxExceeded     ReasonCode = 0x93 // 接收最大值超限
 	ReasonMessageExpired         ReasonCode = 0x94 // 消息已过期
 	ReasonPacketTooLarge         ReasonCode = 0x95 // 数据包过大
-	ReasonMessageRateTooHigh     ReasonCode = 0x96 // 消息速率过高
+	ReasonQueueFull              ReasonCode = 0x96 // 队列已满
 	ReasonQuotaExceeded          ReasonCode = 0x97 // 配额超限
 	ReasonConnectionRateExceeded ReasonCode = 0x98 // 连接速率超限
 	ReasonMaxConnectTime         ReasonCode = 0x99 // 超过最大连接时间
@@ -281,8 +281,8 @@ func (r ReasonCode) String() string {
 		return "Message expired"
 	case ReasonPacketTooLarge:
 		return "Packet too large"
-	case ReasonMessageRateTooHigh:
-		return "Message rate too high"
+	case ReasonQueueFull:
+		return "Queue full"
 	case ReasonQuotaExceeded:
 		return "Quota exceeded"
 	case ReasonConnectionRateExceeded:

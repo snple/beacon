@@ -14,7 +14,7 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 		c.core.logger.Warn("Invalid topic name", zap.String("clientID", c.ID), zap.String("topic", pub.Topic))
 		if pub.QoS == packet.QoS1 {
 			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonTopicNameInvalid)
-			c.WritePacket(puback)
+			c.writePacket(puback)
 		}
 		return nil
 	}
@@ -23,7 +23,7 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 	if !pub.QoS.IsValid() {
 		c.core.logger.Warn("Invalid QoS level", zap.String("clientID", c.ID), zap.Uint8("qos", uint8(pub.QoS)))
 		puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonQoSNotSupported)
-		c.WritePacket(puback)
+		c.writePacket(puback)
 		return nil // 忽略无效 QoS 的消息
 	}
 
@@ -71,24 +71,43 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 			zap.String("topic", pub.Topic))
 		if pub.QoS == packet.QoS1 {
 			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonMessageExpired)
-			c.WritePacket(puback)
+			c.writePacket(puback)
 		}
 		return nil
 	}
 
 	// QoS 0: 直接发布
 	// QoS 1: 发布并发送 PUBACK
-	c.core.publish(msg)
+	if c.core.publish(msg) {
+		if msg.QoS == packet.QoS1 {
+			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonSuccess)
+			if err := c.writePacket(puback); err != nil {
+				c.core.logger.Warn("Failed to send PUBACK",
+					zap.String("clientID", c.ID),
+					zap.Uint16("packetID", msg.PacketID),
+					zap.Error(err))
 
-	if msg.QoS == packet.QoS1 {
-		puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonSuccess)
-		if err := c.WritePacket(puback); err != nil {
-			c.core.logger.Warn("Failed to send PUBACK",
+				return err
+			}
+		}
+	} else {
+		// 发布失败（通常是因为队列满了）
+		if msg.QoS == packet.QoS1 {
+			// 对于 QoS 1，仍然发送 PUBACK，表示已接收但无法处理
+			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonQueueFull)
+			if err := c.writePacket(puback); err != nil {
+				c.core.logger.Warn("Failed to send PUBACK after publish failure",
+					zap.String("clientID", c.ID),
+					zap.Uint16("packetID", msg.PacketID),
+					zap.Error(err))
+
+				return err
+			}
+		} else {
+			// 对于 QoS 0，丢弃消息
+			c.core.logger.Debug("QoS 0 message dropped due to publish failure",
 				zap.String("clientID", c.ID),
-				zap.Uint16("packetID", msg.PacketID),
-				zap.Error(err))
-
-			return err
+				zap.String("topic", pub.Topic))
 		}
 	}
 
@@ -194,7 +213,7 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 	}
 
 	// 先发送 SUBACK，确保客户端收到确认后再发送保留消息
-	if err := c.WritePacket(suback); err != nil {
+	if err := c.writePacket(suback); err != nil {
 		return err
 	}
 
@@ -256,7 +275,7 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 		}
 	}
 
-	return c.WritePacket(unsuback)
+	return c.writePacket(unsuback)
 }
 
 // sendRetainedMessages 逐条发送订阅时的保留消息

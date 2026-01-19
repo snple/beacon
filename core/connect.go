@@ -83,10 +83,10 @@ func (c *Core) handleConn(conn net.Conn) {
 	connackProp := packet.NewConnackProperties()
 	connackProp.SessionTimeout = client.session.timeout
 	connackProp.ClientID = clientID
-	connackProp.KeepAlive = client.conn.KeepAlive
+	connackProp.KeepAlive = client.conn.keepAlive
 	connackProp.MaxPacketSize = c.options.MaxPacketSize
 	connackProp.ReceiveWindow = c.options.ReceiveWindow
-	connackProp.TraceID = client.conn.TraceID
+	connackProp.TraceID = client.conn.traceID
 
 	// 如果认证器设置了响应属性，传递给客户端
 	if authCtx != nil && len(authCtx.ResponseProperties) > 0 {
@@ -103,7 +103,7 @@ func (c *Core) handleConn(conn net.Conn) {
 
 	c.logger.Info("Client connected",
 		zap.String("clientID", client.ID),
-		zap.Uint16("keepAlive", client.conn.KeepAlive),
+		zap.Uint16("keepAlive", client.conn.keepAlive),
 		zap.Bool("keepSession", client.session.keep),
 		zap.Uint32("sessionTimeout", client.session.timeout),
 		zap.Bool("sessionPresent", sessionPresent))
@@ -118,7 +118,12 @@ func (c *Core) handleConn(conn net.Conn) {
 	c.options.Hooks.callOnConnect(connectCtx)
 
 	// 开始处理客户端消息
-	client.Serve()
+	client.serve()
+
+	if client.skipHandle.Load() {
+		// 会话被接管，跳过断开处理
+		return
+	}
 
 	// 客户端断开后处理
 	c.handleClientDisconnect(client)
@@ -227,13 +232,13 @@ func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet
 	c.offlineSessionsMu.Unlock()
 
 	// 检查旧客户端是否在线
-	wasOnline := !existingClient.IsClosed()
+	wasOnline := !existingClient.Closed()
 
 	// 情况2: KeepSession=true，复用旧 Client，只替换 Conn
 	if connect.KeepSession {
 		// 先踢掉旧连接（如果在线），cleanup=false 表示会话被接管
 		if wasOnline {
-			existingClient.Close(packet.ReasonSessionTakenOver, false)
+			existingClient.closeAndSkipHandle(packet.ReasonSessionTakenOver)
 		}
 
 		// 复用 Client，附加新连接
@@ -253,11 +258,12 @@ func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet
 
 	// 踢掉旧连接，cleanup=false 因为我们会手动清理
 	if wasOnline {
-		existingClient.Close(packet.ReasonSessionTakenOver, false)
+		existingClient.closeAndSkipHandle(packet.ReasonSessionTakenOver)
 	}
 
 	// 清理旧资源
-	c.removeClient(existingClient)
+	delete(c.clients, clientID)
+	c.cleanupClient(clientID)
 
 	// 创建新 Client
 	client := newClient(netConn, connect, c)
@@ -287,19 +293,12 @@ func (c *Core) sendConnack(conn net.Conn, sessionPresent bool, code packet.Reaso
 // handleClientDisconnect 处理客户端断开连接
 //
 // 处理逻辑：
-// 1. SessionExpiry=0: 立即清理会话
-// 2. SessionExpiry>0: 保留会话，记录过期时间，等待重连或过期清理
+// 1. session.timeout=0: 立即清理会话
+// 2. session.timeout>0: 保留会话，记录过期时间，等待重连或过期清理
 // 3. 正常断开（收到 DISCONNECT 包）：清除遗嘱消息，不发送
 // 4. 异常断开（没有 DISCONNECT 包）：发布遗嘱消息
 func (c *Core) handleClientDisconnect(client *Client) {
 	c.stats.ClientsConnected.Add(-1)
-
-	// 如果 cleanup=false，不做任何清理（会话已被接管或由调用方负责清理）
-	if !client.conn.cleanup.Load() {
-		c.logger.Debug("Client disconnected (skipping cleanup)",
-			zap.String("clientID", client.ID))
-		return
-	}
 
 	// 调用 OnDisconnect 钩子
 	// Packet 可能为 nil（连接异常断开时）
@@ -325,7 +324,13 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		if !isNormalDisconnect {
 			client.publishWill()
 		}
-		c.removeClient(client)
+		// c.removeClient(client)
+		c.clientsMu.Lock()
+		delete(c.clients, client.ID)
+		c.clientsMu.Unlock()
+
+		// 清理客户端相关资源
+		c.cleanupClient(client.ID)
 		return
 	}
 
@@ -345,21 +350,6 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		zap.String("clientID", client.ID),
 		zap.Uint32("sessionTimeout", client.session.timeout),
 		zap.String("expiresAt", expiryTime.Format(time.RFC3339)))
-}
-
-func (c *Core) removeClient(client *Client) {
-	c.clientsMu.Lock()
-	if existing, ok := c.clients[client.ID]; ok && existing == client {
-		delete(c.clients, client.ID)
-	}
-	c.clientsMu.Unlock()
-
-	// 清理客户端相关资源
-	c.cleanupClient(client.ID)
-
-	// 注意：ClientsConnected 已在 handleClientDisconnect 中扣减，这里不再重复扣减
-
-	c.logger.Info("Client session removed", zap.String("clientID", client.ID))
 }
 
 // migrateSendQueue 迁移旧连接的 sendQueue 到新连接
@@ -408,30 +398,4 @@ func (c *Client) migrateSendQueue() {
 			zap.Int("migrated", migratedCount),
 			zap.Int("dropped", droppedCount))
 	}
-}
-
-// HasSession 检查客户端是否有需要保留的会话
-func (c *Client) HasSession() bool {
-	c.session.subsMu.RLock()
-	hasSubs := len(c.session.subscriptions) > 0
-	c.session.subsMu.RUnlock()
-
-	c.session.pendingAckMu.Lock()
-	hasPending := len(c.session.pendingAck) > 0
-	c.session.pendingAckMu.Unlock()
-
-	return hasSubs || hasPending
-}
-
-// GetSessionInfo 获取会话信息快照（用于调试）
-func (c *Client) GetSessionInfo() (subscriptions int, pendingAck int) {
-	c.session.subsMu.RLock()
-	subscriptions = len(c.session.subscriptions)
-	c.session.subsMu.RUnlock()
-
-	c.session.pendingAckMu.Lock()
-	pendingAck = len(c.session.pendingAck)
-	c.session.pendingAckMu.Unlock()
-
-	return subscriptions, pendingAck
 }

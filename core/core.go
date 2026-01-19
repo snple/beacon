@@ -225,7 +225,7 @@ func (c *Core) Stop() error {
 	// 断开所有普通客户端
 	c.clientsMu.Lock()
 	for _, client := range c.clients {
-		client.Close(packet.ReasonServerShuttingDown, false)
+		client.Close(packet.ReasonServerShuttingDown)
 	}
 	c.clientsMu.Unlock()
 
@@ -369,7 +369,7 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 	info := &ClientInfo{
 		ClientID:       client.ID,
 		RemoteAddr:     conn.conn.RemoteAddr().String(), // 需要通过 conn 获取
-		Connected:      !client.IsClosed(),
+		Connected:      !client.Closed(),
 		ConnectedAt:    client.ConnectedAt(),
 		KeepAlive:      client.KeepAlive(),
 		KeepSession:    client.KeepSession(),
@@ -407,7 +407,7 @@ func (c *Core) IsClientOnline(clientID string) bool {
 	client, exists := c.clients[clientID]
 	c.clientsMu.RUnlock()
 
-	if exists && !client.IsClosed() {
+	if exists && !client.Closed() {
 		return true
 	}
 
@@ -415,7 +415,7 @@ func (c *Core) IsClientOnline(clientID string) bool {
 }
 
 // DisconnectClient 断开指定客户端连接
-func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode, cleanup bool) error {
+func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode) error {
 	c.clientsMu.RLock()
 	client, exists := c.clients[clientID]
 	c.clientsMu.RUnlock()
@@ -424,7 +424,7 @@ func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode, clean
 		return NewClientNotFoundError(clientID)
 	}
 
-	client.Close(reason, cleanup)
+	client.Close(reason)
 	c.logger.Info("Client disconnected by admin", zap.String("clientID", clientID), zap.Uint8("reason", uint8(reason)))
 	return nil
 }
