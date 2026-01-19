@@ -54,6 +54,22 @@ func (m *Message) IsExpired() bool {
 	return time.Now().Unix() > m.Packet.Properties.ExpiryTime
 }
 
+// Topic 返回消息主题
+func (m *Message) Topic() string {
+	if m.Packet != nil {
+		return m.Packet.Topic
+	}
+	return ""
+}
+
+// Payload 返回消息负载
+func (m *Message) Payload() []byte {
+	if m.Packet != nil {
+		return m.Packet.Payload
+	}
+	return nil
+}
+
 // Client 客户端（会话管理器）
 // 负责管理跨连接的会话状态：订阅、注册的 actions、消息队列、持久化存储等
 type Client struct {

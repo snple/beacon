@@ -38,7 +38,7 @@ type Client struct {
 
 	// 连接信息
 	KeepAlive        uint16
-	CleanSession     bool
+	KeepSession      bool
 	SessionExpiry    uint32 // 会话过期时间（秒），0 表示断开即清理
 	AuthMethod       string // 认证方法
 	AuthData         []byte // 认证数据
@@ -69,6 +69,7 @@ type Client struct {
 
 	// 生命周期
 	closed    atomic.Bool
+	takenOver atomic.Bool // true: 会话已被接管（不应清理资源）
 	closeCh   chan struct{}
 	closeOnce sync.Once
 }
@@ -82,7 +83,7 @@ func NewClient(conn net.Conn, connect *packet.ConnectPacket, core *Core) *Client
 		reader:        bufio.NewReader(conn),
 		writer:        bufio.NewWriter(conn),
 		KeepAlive:     connect.KeepAlive,
-		CleanSession:  connect.Flags.CleanSession,
+		KeepSession:   connect.KeepSession,
 		ConnectedAt:   time.Now(),
 		subscriptions: make(map[string]packet.SubscribeOptions),
 		pendingAck:    make(map[uint16]pendingMessage),
@@ -130,16 +131,16 @@ func (c *Client) extractConnectProperties(connect *packet.ConnectPacket, core *C
 
 	// 处理会话过期时间
 	// 规则：
-	// 1. CleanSession=true: SessionExpiry 无意义，设为 0（断开即清理）
-	// 2. CleanSession=false:
+	// 1. KeepSession=false: SessionExpiry 无意义，设为 0（断开即清理）
+	// 2. KeepSession=true:
 	//    - 客户端未设置或设置为 0: 使用 core 的 MaxSessionExpiry
 	//    - 客户端设置了值: 取 min(客户端值, MaxSessionExpiry)
-	if c.CleanSession {
+	if !c.KeepSession {
 		c.SessionExpiry = 0
 		return
 	}
 
-	// CleanSession=false，需要保留会话
+	// KeepSession=true，需要保留会话
 	var sessionExpiry uint32
 
 	if connect.Properties != nil && connect.Properties.SessionExpiry != nil {
@@ -162,8 +163,8 @@ func (c *Client) Serve() {
 	defer c.Close(packet.ReasonNormalDisconnect)
 
 	// 处理持久化消息
-	if c.CleanSession {
-		// CleanSession=true: 清空该客户端在 BadgerDB 中的旧消息
+	if !c.KeepSession {
+		// KeepSession=false: 清空该客户端在 BadgerDB 中的旧消息
 		c.clearPersistedMessages()
 	}
 
@@ -296,11 +297,6 @@ func (c *Client) Close(reason packet.ReasonCode) {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
 		close(c.closeCh)
-
-		// 关闭发送队列
-		if c.sendQueue != nil {
-			c.sendQueue.close()
-		}
 
 		// 发送 DISCONNECT (如果不是正常断开)
 		if reason != packet.ReasonNormalDisconnect {

@@ -156,7 +156,7 @@ func TestConnectWillFlagsEncoding(t *testing.T) {
 			// 创建 CONNECT 包
 			conn := NewConnectPacket()
 			conn.ClientID = "test-client"
-			conn.Flags.Will = true
+			conn.Will = true
 			conn.WillPacket = &PublishPacket{
 				Topic:   "will/topic",
 				QoS:     tt.qos,
@@ -185,7 +185,7 @@ func TestConnectWillFlagsEncoding(t *testing.T) {
 			}
 
 			// 验证 Will 消息
-			if !decoded.Flags.Will {
+			if !decoded.Will {
 				t.Fatal("Will flag not set")
 			}
 			if decoded.WillPacket == nil {

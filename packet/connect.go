@@ -5,12 +5,6 @@ import (
 	"io"
 )
 
-// ConnectFlags CONNECT 包的标志位
-type ConnectFlags struct {
-	CleanSession bool // 清理会话
-	Will         bool // 遗嘱标志
-}
-
 // ConnectPacket CONNECT 数据包
 type ConnectPacket struct {
 	// 协议信息
@@ -18,7 +12,8 @@ type ConnectPacket struct {
 	ProtocolVersion uint8
 
 	// 连接标志
-	Flags ConnectFlags
+	KeepSession bool // 保留会话
+	Will        bool // 遗嘱标志
 
 	// 客户端标识
 	ClientID string
@@ -61,10 +56,10 @@ func (p *ConnectPacket) Encode(w io.Writer) error {
 	// 连接标志 (包含 CleanSession, Will)
 	// 注意: Will QoS 和 Will Retain 现在在遗嘱消息的 Flags 字节中编码
 	var flags byte
-	if p.Flags.CleanSession {
+	if p.KeepSession {
 		flags |= 0x02
 	}
-	if p.Flags.Will {
+	if p.Will {
 		flags |= 0x04
 	}
 	buf.WriteByte(flags)
@@ -88,7 +83,7 @@ func (p *ConnectPacket) Encode(w io.Writer) error {
 	}
 
 	// 遗嘱消息
-	if p.Flags.Will && p.WillPacket != nil {
+	if p.Will && p.WillPacket != nil {
 		// 遗嘱 Flags 字节 (紧凑布局) - 与 PublishPacket 一致
 		// Bit 0: QoS (0 或 1)
 		// Bit 1: Retain
@@ -153,8 +148,8 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) error {
 	if _, err := io.ReadFull(r, flags[:]); err != nil {
 		return err
 	}
-	p.Flags.CleanSession = flags[0]&0x02 != 0
-	p.Flags.Will = flags[0]&0x04 != 0
+	p.KeepSession = flags[0]&0x02 != 0
+	p.Will = flags[0]&0x04 != 0
 
 	// 注意: Will QoS 和 Will Retain 现在在遗嘱消息的 Flags 字节中编码，而不是在 Connect Flags 中
 
@@ -177,7 +172,7 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) error {
 	}
 
 	// 遗嘱消息
-	if p.Flags.Will {
+	if p.Will {
 		p.WillPacket = &PublishPacket{}
 
 		// 遗嘱 Flags 字节 (紧凑布局) - 与 PublishPacket 一致

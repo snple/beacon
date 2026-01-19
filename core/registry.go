@@ -9,6 +9,10 @@ import (
 	"github.com/snple/beacon/packet"
 )
 
+// ============================================================================
+// ActionHandler - Action 处理者
+// ============================================================================
+
 // ActionHandler 代表一个 action 的处理者
 type ActionHandler struct {
 	ClientID     string        // 处理者的客户端ID
@@ -17,10 +21,14 @@ type ActionHandler struct {
 	RequestsSent atomic.Uint64 // 已发送的请求数（用于轮询负载均衡）
 }
 
-// actionRegistry action 注册表
+// ============================================================================
+// ActionRegistry - Action 注册表
+// ============================================================================
+
+// actionRegistry action 注册表，管理客户端注册的 action handlers
+// 支持批量注册/注销、handler 选择等功能
 type actionRegistry struct {
-	// action -> handlers
-	actions map[string][]*ActionHandler
+	actions map[string][]*ActionHandler // action -> handlers
 	mu      sync.RWMutex
 }
 
@@ -31,12 +39,17 @@ func newActionRegistry() *actionRegistry {
 	}
 }
 
-// Register 注册 action
-func (r *actionRegistry) Register(clientID string, actions []string, concurrency uint16) map[string]packet.ReasonCode {
+// ============================================================================
+// 注册/注销操作
+// ============================================================================
+
+// register 批量注册 actions
+// 返回每个 action 的注册结果
+func (r *actionRegistry) register(clientID string, actions []string, concurrency uint16) map[string]packet.ReasonCode {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	results := make(map[string]packet.ReasonCode)
+	results := make(map[string]packet.ReasonCode, len(actions))
 
 	for _, action := range actions {
 		// 验证 action 名称
@@ -45,18 +58,9 @@ func (r *actionRegistry) Register(clientID string, actions []string, concurrency
 			continue
 		}
 
-		// 检查是否已注册
-		handlers := r.actions[action]
-		duplicate := false
-		for _, h := range handlers {
-			if h.ClientID == clientID {
-				results[action] = packet.ReasonDuplicateAction
-				duplicate = true
-				break
-			}
-		}
-
-		if duplicate {
+		// 检查是否已注册（避免重复）
+		if r.hasClient(clientID, action) {
+			results[action] = packet.ReasonDuplicateAction
 			continue
 		}
 
@@ -73,32 +77,16 @@ func (r *actionRegistry) Register(clientID string, actions []string, concurrency
 	return results
 }
 
-// Unregister 注销 action
-func (r *actionRegistry) Unregister(clientID string, actions []string) map[string]packet.ReasonCode {
+// unregister 批量注销 actions
+// 返回每个 action 的注销结果
+func (r *actionRegistry) unregister(clientID string, actions []string) map[string]packet.ReasonCode {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	results := make(map[string]packet.ReasonCode)
+	results := make(map[string]packet.ReasonCode, len(actions))
 
 	for _, action := range actions {
-		handlers := r.actions[action]
-		found := false
-
-		// 查找并移除
-		for i, h := range handlers {
-			if h.ClientID == clientID {
-				r.actions[action] = append(handlers[:i], handlers[i+1:]...)
-				found = true
-				break
-			}
-		}
-
-		// 如果没有 handler 了，删除 action
-		if len(r.actions[action]) == 0 {
-			delete(r.actions, action)
-		}
-
-		if found {
+		if r.removeHandler(clientID, action) {
 			results[action] = packet.ReasonSuccess
 		} else {
 			results[action] = packet.ReasonNoSubscriptionExisted
@@ -108,34 +96,30 @@ func (r *actionRegistry) Unregister(clientID string, actions []string) map[strin
 	return results
 }
 
-// UnregisterClient 注销客户端的所有 actions
-func (r *actionRegistry) UnregisterClient(clientID string) []string {
+// unregisterClient 注销客户端的所有 actions
+// 返回被注销的 action 列表
+func (r *actionRegistry) unregisterClient(clientID string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	var unregistered []string
 
-	for action, handlers := range r.actions {
-		for i, h := range handlers {
-			if h.ClientID == clientID {
-				r.actions[action] = append(handlers[:i], handlers[i+1:]...)
-				unregistered = append(unregistered, action)
-				break
-			}
-		}
-
-		// 如果没有 handler 了，删除 action
-		if len(r.actions[action]) == 0 {
-			delete(r.actions, action)
+	for action := range r.actions {
+		if r.removeHandler(clientID, action) {
+			unregistered = append(unregistered, action)
 		}
 	}
 
 	return unregistered
 }
 
-// SelectHandler 选择一个处理者
-// targetClientID 为空时，选择接收窗口最大的客户端
-func (r *actionRegistry) SelectHandler(action string, targetClientID string, getClient func(string) *Client) (string, packet.ReasonCode) {
+// ============================================================================
+// Handler 选择与查询
+// ============================================================================
+
+// selectHandler 选择一个处理者
+// targetClientID 为空时，使用轮询负载均衡选择最优 handler
+func (r *actionRegistry) selectHandler(action string, targetClientID string, getClient func(string) *Client) (string, packet.ReasonCode) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -146,21 +130,99 @@ func (r *actionRegistry) SelectHandler(action string, targetClientID string, get
 
 	// 如果指定了目标客户端
 	if targetClientID != "" {
-		for _, h := range handlers {
-			if h.ClientID == targetClientID {
-				// 检查客户端是否在线
-				client := getClient(targetClientID)
-				if client == nil {
-					return "", packet.ReasonClientNotFound
-				}
-
-				return targetClientID, packet.ReasonSuccess
-			}
-		}
-		return "", packet.ReasonClientNotFound
+		return r.findTargetHandler(handlers, targetClientID, getClient)
 	}
 
 	// 未指定目标客户端，选择负载最小的（使用轮询算法）
+	return r.findBestHandler(handlers, getClient)
+}
+
+// getHandlers 获取 action 的所有处理者
+func (r *actionRegistry) getHandlers(action string) []*ActionHandler {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	handlers := r.actions[action]
+	result := make([]*ActionHandler, len(handlers))
+	copy(result, handlers)
+	return result
+}
+
+// getClientActions 获取客户端注册的所有 actions
+func (r *actionRegistry) getClientActions(clientID string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var actions []string
+	for action, handlers := range r.actions {
+		for _, h := range handlers {
+			if h.ClientID == clientID {
+				actions = append(actions, action)
+				break
+			}
+		}
+	}
+	return actions
+}
+
+// actionCount 返回注册的 action 总数
+func (r *actionRegistry) actionCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.actions)
+}
+
+// ============================================================================
+// 内部辅助方法（需持有锁）
+// ============================================================================
+
+// hasClient 检查客户端是否已注册指定 action
+func (r *actionRegistry) hasClient(clientID, action string) bool {
+	handlers := r.actions[action]
+	for _, h := range handlers {
+		if h.ClientID == clientID {
+			return true
+		}
+	}
+	return false
+}
+
+// removeHandler 移除指定客户端的 action handler
+// 返回 true 表示成功移除
+func (r *actionRegistry) removeHandler(clientID, action string) bool {
+	handlers := r.actions[action]
+
+	for i, h := range handlers {
+		if h.ClientID == clientID {
+			r.actions[action] = append(handlers[:i], handlers[i+1:]...)
+
+			// 如果没有 handler 了，删除 action
+			if len(r.actions[action]) == 0 {
+				delete(r.actions, action)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// findTargetHandler 查找指定的目标 handler
+func (r *actionRegistry) findTargetHandler(handlers []*ActionHandler, targetClientID string, getClient func(string) *Client) (string, packet.ReasonCode) {
+	for _, h := range handlers {
+		if h.ClientID == targetClientID {
+			// 检查客户端是否在线
+			client := getClient(targetClientID)
+			if client == nil {
+				return "", packet.ReasonClientNotFound
+			}
+			return targetClientID, packet.ReasonSuccess
+		}
+	}
+	return "", packet.ReasonClientNotFound
+}
+
+// findBestHandler 查找负载最小的 handler
+func (r *actionRegistry) findBestHandler(handlers []*ActionHandler, getClient func(string) *Client) (string, packet.ReasonCode) {
 	var bestHandler *ActionHandler
 	var minRequests = ^uint64(0) // 初始化为最大值
 
@@ -188,45 +250,9 @@ func (r *actionRegistry) SelectHandler(action string, targetClientID string, get
 	return bestHandler.ClientID, packet.ReasonSuccess
 }
 
-// GetHandlers 获取 action 的所有处理者
-func (r *actionRegistry) GetHandlers(action string) []*ActionHandler {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	handlers := r.actions[action]
-	result := make([]*ActionHandler, len(handlers))
-	copy(result, handlers)
-	return result
-}
-
-// GetClientActions 获取客户端注册的所有 actions
-func (r *actionRegistry) GetClientActions(clientID string) []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var actions []string
-	for action, handlers := range r.actions {
-		for _, h := range handlers {
-			if h.ClientID == clientID {
-				actions = append(actions, action)
-				break
-			}
-		}
-	}
-	return actions
-}
-
-// GetActionsForClient 获取客户端注册的所有 actions（别名）
-func (r *actionRegistry) GetActionsForClient(clientID string) []string {
-	return r.GetClientActions(clientID)
-}
-
-// Count 返回注册的 action 总数
-func (r *actionRegistry) Count() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.actions)
-}
+// ============================================================================
+// 验证函数
+// ============================================================================
 
 // validateActionName 验证 action 名称
 // action 名称规则：

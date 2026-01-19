@@ -64,7 +64,11 @@ func (q *sendQueue) tryEnqueue(msg *Message) bool {
 // TryDequeue 尝试从队列中取出消息（非阻塞）
 func (q *sendQueue) tryDequeue() (*Message, bool) {
 	select {
-	case qm := <-q.queue:
+	case qm, ok := <-q.queue:
+		if !ok {
+			return nil, false
+		}
+
 		q.used.Add(-1)
 		// QoS 1 消息从 inQueue 中移除
 		if qm.PacketID > 0 {

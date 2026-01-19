@@ -104,21 +104,38 @@ func (c *Core) cleanupExpiredSessions() {
 			delete(c.clients, clientID)
 			c.clientsMu.Unlock()
 
-			// 清理订阅
-			c.subscriptions.RemoveClient(clientID)
-
-			// 清理持久化消息
-			if c.messageStore != nil {
-				if err := c.messageStore.deleteAllForClient(clientID); err != nil {
-					c.logger.Warn("Failed to cleanup expired session messages",
-						zap.String("clientID", clientID),
-						zap.Error(err))
-				}
-			}
+			// 清理客户端相关资源
+			c.cleanupClient(clientID)
 
 			c.logger.Info("Expired session removed", zap.String("clientID", clientID))
 		} else {
 			c.clientsMu.Unlock()
+		}
+	}
+}
+
+// cleanupClient 清理客户端相关资源
+func (c *Core) cleanupClient(clientID string) {
+	// 清理订阅
+	subCount := c.subTree.unsubscribeClient(clientID)
+	if subCount > 0 {
+		c.stats.SubscriptionsCount.Add(-int64(subCount))
+	}
+
+	// 清理注册的 actions
+	actions := c.actionRegistry.unregisterClient(clientID)
+	if len(actions) > 0 {
+		c.logger.Debug("Unregistered actions on disconnect",
+			zap.String("clientID", clientID),
+			zap.Strings("actions", actions))
+	}
+
+	// 清理持久化消息（如果 CleanSession 或会话过期）
+	if c.messageStore != nil {
+		if err := c.messageStore.deleteAllForClient(clientID); err != nil {
+			c.logger.Warn("Failed to cleanup client messages",
+				zap.String("clientID", clientID),
+				zap.Error(err))
 		}
 	}
 }

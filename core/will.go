@@ -10,7 +10,7 @@ import (
 
 // extractWillMessage 提取遗嘱消息
 func (c *Client) extractWillMessage(connect *packet.ConnectPacket) {
-	if !connect.Flags.Will {
+	if !connect.Will {
 		return
 	}
 

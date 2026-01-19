@@ -24,7 +24,7 @@ type ClientOptions struct {
 
 	// 连接选项
 	KeepAlive      uint16            // 心跳间隔 (秒)
-	CleanSession   bool              // 清理会话
+	KeepSession    bool              // 保留会话
 	SessionExpiry  uint32            // 会话过期时间 (秒)，0 表示断开即清理
 	ConnectTimeout time.Duration     // 连接超时
 	PublishTimeout time.Duration     // 发布超时 (默认 30 秒)
@@ -56,7 +56,7 @@ func NewClientOptions() *ClientOptions {
 	return &ClientOptions{
 		Core:             "localhost:3883",
 		KeepAlive:        defaultKeepAlive,
-		CleanSession:     true,
+		KeepSession:      false,
 		ConnectTimeout:   defaultConnectTimeout,
 		PublishTimeout:   defaultPublishTimeout,
 		RequestQueueSize: 100,
@@ -95,9 +95,9 @@ func (o *ClientOptions) WithKeepAlive(seconds uint16) *ClientOptions {
 	return o
 }
 
-// WithCleanSession 设置是否清理会话
-func (o *ClientOptions) WithCleanSession(clean bool) *ClientOptions {
-	o.CleanSession = clean
+// WithKeepSession 设置是否保留会话
+func (o *ClientOptions) WithKeepSession(keep bool) *ClientOptions {
+	o.KeepSession = keep
 	return o
 }
 

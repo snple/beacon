@@ -58,7 +58,7 @@ type Conn struct {
 }
 
 // newConn 创建新的连接对象，从旧连接迁移状态
-func newConn(c *Client, oldConn *Conn, netConn net.Conn, clientID string, keepAlive uint16, sessionPresent bool, sendWindow uint16, cleanSession bool) *Conn {
+func newConn(c *Client, oldConn *Conn, netConn net.Conn, clientID string, keepAlive uint16, sessionPresent bool, sendWindow uint16, keepSession bool) *Conn {
 	ctx, cancel := context.WithCancel(c.rootCtx)
 
 	conn := &Conn{
@@ -77,7 +77,7 @@ func newConn(c *Client, oldConn *Conn, netConn net.Conn, clientID string, keepAl
 	}
 
 	// 从旧连接迁移或初始化状态
-	if oldConn != nil && !cleanSession {
+	if oldConn != nil && keepSession {
 		sendQueue := newSendQueue(int(sendWindow))
 
 		// 迁移 sendQueue（尽力而为，包括 QoS 0 和 QoS 1 未发送的消息）
@@ -109,7 +109,7 @@ func newConn(c *Client, oldConn *Conn, netConn net.Conn, clientID string, keepAl
 		conn.sendQueue = newSendQueue(int(sendWindow))
 
 		// 清空持久化存储
-		if cleanSession && c.store != nil {
+		if !keepSession && c.store != nil {
 			if err := c.store.clear(); err != nil {
 				c.logger.Warn("Failed to clear persisted messages for clean session", zap.Error(err))
 			}

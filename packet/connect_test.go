@@ -41,8 +41,8 @@ func TestConnectPacket_EncodeDecodeBasic(t *testing.T) {
 	if decoded.KeepAlive != pkt.KeepAlive {
 		t.Errorf("KeepAlive 不匹配: 期望 %d, 得到 %d", pkt.KeepAlive, decoded.KeepAlive)
 	}
-	if decoded.Flags.CleanSession != pkt.Flags.CleanSession {
-		t.Errorf("CleanSession 标志不匹配")
+	if decoded.KeepSession != pkt.KeepSession {
+		t.Errorf("KeepSession 标志不匹配")
 	}
 }
 
@@ -50,7 +50,7 @@ func TestConnectPacket_EncodeDecodeWithCleanSession(t *testing.T) {
 	// 创建带 CleanSession 标志的 CONNECT 包
 	pkt := NewConnectPacket()
 	pkt.ClientID = "test-client-456"
-	pkt.Flags.CleanSession = true
+	pkt.KeepSession = true
 	pkt.KeepAlive = 120
 
 	// 编码
@@ -71,8 +71,8 @@ func TestConnectPacket_EncodeDecodeWithCleanSession(t *testing.T) {
 	}
 
 	// 验证
-	if !decoded.Flags.CleanSession {
-		t.Error("CleanSession 标志应该为 true")
+	if !decoded.KeepSession {
+		t.Error("KeepSession 标志应该为 true")
 	}
 	if decoded.ClientID != pkt.ClientID {
 		t.Errorf("ClientID 不匹配: 期望 %s, 得到 %s", pkt.ClientID, decoded.ClientID)
@@ -86,7 +86,7 @@ func TestConnectPacket_EncodeDecodeWithWill(t *testing.T) {
 	// 创建带遗嘱消息的 CONNECT 包
 	pkt := NewConnectPacket()
 	pkt.ClientID = "test-client-with-will"
-	pkt.Flags.Will = true
+	pkt.Will = true
 	pkt.WillPacket = NewPublishPacket("client/status", []byte("offline"))
 	pkt.WillPacket.QoS = QoS1
 	pkt.WillPacket.Retain = true
@@ -110,7 +110,7 @@ func TestConnectPacket_EncodeDecodeWithWill(t *testing.T) {
 	}
 
 	// 验证
-	if !decoded.Flags.Will {
+	if !decoded.Will {
 		t.Error("Will 标志应该为 true")
 	}
 	if decoded.WillPacket == nil {

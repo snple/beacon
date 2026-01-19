@@ -22,6 +22,30 @@ type Response struct {
 	Packet *packet.ResponsePacket
 }
 
+// ReasonCode 返回响应的原因码
+func (r *Response) ReasonCode() packet.ReasonCode {
+	if r.Packet != nil {
+		return r.Packet.ReasonCode
+	}
+	return packet.ReasonUnspecifiedError
+}
+
+// ReasonString 返回响应的原因字符串
+func (r *Response) ReasonString() string {
+	if r.Packet != nil && r.Packet.Properties != nil {
+		return r.Packet.Properties.ReasonString
+	}
+	return ""
+}
+
+// Payload 返回响应的负载
+func (r *Response) Payload() []byte {
+	if r.Packet != nil {
+		return r.Packet.Payload
+	}
+	return nil
+}
+
 // handleRequest 处理收到的 REQUEST 包
 // 采用轮询模式：将请求放入队列，让外部代码通过 PollRequest() 接收并处理
 func (c *Client) handleRequest(p *packet.RequestPacket) error {

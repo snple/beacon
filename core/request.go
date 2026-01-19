@@ -24,7 +24,7 @@ func (c *Client) handleRegister(p *packet.RegisterPacket) error {
 	}
 
 	// 注册 actions
-	results := c.core.actionRegistry.Register(c.ID, p.Actions, concurrency)
+	results := c.core.actionRegistry.register(c.ID, p.Actions, concurrency)
 
 	// 构造响应
 	regResults := make([]packet.RegisterResult, 0, len(results))
@@ -46,7 +46,7 @@ func (c *Client) handleUnregister(p *packet.UnregisterPacket) error {
 		zap.Strings("actions", p.Actions))
 
 	// 注销 actions
-	results := c.core.actionRegistry.Unregister(c.ID, p.Actions)
+	results := c.core.actionRegistry.unregister(c.ID, p.Actions)
 
 	// 构造响应
 	unregResults := make([]packet.RegisterResult, 0, len(results))
@@ -124,7 +124,7 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 		}
 	} else {
 		// 通过 action 路由选择处理者
-		targetClientID, reasonCode = c.core.actionRegistry.SelectHandler(
+		targetClientID, reasonCode = c.core.actionRegistry.selectHandler(
 			p.Action,
 			"",
 			func(id string) *Client {

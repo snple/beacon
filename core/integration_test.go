@@ -57,7 +57,7 @@ func testSetupClient(t *testing.T, coreAddr string, clientID string, opts *clien
 	opts.WithCore(coreAddr).
 		WithClientID(clientID).
 		WithLogger(testIntegrationLogger()).
-		WithCleanSession(true).
+		WithKeepSession(false).
 		WithRequestQueueSize(100).
 		WithMessageQueueSize(100)
 
@@ -669,7 +669,7 @@ func TestWill_Basic(t *testing.T) {
 			WithCore(addr).
 			WithClientID("will-client").
 			WithLogger(testIntegrationLogger()).
-			WithCleanSession(true).
+			WithKeepSession(false).
 			WithWillSimple("client/will-client/status", []byte("offline"), packet.QoS0, false),
 	)
 	if err != nil {
@@ -727,7 +727,7 @@ func TestWill_NormalDisconnect(t *testing.T) {
 			WithCore(addr).
 			WithClientID("will-client2").
 			WithLogger(testIntegrationLogger()).
-			WithCleanSession(true).
+			WithKeepSession(false).
 			WithWillSimple("client/will-client2/status", []byte("offline"), packet.QoS0, false),
 	)
 	if err != nil {
@@ -779,7 +779,7 @@ func TestWill_WithQoS1(t *testing.T) {
 			WithCore(addr).
 			WithClientID("will-qos1-client").
 			WithLogger(testIntegrationLogger()).
-			WithCleanSession(true).
+			WithKeepSession(false).
 			WithWillSimple("client/will-qos1-client/qos1status", []byte("qos1-offline"), packet.QoS1, false),
 	)
 	if err != nil {
@@ -1151,7 +1151,7 @@ func TestHooks_ClientOnMessage(t *testing.T) {
 		WithCore(addr).
 		WithClientID("client-hook-sub").
 		WithLogger(testIntegrationLogger()).
-		WithCleanSession(true).
+		WithKeepSession(false).
 		WithMessageHandler(client.MessageHandlerFunc(func(ctx *client.PublishContext) bool {
 			receivedCount.Add(1)
 			// 过滤掉 payload 为 "filter-me" 的消息
@@ -1227,7 +1227,7 @@ func TestConnection_Reconnect(t *testing.T) {
 		WithCore(addr).
 		WithClientID("reconnect-client").
 		WithLogger(testIntegrationLogger()).
-		WithCleanSession(true)
+		WithKeepSession(false)
 
 	c, err := client.NewWithOptions(opts)
 	if err != nil {
@@ -1278,7 +1278,7 @@ func TestConnection_MaxClients(t *testing.T) {
 		WithCore(addr).
 		WithClientID("max-client3").
 		WithLogger(testIntegrationLogger()).
-		WithCleanSession(true)
+		WithKeepSession(false)
 
 	c3, err := client.NewWithOptions(c3Opts)
 	if err != nil {
@@ -1305,7 +1305,7 @@ func TestConnection_ClientTakeover(t *testing.T) {
 			WithCore(addr).
 			WithClientID("takeover-client").
 			WithLogger(testIntegrationLogger()).
-			WithCleanSession(true),
+			WithKeepSession(false),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create c1: %v", err)
@@ -1324,7 +1324,7 @@ func TestConnection_ClientTakeover(t *testing.T) {
 			WithCore(addr).
 			WithClientID("takeover-client").
 			WithLogger(testIntegrationLogger()).
-			WithCleanSession(true),
+			WithKeepSession(false),
 	)
 	if err != nil {
 		t.Fatalf("Failed to create c2: %v", err)

@@ -116,7 +116,7 @@ func (c *Core) deliver(msg *Message) {
 		return
 	}
 
-	subscribers := c.subscriptions.match(msg.Packet.Topic)
+	subscribers := c.subTree.matchTopic(msg.Packet.Topic)
 
 	// 一次性获取所有需要的客户端，减少锁竞争
 	c.clientsMu.RLock()

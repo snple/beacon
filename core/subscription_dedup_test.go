@@ -8,15 +8,15 @@ import (
 
 // TestSubscriptionDeduplication 测试订阅去重功能
 func TestSubscriptionDeduplication(t *testing.T) {
-	tree := newSubscriptionTree()
+	tree := newSubTree()
 
 	// 客户端订阅多个重叠的模式
-	tree.Add("client1", "sensor/**", packet.QoS0)
-	tree.Add("client1", "sensor/*/temp", packet.QoS1)
+	tree.subscribe("client1", "sensor/**", packet.QoS0)
+	tree.subscribe("client1", "sensor/*/temp", packet.QoS1)
 
 	// 测试 match（自动去重并保留最高 QoS）
 	t.Run("Match_AutoDedup", func(t *testing.T) {
-		matches := tree.match("sensor/room1/temp")
+		matches := tree.matchTopic("sensor/room1/temp")
 
 		// 应该返回 1 条记录（自动去重）
 		if len(matches) != 1 {
@@ -87,21 +87,15 @@ func TestQoSMaxSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := newSubscriptionTree()
+			tree := newSubTree()
 
 			// 添加所有订阅
 			for _, sub := range tt.subscriptions {
-				tree.Add("client1", sub.topic, sub.qos)
+				tree.subscribe("client1", sub.topic, sub.qos)
 			}
 
 			// 匹配主题
-			matches := tree.match(tt.testTopic)
-
-			// 验证结果
-			if len(matches) != 1 {
-				t.Errorf("Expected 1 unique match, got %d", len(matches))
-			}
-
+			matches := tree.matchTopic(tt.testTopic)
 			qos, ok := matches["client1"]
 			if !ok {
 				t.Error("Expected client1 in results")
@@ -117,18 +111,18 @@ func TestQoSMaxSelection(t *testing.T) {
 
 // TestMultipleSubscriptionsWithWildcards 测试复杂的通配符订阅去重
 func TestMultipleSubscriptionsWithWildcards(t *testing.T) {
-	tree := newSubscriptionTree()
+	tree := newSubTree()
 
 	// 设置多个重叠的订阅
-	tree.Add("client1", "sensor/**", packet.QoS0)          // 匹配所有 sensor 下的主题
-	tree.Add("client1", "sensor/temp/**", packet.QoS0)     // 匹配 sensor/temp 下的所有主题
-	tree.Add("client1", "sensor/*/location1", packet.QoS1) // 匹配特定位置
+	tree.subscribe("client1", "sensor/**", packet.QoS0)          // 匹配所有 sensor 下的主题
+	tree.subscribe("client1", "sensor/temp/**", packet.QoS0)     // 匹配 sensor/temp 下的所有主题
+	tree.subscribe("client1", "sensor/*/location1", packet.QoS1) // 匹配特定位置
 
 	// 测试发布到 sensor/temp/location1
 	topic := "sensor/temp/location1"
 
 	// match 应该自动去重，返回 1 条记录
-	matches := tree.match(topic)
+	matches := tree.matchTopic(topic)
 	if len(matches) != 1 {
 		t.Errorf("match() expected 1 unique client, got %d", len(matches))
 	}
@@ -147,23 +141,22 @@ func TestMultipleSubscriptionsWithWildcards(t *testing.T) {
 
 // TestMixedClientsWithOverlappingSubscriptions 测试多个客户端的重叠订阅
 func TestMixedClientsWithOverlappingSubscriptions(t *testing.T) {
-	tree := newSubscriptionTree()
+	tree := newSubTree()
 
 	// client1 有重叠订阅
-	tree.Add("client1", "sensor/**", packet.QoS0)
-	tree.Add("client1", "sensor/temp/*", packet.QoS1)
+	tree.subscribe("client1", "sensor/**", packet.QoS0)
+	tree.subscribe("client1", "sensor/temp/*", packet.QoS1)
 
 	// client2 有单个订阅
-	tree.Add("client2", "sensor/temp/room1", packet.QoS1)
-
+	tree.subscribe("client2", "sensor/temp/room1", packet.QoS1)
 	// client3 有重叠订阅
-	tree.Add("client3", "sensor/**", packet.QoS1)
-	tree.Add("client3", "**", packet.QoS0)
+	tree.subscribe("client3", "sensor/**", packet.QoS1)
+	tree.subscribe("client3", "**", packet.QoS0)
 
 	topic := "sensor/temp/room1"
 
 	// match 应该返回 3 条记录（每个客户端一条，自动去重）
-	matches := tree.match(topic)
+	matches := tree.matchTopic(topic)
 	if len(matches) != 3 {
 		t.Errorf("match() expected 3 unique clients, got %d", len(matches))
 	}

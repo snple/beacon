@@ -72,7 +72,7 @@ func (c *Client) Connect() error {
 	sessionPresent := connack.SessionPresent
 
 	// 创建新的 Connection 对象（从旧连接迁移状态）
-	conn := newConn(c, oldConn, netConn, clientID, keepAlive, sessionPresent, sendWindow, c.options.CleanSession)
+	conn := newConn(c, oldConn, netConn, clientID, keepAlive, sessionPresent, sendWindow, c.options.KeepSession)
 
 	// 设置为当前连接
 	c.connMu.Lock()
@@ -141,7 +141,7 @@ func (c *Client) handshake(conn net.Conn, reader *bufio.Reader, writer *bufio.Wr
 	connect := packet.NewConnectPacket()
 	connect.ClientID = c.options.ClientID
 	connect.KeepAlive = c.options.KeepAlive
-	connect.Flags.CleanSession = c.options.CleanSession
+	connect.KeepSession = c.options.KeepSession
 	connect.Properties.AuthMethod = c.options.AuthMethod
 	connect.Properties.AuthData = c.options.AuthData
 	connect.Properties.TraceID = c.options.TraceID
@@ -160,7 +160,7 @@ func (c *Client) handshake(conn net.Conn, reader *bufio.Reader, writer *bufio.Wr
 		if willPkt.Topic == "" {
 			return nil, ErrWillTopicRequired
 		}
-		connect.Flags.Will = true
+		connect.Will = true
 
 		if c.options.Will.Expiry > 0 {
 			willPkt.Properties.ExpiryTime = time.Now().Unix() + int64(c.options.Will.Expiry.Seconds())

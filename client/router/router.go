@@ -28,6 +28,22 @@ type MessageContext struct {
 	router *Router
 }
 
+// Topic 获取消息主题
+func (ctx *MessageContext) Topic() string {
+	if ctx.Message != nil && ctx.Message.Packet != nil {
+		return ctx.Message.Packet.Topic
+	}
+	return ""
+}
+
+// Payload 获取消息负载
+func (ctx *MessageContext) Payload() []byte {
+	if ctx.Message != nil && ctx.Message.Packet != nil {
+		return ctx.Message.Packet.Payload
+	}
+	return nil
+}
+
 // RequestContext 路由请求上下文（类似 HTTP Request）
 type RequestContext struct {
 	Request   *client.Request   // 原始请求
@@ -55,6 +71,22 @@ func (ctx *RequestContext) RespondSuccess(payload []byte) error {
 // RespondError 响应错误
 func (ctx *RequestContext) RespondError(code packet.ReasonCode, reason string) error {
 	return ctx.Respond(client.NewErrorResponse(code, reason))
+}
+
+// Payload 获取请求负载
+func (ctx *RequestContext) Payload() []byte {
+	if ctx.Request != nil && ctx.Request.Packet != nil {
+		return ctx.Request.Packet.Payload
+	}
+	return nil
+}
+
+// SourceClientID 获取请求的源客户端 ID
+func (ctx *RequestContext) SourceClientID() string {
+	if ctx.Request != nil && ctx.Request.Packet != nil {
+		return ctx.Request.Packet.SourceClientID
+	}
+	return ""
 }
 
 // RouterMessageHandlerFunc 消息处理函数类型

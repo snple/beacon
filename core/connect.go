@@ -31,7 +31,7 @@ func (c *Core) startListener() (net.Listener, error) {
 	return listener, nil
 }
 
-func (c *Core) acceptLoop() {
+func (c *Core) accept() {
 	defer c.wg.Done()
 
 	for c.running.Load() {
@@ -51,31 +51,31 @@ func (c *Core) acceptLoop() {
 		}
 
 		c.wg.Add(1)
-		go c.handleConnection(conn)
+		go c.handleConn(conn)
 	}
 }
 
-func (c *Core) handleConnection(conn net.Conn) {
+func (c *Core) handleConn(conn net.Conn) {
 	defer c.wg.Done()
 
 	// 读取并验证 CONNECT 包
-	connect, err := c.readAndValidateConnect(conn)
+	connect, err := c.readConnectPacket(conn)
 	if err != nil {
 		return
 	}
 
+	// 处理 Client ID（分配或使用客户端提供的）
 	assignedClientID := c.handleClientID(connect)
 
 	// 认证
-	authCtx, ok := c.authenticateClient(conn, connect)
+	authCtx, ok := c.authClient(conn, connect)
 	if !ok {
 		// 认证失败时已经发送 CONNACK 并关闭连接
 		return
 	}
 
-	// 准备连接参数
-	keepAlive := c.negotiateKeepAlive(connect)
-	connect.KeepAlive = keepAlive
+	// 处理 KeepAlive
+	keepAlive := c.handleKeepAlive(connect)
 
 	// 注册客户端并发送 CONNACK
 	client, sessionPresent := c.registerClient(conn, connect)
@@ -103,7 +103,7 @@ func (c *Core) handleConnection(conn net.Conn) {
 
 	c.logger.Info("Client connected",
 		zap.String("clientID", connect.ClientID),
-		zap.Bool("CleanSession", connect.Flags.CleanSession),
+		zap.Bool("KeepSession", connect.KeepSession),
 		zap.Uint16("keepAlive", keepAlive),
 		zap.Uint32("sessionExpiry", client.SessionExpiry),
 		zap.Bool("sessionPresent", sessionPresent))
@@ -124,8 +124,8 @@ func (c *Core) handleConnection(conn net.Conn) {
 	c.handleClientDisconnect(client)
 }
 
-// readAndValidateConnect 读取并验证 CONNECT 包
-func (c *Core) readAndValidateConnect(conn net.Conn) (*packet.ConnectPacket, error) {
+// readConnectPacket 读取并验证 CONNECT 包
+func (c *Core) readConnectPacket(conn net.Conn) (*packet.ConnectPacket, error) {
 	// 设置连接超时
 	if c.options.ConnectTimeout > 0 {
 		conn.SetDeadline(time.Now().Add(time.Duration(c.options.ConnectTimeout) * time.Second))
@@ -145,6 +145,17 @@ func (c *Core) readAndValidateConnect(conn net.Conn) (*packet.ConnectPacket, err
 		c.logger.Debug("First packet is not CONNECT", zap.Uint8("type", uint8(pkt.Type())))
 		conn.Close()
 		return nil, ErrInvalidConnectPacket
+	}
+
+	// 验证协议名
+	if connect.ProtocolName != packet.ProtocolName {
+		c.logger.Debug("unsupported protocol name",
+			zap.String("name", connect.ProtocolName),
+			zap.String("expected", packet.ProtocolName))
+		c.sendConnack(conn, false, packet.ReasonUnsupportedProtocol, nil)
+		conn.Close()
+
+		return nil, ErrUnsupportedProtocol
 	}
 
 	// 验证协议版本
@@ -171,9 +182,9 @@ func (c *Core) handleClientID(connect *packet.ConnectPacket) string {
 	return assignedID
 }
 
-// authenticateClient 认证客户端
+// authClient 认证客户端
 // 返回认证上下文（包含响应属性）和是否成功
-func (c *Core) authenticateClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthConnectContext, bool) {
+func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthConnectContext, bool) {
 	if c.options.Hooks.AuthHandler == nil {
 		return nil, true
 	}
@@ -194,12 +205,14 @@ func (c *Core) authenticateClient(conn net.Conn, connect *packet.ConnectPacket) 
 	return authCtx, true
 }
 
-// negotiateKeepAlive 协商 KeepAlive 时间
-func (c *Core) negotiateKeepAlive(connect *packet.ConnectPacket) uint16 {
+// handleKeepAlive 处理 KeepAlive 时间
+func (c *Core) handleKeepAlive(connect *packet.ConnectPacket) uint16 {
 	keepAlive := connect.KeepAlive
 	if c.options.KeepAlive > 0 && (keepAlive == 0 || c.options.KeepAlive < keepAlive) {
 		keepAlive = c.options.KeepAlive
 	}
+	connect.KeepAlive = keepAlive
+
 	return keepAlive
 }
 
@@ -208,66 +221,69 @@ func (c *Core) negotiateKeepAlive(connect *packet.ConnectPacket) uint16 {
 //
 // 会话管理逻辑：
 // 1. 无旧客户端：创建新会话
-// 2. 旧客户端在线：踢掉旧连接，根据 CleanSession 决定是否恢复会话
-// 3. 旧客户端离线：根据 CleanSession 决定是否恢复会话
+// 2. 旧客户端在线：踢掉旧连接，根据 KeepSession 决定是否保留会话
+// 3. 旧客户端离线：根据 KeepSession 决定是否保留会话
 func (c *Core) registerClient(conn net.Conn, connect *packet.ConnectPacket) (*Client, bool) {
 	c.clientsMu.Lock()
 	defer c.clientsMu.Unlock()
 
 	clientID := connect.ClientID
-	existingClient, exists := c.clients[clientID]
 
-	// 创建新客户端
+	// 创建客户端
 	newClient := NewClient(conn, connect, c)
 
-	// 情况 1：无旧客户端
+	// 检查是否有旧客户端
+	existingClient, exists := c.clients[clientID]
+
+	// 无旧客户端，直接注册新客户端并返回
 	if !exists {
 		c.clients[clientID] = newClient
 		return newClient, false
 	}
 
-	// 情况 2 & 3：存在旧客户端
+	// 有旧客户端，检查其是否在线
 	isOldOnline := !existingClient.IsClosed()
 
-	// 如果旧客户端在线，先踢掉
-	if isOldOnline {
-		existingClient.Close(packet.ReasonSessionTakenOver)
-	}
-
-	// 清除离线会话记录（如果有）
+	// 从离线会话列表中移除旧客户端
 	c.offlineSessionsMu.Lock()
 	delete(c.offlineSessions, clientID)
 	c.offlineSessionsMu.Unlock()
 
-	// 决定是否恢复会话
-	if connect.Flags.CleanSession {
-		// CleanSession=true: 不恢复会话，清理旧数据
-		// 清理旧客户端的 action 注册
-		actions := c.actionRegistry.UnregisterClient(clientID)
-		if len(actions) > 0 {
-			c.logger.Debug("Cleaned up actions for CleanSession",
-				zap.String("clientID", clientID),
-				zap.Strings("actions", actions))
+	if connect.KeepSession {
+		// KeepSession=true: 恢复会话
+		// 先恢复会话数据，再替换客户端，最后踢掉旧连接
+		newClient.restoreSession(existingClient)
+		c.clients[clientID] = newClient
+
+		// 如果旧客户端在线，踢掉它（标记为已接管，防止清理资源）
+		if isOldOnline {
+			existingClient.takenOver.Store(true)
+			existingClient.Close(packet.ReasonSessionTakenOver)
 		}
-		// 清理旧客户端的订阅
-		c.subscriptions.RemoveClient(clientID)
-		// 清理旧客户端的持久化消息
-		if c.messageStore != nil {
-			c.messageStore.deleteAllForClient(clientID)
+
+		c.logger.Info("Session restored",
+			zap.String("clientID", clientID),
+			zap.Bool("wasOnline", isOldOnline))
+
+		return newClient, true
+	} else {
+		// KeepSession=false: 不恢复会话，清理旧数据
+
+		// 先从 clients map 删除旧客户端（防止其断开时误清理）
+		delete(c.clients, clientID)
+
+		// 如果旧客户端在线，踢掉它（标记为已接管，防止清理资源）
+		if isOldOnline {
+			existingClient.takenOver.Store(true)
+			existingClient.Close(packet.ReasonSessionTakenOver)
 		}
+
+		// 清理旧客户端相关资源
+		c.cleanupClient(clientID)
+
 		c.clients[clientID] = newClient
 		return newClient, false
 	}
-
-	// CleanSession=false: 恢复会话
-	newClient.restoreSession(existingClient)
-	c.clients[clientID] = newClient
-
-	c.logger.Info("Session restored",
-		zap.String("clientID", clientID),
-		zap.Bool("wasOnline", isOldOnline))
-
-	return newClient, true
 }
 
 // sendConnack 发送 CONNACK 包
@@ -299,6 +315,13 @@ func (c *Core) sendConnack(conn net.Conn, sessionPresent bool, code packet.Reaso
 // 4. 异常断开（没有 DISCONNECT 包）：发布遗嘱消息
 func (c *Core) handleClientDisconnect(client *Client) {
 	c.stats.ClientsConnected.Add(-1)
+
+	// 如果客户端已被接管，不做任何清理（资源已由新客户端接管）
+	if client.takenOver.Load() {
+		c.logger.Debug("Client disconnected (session taken over, skipping cleanup)",
+			zap.String("clientID", client.ID))
+		return
+	}
 
 	// 调用 OnDisconnect 钩子
 	// Packet 可能为 nil（连接异常断开时）
@@ -348,30 +371,22 @@ func (c *Core) handleClientDisconnect(client *Client) {
 
 func (c *Core) removeClient(client *Client) {
 	c.clientsMu.Lock()
+	isCurrentClient := false
 	if existing, ok := c.clients[client.ID]; ok && existing == client {
 		delete(c.clients, client.ID)
+		isCurrentClient = true
 	}
 	c.clientsMu.Unlock()
 
-	// 清理订阅
-	c.subscriptions.RemoveClient(client.ID)
-
-	// 清理注册的 actions
-	actions := c.actionRegistry.UnregisterClient(client.ID)
-	if len(actions) > 0 {
-		c.logger.Debug("Unregistered actions on disconnect",
-			zap.String("clientID", client.ID),
-			zap.Strings("actions", actions))
+	// 只有确认是当前客户端时才清理资源（防止误删新客户端的资源）
+	if !isCurrentClient {
+		c.logger.Debug("Client already replaced, skipping cleanup",
+			zap.String("clientID", client.ID))
+		return
 	}
 
-	// 清理持久化消息（如果 CleanSession 或会话过期）
-	if c.messageStore != nil {
-		if err := c.messageStore.deleteAllForClient(client.ID); err != nil {
-			c.logger.Warn("Failed to cleanup client messages",
-				zap.String("clientID", client.ID),
-				zap.Error(err))
-		}
-	}
+	// 清理客户端相关资源
+	c.cleanupClient(client.ID)
 
 	// 注意：ClientsConnected 已在 handleClientDisconnect 中扣减，这里不再重复扣减
 
@@ -391,7 +406,7 @@ func (c *Client) restoreSession(old *Client) {
 	// 更新 core 订阅树（指向新客户端）
 	c.subsMu.RLock()
 	for topic, opts := range c.subscriptions {
-		c.core.subscriptions.Add(c.ID, topic, opts.QoS)
+		c.core.subTree.subscribe(c.ID, topic, opts.QoS)
 	}
 	c.subsMu.RUnlock()
 
@@ -406,6 +421,7 @@ func (c *Client) restoreSession(old *Client) {
 	// 迁移 sendQueue（尽力而为，包括 QoS 0 和 QoS 1 未发送的消息）
 	// 从旧队列中取出所有消息，放入新队列
 	migratedCount := 0
+	droppedCount := 0
 	for {
 		msg, ok := old.sendQueue.tryDequeue()
 		if !ok {
@@ -415,13 +431,20 @@ func (c *Client) restoreSession(old *Client) {
 		if c.sendQueue.tryEnqueue(msg) {
 			migratedCount++
 		} else {
-			// 新队列已满，剩余消息丢弃
-			// QoS 1 的消息会在持久化存储中，后续会被重传机制处理
-			c.core.logger.Debug("New sendQueue full during migration, remaining messages not migrated",
+			// 新队列已满，剩余消息需要处理
+			// QoS 1 的消息如果已持久化，会在重传时重新加载
+			// 对于未持久化或 QoS 0 的消息，只能丢弃
+			droppedCount++
+			c.core.logger.Warn("Message dropped during sendQueue migration (queue full)",
 				zap.String("clientID", c.ID),
-				zap.Int("migrated", migratedCount))
-			break
+				zap.String("topic", msg.Packet.Topic),
+				zap.Uint8("qos", uint8(msg.Packet.QoS)))
 		}
+	}
+
+	// 如果有消息被丢弃，更新统计
+	if droppedCount > 0 {
+		c.core.stats.MessagesDropped.Add(int64(droppedCount))
 	}
 
 	// 迁移 packetID
@@ -431,7 +454,8 @@ func (c *Client) restoreSession(old *Client) {
 		zap.String("clientID", c.ID),
 		zap.Int("subscriptions", len(c.subscriptions)),
 		zap.Int("pendingAck", len(c.pendingAck)),
-		zap.Int("sendQueueMigrated", migratedCount))
+		zap.Int("sendQueueMigrated", migratedCount),
+		zap.Int("sendQueueDropped", droppedCount))
 }
 
 // HasSession 检查客户端是否有需要保留的会话

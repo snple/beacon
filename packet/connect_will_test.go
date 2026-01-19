@@ -10,7 +10,7 @@ func TestWillMessageEncoding(t *testing.T) {
 	// 创建带遗嘱的 CONNECT 包
 	pkt := NewConnectPacket()
 	pkt.ClientID = "test-will"
-	pkt.Flags.Will = true
+	pkt.Will = true
 	pkt.WillPacket = NewPublishPacket("will/topic", []byte("will payload"))
 	pkt.WillPacket.QoS = QoS1
 	pkt.WillPacket.Retain = true
@@ -78,7 +78,7 @@ func TestWillMessageWithDifferentQoS(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pkt := NewConnectPacket()
 			pkt.ClientID = "test-qos"
-			pkt.Flags.Will = true
+			pkt.Will = true
 			pkt.WillPacket = NewPublishPacket("test/topic", []byte("test payload"))
 			pkt.WillPacket.QoS = tc.qos
 			pkt.WillPacket.Retain = tc.retain
@@ -116,7 +116,7 @@ func TestWillMessageWithDifferentQoS(t *testing.T) {
 func TestWillMessageWithEmptyPayload(t *testing.T) {
 	pkt := NewConnectPacket()
 	pkt.ClientID = "test-empty-payload"
-	pkt.Flags.Will = true
+	pkt.Will = true
 	pkt.WillPacket = NewPublishPacket("test/topic", []byte{})
 	pkt.WillPacket.QoS = QoS0
 
@@ -157,7 +157,7 @@ func TestWillMessageWithLargePayload(t *testing.T) {
 
 	pkt := NewConnectPacket()
 	pkt.ClientID = "test-large-payload"
-	pkt.Flags.Will = true
+	pkt.Will = true
 	pkt.WillPacket = NewPublishPacket("test/topic", largePayload)
 	pkt.WillPacket.QoS = QoS1
 

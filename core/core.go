@@ -32,7 +32,7 @@ type Core struct {
 	offlineSessionsMu sync.Mutex
 
 	// 订阅管理
-	subscriptions *subscriptionTree
+	subTree *subTree
 
 	// 消息队列 (按优先级)
 	queues [4]*messageQueue
@@ -100,7 +100,7 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		logger:          opts.Logger,
 		clients:         make(map[string]*Client),
 		offlineSessions: make(map[string]time.Time),
-		subscriptions:   newSubscriptionTree(),
+		subTree:         newSubTree(),
 		retainStore:     newRetainStore(),
 		actionRegistry:  newActionRegistry(),
 		msgNotify:       make(chan struct{}, 1),
@@ -195,7 +195,7 @@ func (c *Core) startBackgroundWorkers() {
 
 	// 接受连接
 	c.wg.Add(1)
-	go c.acceptLoop()
+	go c.accept()
 }
 
 // logStartupInfo 记录启动信息
@@ -243,7 +243,7 @@ func (c *Core) Stop() error {
 
 // Subscribe 订阅主题
 func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
-	isNew := c.subscriptions.Add(clientID, sub.Topic, sub.Options.QoS)
+	isNew := c.subTree.subscribe(clientID, sub.Topic, sub.Options.QoS)
 	if isNew {
 		c.stats.SubscriptionsCount.Add(1)
 	}
@@ -251,7 +251,7 @@ func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 
 // Unsubscribe 取消订阅
 func (c *Core) Unsubscribe(clientID, topic string) {
-	if removed := c.subscriptions.Remove(clientID, topic); removed {
+	if removed := c.subTree.unsubscribe(clientID, topic); removed {
 		c.stats.SubscriptionsCount.Add(-1)
 	}
 }
@@ -328,7 +328,7 @@ type ClientInfo struct {
 	Connected     bool                     `json:"connected"`
 	ConnectedAt   time.Time                `json:"connected_at"`
 	KeepAlive     uint16                   `json:"keep_alive"`
-	CleanSession  bool                     `json:"clean_start"`
+	KeepSession   bool                     `json:"keep_session"`
 	SessionExpiry uint32                   `json:"session_expiry"`
 	Subscriptions []ClientSubscriptionInfo `json:"subscriptions"`
 	PendingAck    int                      `json:"pending_ack"`
@@ -373,7 +373,7 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 		Connected:     !client.IsClosed(),
 		ConnectedAt:   client.ConnectedAt,
 		KeepAlive:     client.KeepAlive,
-		CleanSession:  client.CleanSession,
+		KeepSession:   client.KeepSession,
 		SessionExpiry: client.SessionExpiry,
 		Subscriptions: subs,
 		PendingAck:    pendingAck,
@@ -456,7 +456,7 @@ func (c *Core) GetClientSubscriptions(clientID string) ([]ClientSubscriptionInfo
 
 // GetTopicSubscribers 获取订阅指定主题的所有客户端
 func (c *Core) GetTopicSubscribers(topic string) map[string]packet.QoS {
-	return c.subscriptions.match(topic)
+	return c.subTree.matchTopic(topic)
 }
 
 // GetOnlineClientsCount 获取在线客户端数量
