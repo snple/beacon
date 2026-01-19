@@ -45,7 +45,6 @@ func (c *Client) Publish(topic string, payload []byte, opts *PublishOptions) err
 	// 过期时间和元数据
 	pkg.Properties.ExpiryTime = expiryTime
 	pkg.Properties.ContentType = opts.ContentType
-	pkg.Properties.Priority = &opts.Priority
 	pkg.Properties.TraceID = opts.TraceID
 
 	// 请求-响应模式属性

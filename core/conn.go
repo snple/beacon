@@ -2,6 +2,7 @@ package core
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -42,12 +43,15 @@ type conn struct {
 	writeMu    sync.Mutex
 
 	// 生命周期
+	ctx       context.Context
+	cancel    context.CancelFunc
 	closed    atomic.Bool
 	closeOnce sync.Once
 }
 
 // newConn 创建新的连接对象
 func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *conn {
+	ctx, cancel := context.WithCancel(context.Background())
 	conn := &conn{
 		client:      client,
 		conn:        netConn,
@@ -55,6 +59,8 @@ func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *c
 		writer:      bufio.NewWriter(netConn),
 		keepAlive:   connect.KeepAlive,
 		connectedAt: time.Now(),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	// 应用 Core 默认的 KeepAlive（如果客户端未指定或指定值过大）
@@ -250,6 +256,7 @@ func (c *conn) processSendQueue() {
 func (c *conn) close(reason packet.ReasonCode) {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
+		c.cancel() // 取消所有阻塞操作
 
 		// 发送 DISCONNECT (如果不是正常断开)
 		if reason != packet.ReasonNormalDisconnect {

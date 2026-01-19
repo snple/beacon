@@ -515,8 +515,7 @@ type PublishProperties struct {
 	// 消息格式
 	ContentType string `nson:"ctype"` // MIME 类型
 
-	Priority *Priority `nson:"prio"`  // 消息优先级
-	TraceID  string    `nson:"trace"` // 分布式追踪 ID
+	TraceID string `nson:"trace"` // 分布式追踪 ID
 
 	// 请求-响应模式
 	TargetClientID  string `nson:"tgt"`  // 目标客户端ID，用于点对点消息
@@ -532,13 +531,12 @@ type PublishProperties struct {
 const (
 	pubPropExpiryTime      uint16 = 1 << 0 // bit 0
 	pubPropContentType     uint16 = 1 << 1 // bit 1
-	pubPropPriority        uint16 = 1 << 2 // bit 2
-	pubPropTraceID         uint16 = 1 << 3 // bit 3
-	pubPropTargetClientID  uint16 = 1 << 4 // bit 4
-	pubPropSourceClientID  uint16 = 1 << 5 // bit 5
-	pubPropResponseTopic   uint16 = 1 << 6 // bit 6
-	pubPropCorrelationData uint16 = 1 << 7 // bit 7
-	pubPropUserProperties  uint16 = 1 << 8 // bit 8
+	pubPropTraceID         uint16 = 1 << 2 // bit 2
+	pubPropTargetClientID  uint16 = 1 << 3 // bit 3
+	pubPropSourceClientID  uint16 = 1 << 4 // bit 4
+	pubPropResponseTopic   uint16 = 1 << 5 // bit 5
+	pubPropCorrelationData uint16 = 1 << 6 // bit 6
+	pubPropUserProperties  uint16 = 1 << 7 // bit 7
 )
 
 // NewPublishProperties 创建新的发布属性
@@ -559,9 +557,6 @@ func (p *PublishProperties) Encode(w io.Writer) error {
 	}
 	if p.ContentType != "" {
 		flags |= pubPropContentType
-	}
-	if p.Priority != nil {
-		flags |= pubPropPriority
 	}
 	if p.TraceID != "" {
 		flags |= pubPropTraceID
@@ -593,9 +588,6 @@ func (p *PublishProperties) Encode(w io.Writer) error {
 	}
 	if flags&pubPropContentType != 0 {
 		EncodeString(&buf, p.ContentType)
-	}
-	if flags&pubPropPriority != 0 {
-		buf.WriteByte(byte(*p.Priority))
 	}
 	if flags&pubPropTraceID != 0 {
 		EncodeString(&buf, p.TraceID)
@@ -669,14 +661,6 @@ func (p *PublishProperties) Decode(r io.Reader) error {
 		if err != nil {
 			return err
 		}
-	}
-	if flags&pubPropPriority != 0 {
-		b, err := buf.ReadByte()
-		if err != nil {
-			return err
-		}
-		pri := Priority(b)
-		p.Priority = &pri
 	}
 	if flags&pubPropTraceID != 0 {
 		p.TraceID, err = DecodeString(buf)

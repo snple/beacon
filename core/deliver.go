@@ -10,6 +10,7 @@ import (
 )
 
 // Publish 发布消息 (内部使用)
+// ctx: 用于取消阻塞操作（通常传入客户端连接的 context）
 func (c *Core) publish(msg Message) bool {
 	// 处理保留消息
 	if msg.Retain && c.options.RetainEnabled {
@@ -46,40 +47,24 @@ func (c *Core) publish(msg Message) bool {
 		}
 	}
 
-	// 加入优先级队列
-	priority := packet.PriorityNormal
-	if msg.Packet.Properties != nil && msg.Packet.Properties.Priority != nil {
-		priority = *msg.Packet.Properties.Priority
-	}
-
-	// 放入对应优先级的队列
-	// !!! 这里把指针放了进去
-	if !c.queues[priority].push(&msg) {
+	// 放入消息队列
+	select {
+	case c.queue <- &msg:
+		c.stats.MessagesReceived.Add(1)
+		return true
+	default:
 		// 队列满了，丢弃消息
-		c.logger.Debug("Message dropped, dispatch queue full",
+		c.logger.Debug("message dropped, dispatch queue full",
 			zap.String("topic", msg.Packet.Topic))
 		c.stats.MessagesDropped.Add(1)
-
 		return false
 	}
-
-	// 通知 dispatchLoop 有新消息 (非阻塞)
-	select {
-	case c.msgNotify <- struct{}{}:
-	default:
-		// channel 已有通知，无需重复发送
-	}
-
-	c.stats.MessagesReceived.Add(1)
-
-	return true
 }
 
 // PublishOptions 发布选项
 type PublishOptions struct {
 	QoS         packet.QoS
 	Retain      bool
-	Priority    *packet.Priority
 	TraceID     string
 	ContentType string
 	Expiry      uint32
@@ -97,23 +82,9 @@ func (c *Core) dispatchLoop() {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-c.msgNotify:
-			// 批量处理消息，提高吞吐量
-			for {
-				processed := false
-				// 按优先级从高到低处理消息
-				for i := len(c.queues) - 1; i >= 0; i-- {
-					if msg := c.queues[i].pop(); msg != nil {
-						// !!! push 放进去的是指针
-						c.deliver(msg)
-						processed = true
-						break // 保证高优先级优先
-					}
-				}
-				if !processed {
-					break // 所有队列都空了
-				}
-			}
+		case msg := <-c.queue:
+			// !!! push 放进去的是指针
+			c.deliver(msg)
 		}
 	}
 }
@@ -357,9 +328,7 @@ func (c *Core) PublishToClient(clientID string, topic string, payload []byte, op
 	pub := packet.NewPublishPacket(topic, payload)
 	pub.QoS = options.QoS
 	pub.Retain = options.Retain
-	if options.Priority != nil {
-		pub.Properties.Priority = options.Priority
-	}
+
 	pub.Properties.TraceID = options.TraceID
 	pub.Properties.ContentType = options.ContentType
 	pub.Properties.TargetClientID = options.TargetClientID
@@ -401,9 +370,7 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 	pub := packet.NewPublishPacket(topic, payload)
 	pub.QoS = options.QoS
 	pub.Retain = options.Retain
-	if options.Priority != nil {
-		pub.Properties.Priority = options.Priority
-	}
+
 	pub.Properties.TraceID = options.TraceID
 	pub.Properties.ContentType = options.ContentType
 	pub.Properties.ResponseTopic = options.ResponseTopic

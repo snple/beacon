@@ -103,31 +103,6 @@ func (q QoS) String() string {
 	}
 }
 
-// Priority 消息优先级
-type Priority uint8
-
-const (
-	PriorityLow      Priority = 0 // 低优先级
-	PriorityNormal   Priority = 1 // 普通优先级
-	PriorityHigh     Priority = 2 // 高优先级
-	PriorityCritical Priority = 3 // 紧急优先级
-)
-
-func (p Priority) String() string {
-	switch p {
-	case PriorityLow:
-		return "low"
-	case PriorityNormal:
-		return "normal"
-	case PriorityHigh:
-		return "high"
-	case PriorityCritical:
-		return "critical"
-	default:
-		return "unknown"
-	}
-}
-
 // ReasonCode 原因码
 type ReasonCode uint8
 

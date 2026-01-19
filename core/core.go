@@ -12,12 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Core 相关常量
-const (
-	// 优先级队列容量
-	priorityQueueCapacity = 10000
-)
-
 // Core
 type Core struct {
 	options *CoreOptions
@@ -34,11 +28,8 @@ type Core struct {
 	// 订阅管理
 	subTree *subTree
 
-	// 消息队列 (按优先级)
-	queues [4]*messageQueue
-
-	// 消息通知 channel
-	msgNotify chan struct{}
+	// 消息队列
+	queue chan *Message
 
 	// 保留消息
 	retainStore *retainStore
@@ -101,9 +92,9 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		clients:         make(map[string]*Client),
 		offlineSessions: make(map[string]time.Time),
 		subTree:         newSubTree(),
+		queue:           make(chan *Message, opts.MessageQueueSize),
 		retainStore:     newRetainStore(),
 		actionRegistry:  newActionRegistry(),
-		msgNotify:       make(chan struct{}, 1),
 		ctx:             ctx,
 		cancel:          cancel,
 	}
@@ -112,9 +103,6 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 	if err := b.initMessageStore(); err != nil {
 		return nil, err
 	}
-
-	// 初始化优先级队列
-	b.initPriorityQueues()
 
 	return b, nil
 }
@@ -141,13 +129,6 @@ func (c *Core) initMessageStore() error {
 	}
 	c.messageStore = store
 	return nil
-}
-
-// initPriorityQueues 初始化优先级队列
-func (c *Core) initPriorityQueues() {
-	for i := range c.queues {
-		c.queues[i] = newMessageQueue(packet.Priority(i), priorityQueueCapacity)
-	}
 }
 
 // Start 启动 core

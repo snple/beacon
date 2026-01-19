@@ -264,7 +264,6 @@ func (o *ClientOptions) applyDefaults() {
 type PublishOptions struct {
 	QoS             packet.QoS
 	Retain          bool
-	Priority        packet.Priority
 	TraceID         string
 	ContentType     string
 	Expiry          uint32
@@ -278,8 +277,7 @@ type PublishOptions struct {
 // NewPublishOptions 创建新的发布选项
 func NewPublishOptions() *PublishOptions {
 	return &PublishOptions{
-		QoS:      packet.QoS0,
-		Priority: packet.PriorityNormal,
+		QoS: packet.QoS0,
 	}
 }
 
@@ -292,12 +290,6 @@ func (o *PublishOptions) WithQoS(qos packet.QoS) *PublishOptions {
 // WithRetain 设置保留标志
 func (o *PublishOptions) WithRetain(retain bool) *PublishOptions {
 	o.Retain = retain
-	return o
-}
-
-// WithPriority 设置消息优先级
-func (o *PublishOptions) WithPriority(priority packet.Priority) *PublishOptions {
-	o.Priority = priority
 	return o
 }
 

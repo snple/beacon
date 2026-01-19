@@ -69,10 +69,8 @@ func main() {
 	// 4. 向指定客户端发送消息
 	fmt.Println("4. 向指定客户端发送消息:")
 	if c.IsClientOnline(testClientID) {
-		priority := packet.PriorityHigh
 		opts := core.PublishOptions{
 			QoS:         packet.QoS1,
-			Priority:    &priority,
 			TraceID:     "admin-msg-001",
 			ContentType: "text/plain",
 			Expiry:      300, // 5 分钟过期

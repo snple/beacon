@@ -68,7 +68,6 @@ func TestPublishOptionsBuilder(t *testing.T) {
 	opts := NewPublishOptions().
 		WithQoS(packet.QoS1).
 		WithRetain(true).
-		WithPriority(packet.PriorityHigh).
 		WithTraceID("pub-trace-123").
 		WithContentType("application/json").
 		WithExpiry(3600).
@@ -82,9 +81,6 @@ func TestPublishOptionsBuilder(t *testing.T) {
 	}
 	if !opts.Retain {
 		t.Error("expected Retain true")
-	}
-	if opts.Priority != packet.PriorityHigh {
-		t.Errorf("expected PriorityHigh, got %v", opts.Priority)
 	}
 	if opts.TraceID != "pub-trace-123" {
 		t.Errorf("expected traceID pub-trace-123, got %s", opts.TraceID)
@@ -160,9 +156,6 @@ func TestPublishOptionsDefaults(t *testing.T) {
 
 	if opts.QoS != packet.QoS0 {
 		t.Errorf("expected default QoS0, got %v", opts.QoS)
-	}
-	if opts.Priority != packet.PriorityNormal {
-		t.Errorf("expected default PriorityNormal, got %v", opts.Priority)
 	}
 	if opts.Retain {
 		t.Error("expected default Retain false")
