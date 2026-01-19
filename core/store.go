@@ -337,7 +337,7 @@ func (ms *messageStore) countMessages(clientID string) (int, error) {
 	return count, err
 }
 
-// Delete 删除消息 (客户端 ACK 后调用)
+// delete 删除消息 (客户端 ACK 后调用)
 func (ms *messageStore) delete(clientID string, packetID uint16) error {
 	return ms.db.Update(func(txn *badger.Txn) error {
 		key := []byte(messageKey(clientID, packetID))
@@ -345,7 +345,7 @@ func (ms *messageStore) delete(clientID string, packetID uint16) error {
 	})
 }
 
-// DeleteAllForClient 删除客户端所有消息 (CleanSession=true 时调用)
+// deleteAllForClient 删除客户端所有消息
 func (ms *messageStore) deleteAllForClient(clientID string) error {
 	prefix := clientPrefix(clientID)
 	var keysToDelete [][]byte

@@ -97,12 +97,12 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 
 // handlePuback 处理 QoS 1 确认 - 客户端已收到消息
 func (c *Client) handlePuback(p *packet.PubackPacket) error {
-	c.pendingAckMu.Lock()
-	pending, ok := c.pendingAck[p.PacketID]
+	c.session.pendingAckMu.Lock()
+	pending, ok := c.session.pendingAck[p.PacketID]
 	if ok {
-		delete(c.pendingAck, p.PacketID)
+		delete(c.session.pendingAck, p.PacketID)
 	}
-	c.pendingAckMu.Unlock()
+	c.session.pendingAckMu.Unlock()
 
 	if ok {
 		c.core.logger.Debug("Message acknowledged",
@@ -165,9 +165,9 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 		}
 
 		// 检查是否是新订阅（在添加之前检查）
-		c.subsMu.RLock()
-		_, exists := c.subscriptions[sub.Topic]
-		c.subsMu.RUnlock()
+		c.session.subsMu.RLock()
+		_, exists := c.session.subscriptions[sub.Topic]
+		c.session.subsMu.RUnlock()
 		isNew := !exists
 
 		validSubs = append(validSubs, sub)
@@ -177,11 +177,11 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 
 	// 合并锁操作，一次性添加所有有效订阅
 	if len(validSubs) > 0 {
-		c.subsMu.Lock()
+		c.session.subsMu.Lock()
 		for _, sub := range validSubs {
-			c.subscriptions[sub.Topic] = sub.Options
+			c.session.subscriptions[sub.Topic] = sub.Options
 		}
-		c.subsMu.Unlock()
+		c.session.subsMu.Unlock()
 
 		// 在锁外处理 core 订阅和日志
 		for _, sub := range validSubs {
@@ -243,11 +243,11 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 
 	// 合并锁操作
 	if len(validTopics) > 0 {
-		c.subsMu.Lock()
+		c.session.subsMu.Lock()
 		for _, topic := range validTopics {
-			delete(c.subscriptions, topic)
+			delete(c.session.subscriptions, topic)
 		}
-		c.subsMu.Unlock()
+		c.session.subsMu.Unlock()
 
 		// 在锁外处理 core 操作和日志
 		for _, topic := range validTopics {

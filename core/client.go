@@ -1,16 +1,12 @@
 package core
 
 import (
-	"bufio"
 	"errors"
-	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/snple/beacon/packet"
-	"go.uber.org/zap"
 )
 
 // 客户端相关常量
@@ -27,291 +23,200 @@ const (
 	overflowBatchSize = 100 // 从持久化加载的每批最大条数
 )
 
-// Client 表示一个已连接的客户端
+// Client 表示一个已连接的客户端（组合 Session 和 Conn）
+// 提供统一的对外接口，内部委托给 Session 和 Conn 处理
 type Client struct {
-	ID      string
-	conn    net.Conn
-	core    *Core
-	reader  *bufio.Reader
-	writer  *bufio.Writer
-	writeMu sync.Mutex
+	// 客户端标识
+	ID string
 
-	// 连接信息
-	KeepAlive        uint16
-	KeepSession      bool
-	SessionExpiry    uint32 // 会话过期时间（秒），0 表示断开即清理
-	AuthMethod       string // 认证方法
-	AuthData         []byte // 认证数据
-	TraceID          string
-	ConnectedAt      time.Time                // 连接建立时间
-	DisconnectPacket *packet.DisconnectPacket // 断开连接包（正常断开时非 nil）
+	// 会话层（跨连接持久化的状态）
+	session *session
 
-	// 遗嘱消息
-	WillPacket *packet.PublishPacket
+	// 连接层（当前 TCP 连接）
+	conn    *Conn
+	oldConn *Conn // 会话恢复时暂存旧连接，用于迁移 sendQueue
+	connMu  sync.RWMutex
 
-	// 会话状态
-	subscriptions map[string]packet.SubscribeOptions
-	subsMu        sync.RWMutex
-
-	// 包 ID 管理
-	nextPacketID atomic.Uint32
-
-	// QoS 状态 (只需要 QoS 0/1)
-	pendingAck   map[uint16]pendingMessage // QoS 1: 等待客户端 ACK 的消息
-	pendingAckMu sync.Mutex
-
-	// 消息发送
-	processing atomic.Bool // true: 正在处理客户端消息
-	// 流量控制
-	retransmitting atomic.Bool // true: 正在重传消息
-	sendWindow     uint16      // 客户端接收窗口大小(core 发送窗口)
-	sendQueue      *sendQueue  // 发送队列（基于客户端的 ReceiveWindow）
+	// Core 引用
+	core *Core
 
 	// 生命周期
-	closed    atomic.Bool
-	takenOver atomic.Bool // true: 会话已被接管（不应清理资源）
-	closeCh   chan struct{}
 	closeOnce sync.Once
 }
 
-// NewClient 创建新的客户端
-func NewClient(conn net.Conn, connect *packet.ConnectPacket, core *Core) *Client {
+// newClient 创建新的客户端（全新会话）
+func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Client {
+	// 创建会话
+	session := newSession(connect.ClientID, connect, core)
+
+	// 创建客户端
 	c := &Client{
-		ID:            connect.ClientID,
-		conn:          conn,
-		core:          core,
-		reader:        bufio.NewReader(conn),
-		writer:        bufio.NewWriter(conn),
-		KeepAlive:     connect.KeepAlive,
-		KeepSession:   connect.KeepSession,
-		ConnectedAt:   time.Now(),
-		subscriptions: make(map[string]packet.SubscribeOptions),
-		pendingAck:    make(map[uint16]pendingMessage),
-		closeCh:       make(chan struct{}),
+		ID:      connect.ClientID,
+		session: session,
+		core:    core,
 	}
 
-	// 从 CONNECT 属性中读取客户端的初始接收窗口并设置为 core 的发送窗口
-	if connect.Properties != nil && connect.Properties.ReceiveWindow != nil {
-		c.sendWindow = *connect.Properties.ReceiveWindow
-	}
-
-	// 创建发送队列（基于客户端的接收窗口）
-	if c.sendWindow > 0 {
-		c.sendQueue = newSendQueue(int(c.sendWindow))
-	} else {
-		// 如果客户端未指定接收窗口，使用默认值
-		c.sendQueue = newSendQueue(100)
-		c.sendWindow = 100
-	}
+	// 附加连接
+	c.attachConn(netConn, connect)
 
 	// 提取遗嘱消息
 	c.extractWillMessage(connect)
 
-	// 从属性中提取认证信息和特性
-	c.extractConnectProperties(connect, core)
-
-	seed := uint32(minPacketID)
-	if core != nil && core.messageStore != nil {
-		if s, err := core.messageStore.packetIDSeed(c.ID); err == nil {
-			seed = uint32(s)
-		}
-	}
-	c.nextPacketID.Store(seed)
-
 	return c
 }
 
-// extractConnectProperties 从连接属性中提取信息
-func (c *Client) extractConnectProperties(connect *packet.ConnectPacket, core *Core) {
-	if connect.Properties != nil {
-		c.AuthMethod = connect.Properties.AuthMethod
-		c.AuthData = connect.Properties.AuthData
-		c.TraceID = connect.Properties.TraceID
+// attachConn 附加新的网络连接到客户端
+// 用于新连接创建或会话恢复时替换连接
+func (c *Client) attachConn(netConn net.Conn, connect *packet.ConnectPacket) {
+	conn := newConn(c, netConn, connect)
+
+	c.connMu.Lock()
+	// 保存旧连接引用，用于迁移 sendQueue
+	if c.conn != nil {
+		c.oldConn = c.conn
 	}
-
-	// 处理会话过期时间
-	// 规则：
-	// 1. KeepSession=false: SessionExpiry 无意义，设为 0（断开即清理）
-	// 2. KeepSession=true:
-	//    - 客户端未设置或设置为 0: 使用 core 的 MaxSessionExpiry
-	//    - 客户端设置了值: 取 min(客户端值, MaxSessionExpiry)
-	if !c.KeepSession {
-		c.SessionExpiry = 0
-		return
-	}
-
-	// KeepSession=true，需要保留会话
-	var sessionExpiry uint32
-
-	if connect.Properties != nil && connect.Properties.SessionExpiry != nil {
-		sessionExpiry = *connect.Properties.SessionExpiry
-	}
-
-	// 如果客户端未设置或设置为 0，使用 core 默认值
-	if sessionExpiry == 0 {
-		sessionExpiry = core.options.MaxSessionExpiry
-	} else if core.options.MaxSessionExpiry > 0 && sessionExpiry > core.options.MaxSessionExpiry {
-		// 客户端设置的值超过最大值，使用最大值
-		sessionExpiry = core.options.MaxSessionExpiry
-	}
-
-	c.SessionExpiry = sessionExpiry
+	c.conn = conn
+	// 重置 closeOnce，允许新连接关闭
+	c.closeOnce = sync.Once{}
+	c.connMu.Unlock()
 }
 
-// Serve 开始处理客户端消息
+// Serve 开始处理客户端消息（委托给 Conn）
 func (c *Client) Serve() {
-	defer c.Close(packet.ReasonNormalDisconnect)
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
 
-	// 处理持久化消息
-	if !c.KeepSession {
-		// KeepSession=false: 清空该客户端在 BadgerDB 中的旧消息
-		c.clearPersistedMessages()
-	}
-
-	// 设置读取超时
-	keepAliveTimeout := c.calculateKeepAliveTimeout()
-
-	for !c.closed.Load() {
-		// 更新读取超时
-		c.conn.SetReadDeadline(time.Now().Add(keepAliveTimeout))
-
-		pkt, err := packet.ReadPacket(c.reader)
-		if err != nil {
-			if errors.Is(err, io.EOF) || c.closed.Load() {
-				return
-			}
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				c.core.logger.Debug("Client keepalive timeout", zap.String("clientID", c.ID))
-				return
-			}
-			c.core.logger.Debug("Read packet error", zap.String("clientID", c.ID), zap.Error(err))
-			return
+	if conn != nil {
+		// 处理持久化消息
+		if !c.session.keep {
+			// KeepSession=false: 清空该客户端在 BadgerDB 中的旧消息
+			c.core.cleanupClient(c.ID)
 		}
 
-		if err := c.handlePacket(pkt); err != nil {
-			c.core.logger.Debug("Handle packet error", zap.String("clientID", c.ID), zap.Error(err))
-			return
-		}
+		conn.Serve()
 	}
 }
 
-// calculateKeepAliveTimeout 计算 KeepAlive 超时时间
-func (c *Client) calculateKeepAliveTimeout() time.Duration {
-	if c.KeepAlive == 0 {
-		return defaultKeepAliveTimeout
-	}
-	return time.Duration(float64(c.KeepAlive) * float64(time.Second) * keepAliveMultiplier)
-}
-
-func (c *Client) handlePacket(pkt packet.Packet) error {
-	switch p := pkt.(type) {
-	case *packet.PublishPacket:
-		return c.handlePublish(p)
-	case *packet.PubackPacket:
-		return c.handlePuback(p)
-	case *packet.SubscribePacket:
-		return c.handleSubscribe(p)
-	case *packet.UnsubscribePacket:
-		return c.handleUnsubscribe(p)
-	case *packet.PingPacket:
-		return c.handlePing(p)
-	case *packet.DisconnectPacket:
-		return c.handleDisconnect(p)
-	case *packet.RegisterPacket:
-		return c.handleRegister(p)
-	case *packet.UnregisterPacket:
-		return c.handleUnregister(p)
-	case *packet.RequestPacket:
-		return c.handleRequest(p)
-	case *packet.ResponsePacket:
-		return c.handleResponse(p)
-	case *packet.AuthPacket:
-		return c.handleAuth(p)
-	case *packet.TracePacket:
-		return c.handleTrace(p)
-	default:
-		c.core.logger.Debug("Unknown packet type", zap.Uint8("type", uint8(pkt.Type())))
-		return nil
-	}
-}
-
-func (c *Client) handlePing(p *packet.PingPacket) error {
-	// 回复 PONG，回显客户端时间戳
-	pong := &packet.PongPacket{
-		Seq:  p.Seq,
-		Echo: p.Timestamp,
-	}
-	return c.WritePacket(pong)
-}
-
-func (c *Client) handleDisconnect(p *packet.DisconnectPacket) error {
-	c.core.logger.Debug("Client disconnect request",
-		zap.String("clientID", c.ID),
-		zap.Uint8("reasonCode", uint8(p.ReasonCode)))
-	// 保存断开包供 hooks 使用
-	c.DisconnectPacket = p
-	return io.EOF // 触发断开
-}
-
-// allocatePacketID 分配新的 PacketID
-func (c *Client) allocatePacketID() uint16 {
-	id := c.nextPacketID.Add(1)
-	if id == 0 || id > maxPacketID {
-		c.nextPacketID.Store(minPacketID)
-		id = minPacketID
-	}
-
-	pid := uint16(id)
-
-	if c.core.messageStore != nil {
-		if err := c.core.messageStore.setPacketIDSeed(c.ID, pid); err != nil {
-			c.core.logger.Error("Failed to set PacketID seed", zap.String("clientID", c.ID), zap.Error(err))
-		}
-	}
-
-	return pid
-}
-
-// WritePacket 发送数据包
+// WritePacket 发送数据包（委托给 Conn）
 func (c *Client) WritePacket(pkt packet.Packet) error {
-	if c.closed.Load() {
-		return errors.New("client closed")
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn == nil || conn.IsClosed() {
+		return errors.New("client not connected")
 	}
 
-	// 检查 writer 是否为 nil（测试环境中可能没有真实连接）
-	if c.writer == nil {
-		return errors.New("writer not initialized")
-	}
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	if err := packet.WritePacket(c.writer, pkt); err != nil {
-		return err
-	}
-	return c.writer.Flush()
+	return conn.writePacket(pkt)
 }
 
 // Close 关闭客户端连接
-func (c *Client) Close(reason packet.ReasonCode) {
+// cleanup: true 表示执行清理逻辑，false 表示跳过清理（会话被接管时）
+func (c *Client) Close(reason packet.ReasonCode, cleanup bool) {
 	c.closeOnce.Do(func() {
-		c.closed.Store(true)
-		close(c.closeCh)
+		c.connMu.RLock()
+		conn := c.conn
+		c.connMu.RUnlock()
 
-		// 发送 DISCONNECT (如果不是正常断开)
-		if reason != packet.ReasonNormalDisconnect {
-			disconnect := packet.NewDisconnectPacket(reason)
-			c.WritePacket(disconnect)
-		}
-
-		// 关闭连接（检查是否为 nil）
-		if c.conn != nil {
-			c.conn.Close()
+		if conn != nil {
+			conn.close(reason, cleanup)
 		}
 	})
 }
 
 // IsClosed 检查客户端是否已关闭
 func (c *Client) IsClosed() bool {
-	return c.closed.Load()
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn == nil {
+		return true
+	}
+	return conn.IsClosed()
+}
+
+// KeepSession 返回是否保持会话
+func (c *Client) KeepSession() bool {
+	return c.session.keep
+}
+
+// SessionTimeout 返回会话过期时间
+func (c *Client) SessionTimeout() uint32 {
+	return c.session.timeout
+}
+
+// WillPacket 返回遗嘱消息
+func (c *Client) WillPacket() *packet.PublishPacket {
+	return c.session.willPacket
+}
+
+// SetWillPacket 设置遗嘱消息
+func (c *Client) SetWillPacket(will *packet.PublishPacket) {
+	c.session.willPacket = will
+}
+
+// KeepAlive 返回心跳间隔
+func (c *Client) KeepAlive() uint16 {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn != nil {
+		return conn.KeepAlive
+	}
+	return 0
+}
+
+// TraceID 返回跟踪 ID
+func (c *Client) TraceID() string {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn != nil {
+		return conn.TraceID
+	}
+	return ""
+}
+
+// ConnectedAt 返回连接建立时间
+func (c *Client) ConnectedAt() time.Time {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn != nil {
+		return conn.ConnectedAt
+	}
+	return time.Time{}
+}
+
+// DisconnectPacket 返回断开连接包
+func (c *Client) DisconnectPacket() *packet.DisconnectPacket {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn != nil {
+		return conn.DisconnectPacket
+	}
+	return nil
+}
+
+// allocatePacketID 分配新的 PacketID
+func (c *Client) allocatePacketID() uint16 {
+	return c.session.allocatePacketID()
+}
+
+// triggerSend 触发发送协程（委托给 Conn）
+func (c *Client) triggerSend() {
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn != nil && !conn.IsClosed() {
+		conn.triggerSend()
+	}
 }

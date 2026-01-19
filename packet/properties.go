@@ -9,15 +9,15 @@ import (
 // 使用位掩码优化编码，减少字节开销
 type ConnectProperties struct {
 	// 会话管理
-	SessionExpiry *uint32 // 会话过期时间（秒）
+	SessionTimeout uint32 // 会话过期时间（秒）
 
 	// 认证
 	AuthMethod string // 认证方法
 	AuthData   []byte // 认证数据
 
 	// 流量控制
-	MaxPacketSize *uint32 // 最大包大小
-	ReceiveWindow *uint16 // 初始接收窗口（消息数量）
+	MaxPacketSize uint32 // 最大包大小
+	ReceiveWindow uint16 // 初始接收窗口（消息数量）
 
 	TraceID string // 追踪 ID
 
@@ -47,15 +47,15 @@ func NewConnectProperties() *ConnectProperties {
 // 使用位掩码优化编码，减少字节开销
 type ConnackProperties struct {
 	// 会话管理
-	SessionExpiry *uint32 // 会话过期时间（秒）
+	SessionTimeout uint32 // 会话过期时间（秒）
 
 	// 服务器分配
-	ClientID  string  // 服务器分配的 Client ID
-	KeepAlive *uint16 // 服务器要求的心跳间隔
+	ClientID  string // 服务器分配的 Client ID
+	KeepAlive uint16 // 服务器要求的心跳间隔
 
 	// 流量控制
-	MaxPacketSize *uint32 // 最大包大小
-	ReceiveWindow *uint16 // 初始接收窗口（消息数量）
+	MaxPacketSize uint32 // 最大包大小
+	ReceiveWindow uint16 // 初始接收窗口（消息数量）
 
 	TraceID string // 追踪 ID
 
@@ -65,7 +65,7 @@ type ConnackProperties struct {
 
 // ConnackProperties 位掩码常量
 const (
-	connackPropSessionExpiry  uint16 = 1 << 0 // bit 0
+	connackPropSessionTimeout uint16 = 1 << 0 // bit 0
 	connackPropClientID       uint16 = 1 << 1 // bit 1
 	connackPropKeepAlive      uint16 = 1 << 2 // bit 2
 	connackPropMaxPacketSize  uint16 = 1 << 3 // bit 3
@@ -196,7 +196,7 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 
 	// 计算位掩码
 	var flags uint16
-	if p.SessionExpiry != nil {
+	if p.SessionTimeout > 0 {
 		flags |= connPropSessionExpiry
 	}
 	if p.AuthMethod != "" {
@@ -205,10 +205,10 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 	if len(p.AuthData) > 0 {
 		flags |= connPropAuthData
 	}
-	if p.MaxPacketSize != nil {
+	if p.MaxPacketSize > 0 {
 		flags |= connPropMaxPacketSize
 	}
-	if p.ReceiveWindow != nil {
+	if p.ReceiveWindow > 0 {
 		flags |= connPropReceiveWindow
 	}
 	if p.TraceID != "" {
@@ -225,7 +225,7 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 
 	// 按顺序写入存在的属性
 	if flags&connPropSessionExpiry != 0 {
-		EncodeUint32(&buf, *p.SessionExpiry)
+		EncodeUint32(&buf, p.SessionTimeout)
 	}
 	if flags&connPropAuthMethod != 0 {
 		EncodeString(&buf, p.AuthMethod)
@@ -234,10 +234,10 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 		EncodeBinary(&buf, p.AuthData)
 	}
 	if flags&connPropMaxPacketSize != 0 {
-		EncodeUint32(&buf, *p.MaxPacketSize)
+		EncodeUint32(&buf, p.MaxPacketSize)
 	}
 	if flags&connPropReceiveWindow != 0 {
-		EncodeUint16(&buf, *p.ReceiveWindow)
+		EncodeUint16(&buf, p.ReceiveWindow)
 	}
 	if flags&connPropTraceID != 0 {
 		EncodeString(&buf, p.TraceID)
@@ -289,11 +289,10 @@ func (p *ConnectProperties) Decode(r io.Reader) error {
 
 	// 按顺序读取存在的属性
 	if flags&connPropSessionExpiry != 0 {
-		v, err := DecodeUint32(buf)
+		p.SessionTimeout, err = DecodeUint32(buf)
 		if err != nil {
 			return err
 		}
-		p.SessionExpiry = &v
 	}
 	if flags&connPropAuthMethod != 0 {
 		p.AuthMethod, err = DecodeString(buf)
@@ -308,18 +307,16 @@ func (p *ConnectProperties) Decode(r io.Reader) error {
 		}
 	}
 	if flags&connPropMaxPacketSize != 0 {
-		v, err := DecodeUint32(buf)
+		p.MaxPacketSize, err = DecodeUint32(buf)
 		if err != nil {
 			return err
 		}
-		p.MaxPacketSize = &v
 	}
 	if flags&connPropReceiveWindow != 0 {
-		v, err := DecodeUint16(buf)
+		p.ReceiveWindow, err = DecodeUint16(buf)
 		if err != nil {
 			return err
 		}
-		p.ReceiveWindow = &v
 	}
 	if flags&connPropTraceID != 0 {
 		p.TraceID, err = DecodeString(buf)
@@ -357,19 +354,19 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 
 	// 计算位掩码
 	var flags uint16
-	if p.SessionExpiry != nil {
-		flags |= connackPropSessionExpiry
+	if p.SessionTimeout > 0 {
+		flags |= connackPropSessionTimeout
 	}
 	if p.ClientID != "" {
 		flags |= connackPropClientID
 	}
-	if p.KeepAlive != nil {
+	if p.KeepAlive > 0 {
 		flags |= connackPropKeepAlive
 	}
-	if p.MaxPacketSize != nil {
+	if p.MaxPacketSize > 0 {
 		flags |= connackPropMaxPacketSize
 	}
-	if p.ReceiveWindow != nil {
+	if p.ReceiveWindow > 0 {
 		flags |= connackPropReceiveWindow
 	}
 	if p.TraceID != "" {
@@ -385,20 +382,20 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 	}
 
 	// 按顺序写入存在的属性
-	if flags&connackPropSessionExpiry != 0 {
-		EncodeUint32(&buf, *p.SessionExpiry)
+	if flags&connackPropSessionTimeout != 0 {
+		EncodeUint32(&buf, p.SessionTimeout)
 	}
 	if flags&connackPropClientID != 0 {
 		EncodeString(&buf, p.ClientID)
 	}
 	if flags&connackPropKeepAlive != 0 {
-		EncodeUint16(&buf, *p.KeepAlive)
+		EncodeUint16(&buf, p.KeepAlive)
 	}
 	if flags&connackPropMaxPacketSize != 0 {
-		EncodeUint32(&buf, *p.MaxPacketSize)
+		EncodeUint32(&buf, p.MaxPacketSize)
 	}
 	if flags&connackPropReceiveWindow != 0 {
-		EncodeUint16(&buf, *p.ReceiveWindow)
+		EncodeUint16(&buf, p.ReceiveWindow)
 	}
 	if flags&connackPropTraceID != 0 {
 		EncodeString(&buf, p.TraceID)
@@ -449,12 +446,11 @@ func (p *ConnackProperties) Decode(r io.Reader) error {
 	}
 
 	// 按顺序读取存在的属性
-	if flags&connackPropSessionExpiry != 0 {
-		v, err := DecodeUint32(buf)
+	if flags&connackPropSessionTimeout != 0 {
+		p.SessionTimeout, err = DecodeUint32(buf)
 		if err != nil {
 			return err
 		}
-		p.SessionExpiry = &v
 	}
 	if flags&connackPropClientID != 0 {
 		p.ClientID, err = DecodeString(buf)
@@ -463,25 +459,22 @@ func (p *ConnackProperties) Decode(r io.Reader) error {
 		}
 	}
 	if flags&connackPropKeepAlive != 0 {
-		v, err := DecodeUint16(buf)
+		p.KeepAlive, err = DecodeUint16(buf)
 		if err != nil {
 			return err
 		}
-		p.KeepAlive = &v
 	}
 	if flags&connackPropMaxPacketSize != 0 {
-		v, err := DecodeUint32(buf)
+		p.MaxPacketSize, err = DecodeUint32(buf)
 		if err != nil {
 			return err
 		}
-		p.MaxPacketSize = &v
 	}
 	if flags&connackPropReceiveWindow != 0 {
-		v, err := DecodeUint16(buf)
+		p.ReceiveWindow, err = DecodeUint16(buf)
 		if err != nil {
 			return err
 		}
-		p.ReceiveWindow = &v
 	}
 	if flags&connackPropTraceID != 0 {
 		p.TraceID, err = DecodeString(buf)

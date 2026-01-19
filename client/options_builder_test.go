@@ -16,7 +16,7 @@ func TestClientOptionsBuilder(t *testing.T) {
 		WithClientID("test-client").
 		WithKeepAlive(30).
 		WithKeepSession(false).
-		WithSessionExpiry(3600).
+		WithSessionTimeout(3600).
 		WithConnectTimeout(5*time.Second).
 		WithPublishTimeout(10*time.Second).
 		WithTraceID("trace-123").
@@ -37,8 +37,8 @@ func TestClientOptionsBuilder(t *testing.T) {
 	if opts.KeepSession {
 		t.Error("expected keepSession false")
 	}
-	if opts.SessionExpiry != 3600 {
-		t.Errorf("expected sessionExpiry 3600, got %d", opts.SessionExpiry)
+	if opts.SessionTimeout != 3600 {
+		t.Errorf("expected sessionTimeout 3600, got %d", opts.SessionTimeout)
 	}
 	if opts.ConnectTimeout != 5*time.Second {
 		t.Errorf("expected connectTimeout 5s, got %v", opts.ConnectTimeout)

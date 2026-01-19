@@ -13,9 +13,18 @@ func (c *Client) handleAuth(p *packet.AuthPacket) error {
 		zap.Uint8("reasonCode", uint8(p.ReasonCode)))
 
 	// 构建认证上下文（直接引用原始 packet）
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	remoteAddr := ""
+	if conn != nil && conn.conn != nil {
+		remoteAddr = conn.conn.RemoteAddr().String()
+	}
+
 	ctx := &AuthContext{
 		ClientID:   c.ID,
-		RemoteAddr: c.conn.RemoteAddr().String(),
+		RemoteAddr: remoteAddr,
 		Packet:     p,
 	}
 

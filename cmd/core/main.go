@@ -19,7 +19,7 @@ var (
 func main() {
 	// 命令行参数
 	addr := flag.String("addr", ":3883", "Listen address")
-	maxClients := flag.Int("max-clients", 10000, "Maximum number of clients")
+	maxClients := flag.Uint("max-clients", 10000, "Maximum number of clients")
 	authEnabled := flag.Bool("auth", false, "Enable authentication")
 	authSecret := flag.String("auth-secret", "", "Authentication secret key")
 	storageEnabled := flag.Bool("storage", true, "Enable BadgerDB persistence")
@@ -50,7 +50,7 @@ func main() {
 	// 构建 core 选项
 	opts := core.NewCoreOptions().
 		WithAddress(*addr).
-		WithMaxClients(*maxClients).
+		WithMaxClients(uint32(*maxClients)).
 		WithRetainEnabled(true).
 		WithStorageEnabled(*storageEnabled).
 		WithStorageDir(*storageDir).

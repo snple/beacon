@@ -17,16 +17,16 @@ type CoreOptions struct {
 	TLSConfig *tls.Config // TLS 配置 (可选)
 
 	// 连接限制
-	MaxClients     int    // 最大客户端数
-	MaxPacketSize  int    // 最大包大小
-	ConnectTimeout int    // 连接超时 (秒)
+	MaxClients     uint32 // 最大客户端数
+	MaxPacketSize  uint32 // 最大包大小
+	ConnectTimeout uint32 // 连接超时 (秒)
 	KeepAlive      uint16 // 服务器心跳间隔 (秒)，0 表示使用客户端的值
 
 	// 会话管理
-	MaxSessionExpiry uint32 // 最大会话保留时间（秒），0 表示断开即清理
+	MaxSessionTimeout uint32 // 最大会话保留时间（秒），0 表示断开即清理
 
 	// 流量控制
-	ReceiveWindow uint32 // core 可接收的消息窗口大小 (双向 FLOW 用)
+	ReceiveWindow uint16 // core 可接收的消息窗口大小 (双向 FLOW 用)
 
 	// 消息过期
 	DefaultMessageExpiry time.Duration // 默认消息过期时间（0 表示永不过期）
@@ -42,9 +42,9 @@ type CoreOptions struct {
 	Hooks Hooks // 钩子集合（包含认证处理器）
 
 	// 功能开关
-	RetainEnabled    bool // 启用保留消息
-	RequestQueueSize int  // REQUEST 轮询队列缓冲大小（默认 100）
-	MessageQueueSize int  // MESSAGE 轮询队列缓冲大小（默认 100）
+	RetainEnabled    bool   // 启用保留消息
+	RequestQueueSize uint16 // REQUEST 轮询队列缓冲大小（默认 100）
+	MessageQueueSize uint16 // MESSAGE 轮询队列缓冲大小（默认 100）
 
 	// 持久化存储
 	StorageConfig StorageConfig // 消息持久化配置
@@ -61,7 +61,7 @@ func NewCoreOptions() *CoreOptions {
 		MaxPacketSize:         1048576, // 1MB
 		ConnectTimeout:        10,
 		KeepAlive:             60,
-		MaxSessionExpiry:      3600,
+		MaxSessionTimeout:     3600,
 		ReceiveWindow:         1000,
 		DefaultMessageExpiry:  24 * time.Hour,
 		ExpiredCheckInterval:  180 * time.Second,
@@ -87,19 +87,19 @@ func (o *CoreOptions) WithTLS(tlsConfig *tls.Config) *CoreOptions {
 }
 
 // WithMaxClients 设置最大客户端数
-func (o *CoreOptions) WithMaxClients(n int) *CoreOptions {
+func (o *CoreOptions) WithMaxClients(n uint32) *CoreOptions {
 	o.MaxClients = n
 	return o
 }
 
 // WithMaxPacketSize 设置最大包大小
-func (o *CoreOptions) WithMaxPacketSize(size int) *CoreOptions {
+func (o *CoreOptions) WithMaxPacketSize(size uint32) *CoreOptions {
 	o.MaxPacketSize = size
 	return o
 }
 
 // WithConnectTimeout 设置连接超时 (秒)
-func (o *CoreOptions) WithConnectTimeout(seconds int) *CoreOptions {
+func (o *CoreOptions) WithConnectTimeout(seconds uint32) *CoreOptions {
 	o.ConnectTimeout = seconds
 	return o
 }
@@ -110,14 +110,14 @@ func (o *CoreOptions) WithKeepAlive(seconds uint16) *CoreOptions {
 	return o
 }
 
-// WithMaxSessionExpiry 设置最大会话保留时间 (秒)
-func (o *CoreOptions) WithMaxSessionExpiry(seconds uint32) *CoreOptions {
-	o.MaxSessionExpiry = seconds
+// WithMaxSessionTimeout 设置最大会话保留时间 (秒)
+func (o *CoreOptions) WithMaxSessionTimeout(seconds uint32) *CoreOptions {
+	o.MaxSessionTimeout = seconds
 	return o
 }
 
 // WithReceiveWindow 设置 core 可接收的消息窗口大小
-func (o *CoreOptions) WithReceiveWindow(size uint32) *CoreOptions {
+func (o *CoreOptions) WithReceiveWindow(size uint16) *CoreOptions {
 	o.ReceiveWindow = size
 	return o
 }
@@ -189,13 +189,13 @@ func (o *CoreOptions) WithRetainEnabled(enabled bool) *CoreOptions {
 }
 
 // WithRequestQueueSize 设置 REQUEST 轮询队列的缓冲大小
-func (o *CoreOptions) WithRequestQueueSize(size int) *CoreOptions {
+func (o *CoreOptions) WithRequestQueueSize(size uint16) *CoreOptions {
 	o.RequestQueueSize = size
 	return o
 }
 
 // WithMessageQueueSize 设置 MESSAGE 轮询队列的缓冲大小
-func (o *CoreOptions) WithMessageQueueSize(size int) *CoreOptions {
+func (o *CoreOptions) WithMessageQueueSize(size uint16) *CoreOptions {
 	o.MessageQueueSize = size
 	return o
 }
@@ -240,7 +240,7 @@ func (o *CoreOptions) Validate() error {
 	}
 
 	// 验证连接限制
-	if o.MaxClients < 0 {
+	if o.MaxClients <= 0 {
 		return fmt.Errorf("maxClients must be >= 0, got %d", o.MaxClients)
 	}
 	if o.MaxPacketSize <= 0 {
@@ -249,7 +249,7 @@ func (o *CoreOptions) Validate() error {
 	if o.MaxPacketSize > packet.MaxPacketSize {
 		return fmt.Errorf("maxPacketSize must be <= %d, got %d", packet.MaxPacketSize, o.MaxPacketSize)
 	}
-	if o.ConnectTimeout < 0 {
+	if o.ConnectTimeout <= 0 {
 		return fmt.Errorf("connectTimeout must be >= 0, got %d", o.ConnectTimeout)
 	}
 

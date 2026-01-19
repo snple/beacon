@@ -202,7 +202,7 @@ func (c *Core) startBackgroundWorkers() {
 func (c *Core) logStartupInfo() {
 	c.logger.Info("core started",
 		zap.String("address", c.options.Address),
-		zap.Int("maxClients", c.options.MaxClients),
+		zap.Uint32("maxClients", c.options.MaxClients),
 		zap.Bool("tls", c.options.TLSConfig != nil),
 		zap.Bool("persistenceEnabled", c.messageStore != nil))
 }
@@ -225,14 +225,14 @@ func (c *Core) Stop() error {
 	// 断开所有普通客户端
 	c.clientsMu.Lock()
 	for _, client := range c.clients {
-		client.Close(packet.ReasonServerShuttingDown)
+		client.Close(packet.ReasonServerShuttingDown, false)
 	}
 	c.clientsMu.Unlock()
 
 	// 等待所有协程退出
 	c.wg.Wait()
 
-	// 最后关闭消息存储（确保客户端清理完成后再关闭）
+	// 最后关闭消息存储
 	if c.messageStore != nil {
 		c.messageStore.close()
 	}
@@ -312,27 +312,22 @@ type StatsSnapshot struct {
 	SubscriptionsCount int64
 }
 
-// 生成随机 Client ID
-func generateClientID() string {
-	return fmt.Sprintf("queen-%d", time.Now().UnixNano())
-}
-
 // ============================================================================
 // 管理 API
 // ============================================================================
 
 // ClientInfo 客户端信息
 type ClientInfo struct {
-	ClientID      string                   `json:"client_id"`
-	RemoteAddr    string                   `json:"remote_addr"`
-	Connected     bool                     `json:"connected"`
-	ConnectedAt   time.Time                `json:"connected_at"`
-	KeepAlive     uint16                   `json:"keep_alive"`
-	KeepSession   bool                     `json:"keep_session"`
-	SessionExpiry uint32                   `json:"session_expiry"`
-	Subscriptions []ClientSubscriptionInfo `json:"subscriptions"`
-	PendingAck    int                      `json:"pending_ack"`
-	ReceiveWindow uint16                   `json:"receive_window"`
+	ClientID       string                   `json:"client_id"`
+	RemoteAddr     string                   `json:"remote_addr"`
+	Connected      bool                     `json:"connected"`
+	ConnectedAt    time.Time                `json:"connected_at"`
+	KeepAlive      uint16                   `json:"keep_alive"`
+	KeepSession    bool                     `json:"keep_session"`
+	SessionTimeout uint32                   `json:"session_timeout"`
+	Subscriptions  []ClientSubscriptionInfo `json:"subscriptions"`
+	PendingAck     int                      `json:"pending_ack"`
+	ReceiveWindow  uint16                   `json:"receive_window"`
 }
 
 // ClientSubscriptionInfo 客户端订阅信息（不含 ClientID）
@@ -352,32 +347,36 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 	}
 
 	// 获取订阅信息
-	client.subsMu.RLock()
-	subs := make([]ClientSubscriptionInfo, 0, len(client.subscriptions))
-	for topic, opts := range client.subscriptions {
+	client.session.subsMu.RLock()
+	subs := make([]ClientSubscriptionInfo, 0, len(client.session.subscriptions))
+	for topic, opts := range client.session.subscriptions {
 		subs = append(subs, ClientSubscriptionInfo{
 			Topic: topic,
 			QoS:   opts.QoS,
 		})
 	}
-	client.subsMu.RUnlock()
+	client.session.subsMu.RUnlock()
 
 	// 获取 ACK 信息
-	client.pendingAckMu.Lock()
-	pendingAck := len(client.pendingAck)
-	client.pendingAckMu.Unlock()
+	client.session.pendingAckMu.Lock()
+	pendingAck := len(client.session.pendingAck)
+	client.session.pendingAckMu.Unlock()
+
+	client.connMu.RLock()
+	conn := client.conn
+	client.connMu.RUnlock()
 
 	info := &ClientInfo{
-		ClientID:      client.ID,
-		RemoteAddr:    client.conn.RemoteAddr().String(),
-		Connected:     !client.IsClosed(),
-		ConnectedAt:   client.ConnectedAt,
-		KeepAlive:     client.KeepAlive,
-		KeepSession:   client.KeepSession,
-		SessionExpiry: client.SessionExpiry,
-		Subscriptions: subs,
-		PendingAck:    pendingAck,
-		ReceiveWindow: client.sendWindow,
+		ClientID:       client.ID,
+		RemoteAddr:     conn.conn.RemoteAddr().String(), // 需要通过 conn 获取
+		Connected:      !client.IsClosed(),
+		ConnectedAt:    client.ConnectedAt(),
+		KeepAlive:      client.KeepAlive(),
+		KeepSession:    client.KeepSession(),
+		SessionTimeout: client.SessionTimeout(),
+		Subscriptions:  subs,
+		PendingAck:     pendingAck,
+		ReceiveWindow:  conn.sendWindow, // 需要通过 conn 获取
 	}
 
 	return info, nil
@@ -416,7 +415,7 @@ func (c *Core) IsClientOnline(clientID string) bool {
 }
 
 // DisconnectClient 断开指定客户端连接
-func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode) error {
+func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode, cleanup bool) error {
 	c.clientsMu.RLock()
 	client, exists := c.clients[clientID]
 	c.clientsMu.RUnlock()
@@ -425,7 +424,7 @@ func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode) error
 		return NewClientNotFoundError(clientID)
 	}
 
-	client.Close(reason)
+	client.Close(reason, cleanup)
 	c.logger.Info("Client disconnected by admin", zap.String("clientID", clientID), zap.Uint8("reason", uint8(reason)))
 	return nil
 }
@@ -440,11 +439,11 @@ func (c *Core) GetClientSubscriptions(clientID string) ([]ClientSubscriptionInfo
 		return nil, NewClientNotFoundError(clientID)
 	}
 
-	client.subsMu.RLock()
-	defer client.subsMu.RUnlock()
+	client.session.subsMu.RLock()
+	defer client.session.subsMu.RUnlock()
 
-	subs := make([]ClientSubscriptionInfo, 0, len(client.subscriptions))
-	for topic, opts := range client.subscriptions {
+	subs := make([]ClientSubscriptionInfo, 0, len(client.session.subscriptions))
+	for topic, opts := range client.session.subscriptions {
 		subs = append(subs, ClientSubscriptionInfo{
 			Topic: topic,
 			QoS:   opts.QoS,

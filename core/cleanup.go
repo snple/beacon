@@ -145,18 +145,18 @@ func (c *Client) cleanupExpired() int {
 	expiredCount := 0
 
 	// 清理 pendingAck 中的过期消息
-	c.pendingAckMu.Lock()
-	for packetID, pending := range c.pendingAck {
+	c.session.pendingAckMu.Lock()
+	for packetID, pending := range c.session.pendingAck {
 		if pending.msg.IsExpired() {
 			// 删除持久化
 			if c.core.messageStore != nil {
 				c.core.messageStore.delete(c.ID, pending.msg.Packet.PacketID)
 			}
-			delete(c.pendingAck, packetID)
+			delete(c.session.pendingAck, packetID)
 			expiredCount++
 		}
 	}
-	c.pendingAckMu.Unlock()
+	c.session.pendingAckMu.Unlock()
 
 	return expiredCount
 }

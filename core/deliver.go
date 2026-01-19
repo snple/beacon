@@ -245,8 +245,12 @@ func (c *Client) deliver(msg *Message) error {
 			zap.Uint16("packetID", msg.PacketID))
 	}
 
-	// 如果客户端关闭，直接返回
-	if c.closed.Load() {
+	// 尝试放入发送队列
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn == nil || conn.IsClosed() {
 		if msg.QoS == packet.QoS0 {
 			c.core.logger.Debug("QoS0 message dropped, client closed",
 				zap.String("clientID", c.ID),
@@ -258,10 +262,9 @@ func (c *Client) deliver(msg *Message) error {
 		return nil
 	}
 
-	// 尝试放入发送队列
-	if c.sendQueue.tryEnqueue(msg) {
+	if conn.sendQueue.tryEnqueue(msg) {
 		// 成功入队，触发发送协程
-		c.triggerSend()
+		conn.triggerSend()
 		return nil
 	}
 
@@ -282,43 +285,6 @@ func (c *Client) deliver(msg *Message) error {
 		zap.String("topic", msg.Packet.Topic),
 		zap.Uint16("packetID", msg.PacketID))
 	return nil
-}
-
-// triggerSend 触发发送协程（非阻塞）
-// 使用 delivering 标志避免重复启动
-func (c *Client) triggerSend() {
-	if c.processing.CompareAndSwap(false, true) {
-		go c.processSendQueue()
-	}
-}
-
-// processSendQueue 处理发送队列中的消息
-func (c *Client) processSendQueue() {
-	defer c.processing.Store(false)
-
-	for !c.closed.Load() {
-		// 尝试从队列取消息
-		msg, ok := c.sendQueue.tryDequeue()
-		if !ok {
-			// 队列已空
-			break
-		}
-
-		// 发送消息
-		// !!! 传的是 msg 指针，因为 tryEnqueue 内部使用了指针
-		if err := c.sendMessage(msg); err != nil {
-			c.core.logger.Debug("Failed to send message from queue",
-				zap.String("clientID", c.ID),
-				zap.String("topic", msg.Packet.Topic),
-				zap.Error(err))
-
-			// 如果是 QoS1 且持久化失败，则已经在持久化层有备份
-			// 如果是 QoS0，则丢弃
-			if msg.QoS == packet.QoS0 {
-				c.core.stats.MessagesDropped.Add(1)
-			}
-		}
-	}
 }
 
 // pendingMessage 等待确认的消息
@@ -365,12 +331,12 @@ func (c *Client) sendMessage(msg *Message) error {
 		// 加入或更新 pendingAck 等待确认
 		// 注意：如果是重传的消息，pendingAck 中可能已经存在该记录
 		// 此时需要更新 lastSentAt 为实际发送时间
-		c.pendingAckMu.Lock()
-		c.pendingAck[pub.PacketID] = pendingMessage{
+		c.session.pendingAckMu.Lock()
+		c.session.pendingAck[pub.PacketID] = pendingMessage{
 			msg:        msg,
 			lastSentAt: time.Now().Unix(),
 		}
-		c.pendingAckMu.Unlock()
+		c.session.pendingAckMu.Unlock()
 	}
 	// QoS 0: 发送后即清理，无需等待确认
 

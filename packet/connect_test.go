@@ -140,8 +140,8 @@ func TestConnectPacket_EncodeDecodeWithProperties(t *testing.T) {
 	pkt.ClientID = "test-client-props"
 
 	// 设置一些属性
-	sessionExpiry := uint32(3600)
-	pkt.Properties.SessionExpiry = &sessionExpiry
+	sessionTimeout := uint32(3600)
+	pkt.Properties.SessionTimeout = sessionTimeout
 	pkt.Properties.AuthMethod = "SCRAM-SHA-256"
 	pkt.Properties.AuthData = []byte("auth-data")
 	pkt.Properties.TraceID = "trace-123"
@@ -166,8 +166,8 @@ func TestConnectPacket_EncodeDecodeWithProperties(t *testing.T) {
 	}
 
 	// 验证属性
-	if decoded.Properties.SessionExpiry == nil || *decoded.Properties.SessionExpiry != sessionExpiry {
-		t.Errorf("SessionExpiry 不匹配")
+	if decoded.Properties.SessionTimeout != sessionTimeout {
+		t.Errorf("SessionTimeout 不匹配")
 	}
 	if decoded.Properties.AuthMethod != pkt.Properties.AuthMethod {
 		t.Errorf("AuthMethod 不匹配: 期望 %s, 得到 %s",
@@ -197,7 +197,7 @@ func TestConnackPacket_EncodeDecode(t *testing.T) {
 	pkt.SessionPresent = true
 
 	maxPacketSize := uint32(1024000)
-	pkt.Properties.MaxPacketSize = &maxPacketSize
+	pkt.Properties.MaxPacketSize = maxPacketSize
 	pkt.Properties.ClientID = "assigned-client-789"
 
 	// 编码
@@ -224,7 +224,7 @@ func TestConnackPacket_EncodeDecode(t *testing.T) {
 	if decoded.ReasonCode != ReasonSuccess {
 		t.Errorf("ReasonCode 不匹配: 期望 %v, 得到 %v", ReasonSuccess, decoded.ReasonCode)
 	}
-	if decoded.Properties.MaxPacketSize == nil || *decoded.Properties.MaxPacketSize != maxPacketSize {
+	if decoded.Properties.MaxPacketSize != maxPacketSize {
 		t.Error("MaxPacketSize 不匹配")
 	}
 	if decoded.Properties.ClientID != pkt.Properties.ClientID {

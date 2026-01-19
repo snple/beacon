@@ -1,0 +1,117 @@
+package core
+
+import (
+	"sync"
+	"sync/atomic"
+
+	"github.com/snple/beacon/packet"
+	"go.uber.org/zap"
+)
+
+// session 表示客户端的会话状态
+// 负责管理跨连接持久化的状态：订阅、PacketID 种子、会话配置等
+type session struct {
+	// 会话标识
+	id string
+
+	// 会话配置
+	keep    bool   // 是否保持会话
+	timeout uint32 // 会话过期时间（秒），0 表示断开即清理
+
+	authMethod string // 认证方法
+	authData   []byte // 认证数据
+
+	// 遗嘱消息
+	willPacket *packet.PublishPacket
+
+	// 订阅状态（会话级别，跨连接持久化）
+	subscriptions map[string]packet.SubscribeOptions
+	subsMu        sync.RWMutex
+
+	// PacketID 管理（会话级别，跨连接持久化）
+	nextPacketID atomic.Uint32
+
+	// QoS 状态 (只需要 QoS 0/1)
+	pendingAck   map[uint16]pendingMessage // QoS 1: 等待客户端 ACK 的消息
+	pendingAckMu sync.Mutex
+
+	// 重传标志
+	retransmitting atomic.Bool // true: 正在重传消息
+
+	core *Core
+}
+
+// newSession 创建新的会话
+func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *session {
+	s := &session{
+		id:            clientID,
+		keep:          connect.KeepSession,
+		subscriptions: make(map[string]packet.SubscribeOptions),
+		pendingAck:    make(map[uint16]pendingMessage),
+		core:          core,
+	}
+
+	// 从属性中提取认证信息和会话过期时间
+	// s.extractSessionProperties(connect, core)
+
+	// 提取认证信息
+	if connect.Properties != nil {
+		s.authMethod = connect.Properties.AuthMethod
+		s.authData = connect.Properties.AuthData
+	}
+
+	// 处理会话过期时间
+	// 规则：
+	// 1. KeepSession=false: SessionTimeout 无意义，设为 0（断开即清理）
+	// 2. KeepSession=true:
+	//    - 客户端未设置或设置为 0: 使用 core 的 MaxSessionTimeout
+	//    - 客户端设置了值: 取 min(客户端值, MaxSessionTimeout) 作为会话过期时间
+	if s.keep {
+		// KeepSession=true，需要保留会话
+		if connect.Properties != nil {
+			s.timeout = connect.Properties.SessionTimeout
+		}
+
+		// 如果客户端未设置或设置为 0，使用 core 默认值
+		if s.timeout == 0 {
+			s.timeout = core.options.MaxSessionTimeout
+		} else if core.options.MaxSessionTimeout > 0 && s.timeout > core.options.MaxSessionTimeout {
+			// 客户端设置的值超过最大值，使用最大值
+			s.timeout = core.options.MaxSessionTimeout
+		}
+	} else {
+		s.timeout = 0
+	}
+
+	// 初始化 PacketID 种子
+	seed := uint32(minPacketID)
+	if core != nil && core.messageStore != nil {
+		if s, err := core.messageStore.packetIDSeed(clientID); err == nil {
+			seed = uint32(s)
+		}
+	}
+	s.nextPacketID.Store(seed)
+
+	return s
+}
+
+// allocatePacketID 分配新的 PacketID
+func (s *session) allocatePacketID() uint16 {
+	id := s.nextPacketID.Add(1)
+	if id == 0 || id > maxPacketID {
+		s.nextPacketID.Store(minPacketID)
+		id = minPacketID
+	}
+
+	pid := uint16(id)
+
+	if s.core.messageStore != nil {
+		if err := s.core.messageStore.setPacketIDSeed(s.id, pid); err != nil {
+			s.core.logger.Error("Failed to set PacketID seed",
+				zap.String("clientID", s.id),
+				zap.Error(err))
+		}
+	}
+
+	return pid
+}

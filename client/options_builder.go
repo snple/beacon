@@ -25,7 +25,7 @@ type ClientOptions struct {
 	// 连接选项
 	KeepAlive      uint16            // 心跳间隔 (秒)
 	KeepSession    bool              // 保留会话
-	SessionExpiry  uint32            // 会话过期时间 (秒)，0 表示断开即清理
+	SessionTimeout uint32            // 会话过期时间 (秒)，0 表示断开即清理
 	ConnectTimeout time.Duration     // 连接超时
 	PublishTimeout time.Duration     // 发布超时 (默认 30 秒)
 	TraceID        string            // 追踪 ID
@@ -101,9 +101,9 @@ func (o *ClientOptions) WithKeepSession(keep bool) *ClientOptions {
 	return o
 }
 
-// WithSessionExpiry 设置会话过期时间 (秒)
-func (o *ClientOptions) WithSessionExpiry(seconds uint32) *ClientOptions {
-	o.SessionExpiry = seconds
+// WithSessionTimeout 设置会话过期时间 (秒)
+func (o *ClientOptions) WithSessionTimeout(seconds uint32) *ClientOptions {
+	o.SessionTimeout = seconds
 	return o
 }
 

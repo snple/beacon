@@ -37,7 +37,7 @@ func (c *Core) triggerRetransmit() {
 
 	for _, client := range clients {
 		// 调用 processRetransmit 触发重传和加载逻辑
-		if client.retransmitting.CompareAndSwap(false, true) {
+		if client.session.retransmitting.CompareAndSwap(false, true) {
 			go client.processRetransmit()
 		}
 	}
@@ -47,7 +47,7 @@ func (c *Core) triggerRetransmit() {
 // 重传策略：1) 重传超时未确认的消息；2) 从持久化存储加载待发送的消息
 // 使用 retransmitting 标志确保同一时间只有一个重传任务在运行
 func (c *Client) processRetransmit() {
-	defer c.retransmitting.Store(false)
+	defer c.session.retransmitting.Store(false)
 
 	totalSent := 0
 
@@ -73,7 +73,15 @@ func (c *Client) loadPersistedMessages() int {
 
 	// 计算可加载的消息数量
 	// 使用可用容量的 60% 避免队列立即饱和
-	available := c.sendQueue.available()
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn == nil || conn.IsClosed() {
+		return 0
+	}
+
+	available := conn.sendQueue.available()
 	if available == 0 {
 		return 0
 	}
@@ -89,12 +97,12 @@ func (c *Client) loadPersistedMessages() int {
 	}
 
 	// 构建排除列表（已在 pendingAck 中的消息）
-	c.pendingAckMu.Lock()
-	excludePacketIDs := make(map[uint16]bool, len(c.pendingAck))
-	for packetID := range c.pendingAck {
+	c.session.pendingAckMu.Lock()
+	excludePacketIDs := make(map[uint16]bool, len(c.session.pendingAck))
+	for packetID := range c.session.pendingAck {
 		excludePacketIDs[packetID] = true
 	}
-	c.pendingAckMu.Unlock()
+	c.session.pendingAckMu.Unlock()
 
 	// 从持久化存储加载消息
 	messages, err := c.core.messageStore.getPendingMessagesBatch(c.ID, loadCount, excludePacketIDs)
@@ -125,9 +133,9 @@ func (c *Client) loadPersistedMessages() int {
 		msg.Dup = true // 标记为重发
 
 		// 尝试放入发送队列
-		if c.sendQueue.tryEnqueue(msg) {
+		if conn.sendQueue.tryEnqueue(msg) {
 			// 成功入队，触发发送协程
-			c.triggerSend()
+			conn.triggerSend()
 
 			sent++
 		} else {
@@ -138,11 +146,11 @@ func (c *Client) loadPersistedMessages() int {
 
 	// 如果成功加载了消息，触发发送
 	if sent > 0 {
-		c.triggerSend()
+		conn.triggerSend()
 		c.core.logger.Debug("Loaded pending messages",
 			zap.String("clientID", c.ID),
 			zap.Int("count", sent),
-			zap.Int("queueAvailable", c.sendQueue.available()))
+			zap.Int("queueAvailable", conn.sendQueue.available()))
 	}
 
 	return sent
@@ -159,8 +167,8 @@ func (c *Client) retransmitUnackedMessages() int {
 	var toResend []*pendingMessage
 	var expiredPacketIDs []uint16
 
-	c.pendingAckMu.Lock()
-	for packetID, pending := range c.pendingAck {
+	c.session.pendingAckMu.Lock()
+	for packetID, pending := range c.session.pendingAck {
 		// 检查是否过期
 		if pending.msg.IsExpired() {
 			expiredPacketIDs = append(expiredPacketIDs, packetID)
@@ -177,14 +185,23 @@ func (c *Client) retransmitUnackedMessages() int {
 
 	// 删除过期消息
 	for _, packetID := range expiredPacketIDs {
-		pending := c.pendingAck[packetID]
+		pending := c.session.pendingAck[packetID]
 		if c.core.messageStore != nil {
 			c.core.messageStore.delete(c.ID, pending.msg.PacketID)
 		}
-		delete(c.pendingAck, packetID)
+		delete(c.session.pendingAck, packetID)
 		c.core.stats.MessagesDropped.Add(1)
 	}
-	c.pendingAckMu.Unlock()
+	c.session.pendingAckMu.Unlock()
+
+	// 获取连接
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn == nil || conn.IsClosed() {
+		return sent
+	}
 
 	// 尝试将需要重传的消息放入队列
 	for _, item := range toResend {
@@ -192,9 +209,9 @@ func (c *Client) retransmitUnackedMessages() int {
 		msg := item.msg
 		msg.Dup = true // 标记为重发
 
-		if c.sendQueue.tryEnqueue(msg) {
+		if conn.sendQueue.tryEnqueue(msg) {
 			// 触发发送协程
-			c.triggerSend()
+			conn.triggerSend()
 
 			sent++
 		} else {

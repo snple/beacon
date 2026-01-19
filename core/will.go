@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
@@ -25,17 +24,17 @@ func (c *Client) extractWillMessage(connect *packet.ConnectPacket) {
 
 	// !!! will 消息的超时时间由客户端掉线时确定
 
-	c.WillPacket = pub
+	c.session.willPacket = pub
 }
 
 // publishWill 发布遗嘱消息
 func (c *Client) publishWill() {
-	if c.WillPacket == nil {
+	if c.session.willPacket == nil {
 		return
 	}
 
 	// !!! 遗嘱消息没比要复制
-	pub := c.WillPacket
+	pub := c.session.willPacket
 
 	// !!! 遗嘱消息的超时时间由客户端掉线时确定
 	expiry := time.Now().Add(c.core.options.DefaultMessageExpiry)
@@ -45,15 +44,15 @@ func (c *Client) publishWill() {
 
 	c.core.logger.Info("Publishing will message",
 		zap.String("clientID", c.ID),
-		zap.String("topic", c.WillPacket.Topic))
+		zap.String("topic", c.session.willPacket.Topic))
 
 	c.core.publish(msg)
 
 	// 清除遗嘱，防止重复发送
-	c.WillPacket = nil
+	c.session.willPacket = nil
 }
 
 // clearWill 清除遗嘱消息（正常断开时调用）
 func (c *Client) clearWill() {
-	c.WillPacket = nil
+	c.session.willPacket = nil
 }

@@ -60,13 +60,13 @@ func (c *Client) Connect() error {
 	}
 
 	keepAlive := c.options.KeepAlive
-	if connack.Properties.KeepAlive != nil {
-		keepAlive = *connack.Properties.KeepAlive
+	if connack.Properties.KeepAlive != 0 {
+		keepAlive = connack.Properties.KeepAlive
 	}
 
 	sendWindow := uint16(defaultReceiveWindow)
-	if connack.Properties.ReceiveWindow != nil {
-		sendWindow = *connack.Properties.ReceiveWindow
+	if connack.Properties.ReceiveWindow != 0 {
+		sendWindow = connack.Properties.ReceiveWindow
 	}
 
 	sessionPresent := connack.SessionPresent
@@ -146,12 +146,8 @@ func (c *Client) handshake(conn net.Conn, reader *bufio.Reader, writer *bufio.Wr
 	connect.Properties.AuthData = c.options.AuthData
 	connect.Properties.TraceID = c.options.TraceID
 	connect.Properties.UserProperties = c.options.UserProperties
-	if c.options.SessionExpiry > 0 {
-		connect.Properties.SessionExpiry = &c.options.SessionExpiry
-	}
-
-	receiveWindow := uint16(defaultReceiveWindow)
-	connect.Properties.ReceiveWindow = &receiveWindow
+	connect.Properties.SessionTimeout = c.options.SessionTimeout
+	connect.Properties.ReceiveWindow = uint16(defaultReceiveWindow)
 
 	// 遗嘱消息
 	if c.options.Will != nil && c.options.Will.Packet != nil {

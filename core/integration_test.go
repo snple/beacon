@@ -1487,7 +1487,7 @@ func TestManagement_DisconnectClient(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 管理员断开客户端
-	err := core.DisconnectClient("disconnect-client", packet.ReasonServerBusy)
+	err := core.DisconnectClient("disconnect-client", packet.ReasonServerBusy, false)
 	if err != nil {
 		t.Fatalf("Failed to disconnect: %v", err)
 	}

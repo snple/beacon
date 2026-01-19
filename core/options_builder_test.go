@@ -16,7 +16,7 @@ func TestCoreOptionsBuilder(t *testing.T) {
 		WithMaxPacketSize(2097152).
 		WithConnectTimeout(30).
 		WithKeepAlive(120).
-		WithMaxSessionExpiry(7200).
+		WithMaxSessionTimeout(7200).
 		WithReceiveWindow(500).
 		WithDefaultMessageExpiry(48 * time.Hour).
 		WithExpiredCheckInterval(300 * time.Second).
@@ -40,8 +40,8 @@ func TestCoreOptionsBuilder(t *testing.T) {
 	if opts.KeepAlive != 120 {
 		t.Errorf("expected keepAlive 120, got %d", opts.KeepAlive)
 	}
-	if opts.MaxSessionExpiry != 7200 {
-		t.Errorf("expected maxSessionExpiry 7200, got %d", opts.MaxSessionExpiry)
+	if opts.MaxSessionTimeout != 7200 {
+		t.Errorf("expected maxSessionTimeout 7200, got %d", opts.MaxSessionTimeout)
 	}
 	if opts.ReceiveWindow != 500 {
 		t.Errorf("expected receiveWindow 500, got %d", opts.ReceiveWindow)
@@ -85,8 +85,8 @@ func TestCoreOptionsDefaults(t *testing.T) {
 	if opts.KeepAlive != 60 {
 		t.Errorf("expected default keepAlive 60, got %d", opts.KeepAlive)
 	}
-	if opts.MaxSessionExpiry != 3600 {
-		t.Errorf("expected default maxSessionExpiry 3600, got %d", opts.MaxSessionExpiry)
+	if opts.MaxSessionTimeout != 3600 {
+		t.Errorf("expected default maxSessionTimeout 3600, got %d", opts.MaxSessionTimeout)
 	}
 	if opts.ReceiveWindow != 1000 {
 		t.Errorf("expected default receiveWindow 1000, got %d", opts.ReceiveWindow)
