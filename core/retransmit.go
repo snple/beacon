@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -55,106 +56,14 @@ func (c *Client) processRetransmit() {
 	// 1. 重传已发送但未确认的消息（pendingAck 中的超时消息）
 	totalSent += c.retransmitUnackedMessages()
 
-	// 2. 从持久化存储加载未发送的消息
-	totalSent += c.loadPersistedMessages()
+	// 2. 重传发送队列中的消息
+	totalSent += c.retransmitQueuedMessages()
 
 	if totalSent > 0 {
 		c.core.logger.Debug("Retransmit completed",
 			zap.String("clientID", c.ID),
 			zap.Int("totalSent", totalSent))
 	}
-}
-
-// loadPersistedMessages 从持久化存储加载待发送的消息
-// 策略：根据队列可用容量的一定比例（60%）加载消息，避免队列立即饱和
-func (c *Client) loadPersistedMessages() int {
-	if c.core.messageStore == nil {
-		return 0
-	}
-
-	// 计算可加载的消息数量
-	// 使用可用容量的 50% 避免队列立即饱和
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
-	if conn == nil || conn.closed.Load() {
-		return 0
-	}
-
-	available := conn.sendQueue.available()
-	if available == 0 {
-		return 0
-	}
-
-	loadCount := int(float64(available) * 0.5)
-	if loadCount == 0 {
-		loadCount = 1
-	}
-
-	// 限制单次加载数量
-	if loadCount > overflowBatchSize {
-		loadCount = overflowBatchSize
-	}
-
-	// 构建排除列表（已在 pendingAck 中的消息）
-	c.session.pendingAckMu.Lock()
-	excludePacketIDs := make(map[nson.Id]bool, len(c.session.pendingAck))
-	for packetID := range c.session.pendingAck {
-		excludePacketIDs[packetID] = true
-	}
-	c.session.pendingAckMu.Unlock()
-
-	// 从持久化存储加载消息
-	messages, err := c.core.messageStore.getPendingMessagesBatch(c.ID, loadCount, excludePacketIDs)
-	if err != nil {
-		c.core.logger.Warn("Failed to load pending messages",
-			zap.String("clientID", c.ID),
-			zap.Error(err))
-		return 0
-	}
-
-	sent := 0
-	for _, stored := range messages {
-		// 检查消息是否过期
-		if stored.Message.IsExpired() {
-			// 删除过期消息
-			c.core.messageStore.delete(c.ID, stored.Message.PacketID)
-
-			c.core.logger.Debug("Expired message deleted from store",
-				zap.String("clientID", c.ID),
-				zap.String("packetID", stored.Message.PacketID.Hex()),
-				zap.String("topic", stored.Message.Packet.Topic))
-
-			continue
-		}
-
-		// 转换为 Message
-		msg := stored.Message
-		msg.Dup = true // 标记为重发
-
-		// 尝试放入发送队列
-		if conn.sendQueue.tryEnqueue(msg) {
-			// 成功入队，触发发送协程
-			conn.triggerSend()
-
-			sent++
-		} else {
-			// 队列已满，停止加载
-			break
-		}
-	}
-
-	// 如果成功加载了消息，触发发送
-	if sent > 0 {
-		conn.triggerSend()
-		c.core.logger.Debug("Loaded pending messages",
-			zap.String("clientID", c.ID),
-			zap.Int("count", sent),
-			zap.Int("queueAvailable", conn.sendQueue.available()))
-	}
-
-	return sent
 }
 
 // retransmitUnackedMessages 重传已发送但未确认的消息
@@ -186,9 +95,14 @@ func (c *Client) retransmitUnackedMessages() int {
 
 	// 删除过期消息
 	for _, packetID := range expiredPacketIDs {
-		if c.core.messageStore != nil {
-			c.core.messageStore.delete(c.ID, packetID)
+		// 从持久化存储删除
+		if err := c.queue.Delete(packetID); err != nil {
+			c.core.logger.Warn("Failed to delete expired pending message",
+				zap.String("clientID", c.ID),
+				zap.String("packetID", packetID.Hex()),
+				zap.Error(err))
 		}
+
 		delete(c.session.pendingAck, packetID)
 		c.core.stats.MessagesDropped.Add(1)
 	}
@@ -209,15 +123,108 @@ func (c *Client) retransmitUnackedMessages() int {
 		msg := item.msg
 		msg.Dup = true // 标记为重发
 
-		if conn.sendQueue.tryEnqueue(msg) {
-			// 触发发送协程
-			conn.triggerSend()
+		if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+			if errors.Is(err, ErrMessageAlreadyInQueue) {
+				// 消息已在队列中，跳过
+				continue
+			}
 
-			sent++
-		} else {
 			// 队列已满，停止重传
 			break
 		}
+
+		// 触发发送协程
+		conn.triggerSend()
+
+		sent++
+	}
+
+	return sent
+}
+
+// retransmitQueuedMessages 重传发送队列中的消息
+func (c *Client) retransmitQueuedMessages() int {
+	sent := 0
+
+	// 计算可加载的消息数量
+	// 使用可用容量的 50% 避免队列立即饱和
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+
+	if conn == nil || conn.closed.Load() {
+		return 0
+	}
+
+	available := conn.sendQueue.available()
+	if available == 0 {
+		return 0
+	}
+
+	loadCount := int(float64(available) * 0.5)
+	if loadCount == 0 {
+		loadCount = 1
+	}
+
+	// 限制单次加载数量
+	if loadCount > overflowBatchSize {
+		loadCount = overflowBatchSize
+	}
+
+	for range loadCount {
+		msg, err := c.queue.Peek()
+		if err != nil {
+			break // 队列已空
+		}
+
+		if msg.IsExpired() {
+			// 删除过期消息
+			if err := c.queue.Delete(msg.PacketID); err != nil {
+				c.core.logger.Warn("Failed to delete expired queued message",
+					zap.String("clientID", c.ID),
+					zap.String("packetID", msg.PacketID.Hex()),
+					zap.Error(err))
+			}
+
+			c.core.stats.MessagesDropped.Add(1)
+			continue
+		}
+
+		// 排除在 pendingAck 中的消息
+		c.session.pendingAckMu.Lock()
+		_, exists := c.session.pendingAck[msg.PacketID]
+		c.session.pendingAckMu.Unlock()
+		if exists {
+			continue
+		}
+
+		// 转换为 Message
+		msg.Dup = true // 标记为重发
+
+		// 尝试放入发送队列
+		if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+			if errors.Is(err, ErrMessageAlreadyInQueue) {
+				// 消息已在队列中，跳过
+				continue
+			}
+
+			// 队列已满，停止加载
+			break
+		}
+
+		// 成功入队，触发发送协程
+		conn.triggerSend()
+
+		sent++
+
+		// 从持久化存储中删除（已成功加载到发送队列）
+		if err := c.queue.Delete(msg.PacketID); err != nil {
+			c.core.logger.Warn("Failed to delete queued message after loading",
+				zap.String("clientID", c.ID),
+				zap.String("packetID", msg.PacketID.Hex()),
+				zap.Error(err))
+		}
+
 	}
 
 	return sent

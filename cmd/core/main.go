@@ -22,8 +22,7 @@ func main() {
 	maxClients := flag.Uint("max-clients", 10000, "Maximum number of clients")
 	authEnabled := flag.Bool("auth", false, "Enable authentication")
 	authSecret := flag.String("auth-secret", "", "Authentication secret key")
-	storageEnabled := flag.Bool("storage", true, "Enable BadgerDB persistence")
-	storageDir := flag.String("storage-dir", "./data/messages", "BadgerDB storage directory")
+	storeDir := flag.String("store-dir", "./data/messages", "BadgerDB storage directory")
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 
@@ -52,8 +51,7 @@ func main() {
 		WithAddress(*addr).
 		WithMaxClients(uint32(*maxClients)).
 		WithRetainEnabled(true).
-		WithStorageEnabled(*storageEnabled).
-		WithStorageDir(*storageDir).
+		WithStoreDir(*storeDir).
 		WithLogger(logger)
 
 	// 如果启用认证
@@ -91,10 +89,8 @@ func main() {
 	fmt.Printf("║  Version:          %-40s ║\n", version)
 	fmt.Printf("║  Address:          %-40s ║\n", *addr)
 	fmt.Printf("║  Max Clients:      %-40d ║\n", *maxClients)
-	fmt.Printf("║  Persistence:      %-40v ║\n", *storageEnabled)
-	if *storageEnabled {
-		fmt.Printf("║  Storage Dir:      %-40s ║\n", *storageDir)
-	}
+	fmt.Printf("║  Persistence:      %-40v ║\n", *storeDir != "")
+	fmt.Printf("║  Storage Dir:      %-40s ║\n", *storeDir)
 	fmt.Printf("║  Auth:             %-40v ║\n", *authEnabled)
 	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
 	fmt.Println()

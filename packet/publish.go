@@ -82,11 +82,9 @@ func (p *PublishPacket) Encode(w io.Writer) error {
 		return err
 	}
 
-	// 包标识符 (QoS > 0)
-	if p.QoS > 0 {
-		if err := EncodeId(&buf, p.PacketID); err != nil {
-			return err
-		}
+	// 包标识符 (始终存在，QoS=0 和 QoS=1 都需要)
+	if err := EncodeId(&buf, p.PacketID); err != nil {
+		return err
 	}
 
 	// 属性
@@ -133,12 +131,10 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) error {
 		return err
 	}
 
-	// 包标识符 (QoS > 0)
-	if p.QoS > 0 {
-		p.PacketID, err = DecodeId(r)
-		if err != nil {
-			return err
-		}
+	// 包标识符 (始终存在，QoS=0 和 QoS=1 都需要)
+	p.PacketID, err = DecodeId(r)
+	if err != nil {
+		return err
 	}
 
 	// 属性
@@ -230,25 +226,32 @@ func (p *PubackPacket) Decode(r io.Reader, header FixedHeader) error {
 	var err error
 	p.PacketID, err = DecodeId(r)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to decode PacketID: %w", err)
 	}
 
-	if header.Remaining > 2 {
+	// PacketID 是 12 字节
+	const packetIDSize = 12
+	bytesRead := packetIDSize
+
+	// 检查是否有更多数据
+	if header.Remaining > uint32(bytesRead) {
 		// 原因码
 		var code [1]byte
 		if _, err := io.ReadFull(r, code[:]); err != nil {
-			return err
+			return fmt.Errorf("failed to decode ReasonCode: %w", err)
 		}
 		p.ReasonCode = ReasonCode(code[0])
+		bytesRead++
 
 		// 属性
-		if header.Remaining > 3 {
+		if header.Remaining > uint32(bytesRead) {
 			p.Properties = NewReasonProperties()
 			if err := p.Properties.Decode(r); err != nil {
-				return err
+				return fmt.Errorf("failed to decode Properties: %w", err)
 			}
 		}
 	} else {
+		// 没有更多数据,使用默认值
 		p.ReasonCode = ReasonSuccess
 	}
 

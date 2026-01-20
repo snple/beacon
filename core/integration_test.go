@@ -1733,7 +1733,7 @@ func TestRetain_Persistence(t *testing.T) {
 
 	opts := NewCoreOptions().
 		WithRetainEnabled(true).
-		WithStorageDir(tmpDir)
+		WithStoreDir(tmpDir)
 
 	core := testSetupCore(t, opts)
 	addr := core.GetAddress()

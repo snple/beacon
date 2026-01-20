@@ -48,9 +48,6 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 		core:          core,
 	}
 
-	// 从属性中提取认证信息和会话过期时间
-	// s.extractSessionProperties(connect, core)
-
 	// 提取认证信息
 	if connect.Properties != nil {
 		s.authMethod = connect.Properties.AuthMethod
@@ -81,9 +78,4 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 	}
 
 	return s
-}
-
-// allocatePacketID 分配新的 PacketID（使用 nson.Id 以保证全局唯一性和有序性）
-func (s *session) allocatePacketID() nson.Id {
-	return nson.NewId()
 }

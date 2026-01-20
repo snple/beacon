@@ -236,6 +236,12 @@ func (c *conn) processSendQueue() {
 			break
 		}
 
+		// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
+		if msg.IsExpired() {
+			c.client.core.stats.MessagesDropped.Add(1)
+			continue
+		}
+
 		// 发送消息
 		if err := c.client.sendMessage(msg); err != nil {
 			c.client.core.logger.Debug("Failed to send message from queue",
@@ -249,6 +255,9 @@ func (c *conn) processSendQueue() {
 				c.client.core.stats.MessagesDropped.Add(1)
 			}
 		}
+
+		// 发送成功，统计消息发送数
+		c.client.core.stats.MessagesSent.Add(1)
 	}
 }
 

@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -26,13 +27,14 @@ type Client struct {
 	// 客户端标识
 	ID string
 
+	queue *Queue
+
 	// 会话层（跨连接持久化的状态）
 	session *session
 
 	// 连接层（当前 TCP 连接）
-	conn    *conn
-	oldConn *conn // 会话恢复时暂存旧连接，用于迁移 sendQueue
-	connMu  sync.RWMutex
+	conn   *conn
+	connMu sync.RWMutex
 
 	// Core 引用
 	core *Core
@@ -43,15 +45,20 @@ type Client struct {
 
 // newClient 创建新的客户端（全新会话）
 func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Client {
+	clientID := connect.ClientID
+
 	// 创建会话
-	session := newSession(connect.ClientID, connect, core)
+	session := newSession(clientID, connect, core)
 
 	// 创建客户端
 	c := &Client{
-		ID:      connect.ClientID,
+		ID:      clientID,
 		session: session,
 		core:    core,
 	}
+
+	// 初始化消息队列
+	c.initQueue()
 
 	// 附加连接
 	c.attachConn(netConn, connect)
@@ -62,16 +69,21 @@ func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Cli
 	return c
 }
 
+// initQueue 初始化消息队列
+func (c *Client) initQueue() error {
+	c.queue = NewQueue(c.core.store.db, fmt.Sprintf("client:%s:", c.ID))
+
+	c.core.logger.Info("Message queue initialized (InMemory)")
+	return nil
+}
+
 // attachConn 附加新的网络连接到客户端
 // 用于新连接创建或会话恢复时替换连接
 func (c *Client) attachConn(netConn net.Conn, connect *packet.ConnectPacket) {
 	conn := newConn(c, netConn, connect)
 
 	c.connMu.Lock()
-	// 保存旧连接引用，用于迁移 sendQueue
-	if c.conn != nil {
-		c.oldConn = c.conn
-	}
+	// 替换连接
 	c.conn = conn
 	// 重置跳过断开处理标志
 	c.skipHandle.Store(false)

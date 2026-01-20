@@ -77,7 +77,7 @@ func (c *Core) handleConn(conn net.Conn) {
 	}
 
 	// 注册客户端并发送 CONNACK
-	client, sessionPresent := c.registerClient(clientID, conn, connect)
+	client, sessionPresent := c.newClient(clientID, conn, connect)
 
 	// 构建 CONNACK 属性
 	connackProp := packet.NewConnackProperties()
@@ -204,7 +204,7 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 	return authCtx, true
 }
 
-// registerClient 注册客户端，处理会话恢复和接管
+// newClient 注册客户端，处理会话恢复和接管
 // 返回客户端和 sessionPresent 标志
 //
 // 核心思路：会话恢复时复用现有 Client 对象，只替换其 Conn
@@ -213,7 +213,7 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 // 1. 无旧客户端：创建新 Client
 // 2. 有旧客户端 + KeepSession=true：复用旧 Client，替换其 Conn
 // 3. 有旧客户端 + KeepSession=false：清理旧 Client，创建新 Client
-func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool) {
+func (c *Core) newClient(clientID string, netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool) {
 	c.clientsMu.Lock()
 	defer c.clientsMu.Unlock()
 
@@ -244,9 +244,6 @@ func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet
 		// 复用 Client，附加新连接
 		existingClient.attachConn(netConn, connect)
 
-		// 迁移旧 sendQueue 中的消息到新 Conn 的 sendQueue
-		existingClient.migrateSendQueue()
-
 		c.logger.Info("Session restored (reusing client, replacing conn)",
 			zap.String("clientID", clientID),
 			zap.Bool("wasOnline", wasOnline))
@@ -261,9 +258,9 @@ func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet
 		existingClient.closeAndSkipHandle(packet.ReasonSessionTakenOver)
 	}
 
-	// 清理旧资源
+	// 清理旧资源（在持有锁的情况下调用不需要锁的版本）
 	delete(c.clients, clientID)
-	c.cleanupClient(clientID)
+	c.cleanupClientWithoutLock(clientID, existingClient)
 
 	// 创建新 Client
 	client := newClient(netConn, connect, c)
@@ -324,7 +321,7 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		if !isNormalDisconnect {
 			client.publishWill()
 		}
-		// c.removeClient(client)
+
 		c.clientsMu.Lock()
 		delete(c.clients, client.ID)
 		c.clientsMu.Unlock()
@@ -350,52 +347,4 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		zap.String("clientID", client.ID),
 		zap.Uint32("sessionTimeout", client.session.timeout),
 		zap.String("expiresAt", expiryTime.Format(time.RFC3339)))
-}
-
-// migrateSendQueue 迁移旧连接的 sendQueue 到新连接
-// 在会话恢复（attachConn）后调用
-func (c *Client) migrateSendQueue() {
-	c.connMu.RLock()
-	newConn := c.conn
-	oldConn := c.oldConn
-	c.connMu.RUnlock()
-
-	if oldConn == nil || newConn == nil {
-		return
-	}
-
-	migratedCount := 0
-	droppedCount := 0
-
-	for {
-		msg, ok := oldConn.sendQueue.tryDequeue()
-		if !ok {
-			break // 队列已空
-		}
-		if newConn.sendQueue.tryEnqueue(msg) {
-			migratedCount++
-		} else {
-			// 新队列已满，QoS1 消息会在重传时重新加载
-			droppedCount++
-			c.core.logger.Warn("Message dropped during sendQueue migration",
-				zap.String("clientID", c.ID),
-				zap.String("topic", msg.Packet.Topic))
-		}
-	}
-
-	if droppedCount > 0 {
-		c.core.stats.MessagesDropped.Add(int64(droppedCount))
-	}
-
-	// 清除旧连接引用
-	c.connMu.Lock()
-	c.oldConn = nil
-	c.connMu.Unlock()
-
-	if migratedCount > 0 || droppedCount > 0 {
-		c.core.logger.Debug("SendQueue migrated",
-			zap.String("clientID", c.ID),
-			zap.Int("migrated", migratedCount),
-			zap.Int("dropped", droppedCount))
-	}
 }

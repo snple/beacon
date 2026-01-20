@@ -3,7 +3,6 @@ package core
 import (
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
 	"go.uber.org/zap"
 )
 
@@ -60,7 +59,7 @@ func (c *Core) cleanupExpiredSessions() {
 	}
 }
 
-// cleanupClient 清理客户端相关资源
+// cleanupClient 清理客户端相关资源（需要先获取 clientsMu 锁）
 func (c *Core) cleanupClient(clientID string) {
 	// 清理订阅
 	subCount := c.subTree.unsubscribeClient(clientID)
@@ -76,10 +75,40 @@ func (c *Core) cleanupClient(clientID string) {
 			zap.Strings("actions", actions))
 	}
 
-	// 清理持久化消息（如果 CleanSession 或会话过期）
-	if c.messageStore != nil {
-		if err := c.messageStore.deleteAllForClient(clientID); err != nil {
-			c.logger.Warn("Failed to cleanup client messages",
+	// 清理消息队列
+	c.clientsMu.RLock()
+	client, exists := c.clients[clientID]
+	c.clientsMu.RUnlock()
+
+	if exists {
+		if err := client.queue.Clear(); err != nil {
+			c.logger.Warn("Failed to clear client message queue",
+				zap.String("clientID", clientID),
+				zap.Error(err))
+		}
+	}
+}
+
+// cleanupClientWithoutLock 清理客户端相关资源（假定调用者已持有 clientsMu 锁）
+func (c *Core) cleanupClientWithoutLock(clientID string, client *Client) {
+	// 清理订阅
+	subCount := c.subTree.unsubscribeClient(clientID)
+	if subCount > 0 {
+		c.stats.SubscriptionsCount.Add(-int64(subCount))
+	}
+
+	// 清理注册的 actions
+	actions := c.actionRegistry.unregisterClient(clientID)
+	if len(actions) > 0 {
+		c.logger.Debug("Unregistered actions on disconnect",
+			zap.String("clientID", clientID),
+			zap.Strings("actions", actions))
+	}
+
+	// 清理消息队列
+	if client != nil {
+		if err := client.queue.Clear(); err != nil {
+			c.logger.Warn("Failed to clear client message queue",
 				zap.String("clientID", clientID),
 				zap.Error(err))
 		}
@@ -107,17 +136,6 @@ func (c *Core) cleanupExpiredMessages() {
 		c.logger.Debug("Cleaned up expired messages", zap.Int("count", expiredCount))
 		c.stats.MessagesDropped.Add(int64(expiredCount))
 	}
-
-	// 清理持久化存储中的过期消息
-	if c.messageStore != nil {
-		count, err := c.messageStore.cleanupExpired()
-		if err != nil {
-			c.logger.Warn("Failed to cleanup expired messages from store", zap.Error(err))
-		} else if count > 0 {
-			c.logger.Debug("Cleaned up expired messages from store", zap.Int("count", count))
-			c.stats.MessagesDropped.Add(int64(count))
-		}
-	}
 }
 
 // cleanupExpiredRetainMessages 清理过期的保留消息
@@ -127,14 +145,12 @@ func (c *Core) cleanupExpiredRetainMessages() {
 	if count > 0 {
 		c.logger.Debug("Cleaned up expired retain message index", zap.Int("count", count))
 
-		// 同时从 messageStore 中删除对应的消息
-		if c.messageStore != nil {
-			for _, topic := range expiredTopics {
-				if err := c.messageStore.deleteRetainMessage(topic); err != nil {
-					c.logger.Warn("Failed to delete expired retain message from store",
-						zap.String("topic", topic),
-						zap.Error(err))
-				}
+		// 同时从 store 中删除对应的消息
+		for _, topic := range expiredTopics {
+			if err := c.store.deleteRetain(topic); err != nil {
+				c.logger.Warn("Failed to delete expired retain message from store",
+					zap.String("topic", topic),
+					zap.Error(err))
 			}
 		}
 	}
@@ -149,9 +165,14 @@ func (c *Client) cleanupExpired() int {
 	for packetID, pending := range c.session.pendingAck {
 		if pending.msg.IsExpired() {
 			// 删除持久化
-			if c.core.messageStore != nil {
-				c.core.messageStore.delete(c.ID, packetID)
+			if err := c.queue.Delete(packetID); err != nil {
+				c.core.logger.Debug("Failed to delete expired pendingAck message from queue",
+					zap.String("clientID", c.ID),
+					zap.String("packetID", packetID.Hex()),
+					zap.Error(err))
 			}
+
+			// 从内存中删除
 			delete(c.session.pendingAck, packetID)
 			expiredCount++
 		}
@@ -159,68 +180,4 @@ func (c *Client) cleanupExpired() int {
 	c.session.pendingAckMu.Unlock()
 
 	return expiredCount
-}
-
-// cleanupExpired 清理过期消息
-func (ms *messageStore) cleanupExpired() (int, error) {
-	count := 0
-	keysToDelete := make([][]byte, 0)
-
-	err := ms.db.View(func(txn *badger.Txn) error {
-		prefix := []byte("msg:")
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = prefix
-
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-
-			err := item.Value(func(val []byte) error {
-				var msg StoredMessage
-
-				err := decodeStoredMessage(&msg, val)
-				if err != nil {
-					ms.logger.Warn("Failed to decode message",
-						zap.String("key", string(item.Key())),
-						zap.Error(err))
-					return nil // 跳过损坏的消息
-				}
-
-				// 检查是否过期
-				if msg.Message.IsExpired() {
-					keyCopy := make([]byte, len(item.Key()))
-					copy(keyCopy, item.Key())
-					keysToDelete = append(keysToDelete, keyCopy)
-				}
-
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return 0, err
-	}
-
-	// 批量删除过期消息
-	if len(keysToDelete) > 0 {
-		err = ms.db.Update(func(txn *badger.Txn) error {
-			for _, key := range keysToDelete {
-				if err := txn.Delete(key); err != nil {
-					return err
-				}
-				count++
-			}
-			return nil
-		})
-	}
-
-	return count, err
 }

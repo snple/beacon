@@ -78,11 +78,14 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 
 	// QoS 0: 直接发布
 	// QoS 1: 发布并发送 PUBACK
-	if c.core.publish(msg) {
+	publishSuccess := c.core.publish(msg)
+
+	if publishSuccess {
+		// 发布成功
 		if msg.QoS == packet.QoS1 {
 			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonSuccess)
 			if err := c.writePacket(puback); err != nil {
-				c.core.logger.Warn("Failed to send PUBACK",
+				c.core.logger.Error("Failed to send PUBACK",
 					zap.String("clientID", c.ID),
 					zap.String("packetID", msg.PacketID.Hex()),
 					zap.Error(err))
@@ -91,12 +94,12 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 			}
 		}
 	} else {
-		// 发布失败（通常是因为队列满了）
+		// 发布失败
 		if msg.QoS == packet.QoS1 {
 			// 对于 QoS 1，仍然发送 PUBACK，表示已接收但无法处理
-			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonQueueFull)
+			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonQuotaExceeded)
 			if err := c.writePacket(puback); err != nil {
-				c.core.logger.Warn("Failed to send PUBACK after publish failure",
+				c.core.logger.Error("Failed to send PUBACK after publish failure",
 					zap.String("clientID", c.ID),
 					zap.String("packetID", msg.PacketID.Hex()),
 					zap.Error(err))
@@ -130,13 +133,12 @@ func (c *Client) handlePuback(p *packet.PubackPacket) error {
 			zap.String("topic", pending.msg.Packet.Topic),
 			zap.Uint8("reasonCode", uint8(p.ReasonCode)))
 
-		// 收到 PUBACK 即表示消息已送达，删除持久化消息
-		if c.core.messageStore != nil {
-			if err := c.core.messageStore.delete(c.ID, pending.msg.PacketID); err != nil {
-				c.core.logger.Warn("Failed to delete acknowledged message from storage",
-					zap.String("clientID", c.ID),
-					zap.Error(err))
-			}
+		// 收到 PUBACK 即表示消息已送达，从发送队列中删除
+		if err := c.queue.Delete(p.PacketID); err != nil {
+			c.core.logger.Debug("Failed to delete acknowledged message from queue",
+				zap.String("clientID", c.ID),
+				zap.String("packetID", p.PacketID.Hex()),
+				zap.Error(err))
 		}
 	}
 	return nil
@@ -298,10 +300,6 @@ func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 		return
 	}
 
-	if c.core.messageStore == nil {
-		return
-	}
-
 	c.core.logger.Debug("Sending retained messages",
 		zap.String("clientID", c.ID),
 		zap.String("topic", topic),
@@ -312,7 +310,7 @@ func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 
 	// 逐条从 messageStore 获取消息并发送
 	for _, t := range topics {
-		msg, err := c.core.messageStore.getRetainMessage(t)
+		msg, err := c.core.store.getRetain(t)
 		if err != nil {
 			c.core.logger.Debug("Failed to get retain message from store",
 				zap.String("topic", t),

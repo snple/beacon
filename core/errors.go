@@ -3,7 +3,6 @@ package core
 import (
 	"errors"
 	"fmt"
-	"time"
 )
 
 // 通用错误
@@ -15,10 +14,9 @@ var (
 	ErrCoreAlreadyRunning = errors.New("core already running")
 )
 
-// 轮询相关错误
+// 队列相关错误
 var (
-	// ErrPollTimeout 轮询超时
-	ErrPollTimeout = errors.New("poll timeout")
+	ErrQueueEmpty = errors.New("queue is empty")
 )
 
 // 客户端相关错误
@@ -158,36 +156,4 @@ func (e *NoAvailableHandlerError) Is(target error) bool {
 // NewNoAvailableHandlerError 创建没有可用处理器错误
 func NewNoAvailableHandlerError(action string) error {
 	return &NoAvailableHandlerError{Action: action}
-}
-
-// PollTimeoutError 轮询超时错误（携带超时时间）
-type PollTimeoutError struct {
-	Timeout time.Duration
-}
-
-func (e *PollTimeoutError) Error() string {
-	return fmt.Sprintf("poll timeout after %v", e.Timeout)
-}
-
-func (e *PollTimeoutError) Is(target error) bool {
-	return target == ErrPollTimeout
-}
-
-// NewPollTimeoutError 创建轮询超时错误
-func NewPollTimeoutError(timeout time.Duration) error {
-	return &PollTimeoutError{Timeout: timeout}
-}
-
-// RequestTimeoutError 请求超时错误
-type RequestTimeoutError struct {
-	Timeout time.Duration // time.Duration 或 string
-}
-
-func (e *RequestTimeoutError) Error() string {
-	return fmt.Sprintf("request timeout after %v", e.Timeout)
-}
-
-// NewRequestTimeoutError 创建请求超时错误
-func NewRequestTimeoutError(timeout time.Duration) error {
-	return &RequestTimeoutError{Timeout: timeout}
 }

@@ -129,14 +129,10 @@ func TestCoreOptionsValidate(t *testing.T) {
 // TestCoreOptionsWithStorage 测试存储配置
 func TestCoreOptionsWithStorage(t *testing.T) {
 	opts := NewCoreOptions().
-		WithStorageDir("/tmp/queen-data").
-		WithStorageEnabled(true)
+		WithStoreDir("/tmp/queen-data")
 
-	if !opts.StorageConfig.Enabled {
-		t.Error("expected storage enabled")
-	}
-	if opts.StorageConfig.DataDir != "/tmp/queen-data" {
-		t.Errorf("expected dataDir /tmp/queen-data, got %s", opts.StorageConfig.DataDir)
+	if opts.StoreOptions.DataDir != "/tmp/queen-data" {
+		t.Errorf("expected dataDir /tmp/queen-data, got %s", opts.StoreOptions.DataDir)
 	}
 }
 
@@ -194,8 +190,7 @@ func TestCoreOptionsChaining(t *testing.T) {
 		WithAddress(":1883").
 		WithMaxClients(100).
 		WithKeepAlive(30).
-		WithRetainEnabled(true).
-		WithStorageEnabled(false)
+		WithRetainEnabled(true)
 
 	// 验证所有值都正确设置
 	if opts.Address != ":1883" {
@@ -209,9 +204,6 @@ func TestCoreOptionsChaining(t *testing.T) {
 	}
 	if !opts.RetainEnabled {
 		t.Error("chain failed for RetainEnabled")
-	}
-	if opts.StorageConfig.Enabled {
-		t.Error("chain failed for StorageConfig.Enabled")
 	}
 }
 
@@ -336,22 +328,18 @@ func TestCoreOptionsWithTraceHandler(t *testing.T) {
 
 // TestCoreOptionsWithStorageConfig 测试完整存储配置
 func TestCoreOptionsWithStorageConfig(t *testing.T) {
-	storageConfig := StorageConfig{
-		Enabled:    true,
+	storeOptions := StoreOptions{
 		DataDir:    "/custom/path",
 		SyncWrites: true,
 	}
 
 	opts := NewCoreOptions().
-		WithStorage(storageConfig)
+		WithStore(storeOptions)
 
-	if !opts.StorageConfig.Enabled {
-		t.Error("expected storage enabled")
+	if opts.StoreOptions.DataDir != "/custom/path" {
+		t.Errorf("expected dataDir /custom/path, got %s", opts.StoreOptions.DataDir)
 	}
-	if opts.StorageConfig.DataDir != "/custom/path" {
-		t.Errorf("expected dataDir /custom/path, got %s", opts.StorageConfig.DataDir)
-	}
-	if !opts.StorageConfig.SyncWrites {
+	if !opts.StoreOptions.SyncWrites {
 		t.Error("expected syncWrites true")
 	}
 }

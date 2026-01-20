@@ -316,13 +316,12 @@ func TestMatchTopic(t *testing.T) {
 // TestRetainStoreWithMessageStore 测试与 messageStore 集成
 func TestRetainStoreWithMessageStore(t *testing.T) {
 	// 创建内存模式的 messageStore
-	config := StorageConfig{
-		Enabled:          true,
+	config := StoreOptions{
 		DataDir:          "", // InMemory 模式
 		ValueLogFileSize: 64,
 	}
 
-	ms, err := newMessageStore(config)
+	ms, err := newStore(config)
 	if err != nil {
 		t.Fatalf("Failed to create message store: %v", err)
 	}
@@ -342,7 +341,7 @@ func TestRetainStoreWithMessageStore(t *testing.T) {
 	}
 
 	// 存储消息到 messageStore
-	if err := ms.saveRetainMessage(topic, msg); err != nil {
+	if err := ms.setRetain(topic, msg); err != nil {
 		t.Fatalf("Failed to save retain message: %v", err)
 	}
 
@@ -352,7 +351,7 @@ func TestRetainStoreWithMessageStore(t *testing.T) {
 	}
 
 	// 从 messageStore 获取消息
-	retrieved, err := ms.getRetainMessage(topic)
+	retrieved, err := ms.getRetain(topic)
 	if err != nil {
 		t.Fatalf("Failed to get retain message: %v", err)
 	}
@@ -370,7 +369,7 @@ func TestRetainStoreWithMessageStore(t *testing.T) {
 	}
 
 	for _, tp := range topics {
-		msg, err := ms.getRetainMessage(tp)
+		msg, err := ms.getRetain(tp)
 		if err != nil {
 			t.Errorf("Failed to get message for topic %s: %v", tp, err)
 		}

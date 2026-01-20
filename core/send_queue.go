@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -32,17 +33,24 @@ func newSendQueue(capacity int) *sendQueue {
 	}
 }
 
+var (
+	// ErrSendQueueFull 发送队列已满
+	ErrSendQueueFull = fmt.Errorf("send queue is full")
+	// ErrMessageAlreadyInQueue 消息已在队列中
+	ErrMessageAlreadyInQueue = fmt.Errorf("message already in send queue")
+)
+
 // tryEnqueue 尝试将消息放入队列
-// 返回 true 表示成功，false 表示队列已满或消息已在队列中
+// 返回 nil 表示成功，非 nil 表示队列已满或消息已在队列中
 // 对于 QoS 1 消息，通过 PacketID 去重，防止同一消息被重复加入队列
-func (q *sendQueue) tryEnqueue(msg *Message) bool {
+func (q *sendQueue) tryEnqueue(msg *Message) error {
 	// QoS 1 消息需要检查是否已在队列中
 	if !msg.PacketID.IsZero() {
 		q.mu.Lock()
 		if q.inQueue[msg.PacketID] {
 			// 消息已在队列中，拒绝重复添加
 			q.mu.Unlock()
-			return false
+			return ErrMessageAlreadyInQueue
 		}
 		q.mu.Unlock()
 	}
@@ -56,10 +64,10 @@ func (q *sendQueue) tryEnqueue(msg *Message) bool {
 			q.inQueue[msg.PacketID] = true
 			q.mu.Unlock()
 		}
-		return true
+		return nil
 	default:
 		// 队列已满
-		return false
+		return ErrSendQueueFull
 	}
 }
 

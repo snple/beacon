@@ -1,7 +1,6 @@
 package core
 
 import (
-	"errors"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -10,18 +9,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// Publish 发布消息 (内部使用)
-// ctx: 用于取消阻塞操作（通常传入客户端连接的 context）
+// publish 发布消息 (内部使用)
 func (c *Core) publish(msg Message) bool {
+	// 进入队列前重新分配 PacketID，以确保顺序和唯一性
+	msg.PacketID = nson.NewId()
+
 	// 处理保留消息
 	if msg.Retain && c.options.RetainEnabled {
 		if len(msg.Packet.Payload) == 0 {
 			// 删除保留消息
 			c.retainStore.remove(msg.Packet.Topic)
 			// 从持久化存储中删除
-			if c.messageStore != nil {
-				c.messageStore.deleteRetainMessage(msg.Packet.Topic)
-			}
+			c.store.deleteRetain(msg.Packet.Topic)
 		} else {
 			// 计算过期时间
 			var expiryTime int64
@@ -37,9 +36,9 @@ func (c *Core) publish(msg Message) bool {
 			}
 
 			// 持久化保留消息到 messageStore
-			if c.messageStore != nil {
+			if c.store != nil {
 				// !!! 这里传指针
-				if err := c.messageStore.saveRetainMessage(msg.Packet.Topic, &msg); err != nil {
+				if err := c.store.setRetain(msg.Packet.Topic, &msg); err != nil {
 					c.logger.Error("Failed to persist retain message",
 						zap.String("topic", msg.Packet.Topic),
 						zap.Error(err))
@@ -48,18 +47,27 @@ func (c *Core) publish(msg Message) bool {
 		}
 	}
 
-	// 放入消息队列
-	select {
-	case c.queue <- &msg:
-		c.stats.MessagesReceived.Add(1)
-		return true
-	default:
-		// 队列满了，丢弃消息
-		c.logger.Debug("message dropped, dispatch queue full",
-			zap.String("topic", msg.Packet.Topic))
+	// 放入消息队列（现在使用 Queue.Enqueue）
+	if err := c.queue.Enqueue(&msg); err != nil {
+		// 遇到错误，记录日志并丢弃消息
+		c.logger.Error("message dropped, dispatch queue enqueue failed",
+			zap.String("topic", msg.Packet.Topic),
+			zap.String("packetID", msg.PacketID.Hex()),
+			zap.Error(err))
 		c.stats.MessagesDropped.Add(1)
 		return false
 	}
+
+	// 成功入队，触发分发协程
+	select {
+	case c.queueTrigger <- struct{}{}:
+	default:
+		// 已有触发信号，无需重复发送
+	}
+
+	// 统计消息接收数
+	c.stats.MessagesReceived.Add(1)
+	return true
 }
 
 // PublishOptions 发布选项
@@ -83,9 +91,18 @@ func (c *Core) dispatchLoop() {
 		select {
 		case <-c.ctx.Done():
 			return
-		case msg := <-c.queue:
-			// !!! push 放进去的是指针
-			c.deliver(msg)
+		case <-c.queueTrigger:
+			for {
+				// 从队列中取出消息并分发
+				msg, err := c.queue.Dequeue()
+				if err != nil {
+					// 队列为空或其他错误，继续下一轮
+					break
+				}
+
+				// 分发消息
+				c.deliver(msg)
+			}
 		}
 	}
 }
@@ -166,9 +183,6 @@ func (c *Core) deliverToTarget(msg *Message) {
 				zap.String("targetClientID", targetID),
 				zap.String("topic", msg.Packet.Topic),
 				zap.Error(err))
-			if msg.QoS == packet.QoS0 {
-				c.stats.MessagesDropped.Add(1)
-			}
 		}
 
 		return
@@ -191,10 +205,9 @@ func (c *Core) deliverToTarget(msg *Message) {
 //   - QoS0: 直接丢弃
 //   - QoS1: 已持久化，等待重传机制处理
 func (c *Client) deliver(msg *Message) error {
-	// PacketID 属于“投递层字段”，必须对每个目标客户端独立分配，且不能写回原始 PublishPacket 。
-	if msg.QoS == packet.QoS1 {
-		msg.PacketID = c.session.allocatePacketID()
-	}
+	// PacketID 属于“投递层字段”，必须对每个目标客户端独立分配
+	// 无论 QoS=0 还是 QoS=1，都需要 PacketID
+	msg.PacketID = nson.NewId()
 
 	// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
 	if msg.IsExpired() {
@@ -202,19 +215,15 @@ func (c *Client) deliver(msg *Message) error {
 		return nil
 	}
 
-	// QoS 1: 先持久化到存储（确保不丢失）
-	if msg.QoS == packet.QoS1 && c.core.messageStore != nil {
-		if err := c.core.messageStore.save(c.ID, msg); err != nil {
-			c.core.logger.Error("Failed to persist QoS1 message",
-				zap.String("clientID", c.ID),
-				zap.String("topic", msg.Packet.Topic),
-				zap.Error(err))
-			return err
-		}
-		c.core.logger.Debug("QoS1 message persisted",
+	// QoS 0 和 QoS 1 都需要放入发送队列
+	if err := c.queue.Enqueue(msg); err != nil {
+		// 遇到错误，记录日志并丢弃消息
+		c.core.logger.Debug("Message dropped, client dispatch queue enqueue failed",
 			zap.String("clientID", c.ID),
 			zap.String("topic", msg.Packet.Topic),
-			zap.String("packetID", msg.PacketID.Hex()))
+			zap.Error(err))
+		c.core.stats.MessagesDropped.Add(1)
+		return err
 	}
 
 	// 尝试放入发送队列
@@ -222,17 +231,9 @@ func (c *Client) deliver(msg *Message) error {
 	conn := c.conn
 	c.connMu.RUnlock()
 
-	if conn == nil {
-		if msg.QoS == packet.QoS0 {
-			c.core.logger.Debug("QoS0 message dropped, client closed",
-				zap.String("clientID", c.ID),
-				zap.String("topic", msg.Packet.Topic))
-			c.core.stats.MessagesDropped.Add(1)
-
-			return ErrClientClosed
-		}
-		// QoS1: 已经持久化，重连后重传
-		c.core.logger.Debug("QoS1 message queued for retransmit, client closed",
+	if conn == nil || conn.closed.Load() {
+		// 客户端离线，但是已经放入了队列，等待重传机制处理
+		c.core.logger.Debug("Client offline, message queued for retransmit",
 			zap.String("clientID", c.ID),
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("packetID", msg.PacketID.Hex()))
@@ -240,21 +241,24 @@ func (c *Client) deliver(msg *Message) error {
 		return nil
 	}
 
-	if conn.sendQueue.tryEnqueue(msg) {
+	if err := conn.sendQueue.tryEnqueue(msg); err == nil {
 		// 成功入队，触发发送协程
 		conn.triggerSend()
 		return nil
 	}
 
+	// 失败：
+	// !!! 由于上面重新分配了 PacketID，这里不可能出现消息已在队列中的情况 !!!
+
 	// 队列已满
 	if msg.QoS == packet.QoS0 {
-		// QoS0: 直接丢弃
-		c.core.logger.Debug("QoS0 message dropped, send queue full",
+		// QoS0: 虽然列队已满，但消息并没有直接丢弃，因为已经持久化到队列中，等待重传机制处理
+		c.core.logger.Debug("QoS0 message dropped (queue full)",
 			zap.String("clientID", c.ID),
-			zap.String("topic", msg.Packet.Topic))
+			zap.String("topic", msg.Packet.Topic),
+			zap.String("packetID", msg.PacketID.Hex()))
 
-		c.core.stats.MessagesDropped.Add(1)
-		return errors.New("send queue full")
+		return nil
 	}
 
 	// QoS1: 已持久化，等待重传机制处理
@@ -273,22 +277,18 @@ type pendingMessage struct {
 
 // sendMessage 发送消息到客户端
 func (c *Client) sendMessage(msg *Message) error {
-	// 基于只读 PublishPacket 构造一次性出站 packet
 	if msg.Packet == nil {
 		return ErrInvalidMessage
 	}
+
+	// 基于只读 PublishPacket 构造一次性出站 packet
 
 	// 构建最终发送的 PUBLISH 包
 	// !!! 这里要复制消息，因为要修改 QoS 和 PacketID 等字段，不能影响原始消息 !!!
 	pub := msg.Packet.Copy()
 	pub.Dup = msg.Dup
 	pub.QoS = msg.QoS
-	pub.Dup = msg.Dup
-	if msg.QoS > 0 {
-		pub.PacketID = msg.PacketID
-	} else {
-		pub.PacketID = nson.Id{}
-	}
+	pub.PacketID = msg.PacketID // 无论 QoS=0 还是 QoS=1 都使用 PacketID
 
 	// 调用 OnDeliver 钩子，检查是否允许投递
 	deliverCtx := &DeliverContext{
@@ -299,14 +299,14 @@ func (c *Client) sendMessage(msg *Message) error {
 		return ErrDeliveryRejected // 钩子拒绝投递
 	}
 
-	// 先发送消息
+	// 发送消息
 	if err := c.writePacket(&pub); err != nil {
 		return err
 	}
 
-	// 发送成功后处理 QoS 1
+	// 发送成功后的处理
 	if pub.QoS == packet.QoS1 {
-		// 加入或更新 pendingAck 等待确认
+		// QoS=1: 加入 pendingAck 等待确认
 		// 注意：如果是重传的消息，pendingAck 中可能已经存在该记录
 		// 此时需要更新 lastSentAt 为实际发送时间
 		c.session.pendingAckMu.Lock()
@@ -315,11 +315,16 @@ func (c *Client) sendMessage(msg *Message) error {
 			lastSentAt: time.Now().Unix(),
 		}
 		c.session.pendingAckMu.Unlock()
+	} else {
+		// QoS=0: TCP 写成功就从发送队列删除
+		if err := c.queue.Delete(pub.PacketID); err != nil {
+			c.core.logger.Debug("Failed to delete QoS0 message from queue after send",
+				zap.String("clientID", c.ID),
+				zap.String("packetID", pub.PacketID.Hex()),
+				zap.Error(err))
+		}
 	}
-	// QoS 0: 发送后即清理，无需等待确认
 
-	// 发送成功，统计消息发送数
-	c.core.stats.MessagesSent.Add(1)
 	return nil
 }
 

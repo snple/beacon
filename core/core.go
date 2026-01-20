@@ -28,14 +28,15 @@ type Core struct {
 	// 订阅管理
 	subTree *subTree
 
+	// 消息持久化存储
+	store *store
+
 	// 消息队列
-	queue chan *Message
+	queue        *Queue
+	queueTrigger chan struct{}
 
 	// 保留消息
 	retainStore *retainStore
-
-	// 消息持久化存储
-	messageStore *messageStore
 
 	// REQUEST/RESPONSE 支持（轮询模式）
 	actionRegistry *actionRegistry // action 注册表
@@ -92,15 +93,20 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		clients:         make(map[string]*Client),
 		offlineSessions: make(map[string]time.Time),
 		subTree:         newSubTree(),
-		queue:           make(chan *Message, opts.MessageQueueSize),
+		queueTrigger:    make(chan struct{}, 1),
 		retainStore:     newRetainStore(),
 		actionRegistry:  newActionRegistry(),
 		ctx:             ctx,
 		cancel:          cancel,
 	}
 
-	// 初始化消息持久化存储
-	if err := b.initMessageStore(); err != nil {
+	// 初始化消息持久化存储（必须先于 initQueue）
+	if err := b.initStore(); err != nil {
+		return nil, err
+	}
+
+	// 初始化消息队列（使用 InMemory badger）
+	if err := b.initQueue(); err != nil {
 		return nil, err
 	}
 
@@ -112,22 +118,26 @@ func New() (*Core, error) {
 	return NewWithOptions(NewCoreOptions())
 }
 
-// initMessageStore 初始化消息存储
-func (c *Core) initMessageStore() error {
-	if !c.options.StorageConfig.Enabled {
-		return nil
-	}
-
+// initStore 初始化消息存储
+func (c *Core) initStore() error {
 	// 确保 Logger 正确传递
-	if c.options.StorageConfig.Logger == nil {
-		c.options.StorageConfig.Logger = c.options.Logger
+	if c.options.StoreOptions.Logger == nil {
+		c.options.StoreOptions.Logger = c.options.Logger
 	}
 
-	store, err := newMessageStore(c.options.StorageConfig)
+	store, err := newStore(c.options.StoreOptions)
 	if err != nil {
 		return fmt.Errorf("failed to initialize message store: %w", err)
 	}
-	c.messageStore = store
+	c.store = store
+	return nil
+}
+
+// initQueue 初始化消息队列
+func (c *Core) initQueue() error {
+	c.queue = NewQueue(c.store.db, "core:")
+
+	c.logger.Info("Message queue initialized (InMemory)")
 	return nil
 }
 
@@ -146,9 +156,7 @@ func (c *Core) Start() error {
 	c.running.Store(true)
 
 	// 恢复持久化的消息
-	if c.messageStore != nil {
-		c.recoverMessages()
-	}
+	c.recoverMessages()
 
 	// 启动后台协程
 	c.startBackgroundWorkers()
@@ -184,8 +192,7 @@ func (c *Core) logStartupInfo() {
 	c.logger.Info("core started",
 		zap.String("address", c.options.Address),
 		zap.Uint32("maxClients", c.options.MaxClients),
-		zap.Bool("tls", c.options.TLSConfig != nil),
-		zap.Bool("persistenceEnabled", c.messageStore != nil))
+		zap.Bool("tls", c.options.TLSConfig != nil))
 }
 
 // Stop 停止 core
@@ -214,9 +221,7 @@ func (c *Core) Stop() error {
 	c.wg.Wait()
 
 	// 最后关闭消息存储
-	if c.messageStore != nil {
-		c.messageStore.close()
-	}
+	c.store.close()
 
 	c.logger.Info("core stopped")
 	return nil
@@ -246,14 +251,9 @@ func (c *Core) GetRetainedMessages(topic string) []*Message {
 		return nil
 	}
 
-	// 从 messageStore 加载消息
-	if c.messageStore == nil {
-		return nil
-	}
-
 	messages := make([]*Message, 0, len(topics))
 	for _, t := range topics {
-		msg, err := c.messageStore.getRetainMessage(t)
+		msg, err := c.store.getRetain(t)
 		if err != nil {
 			c.logger.Debug("Failed to get retain message from store",
 				zap.String("topic", t),

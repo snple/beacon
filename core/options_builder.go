@@ -47,7 +47,7 @@ type CoreOptions struct {
 	MessageQueueSize uint16 // MESSAGE 轮询队列缓冲大小（默认 100）
 
 	// 持久化存储
-	StorageConfig StorageConfig // 消息持久化配置
+	StoreOptions StoreOptions // 消息持久化配置
 
 	// 日志
 	Logger *zap.Logger
@@ -70,7 +70,7 @@ func NewCoreOptions() *CoreOptions {
 		RetainEnabled:         true,
 		RequestQueueSize:      100,
 		MessageQueueSize:      100,
-		StorageConfig:         DefaultStorageConfig(),
+		StoreOptions:          DefaultStoreOptions(),
 	}
 }
 
@@ -200,22 +200,15 @@ func (o *CoreOptions) WithMessageQueueSize(size uint16) *CoreOptions {
 	return o
 }
 
-// WithStorage 设置持久化存储配置
-func (o *CoreOptions) WithStorage(storageConfig StorageConfig) *CoreOptions {
-	o.StorageConfig = storageConfig
+// WithStore 设置持久化存储配置
+func (o *CoreOptions) WithStore(storeOptions StoreOptions) *CoreOptions {
+	o.StoreOptions = storeOptions
 	return o
 }
 
-// WithStorageDir 设置持久化存储目录
-func (o *CoreOptions) WithStorageDir(dir string) *CoreOptions {
-	o.StorageConfig.Enabled = true
-	o.StorageConfig.DataDir = dir
-	return o
-}
-
-// WithStorageEnabled 设置是否启用持久化存储
-func (o *CoreOptions) WithStorageEnabled(enabled bool) *CoreOptions {
-	o.StorageConfig.Enabled = enabled
+// WithStoreDir 设置持久化存储目录
+func (o *CoreOptions) WithStoreDir(dir string) *CoreOptions {
+	o.StoreOptions.DataDir = dir
 	return o
 }
 
@@ -275,10 +268,8 @@ func (o *CoreOptions) Validate() error {
 	}
 
 	// 验证存储配置
-	if o.StorageConfig.Enabled {
-		if err := o.StorageConfig.Validate(); err != nil {
-			return fmt.Errorf("storage config validation failed: %w", err)
-		}
+	if err := o.StoreOptions.Validate(); err != nil {
+		return fmt.Errorf("store options validation failed: %w", err)
 	}
 
 	return nil
