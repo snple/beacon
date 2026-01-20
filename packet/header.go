@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+
+	"github.com/danclive/nson-go"
 )
 
 var (
@@ -223,4 +225,17 @@ func StringSize(s string) int {
 // BinarySize 返回编码后二进制数据的大小
 func BinarySize(data []byte) int {
 	return 2 + len(data)
+}
+
+// EncodeId 编码 nson.Id
+func EncodeId(w io.Writer, id nson.Id) error {
+	_, err := w.Write(id[:])
+	return err
+}
+
+// DecodeId 解码 nson.Id
+func DecodeId(r io.Reader) (nson.Id, error) {
+	var id nson.Id
+	_, err := io.ReadFull(r, id[:])
+	return id, err
 }

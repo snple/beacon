@@ -3,6 +3,7 @@ package client
 import (
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 
 	"go.uber.org/zap"
@@ -94,7 +95,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 
 		// 分配 PacketID（使用 Client 级别的生成器，支持离线）
 		msg.Packet.PacketID = c.allocatePacketID()
-		if msg.Packet.PacketID == 0 {
+		if msg.Packet.PacketID.IsZero() {
 			return ErrNotConnected // PacketID 分配失败
 		}
 
@@ -103,7 +104,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 			if err := c.store.save(&msg); err != nil {
 				c.logger.Error("Failed to persist QoS1 message",
 					zap.String("topic", msg.Packet.Topic),
-					zap.Uint16("packetID", msg.Packet.PacketID),
+					zap.String("packetID", msg.Packet.PacketID.Hex()),
 					zap.Error(err))
 				return err
 			}
@@ -124,7 +125,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		// QoS1: 已持久化，等待重连后由重传机制处理
 		c.logger.Debug("Not connected, QoS1 message queued for retransmit",
 			zap.String("topic", msg.Packet.Topic),
-			zap.Uint16("packetID", msg.Packet.PacketID))
+			zap.String("packetID", msg.Packet.PacketID.Hex()))
 		return nil
 	}
 
@@ -140,7 +141,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		// QoS1: 已持久化，等待重传机制处理
 		c.logger.Debug("Send queue full, QoS1 message queued for retransmit",
 			zap.String("topic", msg.Packet.Topic),
-			zap.Uint16("packetID", msg.Packet.PacketID))
+			zap.String("packetID", msg.Packet.PacketID.Hex()))
 		return nil
 	}
 
@@ -161,7 +162,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 // 1. 仅对首次发布的消息调用（重传消息不等待）
 // 2. 如果超时或连接断开，消息仍在持久化中，会被重传机制处理
 // 3. 使用 defer 确保 pendingAck 始终被清理
-func (c *Client) waitForPublishAck(conn *Conn, packetID uint16, timeout time.Duration) error {
+func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, timeout time.Duration) error {
 	// 创建等待通道
 	waitCh := make(chan error, 1)
 
@@ -184,12 +185,12 @@ func (c *Client) waitForPublishAck(conn *Conn, packetID uint16, timeout time.Dur
 	case <-timeoutCh:
 		// 超时：消息仍在持久化中，会被重传
 		c.logger.Warn("Publish ACK timeout, message will be retransmitted",
-			zap.Uint16("packetID", packetID))
+			zap.String("packetID", packetID.Hex()))
 		return ErrPublishTimeout
 	case <-conn.ctx.Done():
 		// 连接断开：消息在持久化中，会被重传
 		c.logger.Debug("Connection lost while waiting for ACK, message will be retransmitted",
-			zap.Uint16("packetID", packetID))
+			zap.String("packetID", packetID.Hex()))
 		return ErrNotConnected
 	case <-c.rootCtx.Done():
 		// 客户端关闭
@@ -236,7 +237,7 @@ func (c *Client) processSendQueue() {
 		if msg.IsExpired() {
 			c.logger.Debug("Message expired, dropping",
 				zap.String("topic", msg.Packet.Topic),
-				zap.Uint16("packetID", msg.Packet.PacketID))
+				zap.String("packetID", msg.Packet.PacketID.Hex()))
 			continue
 		}
 
@@ -245,7 +246,7 @@ func (c *Client) processSendQueue() {
 			c.logger.Warn("Failed to send message from queue",
 				zap.Error(err),
 				zap.String("topic", msg.Packet.Topic),
-				zap.Uint16("packetID", msg.Packet.PacketID))
+				zap.String("packetID", msg.Packet.PacketID.Hex()))
 			// 发送失败，消息已出队，QoS1 消息会在持久化存储中，重传机制会处理
 		}
 	}

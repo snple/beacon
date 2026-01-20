@@ -3,7 +3,6 @@ package client
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -68,7 +67,7 @@ func (c *StoreConfig) Validate() error {
 // StoredMessage 持久化存储的消息格式
 type StoredMessage struct {
 	// 消息标识
-	PacketID uint16 `nson:"pid"` // 数据包 ID
+	PacketID nson.Id `nson:"pid"` // 数据包 ID
 
 	// 原始 Message 包（视为只读）
 	Message *Message `nson:"m"`
@@ -182,70 +181,14 @@ func (ms *messageStore) runGC() {
 }
 
 // messageKey 生成消息存储 key
-// 格式: msg:{packetID}
-func messageKey(packetID uint16) []byte {
-	return fmt.Appendf(nil, "msg:%d", packetID)
+// 格式: msg:{packetID_hex}
+func messageKey(packetID nson.Id) []byte {
+	return fmt.Appendf(nil, "msg:%s", packetID.Hex())
 }
 
 // messagePrefix 返回所有发送消息的前缀
 func messagePrefix() []byte {
 	return []byte("msg:")
-}
-
-// packetIDSeedKey 生成 PacketID 种子存储 key
-func packetIDSeedKey() []byte {
-	return []byte("meta:pid_seed")
-}
-
-func encodePacketIDSeed(seed uint16) []byte {
-	var b [2]byte
-	binary.BigEndian.PutUint16(b[:], seed)
-	return b[:]
-}
-
-func decodePacketIDSeed(b []byte) (uint16, bool) {
-	if len(b) != 2 {
-		return 0, false
-	}
-	return binary.BigEndian.Uint16(b), true
-}
-
-// PacketIDSeed returns the stored PacketID seed for allocation.
-// It is used to reduce collisions after restart/reconnect without scanning the whole store.
-func (ms *messageStore) PacketIDSeed() (uint16, error) {
-	if ms == nil || ms.db == nil {
-		return uint16(minPacketID), nil
-	}
-
-	var seed = uint16(minPacketID)
-	err := ms.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(packetIDSeedKey())
-		if err != nil {
-			if err == badger.ErrKeyNotFound {
-				return nil
-			}
-			return err
-		}
-		return item.Value(func(val []byte) error {
-			if s, ok := decodePacketIDSeed(val); ok {
-				seed = s
-			}
-			return nil
-		})
-	})
-	return seed, err
-}
-
-// SetPacketIDSeed stores the last allocated PacketID.
-// It is used to resume allocation after restart/reconnect without scanning the whole store.
-// Best-effort semantics: callers may ignore the returned error.
-func (ms *messageStore) setPacketIDSeed(seed uint16) error {
-	if ms == nil || ms.db == nil {
-		return nil
-	}
-	return ms.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(packetIDSeedKey(), encodePacketIDSeed(seed))
-	})
 }
 
 // Save 保存消息到存储
@@ -281,13 +224,13 @@ func (ms *messageStore) save(msg *Message) error {
 	}
 
 	ms.logger.Debug("Message saved",
-		zap.Uint16("packetID", msg.Packet.PacketID),
+		zap.String("packetID", msg.Packet.PacketID.Hex()),
 		zap.String("topic", msg.Packet.Topic))
 	return nil
 }
 
 // Delete 删除消息 (ACK 后调用)
-func (ms *messageStore) Delete(packetID uint16) error {
+func (ms *messageStore) Delete(packetID nson.Id) error {
 	return ms.db.Update(func(txn *badger.Txn) error {
 		key := messageKey(packetID)
 		return txn.Delete(key)
@@ -295,7 +238,7 @@ func (ms *messageStore) Delete(packetID uint16) error {
 }
 
 // Get 获取指定的消息
-func (ms *messageStore) Get(packetID uint16) (*StoredMessage, error) {
+func (ms *messageStore) Get(packetID nson.Id) (*StoredMessage, error) {
 	var msg *StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
@@ -319,7 +262,7 @@ func (ms *messageStore) Get(packetID uint16) (*StoredMessage, error) {
 // GetBatch 获取一批待发送的消息
 // limit: 最大获取数量
 // excludePacketIDs: 需要排除的 PacketID（已在 pendingAck 中）
-func (ms *messageStore) GetBatch(limit int, excludePacketIDs map[uint16]bool) ([]*StoredMessage, error) {
+func (ms *messageStore) GetBatch(limit int, excludePacketIDs map[nson.Id]bool) ([]*StoredMessage, error) {
 	var messages []*StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
@@ -444,13 +387,6 @@ func (ms *messageStore) clear() error {
 
 	ms.logger.Info("Cleared all persisted messages",
 		zap.Int("count", len(keysToDelete)))
-
-	// Reset PacketID seed for a clean session.
-	if ms != nil && ms.db != nil {
-		_ = ms.db.Update(func(txn *badger.Txn) error {
-			return txn.Set(packetIDSeedKey(), encodePacketIDSeed(uint16(minPacketID)))
-		})
-	}
 
 	return nil
 }

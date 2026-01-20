@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
@@ -37,7 +38,7 @@ type Conn struct {
 	processing atomic.Bool
 
 	// 等待确认的包（连接级别，断开后失效）
-	pendingAck   map[uint16]chan error
+	pendingAck   map[nson.Id]chan error
 	pendingAckMu sync.Mutex
 
 	// 心跳 RTT
@@ -70,7 +71,7 @@ func newConn(c *Client, oldConn *Conn, netConn net.Conn, clientID string, keepAl
 		keepAlive:      keepAlive,
 		sessionPresent: sessionPresent,
 		sendWindow:     sendWindow,
-		pendingAck:     make(map[uint16]chan error),
+		pendingAck:     make(map[nson.Id]chan error),
 		ctx:            ctx,
 		cancel:         cancel,
 		logger:         c.logger,
@@ -260,7 +261,7 @@ func (conn *Conn) handlePuback(p *packet.PubackPacket) {
 	if conn.client.store != nil {
 		if delErr := conn.client.store.Delete(p.PacketID); delErr != nil {
 			conn.logger.Warn("Failed to delete persisted message after ACK",
-				zap.Uint16("packetID", p.PacketID),
+				zap.String("packetID", p.PacketID.Hex()),
 				zap.Error(delErr))
 		}
 	}
@@ -309,7 +310,7 @@ func (conn *Conn) handlePong(p *packet.PongPacket) {
 }
 
 // handleAck 处理确认响应
-func (conn *Conn) handleAck(packetID uint16, err error) {
+func (conn *Conn) handleAck(packetID nson.Id, err error) {
 	conn.pendingAckMu.Lock()
 	ch, ok := conn.pendingAck[packetID]
 	if ok {
@@ -352,7 +353,7 @@ func (conn *Conn) sendMessage(msg *Message) error {
 }
 
 // waitAck 等待包确认
-func (conn *Conn) waitAck(packetID uint16, timeout time.Duration) error {
+func (conn *Conn) waitAck(packetID nson.Id, timeout time.Duration) error {
 	ch := make(chan error, 1)
 	conn.pendingAckMu.Lock()
 	conn.pendingAck[packetID] = ch
@@ -395,7 +396,7 @@ func (conn *Conn) close(err error) {
 			default:
 			}
 		}
-		conn.pendingAck = make(map[uint16]chan error)
+		conn.pendingAck = make(map[nson.Id]chan error)
 		conn.pendingAckMu.Unlock()
 
 		// 通知客户端连接已断开

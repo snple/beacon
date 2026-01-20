@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
@@ -22,10 +23,6 @@ const (
 
 	// 流量控制
 	defaultReceiveWindow = 100 // 默认接收窗口大小
-
-	// PacketID 相关
-	minPacketID = 1
-	maxPacketID = 65535
 
 	// 重传相关
 	retransmitBatchSize = 50 // 每次从持久化加载的最大消息数
@@ -90,9 +87,6 @@ type Client struct {
 
 	// 连接状态
 	connected atomic.Bool
-
-	// 包 ID 管理（跨连接持久化，用于离线发布和重传）
-	nextPacketID atomic.Uint32
 
 	// REQUEST/RESPONSE 支持
 	nextRequestID   atomic.Uint32
@@ -171,15 +165,6 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 
 		c.store = store
 	}
-
-	// 初始化包 ID（从持久化存储加载种子）
-	seed := uint16(minPacketID)
-	if c.store != nil {
-		if s, err := c.store.PacketIDSeed(); err == nil {
-			seed = s
-		}
-	}
-	c.nextPacketID.Store(uint32(seed))
 
 	// 启动统一的重连循环（内部会检查 autoReconnect 开关）
 	go c.reconnectLoop()
@@ -342,26 +327,9 @@ func (c *Client) LastRTT() time.Duration {
 	return c.conn.LastRTT()
 }
 
-// allocatePacketID 分配新的 PacketID
-func (c *Client) allocatePacketID() uint16 {
-	id := c.nextPacketID.Add(1)
-	if id == 0 || id > maxPacketID {
-		c.nextPacketID.Store(minPacketID)
-		id = minPacketID
-	}
-
-	pid := uint16(id)
-
-	// Best-effort persist the latest allocated PacketID seed (used on next start/reconnect).
-	if c.store != nil {
-		if err := c.store.setPacketIDSeed(pid); err != nil {
-			c.logger.Error("Failed to set PacketID seed",
-				zap.Uint16("packetID", pid),
-				zap.Error(err))
-		}
-	}
-
-	return pid
+// allocatePacketID 分配新的 PacketID（使用 nson.Id 以保证全局唯一性和有序性）
+func (c *Client) allocatePacketID() nson.Id {
+	return nson.NewId()
 }
 
 // getConn 获取当前活跃的连接

@@ -3,7 +3,6 @@ package core
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -16,9 +15,9 @@ import (
 // StoredMessage 持久化存储的消息格式
 type StoredMessage struct {
 	// 消息标识
-	ID       string `nson:"id"`  // 消息唯一标识
-	ClientID string `nson:"cid"` // 客户端 ID
-	PacketID uint16 `nson:"pid"` // 数据包 ID（冗余字段，便于索引/过滤）
+	ID       string  `nson:"id"`  // 消息唯一标识
+	ClientID string  `nson:"cid"` // 客户端 ID
+	PacketID nson.Id `nson:"pid"` // 数据包 ID（用于去重和索引）
 
 	// 原始 Message 包（视为只读）
 	Message *Message `nson:"m"`
@@ -185,19 +184,14 @@ func (ms *messageStore) runGC() {
 }
 
 // messageKey 生成消息存储 key
-// 格式: msg:{clientID}:{packetID}
-func messageKey(clientID string, packetID uint16) []byte {
-	return fmt.Appendf(nil, "msg:%s:%d", clientID, packetID)
+// 格式: msg:{clientID}:{packetID_hex}
+func messageKey(clientID string, packetID nson.Id) []byte {
+	return fmt.Appendf(nil, "msg:%s:%s", clientID, packetID.Hex())
 }
 
 // messagePrefix 返回所有发送消息的前缀
 func messagePrefix() []byte {
 	return []byte("msg:")
-}
-
-// packetIDSeedKey 生成 PacketID 种子存储 key
-func packetIDSeedKey(clientID string) []byte {
-	return fmt.Appendf(nil, "meta:pid_seed:%s", clientID)
 }
 
 // retainKey 生成保留消息存储 key
@@ -208,55 +202,6 @@ func retainKey(topic string) []byte {
 // retainKeyPrefix 返回保留消息前缀
 func retainKeyPrefix() []byte {
 	return []byte("retain:")
-}
-
-func encodePacketIDSeed(seed uint16) []byte {
-	var b [2]byte
-	binary.BigEndian.PutUint16(b[:], seed)
-	return b[:]
-}
-
-func decodePacketIDSeed(b []byte) (uint16, bool) {
-	if len(b) != 2 {
-		return 0, false
-	}
-	return binary.BigEndian.Uint16(b), true
-}
-
-// PacketIDSeed returns the stored PacketID seed for a client.
-// It is used to resume outbound PacketID allocation after restart without scanning the whole store.
-func (ms *messageStore) packetIDSeed(clientID string) (uint16, error) {
-	if ms == nil || ms.db == nil {
-		return uint16(minPacketID), nil
-	}
-
-	var seed = uint16(minPacketID)
-	err := ms.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(packetIDSeedKey(clientID))
-		if err != nil {
-			if err == badger.ErrKeyNotFound {
-				return nil
-			}
-			return err
-		}
-		return item.Value(func(val []byte) error {
-			if s, ok := decodePacketIDSeed(val); ok {
-				seed = s
-			}
-			return nil
-		})
-	})
-	return seed, err
-}
-
-// SetPacketIDSeed stores the last allocated PacketID for a client (best-effort).
-func (ms *messageStore) setPacketIDSeed(clientID string, seed uint16) error {
-	if ms == nil || ms.db == nil {
-		return nil
-	}
-	return ms.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(packetIDSeedKey(clientID), encodePacketIDSeed(seed))
-	})
 }
 
 // clientPrefix 生成客户端消息前缀
@@ -270,14 +215,14 @@ func clientPrefix(clientID string) []byte {
 // - baseMsg 视为只读共享内容
 // - packetID/qos 是投递层字段，会写入存储的 packet 副本
 func (ms *messageStore) save(clientID string, msg *Message) error {
-	if msg == nil || msg.PacketID == 0 || msg.Packet == nil {
+	if msg == nil || msg.PacketID.IsZero() || msg.Packet == nil {
 		return fmt.Errorf("nil message")
 	}
 
 	key := messageKey(clientID, msg.PacketID)
 
 	stored := &StoredMessage{
-		ID:       fmt.Sprintf("msg:%s:%d", clientID, msg.PacketID),
+		ID:       fmt.Sprintf("msg:%s:%s", clientID, msg.PacketID.Hex()),
 		ClientID: clientID,
 		PacketID: msg.PacketID,
 
@@ -338,7 +283,7 @@ func (ms *messageStore) countMessages(clientID string) (int, error) {
 }
 
 // delete 删除消息 (客户端 ACK 后调用)
-func (ms *messageStore) delete(clientID string, packetID uint16) error {
+func (ms *messageStore) delete(clientID string, packetID nson.Id) error {
 	return ms.db.Update(func(txn *badger.Txn) error {
 		key := []byte(messageKey(clientID, packetID))
 		return txn.Delete(key)
@@ -400,7 +345,7 @@ func (ms *messageStore) deleteAllForClient(clientID string) error {
 // getPendingMessagesBatch 获取客户端待投递消息（限制数量）
 // limit: 最大获取数量
 // excludeIDs: 需要排除的消息 ID（已在 pendingAck 中）
-func (ms *messageStore) getPendingMessagesBatch(clientID string, limit int, excludeIDs map[uint16]bool) ([]StoredMessage, error) {
+func (ms *messageStore) getPendingMessagesBatch(clientID string, limit int, excludeIDs map[nson.Id]bool) ([]StoredMessage, error) {
 	var messages []StoredMessage
 
 	err := ms.db.View(func(txn *badger.Txn) error {
@@ -504,7 +449,7 @@ func (ms *messageStore) saveRetainMessage(topic string, msg *Message) error {
 	stored := &StoredMessage{
 		ID:       topic,
 		ClientID: "",
-		PacketID: 0,
+		PacketID: nson.Id{},
 
 		Message: msg,
 	}

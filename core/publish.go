@@ -84,7 +84,7 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 			if err := c.writePacket(puback); err != nil {
 				c.core.logger.Warn("Failed to send PUBACK",
 					zap.String("clientID", c.ID),
-					zap.Uint16("packetID", msg.PacketID),
+					zap.String("packetID", msg.PacketID.Hex()),
 					zap.Error(err))
 
 				return err
@@ -98,7 +98,7 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 			if err := c.writePacket(puback); err != nil {
 				c.core.logger.Warn("Failed to send PUBACK after publish failure",
 					zap.String("clientID", c.ID),
-					zap.Uint16("packetID", msg.PacketID),
+					zap.String("packetID", msg.PacketID.Hex()),
 					zap.Error(err))
 
 				return err
@@ -126,7 +126,7 @@ func (c *Client) handlePuback(p *packet.PubackPacket) error {
 	if ok {
 		c.core.logger.Debug("Message acknowledged",
 			zap.String("clientID", c.ID),
-			zap.Uint16("packetID", p.PacketID),
+			zap.String("packetID", p.PacketID.Hex()),
 			zap.String("topic", pending.msg.Packet.Topic),
 			zap.Uint8("reasonCode", uint8(p.ReasonCode)))
 

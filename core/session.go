@@ -4,8 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
-	"go.uber.org/zap"
 )
 
 // session 表示客户端的会话状态
@@ -28,11 +28,8 @@ type session struct {
 	subscriptions map[string]packet.SubscribeOptions
 	subsMu        sync.RWMutex
 
-	// PacketID 管理（会话级别，跨连接持久化）
-	nextPacketID atomic.Uint32
-
 	// QoS 状态 (只需要 QoS 0/1)
-	pendingAck   map[uint16]pendingMessage // QoS 1: 等待客户端 ACK 的消息
+	pendingAck   map[nson.Id]pendingMessage // QoS 1: 等待客户端 ACK 的消息
 	pendingAckMu sync.Mutex
 
 	// 重传标志
@@ -47,7 +44,7 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 		id:            clientID,
 		keep:          connect.KeepSession,
 		subscriptions: make(map[string]packet.SubscribeOptions),
-		pendingAck:    make(map[uint16]pendingMessage),
+		pendingAck:    make(map[nson.Id]pendingMessage),
 		core:          core,
 	}
 
@@ -83,35 +80,10 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 		s.timeout = 0
 	}
 
-	// 初始化 PacketID 种子
-	seed := uint32(minPacketID)
-	if core != nil && core.messageStore != nil {
-		if s, err := core.messageStore.packetIDSeed(clientID); err == nil {
-			seed = uint32(s)
-		}
-	}
-	s.nextPacketID.Store(seed)
-
 	return s
 }
 
-// allocatePacketID 分配新的 PacketID
-func (s *session) allocatePacketID() uint16 {
-	id := s.nextPacketID.Add(1)
-	if id == 0 || id > maxPacketID {
-		s.nextPacketID.Store(minPacketID)
-		id = minPacketID
-	}
-
-	pid := uint16(id)
-
-	if s.core.messageStore != nil {
-		if err := s.core.messageStore.setPacketIDSeed(s.id, pid); err != nil {
-			s.core.logger.Error("Failed to set PacketID seed",
-				zap.String("clientID", s.id),
-				zap.Error(err))
-		}
-	}
-
-	return pid
+// allocatePacketID 分配新的 PacketID（使用 nson.Id 以保证全局唯一性和有序性）
+func (s *session) allocatePacketID() nson.Id {
+	return nson.NewId()
 }

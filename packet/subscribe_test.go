@@ -3,6 +3,8 @@ package packet
 import (
 	"bytes"
 	"testing"
+
+	"github.com/danclive/nson-go"
 )
 
 func TestSubscribeOptionsEncoding(t *testing.T) {
@@ -24,19 +26,19 @@ func TestSubscribeOptionsEncoding(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-sub := NewSubscribePacket(1)
-sub.Subscriptions = append(sub.Subscriptions, Subscription{
-Topic: "test/topic",
-Options: SubscribeOptions{
-QoS:               tt.qos,
-NoLocal:           tt.noLocal,
-RetainAsPublished: tt.retainAsPublished,
-RetainHandling:    tt.retainHandling,
-},
-})
+			sub := NewSubscribePacket(nson.NewId())
+			sub.Subscriptions = append(sub.Subscriptions, Subscription{
+				Topic: "test/topic",
+				Options: SubscribeOptions{
+					QoS:               tt.qos,
+					NoLocal:           tt.noLocal,
+					RetainAsPublished: tt.retainAsPublished,
+					RetainHandling:    tt.retainHandling,
+				},
+			})
 
-var buf bytes.Buffer
-if err := sub.Encode(&buf); err != nil {
+			var buf bytes.Buffer
+			if err := sub.Encode(&buf); err != nil {
 				t.Fatalf("Encode failed: %v", err)
 			}
 

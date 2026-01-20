@@ -16,10 +16,6 @@ const (
 	keepAliveMultiplier     = 1.5 // KeepAlive * 1.5 作为读取超时
 	defaultKeepAliveTimeout = 60 * time.Second
 
-	// PacketID 相关
-	minPacketID = 1
-	maxPacketID = 65535
-
 	// 重传相关
 	overflowBatchSize = 100 // 从持久化加载的每批最大条数
 )

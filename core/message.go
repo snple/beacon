@@ -3,6 +3,7 @@ package core
 import (
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 )
 
@@ -21,7 +22,7 @@ type Message struct {
 	Retain bool       `nson:"ret"` // 保留标志
 
 	// 发送相关
-	PacketID uint16 `nson:"pid"` // 分配的包 ID（仅 QoS 1 有效）
+	PacketID nson.Id `nson:"pid"` // 分配的包 ID（仅 QoS 1 有效）
 
 	// 时间相关（非协议字段，仅用于调试/观察）
 	Timestamp int64 `nson:"ts"`

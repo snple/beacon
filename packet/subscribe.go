@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"io"
 	"strings"
+
+	"github.com/danclive/nson-go"
 )
 
 // SubscribeOptions 订阅选项
@@ -131,13 +133,13 @@ func MatchTopic(filter, topic string) bool {
 
 // SubscribePacket SUBSCRIBE 数据包
 type SubscribePacket struct {
-	PacketID      uint16
+	PacketID      nson.Id
 	Properties    *ReasonProperties
 	Subscriptions []Subscription
 }
 
 // NewSubscribePacket 创建新的 SUBSCRIBE 包
-func NewSubscribePacket(packetID uint16) *SubscribePacket {
+func NewSubscribePacket(packetID nson.Id) *SubscribePacket {
 	return &SubscribePacket{
 		PacketID:   packetID,
 		Properties: NewReasonProperties(),
@@ -162,7 +164,7 @@ func (p *SubscribePacket) Encode(w io.Writer) error {
 	var buf bytes.Buffer
 
 	// 包标识符
-	if err := EncodeUint16(&buf, p.PacketID); err != nil {
+	if err := EncodeId(&buf, p.PacketID); err != nil {
 		return err
 	}
 
@@ -208,7 +210,7 @@ func (p *SubscribePacket) Encode(w io.Writer) error {
 func (p *SubscribePacket) Decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeUint16(r)
+	p.PacketID, err = DecodeId(r)
 	if err != nil {
 		return err
 	}
@@ -250,13 +252,13 @@ func (p *SubscribePacket) Decode(r io.Reader, header FixedHeader) error {
 
 // SubackPacket SUBACK 数据包
 type SubackPacket struct {
-	PacketID    uint16
+	PacketID    nson.Id
 	Properties  *ReasonProperties
 	ReasonCodes []ReasonCode
 }
 
 // NewSubackPacket 创建新的 SUBACK 包
-func NewSubackPacket(packetID uint16) *SubackPacket {
+func NewSubackPacket(packetID nson.Id) *SubackPacket {
 	return &SubackPacket{
 		PacketID:   packetID,
 		Properties: NewReasonProperties(),
@@ -271,7 +273,7 @@ func (p *SubackPacket) Encode(w io.Writer) error {
 	var buf bytes.Buffer
 
 	// 包标识符
-	if err := EncodeUint16(&buf, p.PacketID); err != nil {
+	if err := EncodeId(&buf, p.PacketID); err != nil {
 		return err
 	}
 
@@ -304,7 +306,7 @@ func (p *SubackPacket) Encode(w io.Writer) error {
 func (p *SubackPacket) Decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeUint16(r)
+	p.PacketID, err = DecodeId(r)
 	if err != nil {
 		return err
 	}
@@ -331,13 +333,13 @@ func (p *SubackPacket) Decode(r io.Reader, header FixedHeader) error {
 
 // UnsubscribePacket UNSUBSCRIBE 数据包
 type UnsubscribePacket struct {
-	PacketID   uint16
+	PacketID   nson.Id
 	Properties *ReasonProperties
 	Topics     []string
 }
 
 // NewUnsubscribePacket 创建新的 UNSUBSCRIBE 包
-func NewUnsubscribePacket(packetID uint16) *UnsubscribePacket {
+func NewUnsubscribePacket(packetID nson.Id) *UnsubscribePacket {
 	return &UnsubscribePacket{
 		PacketID:   packetID,
 		Properties: NewReasonProperties(),
@@ -352,7 +354,7 @@ func (p *UnsubscribePacket) Encode(w io.Writer) error {
 	var buf bytes.Buffer
 
 	// 包标识符
-	if err := EncodeUint16(&buf, p.PacketID); err != nil {
+	if err := EncodeId(&buf, p.PacketID); err != nil {
 		return err
 	}
 
@@ -387,7 +389,7 @@ func (p *UnsubscribePacket) Encode(w io.Writer) error {
 func (p *UnsubscribePacket) Decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeUint16(r)
+	p.PacketID, err = DecodeId(r)
 	if err != nil {
 		return err
 	}
@@ -414,13 +416,13 @@ func (p *UnsubscribePacket) Decode(r io.Reader, header FixedHeader) error {
 
 // UnsubackPacket UNSUBACK 数据包
 type UnsubackPacket struct {
-	PacketID    uint16
+	PacketID    nson.Id
 	Properties  *ReasonProperties
 	ReasonCodes []ReasonCode
 }
 
 // NewUnsubackPacket 创建新的 UNSUBACK 包
-func NewUnsubackPacket(packetID uint16) *UnsubackPacket {
+func NewUnsubackPacket(packetID nson.Id) *UnsubackPacket {
 	return &UnsubackPacket{
 		PacketID:   packetID,
 		Properties: NewReasonProperties(),
@@ -435,7 +437,7 @@ func (p *UnsubackPacket) Encode(w io.Writer) error {
 	var buf bytes.Buffer
 
 	// 包标识符
-	if err := EncodeUint16(&buf, p.PacketID); err != nil {
+	if err := EncodeId(&buf, p.PacketID); err != nil {
 		return err
 	}
 
@@ -468,7 +470,7 @@ func (p *UnsubackPacket) Encode(w io.Writer) error {
 func (p *UnsubackPacket) Decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeUint16(r)
+	p.PacketID, err = DecodeId(r)
 	if err != nil {
 		return err
 	}

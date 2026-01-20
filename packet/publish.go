@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	"github.com/danclive/nson-go"
 )
 
 // PublishPacket PUBLISH 数据包
@@ -17,7 +19,7 @@ type PublishPacket struct {
 	Topic string `nson:"topic"`
 
 	// 包标识符 (QoS > 0 时存在)
-	PacketID uint16 `nson:"pid"`
+	PacketID nson.Id `nson:"pid"`
 
 	// 属性
 	Properties *PublishProperties `nson:"props"`
@@ -82,7 +84,7 @@ func (p *PublishPacket) Encode(w io.Writer) error {
 
 	// 包标识符 (QoS > 0)
 	if p.QoS > 0 {
-		if err := EncodeUint16(&buf, p.PacketID); err != nil {
+		if err := EncodeId(&buf, p.PacketID); err != nil {
 			return err
 		}
 	}
@@ -133,7 +135,7 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) error {
 
 	// 包标识符 (QoS > 0)
 	if p.QoS > 0 {
-		p.PacketID, err = DecodeUint16(r)
+		p.PacketID, err = DecodeId(r)
 		if err != nil {
 			return err
 		}
@@ -165,19 +167,19 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) error {
 }
 
 func (p *PublishPacket) String() string {
-	return fmt.Sprintf("PUBLISH Topic=%s PacketID=%d QoS=%d Retain=%t Dup=%t Properties=%v PayloadLen=%d",
-		p.Topic, p.PacketID, p.QoS, p.Retain, p.Dup, p.Properties, len(p.Payload))
+	return fmt.Sprintf("PUBLISH Topic=%s PacketID=%s QoS=%d Retain=%t Dup=%t Properties=%v PayloadLen=%d",
+		p.Topic, p.PacketID.Hex(), p.QoS, p.Retain, p.Dup, p.Properties, len(p.Payload))
 }
 
 // PubackPacket PUBACK 数据包
 type PubackPacket struct {
-	PacketID   uint16
+	PacketID   nson.Id
 	ReasonCode ReasonCode
 	Properties *ReasonProperties
 }
 
 // NewPubackPacket 创建新的 PUBACK 包
-func NewPubackPacket(packetID uint16, code ReasonCode) *PubackPacket {
+func NewPubackPacket(packetID nson.Id, code ReasonCode) *PubackPacket {
 	return &PubackPacket{
 		PacketID:   packetID,
 		ReasonCode: code,
@@ -193,7 +195,7 @@ func (p *PubackPacket) Encode(w io.Writer) error {
 	var buf bytes.Buffer
 
 	// 包标识符
-	if err := EncodeUint16(&buf, p.PacketID); err != nil {
+	if err := EncodeId(&buf, p.PacketID); err != nil {
 		return err
 	}
 
@@ -226,7 +228,7 @@ func (p *PubackPacket) Encode(w io.Writer) error {
 func (p *PubackPacket) Decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeUint16(r)
+	p.PacketID, err = DecodeId(r)
 	if err != nil {
 		return err
 	}
@@ -254,6 +256,6 @@ func (p *PubackPacket) Decode(r io.Reader, header FixedHeader) error {
 }
 
 func (p *PubackPacket) String() string {
-	return fmt.Sprintf("PUBACK PacketID=%d ReasonCode=%d Properties=%v",
-		p.PacketID, p.ReasonCode, p.Properties)
+	return fmt.Sprintf("PUBACK PacketID=%s ReasonCode=%d Properties=%v",
+		p.PacketID.Hex(), p.ReasonCode, p.Properties)
 }

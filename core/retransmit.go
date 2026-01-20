@@ -3,6 +3,7 @@ package core
 import (
 	"time"
 
+	"github.com/danclive/nson-go"
 	"go.uber.org/zap"
 )
 
@@ -98,7 +99,7 @@ func (c *Client) loadPersistedMessages() int {
 
 	// 构建排除列表（已在 pendingAck 中的消息）
 	c.session.pendingAckMu.Lock()
-	excludePacketIDs := make(map[uint16]bool, len(c.session.pendingAck))
+	excludePacketIDs := make(map[nson.Id]bool, len(c.session.pendingAck))
 	for packetID := range c.session.pendingAck {
 		excludePacketIDs[packetID] = true
 	}
@@ -118,11 +119,11 @@ func (c *Client) loadPersistedMessages() int {
 		// 检查消息是否过期
 		if stored.Message.IsExpired() {
 			// 删除过期消息
-			c.core.messageStore.delete(c.ID, stored.PacketID)
+			c.core.messageStore.delete(c.ID, stored.Message.PacketID)
 
 			c.core.logger.Debug("Expired message deleted from store",
 				zap.String("clientID", c.ID),
-				zap.Uint16("packetID", stored.PacketID),
+				zap.String("packetID", stored.Message.PacketID.Hex()),
 				zap.String("topic", stored.Message.Packet.Topic))
 
 			continue
@@ -165,7 +166,7 @@ func (c *Client) retransmitUnackedMessages() int {
 
 	// 收集需要重发的消息和过期消息
 	var toResend []*pendingMessage
-	var expiredPacketIDs []uint16
+	var expiredPacketIDs []nson.Id
 
 	c.session.pendingAckMu.Lock()
 	for packetID, pending := range c.session.pendingAck {
@@ -185,9 +186,8 @@ func (c *Client) retransmitUnackedMessages() int {
 
 	// 删除过期消息
 	for _, packetID := range expiredPacketIDs {
-		pending := c.session.pendingAck[packetID]
 		if c.core.messageStore != nil {
-			c.core.messageStore.delete(c.ID, pending.msg.PacketID)
+			c.core.messageStore.delete(c.ID, packetID)
 		}
 		delete(c.session.pendingAck, packetID)
 		c.core.stats.MessagesDropped.Add(1)

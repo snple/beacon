@@ -3,6 +3,8 @@ package core
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/danclive/nson-go"
 )
 
 // sendQueue 客户端发送队列（用于流量控制）
@@ -13,8 +15,8 @@ type sendQueue struct {
 	queue    chan *Message // 消息队列
 	used     atomic.Int32  // 当前使用量
 
-	inQueue map[uint16]bool // 已在队列中的消息 PacketID（QoS 1）
-	mu      sync.Mutex      // 保护 inQueue map
+	inQueue map[nson.Id]bool // 已在队列中的消息 PacketID（QoS 1）
+	mu      sync.Mutex       // 保护 inQueue map
 }
 
 // newSendQueue 创建发送队列
@@ -26,7 +28,7 @@ func newSendQueue(capacity int) *sendQueue {
 	return &sendQueue{
 		capacity: capacity,
 		queue:    make(chan *Message, capacity),
-		inQueue:  make(map[uint16]bool),
+		inQueue:  make(map[nson.Id]bool),
 	}
 }
 
@@ -35,7 +37,7 @@ func newSendQueue(capacity int) *sendQueue {
 // 对于 QoS 1 消息，通过 PacketID 去重，防止同一消息被重复加入队列
 func (q *sendQueue) tryEnqueue(msg *Message) bool {
 	// QoS 1 消息需要检查是否已在队列中
-	if msg.PacketID > 0 {
+	if !msg.PacketID.IsZero() {
 		q.mu.Lock()
 		if q.inQueue[msg.PacketID] {
 			// 消息已在队列中，拒绝重复添加
@@ -49,7 +51,7 @@ func (q *sendQueue) tryEnqueue(msg *Message) bool {
 	case q.queue <- msg:
 		q.used.Add(1)
 		// QoS 1 消息标记为已在队列中
-		if msg.PacketID > 0 {
+		if !msg.PacketID.IsZero() {
 			q.mu.Lock()
 			q.inQueue[msg.PacketID] = true
 			q.mu.Unlock()
@@ -71,7 +73,7 @@ func (q *sendQueue) tryDequeue() (*Message, bool) {
 
 		q.used.Add(-1)
 		// QoS 1 消息从 inQueue 中移除
-		if qm.PacketID > 0 {
+		if !qm.PacketID.IsZero() {
 			q.mu.Lock()
 			delete(q.inQueue, qm.PacketID)
 			q.mu.Unlock()

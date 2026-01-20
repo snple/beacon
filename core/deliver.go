@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 
 	"go.uber.org/zap"
@@ -213,7 +214,7 @@ func (c *Client) deliver(msg *Message) error {
 		c.core.logger.Debug("QoS1 message persisted",
 			zap.String("clientID", c.ID),
 			zap.String("topic", msg.Packet.Topic),
-			zap.Uint16("packetID", msg.PacketID))
+			zap.String("packetID", msg.PacketID.Hex()))
 	}
 
 	// 尝试放入发送队列
@@ -234,7 +235,7 @@ func (c *Client) deliver(msg *Message) error {
 		c.core.logger.Debug("QoS1 message queued for retransmit, client closed",
 			zap.String("clientID", c.ID),
 			zap.String("topic", msg.Packet.Topic),
-			zap.Uint16("packetID", msg.PacketID))
+			zap.String("packetID", msg.PacketID.Hex()))
 
 		return nil
 	}
@@ -260,7 +261,7 @@ func (c *Client) deliver(msg *Message) error {
 	c.core.logger.Debug("QoS1 message queued for retransmit (queue full)",
 		zap.String("clientID", c.ID),
 		zap.String("topic", msg.Packet.Topic),
-		zap.Uint16("packetID", msg.PacketID))
+		zap.String("packetID", msg.PacketID.Hex()))
 	return nil
 }
 
@@ -286,7 +287,7 @@ func (c *Client) sendMessage(msg *Message) error {
 	if msg.QoS > 0 {
 		pub.PacketID = msg.PacketID
 	} else {
-		pub.PacketID = 0
+		pub.PacketID = nson.Id{}
 	}
 
 	// 调用 OnDeliver 钩子，检查是否允许投递

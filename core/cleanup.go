@@ -150,7 +150,7 @@ func (c *Client) cleanupExpired() int {
 		if pending.msg.IsExpired() {
 			// 删除持久化
 			if c.core.messageStore != nil {
-				c.core.messageStore.delete(c.ID, pending.msg.Packet.PacketID)
+				c.core.messageStore.delete(c.ID, packetID)
 			}
 			delete(c.session.pendingAck, packetID)
 			expiredCount++

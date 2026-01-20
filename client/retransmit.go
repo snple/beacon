@@ -3,6 +3,7 @@ package client
 import (
 	"time"
 
+	"github.com/danclive/nson-go"
 	"go.uber.org/zap"
 )
 
@@ -38,7 +39,7 @@ func (c *Client) processRetransmit() {
 	conn := c.getConn()
 
 	// 构建排除列表（当前已在等待 ACK 的消息）
-	excludePacketIDs := make(map[uint16]bool)
+	excludePacketIDs := make(map[nson.Id]bool)
 	if conn != nil {
 		conn.pendingAckMu.Lock()
 		for packetID := range conn.pendingAck {
@@ -90,7 +91,7 @@ func (c *Client) processRetransmit() {
 			c.store.Delete(stored.PacketID)
 
 			c.logger.Debug("Expired message deleted from store",
-				zap.Uint16("packetID", stored.PacketID),
+				zap.String("packetID", stored.PacketID.Hex()),
 				zap.String("topic", stored.Message.Packet.Topic))
 
 			continue
