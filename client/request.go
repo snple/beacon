@@ -333,7 +333,7 @@ func (c *Client) Request(ctx context.Context, req *Request) (*Response, error) {
 		return nil, NewRequestTimeoutError(timeout)
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-c.rootCtx.Done():
+	case <-c.ctx.Done():
 		return nil, ErrClientClosed
 	}
 }

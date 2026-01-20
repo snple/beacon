@@ -77,7 +77,7 @@ func (c *Core) handleConn(conn net.Conn) {
 	}
 
 	// 注册客户端并发送 CONNACK
-	client, sessionPresent := c.newClient(clientID, conn, connect)
+	client, sessionPresent := c.registerClient(clientID, conn, connect)
 
 	// 构建 CONNACK 属性
 	connackProp := packet.NewConnackProperties()
@@ -204,7 +204,7 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 	return authCtx, true
 }
 
-// newClient 注册客户端，处理会话恢复和接管
+// registerClient 注册客户端，处理会话恢复和接管
 // 返回客户端和 sessionPresent 标志
 //
 // 核心思路：会话恢复时复用现有 Client 对象，只替换其 Conn
@@ -213,7 +213,7 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 // 1. 无旧客户端：创建新 Client
 // 2. 有旧客户端 + KeepSession=true：复用旧 Client，替换其 Conn
 // 3. 有旧客户端 + KeepSession=false：清理旧 Client，创建新 Client
-func (c *Core) newClient(clientID string, netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool) {
+func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool) {
 	c.clientsMu.Lock()
 	defer c.clientsMu.Unlock()
 

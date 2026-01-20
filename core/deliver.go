@@ -227,10 +227,7 @@ func (c *Client) deliver(msg *Message) error {
 	}
 
 	// 尝试放入发送队列
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-
+	conn := c.getConn()
 	if conn == nil || conn.closed.Load() {
 		// 客户端离线，但是已经放入了队列，等待重传机制处理
 		c.core.logger.Debug("Client offline, message queued for retransmit",
@@ -241,31 +238,33 @@ func (c *Client) deliver(msg *Message) error {
 		return nil
 	}
 
-	if err := conn.sendQueue.tryEnqueue(msg); err == nil {
-		// 成功入队，触发发送协程
-		conn.triggerSend()
-		return nil
-	}
+	if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+		// 失败：
+		// !!! 由于上面重新分配了 PacketID，这里不可能出现消息已在队列中的情况 !!!
 
-	// 失败：
-	// !!! 由于上面重新分配了 PacketID，这里不可能出现消息已在队列中的情况 !!!
+		// 队列已满
+		if msg.QoS == packet.QoS0 {
+			// QoS0: 虽然列队已满，但消息并没有直接丢弃，因为已经持久化到队列中，等待重传机制处理
+			c.core.logger.Debug("QoS0 message dropped (queue full)",
+				zap.String("clientID", c.ID),
+				zap.String("topic", msg.Packet.Topic),
+				zap.String("packetID", msg.PacketID.Hex()))
 
-	// 队列已满
-	if msg.QoS == packet.QoS0 {
-		// QoS0: 虽然列队已满，但消息并没有直接丢弃，因为已经持久化到队列中，等待重传机制处理
-		c.core.logger.Debug("QoS0 message dropped (queue full)",
+			return nil
+		}
+
+		// QoS1: 已持久化，等待重传机制处理
+		c.core.logger.Debug("QoS1 message queued for retransmit (queue full)",
 			zap.String("clientID", c.ID),
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("packetID", msg.PacketID.Hex()))
 
-		return nil
+		return err
 	}
 
-	// QoS1: 已持久化，等待重传机制处理
-	c.core.logger.Debug("QoS1 message queued for retransmit (queue full)",
-		zap.String("clientID", c.ID),
-		zap.String("topic", msg.Packet.Topic),
-		zap.String("packetID", msg.PacketID.Hex()))
+	// 成功入队，触发发送协程
+	conn.triggerSend()
+
 	return nil
 }
 

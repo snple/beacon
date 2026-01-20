@@ -343,9 +343,7 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 	pendingAck := len(client.session.pendingAck)
 	client.session.pendingAckMu.Unlock()
 
-	client.connMu.RLock()
-	conn := client.conn
-	client.connMu.RUnlock()
+	conn := client.getConn()
 
 	info := &ClientInfo{
 		ClientID:       client.ID,

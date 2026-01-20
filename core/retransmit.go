@@ -191,11 +191,13 @@ func (c *Client) retransmitQueuedMessages() int {
 		}
 
 		// 排除在 pendingAck 中的消息
+		// 队列是 FIFO 的，如果头部消息在 pendingAck 中（等待确认），
+		// 说明它已经被发送了，我们应该停止处理，而不是继续处理后面的消息
 		c.session.pendingAckMu.Lock()
 		_, exists := c.session.pendingAck[msg.PacketID]
 		c.session.pendingAckMu.Unlock()
 		if exists {
-			continue
+			break
 		}
 
 		// 转换为 Message
@@ -216,15 +218,6 @@ func (c *Client) retransmitQueuedMessages() int {
 		conn.triggerSend()
 
 		sent++
-
-		// 从持久化存储中删除（已成功加载到发送队列）
-		if err := c.queue.Delete(msg.PacketID); err != nil {
-			c.core.logger.Warn("Failed to delete queued message after loading",
-				zap.String("clientID", c.ID),
-				zap.String("packetID", msg.PacketID.Hex()),
-				zap.Error(err))
-		}
-
 	}
 
 	return sent

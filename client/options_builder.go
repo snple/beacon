@@ -35,7 +35,7 @@ type ClientOptions struct {
 	Will *WillMessage
 
 	// 消息持久化配置
-	StoreConfig *StoreConfig // 消息持久化存储配置，nil 表示不启用持久化
+	StoreOptions StoreOptions // 消息持久化存储配置，nil 表示不启用持久化
 
 	// 重传配置
 	RetransmitInterval time.Duration // QoS 1 消息重传间隔（默认 5 秒）
@@ -61,6 +61,7 @@ func NewClientOptions() *ClientOptions {
 		PublishTimeout:   defaultPublishTimeout,
 		RequestQueueSize: 100,
 		MessageQueueSize: 100,
+		StoreOptions:     DefaultStoreOptions(),
 	}
 }
 
@@ -202,18 +203,14 @@ func (o *ClientOptions) WithWillSimple(topic string, payload []byte, qos packet.
 }
 
 // WithStore 设置消息持久化存储配置
-func (o *ClientOptions) WithStore(cfg *StoreConfig) *ClientOptions {
-	o.StoreConfig = cfg
+func (o *ClientOptions) WithStore(cfg StoreOptions) *ClientOptions {
+	o.StoreOptions = cfg
 	return o
 }
 
 // WithStoreDataDir 便捷设置持久化存储目录
 func (o *ClientOptions) WithStoreDataDir(dataDir string) *ClientOptions {
-	if o.StoreConfig == nil {
-		cfg := DefaultStoreConfig()
-		o.StoreConfig = &cfg
-	}
-	o.StoreConfig.DataDir = dataDir
+	o.StoreOptions.DataDir = dataDir
 	return o
 }
 

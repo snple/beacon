@@ -59,8 +59,8 @@ type Conn struct {
 }
 
 // newConn 创建新的连接对象，从旧连接迁移状态
-func newConn(c *Client, oldConn *Conn, netConn net.Conn, clientID string, keepAlive uint16, sessionPresent bool, sendWindow uint16, keepSession bool) *Conn {
-	ctx, cancel := context.WithCancel(c.rootCtx)
+func newConn(c *Client, netConn net.Conn, clientID string, keepAlive uint16, sessionPresent bool, sendWindow uint16, keepSession bool) *Conn {
+	ctx, cancel := context.WithCancel(c.ctx)
 
 	conn := &Conn{
 		client:         c,
@@ -71,49 +71,17 @@ func newConn(c *Client, oldConn *Conn, netConn net.Conn, clientID string, keepAl
 		keepAlive:      keepAlive,
 		sessionPresent: sessionPresent,
 		sendWindow:     sendWindow,
+		sendQueue:      newSendQueue(int(sendWindow)),
 		pendingAck:     make(map[nson.Id]chan error),
 		ctx:            ctx,
 		cancel:         cancel,
 		logger:         c.logger,
 	}
 
-	// 从旧连接迁移或初始化状态
-	if oldConn != nil && keepSession {
-		sendQueue := newSendQueue(int(sendWindow))
-
-		// 迁移 sendQueue（尽力而为，包括 QoS 0 和 QoS 1 未发送的消息）
-		// 从旧队列中取出所有消息，放入新队列
-		migratedCount := 0
-		for {
-			msg, ok := oldConn.sendQueue.tryDequeue()
-			if !ok {
-				break // 队列已空
-			}
-			// 尝试放入新队列，如果新队列满了则停止迁移
-			if sendQueue.tryEnqueue(msg) {
-				migratedCount++
-			} else {
-				// 新队列已满，剩余消息丢弃
-				// QoS 1 的消息会在持久化存储中，后续会被重传机制处理
-				c.logger.Debug("New sendQueue full during migration, remaining messages not migrated",
-					zap.Int("migrated", migratedCount))
-				break
-			}
-		}
-
-		conn.sendQueue = sendQueue
-
-		c.logger.Debug("Migrated sendQueue from old connection",
-			zap.Int("migrated", migratedCount))
-	} else {
-		// 初始化新的发送队列
-		conn.sendQueue = newSendQueue(int(sendWindow))
-
-		// 清空持久化存储
-		if !keepSession && c.store != nil {
-			if err := c.store.clear(); err != nil {
-				c.logger.Warn("Failed to clear persisted messages for clean session", zap.Error(err))
-			}
+	// 清空持久化队列（clean session）
+	if !keepSession {
+		if err := c.queue.Clear(); err != nil {
+			c.logger.Warn("Failed to clear queue for clean session", zap.Error(err))
 		}
 	}
 
@@ -257,13 +225,11 @@ func (conn *Conn) handlePuback(p *packet.PubackPacket) {
 		err = NewPublishWarningError(p.ReasonCode.String())
 	}
 
-	// 从持久化删除
-	if conn.client.store != nil {
-		if delErr := conn.client.store.Delete(p.PacketID); delErr != nil {
-			conn.logger.Warn("Failed to delete persisted message after ACK",
-				zap.String("packetID", p.PacketID.Hex()),
-				zap.Error(delErr))
-		}
+	// 从持久化队列删除（无论成功失败）
+	if delErr := conn.client.queue.Delete(p.PacketID); delErr != nil {
+		conn.logger.Warn("Failed to delete message from queue after ACK",
+			zap.String("packetID", p.PacketID.Hex()),
+			zap.Error(delErr))
 	}
 
 	conn.handleAck(p.PacketID, err)

@@ -27,6 +27,7 @@ type Client struct {
 	// 客户端标识
 	ID string
 
+	// 消息队列
 	queue *Queue
 
 	// 会话层（跨连接持久化的状态）
@@ -90,11 +91,15 @@ func (c *Client) attachConn(netConn net.Conn, connect *packet.ConnectPacket) {
 	c.connMu.Unlock()
 }
 
+func (c *Client) getConn() *conn {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
+	return c.conn
+}
+
 // serve 开始处理客户端消息（委托给 Conn）
 func (c *Client) serve() {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn != nil {
 		conn.serve()
@@ -103,9 +108,7 @@ func (c *Client) serve() {
 
 // writePacket 发送数据包（委托给 Conn）
 func (c *Client) writePacket(pkt packet.Packet) error {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn == nil || conn.closed.Load() {
 		return errors.New("client not connected")
@@ -116,9 +119,7 @@ func (c *Client) writePacket(pkt packet.Packet) error {
 
 // Close 关闭客户端连接
 func (c *Client) Close(reason packet.ReasonCode) {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn != nil {
 		conn.close(reason)
@@ -130,9 +131,7 @@ func (c *Client) Close(reason packet.ReasonCode) {
 func (c *Client) closeAndSkipHandle(reason packet.ReasonCode) {
 	c.skipHandle.Store(true)
 
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn != nil {
 		conn.close(reason)
@@ -141,9 +140,7 @@ func (c *Client) closeAndSkipHandle(reason packet.ReasonCode) {
 
 // IsClosed 检查客户端是否已关闭
 func (c *Client) Closed() bool {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn == nil {
 		return true
@@ -173,9 +170,7 @@ func (c *Client) SetWillPacket(will *packet.PublishPacket) {
 
 // KeepAlive 返回心跳间隔
 func (c *Client) KeepAlive() uint16 {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn != nil {
 		return conn.keepAlive
@@ -185,9 +180,7 @@ func (c *Client) KeepAlive() uint16 {
 
 // TraceID 返回跟踪 ID
 func (c *Client) TraceID() string {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn != nil {
 		return conn.traceID
@@ -197,9 +190,7 @@ func (c *Client) TraceID() string {
 
 // ConnectedAt 返回连接建立时间
 func (c *Client) ConnectedAt() time.Time {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn != nil {
 		return conn.connectedAt
@@ -209,9 +200,7 @@ func (c *Client) ConnectedAt() time.Time {
 
 // DisconnectPacket 返回断开连接包
 func (c *Client) DisconnectPacket() *packet.DisconnectPacket {
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
+	conn := c.getConn()
 
 	if conn != nil {
 		return conn.disconnectPacket

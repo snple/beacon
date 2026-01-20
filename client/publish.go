@@ -74,53 +74,44 @@ func (c *Client) PublishToClient(targetClientID, topic string, payload []byte, o
 
 // publishMessage 内部发布消息方法
 //
-// 流程：
-// 1. QoS=1: 分配 PacketID 并持久化（离线也可以）
-// 2. 获取连接，如果没有连接：
-//   - QoS=0: 返回错误（无法缓存）
-//   - QoS=1: 返回成功（已持久化，等待重传）
+// 新流程（参考 core）：
+// 1. 分配 PacketID（QoS 0 和 QoS 1 都分配，用于队列索引）
+// 2. 放入持久化队列 (queue)
+// 3. 如果客户端在线，尝试放入发送队列 (sendQueue)
+//   - 成功：触发发送
+//   - 失败（队列满）：等待重传机制处理
 //
-// 3. 尝试入队，如果队列满：
-//   - QoS=0: 返回错误
-//   - QoS=1: 返回成功（已持久化，等待重传）
-//
-// 4. 入队成功：触发发送
-// 5. QoS=1: 等待 ACK（仅首次发布，重传不等待）
+// 4. QoS=1: 等待 ACK（仅首次发布）
 func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
-	// QoS 1: 分配 PacketID 并持久化
-	if msg.Packet.QoS == packet.QoS1 {
-		c.logger.Debug("Publishing QoS1 message",
+	// 1. 分配 PacketID（无论 QoS 0 还是 QoS 1）
+	msg.Packet.PacketID = c.allocatePacketID()
+
+	c.logger.Debug("Publishing message",
+		zap.String("topic", msg.Packet.Topic),
+		zap.Uint8("qos", uint8(msg.Packet.QoS)),
+		zap.String("packetID", msg.Packet.PacketID.Hex()),
+		zap.String("traceID", msg.Packet.Properties.TraceID))
+
+	// 2. 放入持久化队列（QoS0 和 QoS1 都持久化以提高到达率）
+	if err := c.queue.Enqueue(&msg); err != nil {
+		c.logger.Error("Failed to enqueue message to persistent queue",
 			zap.String("topic", msg.Packet.Topic),
-			zap.String("traceID", msg.Packet.Properties.TraceID))
-
-		// 分配 PacketID（使用 Client 级别的生成器，支持离线）
-		msg.Packet.PacketID = c.allocatePacketID()
-		if msg.Packet.PacketID.IsZero() {
-			return ErrNotConnected // PacketID 分配失败
-		}
-
-		// 持久化到存储（确保不丢失）
-		if c.store != nil {
-			if err := c.store.save(&msg); err != nil {
-				c.logger.Error("Failed to persist QoS1 message",
-					zap.String("topic", msg.Packet.Topic),
-					zap.String("packetID", msg.Packet.PacketID.Hex()),
-					zap.Error(err))
-				return err
-			}
-		}
+			zap.String("packetID", msg.Packet.PacketID.Hex()),
+			zap.Error(err))
+		return err
 	}
 
-	// 获取当前连接
+	// 3. 获取当前连接
 	conn := c.getConn()
 
 	// 如果没有连接
-	if conn == nil {
+	if conn == nil || conn.IsClosed() {
 		if msg.Packet.QoS == packet.QoS0 {
-			// QoS0: 无法缓存，直接失败
-			c.logger.Warn("Not connected, QoS0 message dropped",
-				zap.String("topic", msg.Packet.Topic))
-			return ErrNotConnected
+			// QoS0: 已持久化到队列，等待连接后发送（提高到达率）
+			c.logger.Debug("Not connected, QoS0 message queued",
+				zap.String("topic", msg.Packet.Topic),
+				zap.String("packetID", msg.Packet.PacketID.Hex()))
+			return nil
 		}
 		// QoS1: 已持久化，等待重连后由重传机制处理
 		c.logger.Debug("Not connected, QoS1 message queued for retransmit",
@@ -129,26 +120,31 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		return nil
 	}
 
-	// 尝试放入发送队列
-	if !conn.sendQueue.tryEnqueue(&msg) {
+	// 4. 尝试放入发送队列
+	if err := conn.sendQueue.tryEnqueue(&msg); err != nil {
+		// 失败：
+		// !!! 由于上面重新分配了 PacketID，这里不可能出现消息已在队列中的情况 !!!
+
 		// 队列已满
 		if msg.Packet.QoS == packet.QoS0 {
-			// QoS0: 丢弃
-			c.logger.Warn("Send queue full, QoS0 message dropped",
-				zap.String("topic", msg.Packet.Topic))
-			return ErrSendQueueFull
+			// QoS0: 虽然列队已满，但消息并没有直接丢弃，因为已经持久化到队列中，等待重传机制处理
+			c.logger.Debug("Send queue full, QoS0 message queued for retransmit",
+				zap.String("topic", msg.Packet.Topic),
+				zap.String("packetID", msg.Packet.PacketID.Hex()))
+			return nil
 		}
 		// QoS1: 已持久化，等待重传机制处理
 		c.logger.Debug("Send queue full, QoS1 message queued for retransmit",
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("packetID", msg.Packet.PacketID.Hex()))
-		return nil
+
+		return err
 	}
 
-	// 消息已入队，触发发送
+	// 5. 消息已入队，触发发送
 	c.triggerSend()
 
-	// QoS1: 等待 ACK（仅对首次发布的消息）
+	// 6. QoS1: 等待 ACK（仅对首次发布的消息）
 	if msg.Packet.QoS == packet.QoS1 {
 		return c.waitForPublishAck(conn, msg.Packet.PacketID, timeout)
 	}
@@ -192,9 +188,9 @@ func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, timeout time.Du
 		c.logger.Debug("Connection lost while waiting for ACK, message will be retransmitted",
 			zap.String("packetID", packetID.Hex()))
 		return ErrNotConnected
-	case <-c.rootCtx.Done():
+	case <-c.ctx.Done():
 		// 客户端关闭
-		return ErrNotConnected
+		return ErrClientClosed
 	}
 }
 
@@ -238,6 +234,11 @@ func (c *Client) processSendQueue() {
 			c.logger.Debug("Message expired, dropping",
 				zap.String("topic", msg.Packet.Topic),
 				zap.String("packetID", msg.Packet.PacketID.Hex()))
+
+			// 从持久化队列删除
+			if c.queue != nil {
+				c.queue.Delete(msg.Packet.PacketID)
+			}
 			continue
 		}
 
@@ -247,7 +248,19 @@ func (c *Client) processSendQueue() {
 				zap.Error(err),
 				zap.String("topic", msg.Packet.Topic),
 				zap.String("packetID", msg.Packet.PacketID.Hex()))
-			// 发送失败，消息已出队，QoS1 消息会在持久化存储中，重传机制会处理
+			// 发送失败，消息已出队
+			// QoS1 消息仍在持久化队列中，重传机制会处理
+			// QoS0 消息应从持久化队列删除（已尽力发送）
+			if msg.Packet.QoS == packet.QoS0 && c.queue != nil {
+				c.queue.Delete(msg.Packet.PacketID)
+			}
+		} else {
+			// 发送成功
+			// QoS0: 从持久化队列删除（TCP 写成功即可）
+			if msg.Packet.QoS == packet.QoS0 && c.queue != nil {
+				c.queue.Delete(msg.Packet.PacketID)
+			}
+			// QoS1: 等待 PUBACK，在 handlePuback 中删除
 		}
 	}
 }

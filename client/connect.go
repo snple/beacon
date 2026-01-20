@@ -72,7 +72,7 @@ func (c *Client) Connect() error {
 	sessionPresent := connack.SessionPresent
 
 	// 创建新的 Connection 对象（从旧连接迁移状态）
-	conn := newConn(c, oldConn, netConn, clientID, keepAlive, sessionPresent, sendWindow, c.options.KeepSession)
+	conn := newConn(c, netConn, clientID, keepAlive, sessionPresent, sendWindow, c.options.KeepSession)
 
 	// 设置为当前连接
 	c.connMu.Lock()
@@ -86,10 +86,13 @@ func (c *Client) Connect() error {
 	conn.start()
 
 	// 启动重传协程（仅第一次连接时启动）
-	if c.store != nil {
+	if c.queue != nil {
 		// 检查重传协程是否已在运行
 		if c.retransmitting.CompareAndSwap(false, true) {
 			go c.retransmitLoop()
+		} else {
+			// 已有重传协程在运行，手动触发一次重传
+			c.TriggerRetransmit()
 		}
 	}
 
@@ -112,7 +115,7 @@ func (c *Client) dialTCP() (net.Conn, error) {
 		useTLS = true
 	}
 
-	ctx, cancel := context.WithTimeout(c.rootCtx, c.options.ConnectTimeout)
+	ctx, cancel := context.WithTimeout(c.ctx, c.options.ConnectTimeout)
 	defer cancel()
 
 	var conn net.Conn

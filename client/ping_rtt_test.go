@@ -26,8 +26,8 @@ func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
 func TestConnection_PongSeqUpdatesRTT(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	client := &Client{
-		rootCtx: context.Background(),
-		logger:  logger,
+		ctx:    context.Background(),
+		logger: logger,
 	}
 
 	conn := &Conn{

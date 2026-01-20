@@ -21,7 +21,7 @@ func (c *Client) reconnectLoop() {
 
 	for {
 		select {
-		case <-c.rootCtx.Done():
+		case <-c.ctx.Done():
 			return
 		case <-c.connLostCh:
 			// Drain any extra signals to collapse bursts.
@@ -75,7 +75,7 @@ func (c *Client) reconnectLoop() {
 					break
 				}
 				select {
-				case <-c.rootCtx.Done():
+				case <-c.ctx.Done():
 					c.reconnecting.Store(false)
 					return
 				case <-time.After(currentDelay):

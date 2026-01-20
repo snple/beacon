@@ -484,8 +484,7 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 			WithClientID("test-client").
 			WithKeepSession(true).
 			WithKeepAlive(60).
-			WithStore(&client.StoreConfig{
-				Enabled:    true,
+			WithStore(client.StoreOptions{
 				DataDir:    storeDir,
 				SyncWrites: false,
 			}),
@@ -508,13 +507,6 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 	// 等待消息发送和ACK
 	time.Sleep(200 * time.Millisecond)
 
-	// 消息应该已从持久化中删除（已ACK）
-	count, err := c.CleanupExpired()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// CleanupExpired只清理过期消息，已ACK的消息应该已经删除
-	t.Logf("Cleaned up %d expired messages", count)
 }
 
 // TestClientSessionExpiry 测试客户端会话过期

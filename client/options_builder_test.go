@@ -350,11 +350,11 @@ func TestPublishWithOptionsNotConnected(t *testing.T) {
 
 	client.connected.Store(false)
 
-	// QoS0: 离线时应该失败（无持久化）
+	// QoS0: 离线时允许发布，消息会被持久化到队列等待连接后发送（提高到达率）
 	opts := NewPublishOptions().WithQoS(packet.QoS0)
 	err = client.Publish("topic", []byte("payload"), opts)
-	if err == nil {
-		t.Error("expected error for QoS0 when not connected")
+	if err != nil {
+		t.Errorf("QoS0 should succeed when not connected (queued for later delivery), got %v", err)
 	}
 
 	// QoS1: 离线时应该成功（消息会被持久化并在重连后重传）

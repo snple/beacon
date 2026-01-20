@@ -103,14 +103,18 @@ type Client struct {
 	reconnectWG   sync.WaitGroup
 	connLostCh    chan error
 
-	// QoS1 消息持久化
-	store          *messageStore
+	// 消息持久化存储
+	store *store
+
+	// 消息队列（持久化）
+	queue *Queue
+
 	retransmitting atomic.Bool
 
 	// 生命周期
-	rootCtx    context.Context
-	rootCancel context.CancelFunc
-	closeOnce  sync.Once
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closeOnce sync.Once
 
 	logger *zap.Logger
 }
@@ -131,7 +135,7 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	}
 	opts.applyDefaults()
 
-	rootCtx, rootCancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 
 	// 使用用户提供的 logger，或创建默认 logger
 	logger := opts.Logger
@@ -143,8 +147,8 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 		options:           opts,
 		subscribedTopics:  make(map[string]bool),
 		registeredActions: make(map[string]bool),
-		rootCtx:           rootCtx,
-		rootCancel:        rootCancel,
+		ctx:               ctx,
+		cancel:            cancel,
 		connLostCh:        make(chan error, 1),
 		logger:            logger,
 		messageQueue:      make(chan *Message, opts.MessageQueueSize),
@@ -153,18 +157,22 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	}
 
 	// 初始化消息存储
-	if opts.StoreConfig != nil && opts.StoreConfig.Enabled {
-		if opts.StoreConfig.Logger == nil {
-			opts.StoreConfig.Logger = logger
-		}
-		store, err := newMessageStore(*opts.StoreConfig)
-		if err != nil {
-			logger.Error("Failed to initialize message store", zap.Error(err))
-			return nil, err
-		}
 
-		c.store = store
+	if opts.StoreOptions.Logger == nil {
+		opts.StoreOptions.Logger = logger
 	}
+	store, err := newStore(opts.StoreOptions)
+	if err != nil {
+		logger.Error("Failed to initialize message store", zap.Error(err))
+		return nil, err
+	}
+
+	c.store = store
+
+	// 初始化消息队列（基于 store.db）
+	c.queue = NewQueue(store.db, "queue:")
+
+	logger.Info("Message queue initialized")
 
 	// 启动统一的重连循环（内部会检查 autoReconnect 开关）
 	go c.reconnectLoop()
@@ -243,9 +251,7 @@ func (c *Client) Close() error {
 
 	err := c.Disconnect()
 	// 关闭整个客户端生命周期
-	if c.rootCancel != nil {
-		c.rootCancel()
-	}
+	c.cancel()
 
 	// 关闭消息存储
 	if c.store != nil {
@@ -304,16 +310,6 @@ func (c *Client) GetLogger() *zap.Logger {
 // 注意：这是一个测试辅助方法，生产环境请使用 Disconnect() 或 Close()
 func (c *Client) ForceClose() error {
 	return c.close(nil)
-}
-
-// CleanupExpired 清理已过期的持久化消息
-// 消息重发时会自动清理过期消息，一般不需要手动调用此方法
-func (c *Client) CleanupExpired() (int, error) {
-	if c.store == nil {
-		return 0, nil
-	}
-
-	return c.store.cleanupExpired()
 }
 
 // LastRTT 返回最近一次心跳 RTT（0 表示未知）

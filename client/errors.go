@@ -61,8 +61,8 @@ var (
 
 // 队列相关错误
 var (
-	// ErrSendQueueFull 发送队列已满
-	ErrSendQueueFull = errors.New("send queue full, message dropped")
+	// 队列相关错误
+	ErrQueueEmpty = errors.New("queue is empty")
 )
 
 // PollTimeoutError 轮询超时错误（携带超时时间）

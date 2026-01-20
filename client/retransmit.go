@@ -1,13 +1,13 @@
 package client
 
 import (
+	"errors"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"go.uber.org/zap"
 )
 
-// retransmitLoop 重传协程，定期检查并重传未确认的 QoS1 消息
+// retransmitLoop 重传协程，定期检查并从持久化队列加载消息
 // 注意：这个协程跨连接运行，不绑定到单个 Connection
 func (c *Client) retransmitLoop() {
 	defer c.retransmitting.Store(false)
@@ -20,7 +20,7 @@ func (c *Client) retransmitLoop() {
 
 	for {
 		select {
-		case <-c.rootCtx.Done():
+		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
 			c.processRetransmit()
@@ -28,95 +28,102 @@ func (c *Client) retransmitLoop() {
 	}
 }
 
-// processRetransmit 处理消息重传
-// 策略：从持久化存储加载未确认的消息并重新发送
+// processRetransmit 处理消息重传（在 goroutine 中执行）
+// 重传策略：从持久化队列 (queue) 加载消息到发送队列 (sendQueue)
+// 使用 retransmitting 标志确保同一时间只有一个重传任务在运行
 func (c *Client) processRetransmit() {
-	if c.store == nil {
+	if c.queue == nil {
 		return
 	}
 
-	// 获取当前连接（如果有）
+	// 从持久化队列加载消息到发送队列
+	sent := c.retransmitQueuedMessages()
+
+	if sent > 0 {
+		c.logger.Debug("Retransmit completed",
+			zap.Int("sent", sent))
+	}
+}
+
+// retransmitQueuedMessages 从持久化队列加载消息到发送队列
+// 参考 core 的实现
+func (c *Client) retransmitQueuedMessages() int {
+	sent := 0
+
+	// 获取连接
 	conn := c.getConn()
-
-	// 构建排除列表（当前已在等待 ACK 的消息）
-	excludePacketIDs := make(map[nson.Id]bool)
-	if conn != nil {
-		conn.pendingAckMu.Lock()
-		for packetID := range conn.pendingAck {
-			excludePacketIDs[packetID] = true
-		}
-		conn.pendingAckMu.Unlock()
+	if conn == nil || conn.IsClosed() {
+		return 0
 	}
 
-	// 无连接时不重传（等待重连）
-	if conn == nil {
-		return
-	}
-
-	// 计算可加载的消息数量（使用发送队列可用容量的 50%）
+	// 计算可加载的消息数量
+	// 使用可用容量的 50% 避免队列立即饱和
 	available := conn.sendQueue.available()
 	if available == 0 {
-		return
+		return 0
 	}
 
 	loadCount := int(float64(available) * 0.5)
 	if loadCount == 0 {
 		loadCount = 1
 	}
+
+	// 限制单次加载数量
 	if loadCount > retransmitBatchSize {
 		loadCount = retransmitBatchSize
 	}
 
-	// 从持久化存储加载消息
-	messages, err := c.store.GetBatch(loadCount, excludePacketIDs)
-	if err != nil {
-		c.logger.Warn("Failed to load pending messages for retransmit",
-			zap.Error(err))
-		return
-	}
-
-	if len(messages) == 0 {
-		return
-	}
-
-	sent := 0
-	for _, stored := range messages {
-		if !c.connected.Load() {
+	for range loadCount {
+		// Peek 获取队列头部消息（不删除）
+		msg, err := c.queue.Peek()
+		if err != nil {
+			// 队列为空或其他错误
 			break
 		}
 
 		// 检查消息是否过期
-		if stored.Message.IsExpired() {
-			// 删除过期消息
-			c.store.Delete(stored.PacketID)
-
-			c.logger.Debug("Expired message deleted from store",
-				zap.String("packetID", stored.PacketID.Hex()),
-				zap.String("topic", stored.Message.Packet.Topic))
+		if msg.IsExpired() {
+			// 删除过期消息并继续
+			if err := c.queue.Delete(msg.Packet.PacketID); err != nil {
+				c.logger.Warn("Failed to delete expired queued message",
+					zap.String("packetID", msg.Packet.PacketID.Hex()),
+					zap.Error(err))
+			}
 
 			continue
 		}
 
-		// 转换为 Message
-		msg := stored.Message
-		msg.Dup = true // 标记为重发
+		// 标记为重发
+		msg.Dup = true
 
 		// 尝试放入发送队列
-		if !conn.sendQueue.tryEnqueue(msg) {
+		if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+			if errors.Is(err, ErrMessageAlreadyInQueue) {
+				// 消息已在队列中，跳过
+				continue
+			}
+
 			// 队列已满，停止加载
-			c.logger.Debug("Send queue full during retransmit, stopping",
-				zap.Int("sent", sent))
 			break
 		}
+
+		// 成功入队，触发发送协程
+		c.triggerSend()
 
 		sent++
 	}
 
-	// 触发发送
+	// 如果有消息入队，触发发送
 	if sent > 0 {
 		c.triggerSend()
-		c.logger.Debug("Retransmit completed",
-			zap.Int("count", sent),
-			zap.Int("queueAvailable", conn.sendQueue.available()))
+	}
+
+	return sent
+}
+
+// TriggerRetransmit 手动触发重传（可由外部调用）
+func (c *Client) TriggerRetransmit() {
+	if c.retransmitting.CompareAndSwap(false, true) {
+		go c.processRetransmit()
 	}
 }
