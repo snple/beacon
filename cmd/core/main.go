@@ -8,7 +8,6 @@ import (
 	"syscall"
 
 	"github.com/snple/beacon/core"
-
 	"go.uber.org/zap"
 )
 
@@ -22,14 +21,14 @@ func main() {
 	maxClients := flag.Uint("max-clients", 10000, "Maximum number of clients")
 	authEnabled := flag.Bool("auth", false, "Enable authentication")
 	authSecret := flag.String("auth-secret", "", "Authentication secret key")
-	storeDir := flag.String("store-dir", "./data/messages", "BadgerDB storage directory")
+	storeDir := flag.String("store-dir", "./data", "BadgerDB storage directory")
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("Queen 0.1 core v%s\n", version)
+		fmt.Printf("Beacon 0.1 core v%s\n", version)
 		os.Exit(0)
 	}
 

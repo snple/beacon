@@ -328,9 +328,5 @@ func decodeMessage(msg *Message, data []byte) error {
 	}
 
 	// 将 Map 反序列化为结构体
-	if err := nson.Unmarshal(m, msg); err != nil {
-		return err
-	}
-
-	return nil
+	return nson.Unmarshal(m, msg)
 }
