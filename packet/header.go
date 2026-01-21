@@ -2,17 +2,9 @@ package packet
 
 import (
 	"encoding/binary"
-	"errors"
 	"io"
 
 	"github.com/danclive/nson-go"
-)
-
-var (
-	ErrPacketTooLarge    = errors.New("packet too large")
-	ErrMalformedPacket   = errors.New("malformed packet")
-	ErrInvalidQoS        = errors.New("invalid QoS level")
-	ErrInvalidPacketType = errors.New("invalid packet type")
 )
 
 // FixedHeader 固定头部

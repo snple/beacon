@@ -22,6 +22,8 @@ type Conn struct {
 
 	// TCP 连接
 	conn net.Conn
+	// 保护写入操作
+	writeMu sync.Mutex
 
 	// 连接会话状态（每次连接可能不同）
 	clientID       string // 实际使用的客户端 ID（可能由服务器分配）
@@ -50,7 +52,6 @@ type Conn struct {
 	wg        sync.WaitGroup
 	closed    atomic.Bool
 	closeOnce sync.Once
-	writeMu   sync.Mutex
 
 	logger *zap.Logger
 }
@@ -342,7 +343,7 @@ func (c *Conn) sendMessage(msg *Message) error {
 	pub := msg.Packet // 复制数据包以修改 PacketID
 
 	if err := c.writePacket(pub); err != nil {
-		if errors.Is(err, packet.ErrPacketTooLarge) {
+		if errors.Is(err, &packet.PacketTooLargeError{}) {
 			// 数据包超过客户端允许的最大大小，丢弃消息
 			c.client.logger.Warn("Message dropped: packet size exceeds client maxPacketSize",
 				zap.String("topic", pub.Topic),
@@ -382,6 +383,9 @@ func (c *Conn) writePacket(pkt packet.Packet) error {
 	if c.closed.Load() {
 		return errors.New("connection closed")
 	}
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 
 	if err := packet.WritePacket(c.conn, pkt, c.maxPacketSize); err != nil {
 		return err

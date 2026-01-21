@@ -346,7 +346,7 @@ func (c *conn) sendMessage(msg *Message) error {
 	}
 
 	if err := c.writePacket(&pub); err != nil {
-		if errors.Is(err, packet.ErrPacketTooLarge) {
+		if errors.Is(err, &packet.PacketTooLargeError{}) {
 			// 数据包超过客户端允许的最大大小，丢弃消息
 			c.client.core.logger.Warn("Message dropped: packet size exceeds client maxPacketSize",
 				zap.String("clientID", c.client.ID),

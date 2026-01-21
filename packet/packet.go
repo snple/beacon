@@ -18,21 +18,6 @@ type Packet interface {
 	decode(r io.Reader, header FixedHeader) error
 }
 
-// PacketTooLargeError 数据包过大错误
-type PacketTooLargeError struct {
-	Size       uint32
-	MaxAllowed uint32
-}
-
-func (e *PacketTooLargeError) Error() string {
-	return fmt.Sprintf("packet size %d exceeds maximum allowed %d", e.Size, e.MaxAllowed)
-}
-
-func (e *PacketTooLargeError) Is(target error) bool {
-	_, ok := target.(*PacketTooLargeError)
-	return ok
-}
-
 // ReadPacket 从 Reader 读取并解析数据包
 // maxPacketSize: 最大允许的包大小（0 表示无限制）
 func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
@@ -43,10 +28,10 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 
 	// 检查包大小是否超过限制
 	if maxPacketSize > 0 && header.Remaining > maxPacketSize {
-		return nil, &PacketTooLargeError{
-			Size:       header.Remaining,
-			MaxAllowed: maxPacketSize,
-		}
+		return nil, NewPacketTooLargeError(
+			header.Remaining,
+			maxPacketSize,
+		)
 	}
 
 	// 读取剩余数据
@@ -122,10 +107,10 @@ func WritePacket(w io.Writer, pkt Packet, maxPacketSize uint32) error {
 	// 检查包大小是否超过限制
 	totalSize := uint32(buf.Len() + 5) // 包体大小 + 固定头部大小
 	if maxPacketSize > 0 && totalSize > maxPacketSize {
-		return &PacketTooLargeError{
-			Size:       totalSize,
-			MaxAllowed: maxPacketSize,
-		}
+		return NewPacketTooLargeError(
+			totalSize,
+			maxPacketSize,
+		)
 	}
 
 	// 构造固定头部

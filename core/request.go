@@ -209,7 +209,7 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 		var reasonCode packet.ReasonCode
 		var reasonString string
 
-		if errors.Is(err, packet.ErrPacketTooLarge) {
+		if errors.Is(err, &packet.PacketTooLargeError{}) {
 			reasonCode = packet.ReasonPacketTooLarge
 			reasonString = "Request packet exceeds target client maxPacketSize"
 			// 增加丢弃消息计数器
@@ -262,7 +262,7 @@ func (c *Client) handleResponse(p *packet.ResponsePacket) error {
 
 	if err := targetClient.writePacket(p); err != nil {
 		// 响应包发送失败，记录日志但不返回错误（因为请求方可能已断开）
-		if errors.Is(err, packet.ErrPacketTooLarge) {
+		if errors.Is(err, &packet.PacketTooLargeError{}) {
 			// 如果是因为包太大导致丢弃，增加丢弃消息计数器
 			c.core.stats.MessagesDropped.Add(1)
 		}

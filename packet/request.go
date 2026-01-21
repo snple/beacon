@@ -311,7 +311,7 @@ func (p *RequestProperties) Encode(w io.Writer) error {
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
 	if propLen > MaxPacketSize {
-		return ErrPacketTooLarge
+		return ErrMalformedPacket
 	}
 
 	if err := EncodeUint32(w, propLen); err != nil {
@@ -472,7 +472,7 @@ func (p *ResponseProperties) Encode(w io.Writer) error {
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
 	if propLen > MaxPacketSize {
-		return ErrPacketTooLarge
+		return ErrMalformedPacket
 	}
 
 	if err := EncodeUint32(w, propLen); err != nil {
