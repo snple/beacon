@@ -17,7 +17,7 @@ func TestWillMessageEncoding(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := pkt.Encode(&buf); err != nil {
+	if err := WritePacket(&buf, pkt, 0); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 
@@ -33,7 +33,7 @@ func TestWillMessageEncoding(t *testing.T) {
 		t.Fatalf("解码固定头部失败: %v", err)
 	}
 
-	if err := decoded.Decode(reader, header); err != nil {
+	if err := decoded.decode(reader, header); err != nil {
 		t.Fatalf("解码失败: %v", err)
 	}
 
@@ -85,7 +85,7 @@ func TestWillMessageWithDifferentQoS(t *testing.T) {
 
 			// 编码
 			var buf bytes.Buffer
-			if err := pkt.Encode(&buf); err != nil {
+			if err := WritePacket(&buf, pkt, 0); err != nil {
 				t.Fatalf("编码失败: %v", err)
 			}
 
@@ -97,7 +97,7 @@ func TestWillMessageWithDifferentQoS(t *testing.T) {
 				t.Fatalf("解码固定头部失败: %v", err)
 			}
 
-			if err := decoded.Decode(reader, header); err != nil {
+			if err := decoded.decode(reader, header); err != nil {
 				t.Fatalf("解码失败: %v", err)
 			}
 
@@ -122,7 +122,7 @@ func TestWillMessageWithEmptyPayload(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := pkt.Encode(&buf); err != nil {
+	if err := WritePacket(&buf, pkt, 0); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 
@@ -134,7 +134,7 @@ func TestWillMessageWithEmptyPayload(t *testing.T) {
 		t.Fatalf("解码固定头部失败: %v", err)
 	}
 
-	if err := decoded.Decode(reader, header); err != nil {
+	if err := decoded.decode(reader, header); err != nil {
 		t.Fatalf("解码失败: %v", err)
 	}
 
@@ -163,7 +163,7 @@ func TestWillMessageWithLargePayload(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := pkt.Encode(&buf); err != nil {
+	if err := WritePacket(&buf, pkt, 0); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 
@@ -175,7 +175,7 @@ func TestWillMessageWithLargePayload(t *testing.T) {
 		t.Fatalf("解码固定头部失败: %v", err)
 	}
 
-	if err := decoded.Decode(reader, header); err != nil {
+	if err := decoded.decode(reader, header); err != nil {
 		t.Fatalf("解码失败: %v", err)
 	}
 

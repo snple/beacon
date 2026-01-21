@@ -17,12 +17,12 @@ func TestAuthPacket(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := WritePacket(&buf, auth); err != nil {
+	if err := WritePacket(&buf, auth, 0); err != nil {
 		t.Fatalf("Failed to encode AUTH packet: %v", err)
 	}
 
 	// 解码
-	decoded, err := ReadPacket(&buf)
+	decoded, err := ReadPacket(&buf, 0)
 	if err != nil {
 		t.Fatalf("Failed to decode AUTH packet: %v", err)
 	}
@@ -61,12 +61,12 @@ func TestTracePacket(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := WritePacket(&buf, trace); err != nil {
+	if err := WritePacket(&buf, trace, 0); err != nil {
 		t.Fatalf("Failed to encode TRACE packet: %v", err)
 	}
 
 	// 解码
-	decoded, err := ReadPacket(&buf)
+	decoded, err := ReadPacket(&buf, 0)
 	if err != nil {
 		t.Fatalf("Failed to decode TRACE packet: %v", err)
 	}
@@ -110,12 +110,12 @@ func TestTracePacketEmptyDetails(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := WritePacket(&buf, trace); err != nil {
+	if err := WritePacket(&buf, trace, 0); err != nil {
 		t.Fatalf("Failed to encode TRACE packet: %v", err)
 	}
 
 	// 解码
-	decoded, err := ReadPacket(&buf)
+	decoded, err := ReadPacket(&buf, 0)
 	if err != nil {
 		t.Fatalf("Failed to decode TRACE packet: %v", err)
 	}
@@ -140,12 +140,12 @@ func TestAuthPacketMinimal(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := WritePacket(&buf, auth); err != nil {
+	if err := WritePacket(&buf, auth, 0); err != nil {
 		t.Fatalf("Failed to encode AUTH packet: %v", err)
 	}
 
 	// 解码
-	decoded, err := ReadPacket(&buf)
+	decoded, err := ReadPacket(&buf, 0)
 	if err != nil {
 		t.Fatalf("Failed to decode AUTH packet: %v", err)
 	}

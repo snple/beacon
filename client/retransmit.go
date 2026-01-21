@@ -108,14 +108,9 @@ func (c *Client) retransmitQueuedMessages() int {
 		}
 
 		// 成功入队，触发发送协程
-		c.triggerSend()
+		conn.triggerSend()
 
 		sent++
-	}
-
-	// 如果有消息入队，触发发送
-	if sent > 0 {
-		c.triggerSend()
 	}
 
 	return sent

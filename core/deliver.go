@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -140,21 +141,13 @@ func (c *Core) deliver(msg *Message) {
 
 		// 直接调用 Deliver，持久化逻辑在其中统一处理
 		// 注意：不要在这里检查 IsClosed()，因为：
-		// 1. QoS1消息即使客户端离线也需要持久化
+		// 1. 消息即使客户端离线也需要持久化
 		// 2. client.deliver() 内部会处理离线情况
 		if err := cq.client.deliver(&copiedMsg); err != nil {
-			if copiedMsg.QoS == packet.QoS0 {
-				c.logger.Debug("QoS0 message delivery failed",
-					zap.String("clientID", cq.client.ID),
-					zap.String("topic", copiedMsg.Packet.Topic),
-					zap.Error(err))
-				c.stats.MessagesDropped.Add(1)
-			} else {
-				c.logger.Debug("QoS1 message delivery failed",
-					zap.String("clientID", cq.client.ID),
-					zap.String("topic", copiedMsg.Packet.Topic),
-					zap.Error(err))
-			}
+			c.logger.Debug("message delivery failed",
+				zap.String("clientID", cq.client.ID),
+				zap.String("topic", copiedMsg.Packet.Topic),
+				zap.Error(err))
 		}
 	}
 }
@@ -176,8 +169,10 @@ func (c *Core) deliverToTarget(msg *Message) {
 	c.clientsMu.RUnlock()
 
 	if exists {
-		// 直接调用deliver，不要在这里检查IsClosed
-		// QoS1消息即使客户端离线也需要持久化
+		// 直接调用 Deliver，持久化逻辑在其中统一处理
+		// 注意：不要在这里检查 IsClosed()，因为：
+		// 1. 消息即使客户端离线也需要持久化
+		// 2. client.deliver() 内部会处理离线情况
 		if err := client.deliver(msg); err != nil {
 			c.logger.Debug("Target delivery failed",
 				zap.String("targetClientID", targetID),
@@ -192,6 +187,7 @@ func (c *Core) deliverToTarget(msg *Message) {
 	c.logger.Debug("Target client not found",
 		zap.String("targetClientID", targetID),
 		zap.String("topic", msg.Packet.Topic))
+
 	c.stats.MessagesDropped.Add(1)
 }
 
@@ -290,6 +286,15 @@ func (c *conn) processSendQueue() {
 
 		// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
 		if msg.IsExpired() {
+			c.client.core.logger.Debug("Message expired, dropping",
+				zap.String("clientID", c.client.ID),
+				zap.String("topic", msg.Packet.Topic),
+				zap.String("packetID", msg.PacketID.Hex()))
+
+			// 从持久化队列删除
+			c.client.queue.Delete(msg.PacketID)
+
+			// 统计消息丢弃数
 			c.client.core.stats.MessagesDropped.Add(1)
 			continue
 		}
@@ -340,8 +345,29 @@ func (c *conn) sendMessage(msg *Message) error {
 		return ErrDeliveryRejected // 钩子拒绝投递
 	}
 
-	// 发送消息
 	if err := c.writePacket(&pub); err != nil {
+		if errors.Is(err, packet.ErrPacketTooLarge) {
+			// 数据包超过客户端允许的最大大小，丢弃消息
+			c.client.core.logger.Warn("Message dropped: packet size exceeds client maxPacketSize",
+				zap.String("clientID", c.client.ID),
+				zap.String("topic", pub.Topic),
+				zap.String("packetID", pub.PacketID.Hex()),
+				zap.Error(err))
+
+			c.client.core.stats.MessagesDropped.Add(1)
+
+			// 从队列中删除该消息
+			if err := c.client.queue.Delete(pub.PacketID); err != nil {
+				c.client.core.logger.Debug("Failed to delete oversized message from queue",
+					zap.String("clientID", c.client.ID),
+					zap.String("packetID", pub.PacketID.Hex()),
+					zap.Error(err))
+			}
+
+			return nil
+		}
+
+		// 其他写入错误
 		return err
 	}
 

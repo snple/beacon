@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bufio"
 	"context"
 	"net"
 	"testing"
@@ -33,8 +32,6 @@ func TestConnection_PongSeqUpdatesRTT(t *testing.T) {
 	conn := &Conn{
 		client: client,
 		conn:   &mockConn{},
-		reader: bufio.NewReader(&mockConn{}),
-		writer: bufio.NewWriter(&mockConn{}),
 		logger: logger,
 	}
 

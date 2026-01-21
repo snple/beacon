@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -21,10 +20,7 @@ type conn struct {
 	client *Client
 
 	// TCP 连接
-	conn   net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
-	connMu sync.RWMutex
+	conn net.Conn
 
 	// 连接参数
 	keepAlive   uint16
@@ -35,12 +31,12 @@ type conn struct {
 	disconnectPacket *packet.DisconnectPacket
 
 	// 流量控制（连接级别）
-	sendWindow uint16     // 客户端接收窗口大小(core 发送窗口)
-	sendQueue  *sendQueue // 发送队列（基于客户端的 ReceiveWindow）
+	maxPacketSize uint32     // 客户端最大包大小（发送时检查）
+	sendWindow    uint16     // 客户端接收窗口大小(core 发送窗口)
+	sendQueue     *sendQueue // 发送队列（基于客户端的 ReceiveWindow）
 
 	// 消息发送控制
 	processing atomic.Bool // true: 正在处理发送队列
-	writeMu    sync.Mutex
 
 	// 生命周期
 	ctx       context.Context
@@ -55,8 +51,6 @@ func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *c
 	conn := &conn{
 		client:      client,
 		conn:        netConn,
-		reader:      bufio.NewReader(netConn),
-		writer:      bufio.NewWriter(netConn),
 		keepAlive:   connect.KeepAlive,
 		connectedAt: time.Now(),
 		ctx:         ctx,
@@ -70,6 +64,7 @@ func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *c
 
 	// 从 CONNECT 属性中读取客户端的初始接收窗口并设置为 core 的发送窗口
 	if connect.Properties != nil {
+		conn.maxPacketSize = connect.Properties.MaxPacketSize
 		conn.sendWindow = connect.Properties.ReceiveWindow
 		conn.traceID = connect.Properties.TraceID
 	}
@@ -100,7 +95,7 @@ func (c *conn) serve() {
 		// 更新读取超时
 		c.conn.SetReadDeadline(time.Now().Add(keepAliveTimeout))
 
-		pkt, err := packet.ReadPacket(c.reader)
+		pkt, err := packet.ReadPacket(c.conn, c.client.core.MaxPacketSize())
 		if err != nil {
 			if errors.Is(err, io.EOF) || c.closed.Load() {
 				return
@@ -183,7 +178,13 @@ func (c *conn) handlePing(p *packet.PingPacket) error {
 		Seq:  p.Seq,
 		Echo: p.Timestamp,
 	}
-	return c.writePacket(pong)
+	if err := c.writePacket(pong); err != nil {
+		c.client.core.logger.Error("Failed to send PONG",
+			zap.String("clientID", c.client.ID),
+			zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 // handleDisconnect 处理 DISCONNECT 包
@@ -202,31 +203,31 @@ func (c *conn) writePacket(pkt packet.Packet) error {
 		return errors.New("connection closed")
 	}
 
-	// 检查 writer 是否为 nil（测试环境中可能没有真实连接）
-	if c.writer == nil {
-		return errors.New("writer not initialized")
-	}
-
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	if err := packet.WritePacket(c.writer, pkt); err != nil {
+	if err := packet.WritePacket(c.conn, pkt, c.maxPacketSize); err != nil {
 		return err
 	}
-	return c.writer.Flush()
+
+	return nil
 }
 
 // close 关闭连接
 func (c *conn) close(reason packet.ReasonCode) {
 	c.closeOnce.Do(func() {
-		c.closed.Store(true)
-		c.cancel() // 取消所有阻塞操作
-
 		// 发送 DISCONNECT (如果不是正常断开)
+		// 注意：必须在设置 closed 标志之前发送，以避免并发写入竞态
+		// 直接写入连接，不使用 writePacket (它会检查 closed 标志)
 		if reason != packet.ReasonNormalDisconnect {
 			disconnect := packet.NewDisconnectPacket(reason)
-			c.writePacket(disconnect)
+			if err := c.writePacket(disconnect); err != nil {
+				c.client.core.logger.Debug("Failed to send DISCONNECT",
+					zap.String("clientID", c.client.ID),
+					zap.Error(err))
+			}
 		}
+
+		c.cancel()
+		// 设置 closed 标志，阻止新的写入
+		c.closed.Store(true)
 
 		// 关闭连接（检查是否为 nil）
 		if c.conn != nil {

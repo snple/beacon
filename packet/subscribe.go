@@ -160,11 +160,9 @@ func (p *SubscribePacket) Type() PacketType {
 	return SUBSCRIBE
 }
 
-func (p *SubscribePacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *SubscribePacket) encode(w io.Writer) error {
 	// 包标识符
-	if err := EncodeId(&buf, p.PacketID); err != nil {
+	if err := EncodeId(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -172,13 +170,13 @@ func (p *SubscribePacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
 	// 订阅列表
 	for _, sub := range p.Subscriptions {
-		if err := EncodeString(&buf, sub.Topic); err != nil {
+		if err := EncodeString(w, sub.Topic); err != nil {
 			return err
 		}
 		// 订阅选项
@@ -191,23 +189,15 @@ func (p *SubscribePacket) Encode(w io.Writer) error {
 			options |= 0x08
 		}
 		options |= (sub.Options.RetainHandling & 0x03) << 4
-		buf.WriteByte(options)
+		if err := WriteByte(w, options); err != nil {
+			return err
+		}
 	}
 
-	// 固定头部 (SUBSCRIBE 的标志位固定为 0x02)
-	header := FixedHeader{
-		Type:      SUBSCRIBE,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *SubscribePacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *SubscribePacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
 	p.PacketID, err = DecodeId(r)
@@ -269,11 +259,9 @@ func (p *SubackPacket) Type() PacketType {
 	return SUBACK
 }
 
-func (p *SubackPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *SubackPacket) encode(w io.Writer) error {
 	// 包标识符
-	if err := EncodeId(&buf, p.PacketID); err != nil {
+	if err := EncodeId(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -281,29 +269,21 @@ func (p *SubackPacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
 	// 原因码列表
 	for _, code := range p.ReasonCodes {
-		buf.WriteByte(byte(code))
+		if err := WriteByte(w, byte(code)); err != nil {
+			return err
+		}
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      SUBACK,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *SubackPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *SubackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
 	p.PacketID, err = DecodeId(r)
@@ -350,11 +330,9 @@ func (p *UnsubscribePacket) Type() PacketType {
 	return UNSUBSCRIBE
 }
 
-func (p *UnsubscribePacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *UnsubscribePacket) encode(w io.Writer) error {
 	// 包标识符
-	if err := EncodeId(&buf, p.PacketID); err != nil {
+	if err := EncodeId(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -362,31 +340,21 @@ func (p *UnsubscribePacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
 	// 主题列表
 	for _, topic := range p.Topics {
-		if err := EncodeString(&buf, topic); err != nil {
+		if err := EncodeString(w, topic); err != nil {
 			return err
 		}
 	}
 
-	// 固定头部 (UNSUBSCRIBE 的标志位固定为 0x02)
-	header := FixedHeader{
-		Type:      UNSUBSCRIBE,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *UnsubscribePacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *UnsubscribePacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
 	p.PacketID, err = DecodeId(r)
@@ -433,11 +401,10 @@ func (p *UnsubackPacket) Type() PacketType {
 	return UNSUBACK
 }
 
-func (p *UnsubackPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
+func (p *UnsubackPacket) encode(w io.Writer) error {
 
 	// 包标识符
-	if err := EncodeId(&buf, p.PacketID); err != nil {
+	if err := EncodeId(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -445,29 +412,21 @@ func (p *UnsubackPacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
 	// 原因码列表
 	for _, code := range p.ReasonCodes {
-		buf.WriteByte(byte(code))
+		if err := WriteByte(w, byte(code)); err != nil {
+			return err
+		}
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      UNSUBACK,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *UnsubackPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *UnsubackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
 	p.PacketID, err = DecodeId(r)

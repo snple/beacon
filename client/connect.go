@@ -1,13 +1,13 @@
 package client
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"net"
 	"time"
 
 	"github.com/snple/beacon/packet"
+	"go.uber.org/zap"
 )
 
 // WillMessage 遗嘱消息（连接异常断开时由 core 代发）
@@ -43,36 +43,15 @@ func (c *Client) Connect() error {
 		return err
 	}
 
-	reader := bufio.NewReader(netConn)
-	writer := bufio.NewWriter(netConn)
-
 	// 握手：发送 CONNECT，接收 CONNACK
-	connack, err := c.handshake(netConn, reader, writer)
+	connack, err := c.handshake(netConn)
 	if err != nil {
 		netConn.Close()
 		return err
 	}
 
-	// 提取连接参数
-	clientID := c.options.ClientID
-	if connack.Properties.ClientID != "" {
-		clientID = connack.Properties.ClientID
-	}
-
-	keepAlive := c.options.KeepAlive
-	if connack.Properties.KeepAlive != 0 {
-		keepAlive = connack.Properties.KeepAlive
-	}
-
-	sendWindow := uint16(defaultReceiveWindow)
-	if connack.Properties.ReceiveWindow != 0 {
-		sendWindow = connack.Properties.ReceiveWindow
-	}
-
-	sessionPresent := connack.SessionPresent
-
 	// 创建新的 Connection 对象（从旧连接迁移状态）
-	conn := newConn(c, netConn, clientID, keepAlive, sessionPresent, sendWindow, c.options.KeepSession)
+	conn := newConn(c, netConn, connack)
 
 	// 设置为当前连接
 	c.connMu.Lock()
@@ -139,18 +118,20 @@ func (c *Client) dialTCP() (net.Conn, error) {
 }
 
 // handshake 执行 CONNECT/CONNACK 握手
-func (c *Client) handshake(conn net.Conn, reader *bufio.Reader, writer *bufio.Writer) (*packet.ConnackPacket, error) {
+func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 	// 构建 CONNECT 包
 	connect := packet.NewConnectPacket()
 	connect.ClientID = c.options.ClientID
 	connect.KeepAlive = c.options.KeepAlive
 	connect.KeepSession = c.options.KeepSession
+
+	connect.Properties.SessionTimeout = c.options.SessionTimeout
 	connect.Properties.AuthMethod = c.options.AuthMethod
 	connect.Properties.AuthData = c.options.AuthData
+	connect.Properties.MaxPacketSize = c.options.MaxPacketSize
+	connect.Properties.ReceiveWindow = c.options.ReceveWindow
 	connect.Properties.TraceID = c.options.TraceID
 	connect.Properties.UserProperties = c.options.UserProperties
-	connect.Properties.SessionTimeout = c.options.SessionTimeout
-	connect.Properties.ReceiveWindow = uint16(defaultReceiveWindow)
 
 	// 遗嘱消息
 	if c.options.Will != nil && c.options.Will.Packet != nil {
@@ -169,16 +150,13 @@ func (c *Client) handshake(conn net.Conn, reader *bufio.Reader, writer *bufio.Wr
 	}
 
 	// 发送 CONNECT
-	if err := packet.WritePacket(writer, connect); err != nil {
-		return nil, NewConnectionError("send CONNECT", err)
-	}
-	if err := writer.Flush(); err != nil {
+	if err := packet.WritePacket(conn, connect, c.options.MaxPacketSize); err != nil {
 		return nil, NewConnectionError("send CONNECT", err)
 	}
 
 	// 接收 CONNACK
 	conn.SetReadDeadline(time.Now().Add(c.options.ConnectTimeout))
-	pkt, err := packet.ReadPacket(reader)
+	pkt, err := packet.ReadPacket(conn, c.options.MaxPacketSize) // CONNACK 时不知道限制，传 0
 	if err != nil {
 		return nil, NewConnectionError("read CONNACK", err)
 	}
@@ -212,7 +190,9 @@ func (c *Client) DisconnectWithReason(reason packet.ReasonCode) error {
 
 	// 发送 DISCONNECT
 	disconnect := packet.NewDisconnectPacket(reason)
-	_ = c.writePacket(disconnect)
+	if err := c.writePacket(disconnect); err != nil {
+		c.logger.Error("Failed to send DISCONNECT packet", zap.Error(err))
+	}
 
 	return c.close(nil)
 }

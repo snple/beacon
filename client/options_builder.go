@@ -28,6 +28,8 @@ type ClientOptions struct {
 	SessionTimeout uint32            // 会话过期时间 (秒)，0 表示断开即清理
 	ConnectTimeout time.Duration     // 连接超时
 	PublishTimeout time.Duration     // 发布超时 (默认 30 秒)
+	MaxPacketSize  uint32            // 客户端能接收的最大数据包大小（0 表示无限制）
+	ReceveWindow   uint16            // 客户端接收窗口大小（默认 32）
 	TraceID        string            // 追踪 ID
 	UserProperties map[string]string // 连接时发送的用户属性
 
@@ -54,14 +56,17 @@ type ClientOptions struct {
 // NewClientOptions 创建新的客户端配置选项
 func NewClientOptions() *ClientOptions {
 	return &ClientOptions{
-		Core:             "localhost:3883",
-		KeepAlive:        defaultKeepAlive,
-		KeepSession:      false,
-		ConnectTimeout:   defaultConnectTimeout,
-		PublishTimeout:   defaultPublishTimeout,
-		RequestQueueSize: 100,
-		MessageQueueSize: 100,
-		StoreOptions:     DefaultStoreOptions(),
+		Core:               "localhost:3883",
+		KeepAlive:          defaultKeepAlive,
+		KeepSession:        false,
+		ConnectTimeout:     defaultConnectTimeout,
+		PublishTimeout:     defaultPublishTimeout,
+		MaxPacketSize:      defaultMaxPacketSize,
+		ReceveWindow:       defaultReceiveWindow,
+		RetransmitInterval: defaultRetransmitInterval,
+		RequestQueueSize:   100,
+		MessageQueueSize:   100,
+		StoreOptions:       DefaultStoreOptions(),
 	}
 }
 
@@ -117,6 +122,12 @@ func (o *ClientOptions) WithConnectTimeout(d time.Duration) *ClientOptions {
 // WithPublishTimeout 设置发布超时
 func (o *ClientOptions) WithPublishTimeout(d time.Duration) *ClientOptions {
 	o.PublishTimeout = d
+	return o
+}
+
+// WithMaxPacketSize 设置客户端能接收的最大数据包大小（0 表示无限制）
+func (o *ClientOptions) WithMaxPacketSize(size uint32) *ClientOptions {
+	o.MaxPacketSize = size
 	return o
 }
 

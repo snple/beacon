@@ -27,17 +27,15 @@ func (p *RegisterPacket) Type() PacketType {
 	return REGISTER
 }
 
-func (p *RegisterPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *RegisterPacket) encode(w io.Writer) error {
 	// Actions 数量 (2 bytes)
-	if err := EncodeUint16(&buf, uint16(len(p.Actions))); err != nil {
+	if err := EncodeUint16(w, uint16(len(p.Actions))); err != nil {
 		return err
 	}
 
 	// Actions 列表
 	for _, action := range p.Actions {
-		if err := EncodeString(&buf, action); err != nil {
+		if err := EncodeString(w, action); err != nil {
 			return err
 		}
 	}
@@ -46,24 +44,14 @@ func (p *RegisterPacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewRegisterProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      REGISTER,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *RegisterPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *RegisterPacket) decode(r io.Reader, header FixedHeader) error {
 	// Actions 数量
 	count, err := DecodeUint16(r)
 	if err != nil {
@@ -112,44 +100,34 @@ func (p *RegackPacket) Type() PacketType {
 	return REGACK
 }
 
-func (p *RegackPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *RegackPacket) encode(w io.Writer) error {
 	// 结果数量 (2 bytes)
-	if err := EncodeUint16(&buf, uint16(len(p.Results))); err != nil {
+	if err := EncodeUint16(w, uint16(len(p.Results))); err != nil {
 		return err
 	}
 
 	// 结果列表
 	for _, result := range p.Results {
-		if err := EncodeString(&buf, result.Action); err != nil {
+		if err := EncodeString(w, result.Action); err != nil {
 			return err
 		}
-		buf.WriteByte(byte(result.ReasonCode))
+		if err := WriteByte(w, byte(result.ReasonCode)); err != nil {
+			return err
+		}
 	}
 
 	// 属性
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      REGACK,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *RegackPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *RegackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 结果数量
 	count, err := DecodeUint16(r)
 	if err != nil {
@@ -198,17 +176,15 @@ func (p *UnregisterPacket) Type() PacketType {
 	return UNREGISTER
 }
 
-func (p *UnregisterPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *UnregisterPacket) encode(w io.Writer) error {
 	// Actions 数量 (2 bytes)
-	if err := EncodeUint16(&buf, uint16(len(p.Actions))); err != nil {
+	if err := EncodeUint16(w, uint16(len(p.Actions))); err != nil {
 		return err
 	}
 
 	// Actions 列表
 	for _, action := range p.Actions {
-		if err := EncodeString(&buf, action); err != nil {
+		if err := EncodeString(w, action); err != nil {
 			return err
 		}
 	}
@@ -217,24 +193,14 @@ func (p *UnregisterPacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      UNREGISTER,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *UnregisterPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *UnregisterPacket) decode(r io.Reader, header FixedHeader) error {
 	// Actions 数量
 	count, err := DecodeUint16(r)
 	if err != nil {
@@ -277,44 +243,34 @@ func (p *UnregackPacket) Type() PacketType {
 	return UNREGACK
 }
 
-func (p *UnregackPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *UnregackPacket) encode(w io.Writer) error {
 	// 结果数量 (2 bytes)
-	if err := EncodeUint16(&buf, uint16(len(p.Results))); err != nil {
+	if err := EncodeUint16(w, uint16(len(p.Results))); err != nil {
 		return err
 	}
 
 	// 结果列表
 	for _, result := range p.Results {
-		if err := EncodeString(&buf, result.Action); err != nil {
+		if err := EncodeString(w, result.Action); err != nil {
 			return err
 		}
-		buf.WriteByte(byte(result.ReasonCode))
+		if err := WriteByte(w, byte(result.ReasonCode)); err != nil {
+			return err
+		}
 	}
 
 	// 属性
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      UNREGACK,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *UnregackPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *UnregackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 结果数量
 	count, err := DecodeUint16(r)
 	if err != nil {
@@ -378,9 +334,7 @@ func (p *RegisterProperties) Encode(w io.Writer) error {
 	}
 
 	// 写入位掩码 (2 bytes)
-	if err := EncodeUint16(&buf, flags); err != nil {
-		return err
-	}
+	EncodeUint16(&buf, flags)
 
 	// 按顺序写入存在的属性
 	if flags&regPropConcurrency != 0 {

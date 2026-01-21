@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/snple/beacon/packet"
@@ -36,7 +37,14 @@ func (c *Client) handleRegister(p *packet.RegisterPacket) error {
 	}
 
 	regack := packet.NewRegackPacket(regResults)
-	return c.writePacket(regack)
+	if err := c.writePacket(regack); err != nil {
+		c.core.logger.Error("Failed to send REGACK",
+			zap.String("clientID", c.ID),
+			zap.Error(err))
+		return err
+	}
+
+	return nil
 }
 
 // handleUnregister 处理 UNREGISTER 包
@@ -58,7 +66,14 @@ func (c *Client) handleUnregister(p *packet.UnregisterPacket) error {
 	}
 
 	unregack := packet.NewUnregackPacket(unregResults)
-	return c.writePacket(unregack)
+	if err := c.writePacket(unregack); err != nil {
+		c.core.logger.Error("Failed to send UNREGACK",
+			zap.String("clientID", c.ID),
+			zap.Error(err))
+		return err
+	}
+
+	return nil
 }
 
 // handleRequest 处理 REQUEST 包
@@ -81,7 +96,14 @@ func (c *Client) handleRequest(p *packet.RequestPacket) error {
 			zap.Error(err))
 		resp := packet.NewResponsePacket(p.RequestID, c.ID, packet.ReasonNotAuthorized, nil)
 		resp.Properties.ReasonString = err.Error()
-		return c.writePacket(resp)
+		if err := c.writePacket(resp); err != nil {
+			c.core.logger.Error("Failed to send RESPONSE",
+				zap.String("clientID", c.ID),
+				zap.Error(err))
+			return err
+		}
+
+		return nil
 	}
 
 	// 验证 Action 名称
@@ -93,7 +115,14 @@ func (c *Client) handleRequest(p *packet.RequestPacket) error {
 			nil,
 		)
 		resp.Properties.ReasonString = fmt.Sprintf("Invalid action name: %s", p.Action)
-		return c.writePacket(resp)
+		if err := c.writePacket(resp); err != nil {
+			c.core.logger.Error("Failed to send RESPONSE",
+				zap.String("clientID", c.ID),
+				zap.Error(err))
+			return err
+		}
+
+		return nil
 	}
 
 	// 填充 SourceClientID（由 core 填充，确保可信）
@@ -146,7 +175,14 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 		case packet.ReasonNoAvailableHandler:
 			resp.Properties.ReasonString = fmt.Sprintf("No available handler for action: %s", p.Action)
 		}
-		return c.writePacket(resp)
+		if err := c.writePacket(resp); err != nil {
+			c.core.logger.Error("Failed to send RESPONSE",
+				zap.String("clientID", c.ID),
+				zap.Error(err))
+			return err
+		}
+
+		return nil
 	}
 
 	// 获取目标客户端并发送请求
@@ -158,15 +194,39 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 		// 目标客户端已断开
 		resp := packet.NewResponsePacket(p.RequestID, c.ID, packet.ReasonClientNotFound, nil)
 		resp.Properties.ReasonString = "Target client not found"
-		return c.writePacket(resp)
+		if err := c.writePacket(resp); err != nil {
+			c.core.logger.Error("Failed to send RESPONSE",
+				zap.String("clientID", c.ID),
+				zap.Error(err))
+			return err
+		}
+
+		return nil
 	}
 
-	// 直接转发请求包，保持原始 RequestID 和 SourceClientID
 	if err := targetClient.writePacket(p); err != nil {
 		// 发送失败，返回错误响应
-		resp := packet.NewResponsePacket(p.RequestID, c.ID, packet.ReasonClientNotFound, nil)
-		resp.Properties.ReasonString = "Target client disconnected"
-		return c.writePacket(resp)
+		var reasonCode packet.ReasonCode
+		var reasonString string
+
+		if errors.Is(err, packet.ErrPacketTooLarge) {
+			reasonCode = packet.ReasonPacketTooLarge
+			reasonString = "Request packet exceeds target client maxPacketSize"
+			// 增加丢弃消息计数器
+			c.core.stats.MessagesDropped.Add(1)
+		} else {
+			reasonCode = packet.ReasonClientNotAvailable
+			reasonString = "Target client disconnected"
+		}
+
+		resp := packet.NewResponsePacket(p.RequestID, c.ID, reasonCode, nil)
+		resp.Properties.ReasonString = reasonString
+		if err := c.writePacket(resp); err != nil {
+			c.core.logger.Error("Failed to send RESPONSE",
+				zap.String("clientID", c.ID),
+				zap.Error(err))
+			return err
+		}
 	}
 
 	return nil
@@ -200,6 +260,17 @@ func (c *Client) handleResponse(p *packet.ResponsePacket) error {
 	}
 	c.core.options.Hooks.callOnResponse(respCtx)
 
-	// 直接转发响应包，保持原始 RequestID
-	return targetClient.writePacket(p)
+	if err := targetClient.writePacket(p); err != nil {
+		// 响应包发送失败，记录日志但不返回错误（因为请求方可能已断开）
+		if errors.Is(err, packet.ErrPacketTooLarge) {
+			// 如果是因为包太大导致丢弃，增加丢弃消息计数器
+			c.core.stats.MessagesDropped.Add(1)
+		}
+		c.core.logger.Debug("Failed to send response to target client",
+			zap.String("targetClientID", p.TargetClientID),
+			zap.Uint32("requestID", p.RequestID),
+			zap.Error(err))
+	}
+
+	return nil
 }

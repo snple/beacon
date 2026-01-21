@@ -169,12 +169,13 @@ const (
 	// ========== 请求/响应相关错误 (0xC0-0xCF) ==========
 	ReasonActionNotFound     ReasonCode = 0xC0 // Action 不存在
 	ReasonClientNotFound     ReasonCode = 0xC1 // 目标客户端不存在
-	ReasonRequestTimeout     ReasonCode = 0xC2 // 请求超时
-	ReasonNoAvailableHandler ReasonCode = 0xC3 // 没有可用的处理器
-	ReasonRequestCancelled   ReasonCode = 0xC4 // 请求被取消
-	ReasonDuplicateAction    ReasonCode = 0xC5 // Action 已被注册
-	ReasonActionInvalid      ReasonCode = 0xC6 // Action 名称无效
-	ReasonBadRequest         ReasonCode = 0xC7 // 错误的请求
+	ReasonClientNotAvailable ReasonCode = 0xC2 // 目标客户端不可用
+	ReasonRequestTimeout     ReasonCode = 0xC3 // 请求超时
+	ReasonNoAvailableHandler ReasonCode = 0xC4 // 没有可用的处理器
+	ReasonRequestCancelled   ReasonCode = 0xC5 // 请求被取消
+	ReasonDuplicateAction    ReasonCode = 0xC6 // Action 已被注册
+	ReasonActionInvalid      ReasonCode = 0xC7 // Action 名称无效
+	ReasonBadRequest         ReasonCode = 0xC8 // 错误的请求
 )
 
 func (r ReasonCode) String() string {
@@ -282,6 +283,8 @@ func (r ReasonCode) String() string {
 		return "Action not found"
 	case ReasonClientNotFound:
 		return "Client not found"
+	case ReasonClientNotAvailable:
+		return "Client not available"
 	case ReasonRequestTimeout:
 		return "Request timeout"
 	case ReasonNoAvailableHandler:

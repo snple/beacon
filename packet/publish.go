@@ -59,9 +59,7 @@ func (p *PublishPacket) Type() PacketType {
 	return PUBLISH
 }
 
-func (p *PublishPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *PublishPacket) encode(w io.Writer) error {
 	// Flags 字节 (更紧凑的布局)
 	// Bit 0: QoS (0 或 1)
 	// Bit 1: Retain
@@ -75,15 +73,17 @@ func (p *PublishPacket) Encode(w io.Writer) error {
 	if p.Dup {
 		flags |= 0x04 // Bit 2: Dup
 	}
-	buf.WriteByte(flags)
+	if err := WriteByte(w, flags); err != nil {
+		return err
+	}
 
 	// 主题名
-	if err := EncodeString(&buf, p.Topic); err != nil {
+	if err := EncodeString(w, p.Topic); err != nil {
 		return err
 	}
 
 	// 包标识符 (始终存在，QoS=0 和 QoS=1 都需要)
-	if err := EncodeId(&buf, p.PacketID); err != nil {
+	if err := EncodeId(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -91,27 +91,19 @@ func (p *PublishPacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewPublishProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
 	// 载荷
-	buf.Write(p.Payload)
-
-	// 固定头部
-	header := FixedHeader{
-		Type:      PUBLISH,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
+	if _, err := w.Write(p.Payload); err != nil {
 		return err
 	}
 
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *PublishPacket) decode(r io.Reader, header FixedHeader) error {
 	// Flags 字节 (紧凑布局)
 	// Bit 0: QoS (0 或 1)
 	// Bit 1: Retain
@@ -187,41 +179,32 @@ func (p *PubackPacket) Type() PacketType {
 	return PUBACK
 }
 
-func (p *PubackPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
+func (p *PubackPacket) encode(w io.Writer) error {
 
 	// 包标识符
-	if err := EncodeId(&buf, p.PacketID); err != nil {
+	if err := EncodeId(w, p.PacketID); err != nil {
 		return err
 	}
 
 	// 原因码 (如果是成功且无属性，可以省略)
 	if p.ReasonCode != ReasonSuccess || (p.Properties != nil && len(p.Properties.UserProperties) > 0) {
-		buf.WriteByte(byte(p.ReasonCode))
+		if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
+			return err
+		}
 
 		// 属性
 		if p.Properties == nil {
 			p.Properties = NewReasonProperties()
 		}
-		if err := p.Properties.Encode(&buf); err != nil {
+		if err := p.Properties.Encode(w); err != nil {
 			return err
 		}
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      PUBACK,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *PubackPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *PubackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
 	p.PacketID, err = DecodeId(r)

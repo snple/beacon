@@ -22,7 +22,8 @@ const (
 	defaultRetransmitInterval = 5 * time.Second // QoS1 消息重传间隔
 
 	// 流量控制
-	defaultReceiveWindow = 100 // 默认接收窗口大小
+	defaultMaxPacketSize = 1048576 // 默认最大包大小（1 MB）
+	defaultReceiveWindow = 100     // 默认接收窗口大小
 
 	// 重传相关
 	retransmitBatchSize = 50 // 每次从持久化加载的最大消息数
@@ -290,6 +291,11 @@ func (c *Client) ClientID() string {
 	return c.options.ClientID
 }
 
+// MaxPacketSize 返回客户端允许接收的最大包大小
+func (c *Client) MaxPacketSize() uint32 {
+	return c.options.MaxPacketSize
+}
+
 // GetSendWindow 返回 core 的接收窗口大小（客户端的发送窗口）
 func (c *Client) GetSendWindow() uint16 {
 	c.connMu.RLock()
@@ -338,7 +344,7 @@ func (c *Client) getConn() *Conn {
 // writePacket 发送数据包（通过当前连接）
 func (c *Client) writePacket(pkt packet.Packet) error {
 	conn := c.getConn()
-	if conn == nil {
+	if conn == nil || conn.closed.Load() {
 		return ErrNotConnected
 	}
 	return conn.writePacket(pkt)
@@ -362,15 +368,6 @@ func (c *Client) HasSubscription(topic string) bool {
 	defer c.subscribedTopicsMu.RUnlock()
 
 	return c.subscribedTopics[topic]
-}
-
-// sendMessage 发送消息到 core（从 sendQueue 调用）
-func (c *Client) sendMessage(msg *Message) error {
-	conn := c.getConn()
-	if conn == nil {
-		return ErrNotConnected
-	}
-	return conn.sendMessage(msg)
 }
 
 // matchTopic 检查主题是否匹配模式

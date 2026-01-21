@@ -14,7 +14,14 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 		c.core.logger.Warn("Invalid topic name", zap.String("clientID", c.ID), zap.String("topic", pub.Topic))
 		if pub.QoS == packet.QoS1 {
 			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonTopicNameInvalid)
-			c.writePacket(puback)
+			if err := c.writePacket(puback); err != nil {
+				c.core.logger.Error("Failed to send PUBACK",
+					zap.String("clientID", c.ID),
+					zap.String("packetID", pub.PacketID.Hex()),
+					zap.Error(err))
+
+				return err
+			}
 		}
 		return nil
 	}
@@ -23,7 +30,14 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 	if !pub.QoS.IsValid() {
 		c.core.logger.Warn("Invalid QoS level", zap.String("clientID", c.ID), zap.Uint8("qos", uint8(pub.QoS)))
 		puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonQoSNotSupported)
-		c.writePacket(puback)
+		if err := c.writePacket(puback); err != nil {
+			c.core.logger.Error("Failed to send PUBACK",
+				zap.String("clientID", c.ID),
+				zap.String("packetID", pub.PacketID.Hex()),
+				zap.Error(err))
+			return err
+		}
+
 		return nil // 忽略无效 QoS 的消息
 	}
 
@@ -38,6 +52,7 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 			zap.String("clientID", c.ID),
 			zap.String("topic", pub.Topic),
 			zap.Error(err))
+
 		return nil
 	}
 
@@ -71,7 +86,13 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 			zap.String("topic", pub.Topic))
 		if pub.QoS == packet.QoS1 {
 			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonMessageExpired)
-			c.writePacket(puback)
+			if err := c.writePacket(puback); err != nil {
+				c.core.logger.Error("Failed to send PUBACK",
+					zap.String("clientID", c.ID),
+					zap.String("packetID", pub.PacketID.Hex()),
+					zap.Error(err))
+				return err
+			}
 		}
 		return nil
 	}
@@ -216,6 +237,10 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 
 	// 先发送 SUBACK，确保客户端收到确认后再发送保留消息
 	if err := c.writePacket(suback); err != nil {
+		c.core.logger.Error("Failed to send SUBACK",
+			zap.String("clientID", c.ID),
+			zap.String("packetID", p.PacketID.Hex()),
+			zap.Error(err))
 		return err
 	}
 
@@ -277,7 +302,15 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 		}
 	}
 
-	return c.writePacket(unsuback)
+	if err := c.writePacket(unsuback); err != nil {
+		c.core.logger.Error("Failed to send UNSUBACK",
+			zap.String("clientID", c.ID),
+			zap.String("packetID", p.PacketID.Hex()),
+			zap.Error(err))
+		return err
+	}
+
+	return nil
 }
 
 // sendRetainedMessages 逐条发送订阅时的保留消息

@@ -142,7 +142,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 	}
 
 	// 5. 消息已入队，触发发送
-	c.triggerSend()
+	conn.triggerSend()
 
 	// 6. QoS1: 等待 ACK（仅对首次发布的消息）
 	if msg.Packet.QoS == packet.QoS1 {
@@ -196,34 +196,19 @@ func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, timeout time.Du
 
 // triggerSend 触发发送协程（非阻塞）
 // 使用 processing 标志避免重复启动
-func (c *Client) triggerSend() {
-	conn := c.getConn()
-	if conn == nil {
-		return
-	}
-	if conn.processing.CompareAndSwap(false, true) {
+func (c *Conn) triggerSend() {
+	if c.processing.CompareAndSwap(false, true) {
 		go c.processSendQueue()
 	}
 }
 
 // processSendQueue 处理发送队列中的消息
-func (c *Client) processSendQueue() {
-	// 获取当前连接
-	conn := c.getConn()
-	if conn == nil {
-		return
-	}
-	defer conn.processing.Store(false)
+func (c *Conn) processSendQueue() {
+	defer c.processing.Store(false)
 
-	for {
-		// 检查连接是否仍然有效
-		if conn.IsClosed() {
-			// 连接已关闭，退出（消息留在队列中，等待重连后发送）
-			return
-		}
-
+	for !c.closed.Load() {
 		// 尝试从队列取消息
-		msg, ok := conn.sendQueue.tryDequeue()
+		msg, ok := c.sendQueue.tryDequeue()
 		if !ok {
 			// 队列为空，退出
 			return
@@ -236,8 +221,8 @@ func (c *Client) processSendQueue() {
 				zap.String("packetID", msg.Packet.PacketID.Hex()))
 
 			// 从持久化队列删除
-			if c.queue != nil {
-				c.queue.Delete(msg.Packet.PacketID)
+			if c.client.queue != nil {
+				c.client.queue.Delete(msg.Packet.PacketID)
 			}
 			continue
 		}
@@ -251,14 +236,14 @@ func (c *Client) processSendQueue() {
 			// 发送失败，消息已出队
 			// QoS1 消息仍在持久化队列中，重传机制会处理
 			// QoS0 消息应从持久化队列删除（已尽力发送）
-			if msg.Packet.QoS == packet.QoS0 && c.queue != nil {
-				c.queue.Delete(msg.Packet.PacketID)
+			if msg.Packet.QoS == packet.QoS0 && c.client.queue != nil {
+				c.client.queue.Delete(msg.Packet.PacketID)
 			}
 		} else {
 			// 发送成功
 			// QoS0: 从持久化队列删除（TCP 写成功即可）
-			if msg.Packet.QoS == packet.QoS0 && c.queue != nil {
-				c.queue.Delete(msg.Packet.PacketID)
+			if msg.Packet.QoS == packet.QoS0 && c.client.queue != nil {
+				c.client.queue.Delete(msg.Packet.PacketID)
 			}
 			// QoS1: 等待 PUBACK，在 handlePuback 中删除
 		}

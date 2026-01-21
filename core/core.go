@@ -227,6 +227,11 @@ func (c *Core) Stop() error {
 	return nil
 }
 
+// CoreMaxPacketSize
+func (c *Core) MaxPacketSize() uint32 {
+	return c.options.MaxPacketSize
+}
+
 // Subscribe 订阅主题
 func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 	isNew := c.subTree.subscribe(clientID, sub.Topic, sub.Options.QoS)

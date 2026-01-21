@@ -40,26 +40,24 @@ func (p *RequestPacket) Type() PacketType {
 	return REQUEST
 }
 
-func (p *RequestPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *RequestPacket) encode(w io.Writer) error {
 	// 请求ID (8 bytes)
-	if err := EncodeUint32(&buf, p.RequestID); err != nil {
+	if err := EncodeUint32(w, p.RequestID); err != nil {
 		return err
 	}
 
 	// Action 名称
-	if err := EncodeString(&buf, p.Action); err != nil {
+	if err := EncodeString(w, p.Action); err != nil {
 		return err
 	}
 
 	// 目标客户端ID
-	if err := EncodeString(&buf, p.TargetClientID); err != nil {
+	if err := EncodeString(w, p.TargetClientID); err != nil {
 		return err
 	}
 
 	// 来源客户端ID（由core填充）
-	if err := EncodeString(&buf, p.SourceClientID); err != nil {
+	if err := EncodeString(w, p.SourceClientID); err != nil {
 		return err
 	}
 
@@ -67,27 +65,20 @@ func (p *RequestPacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewRequestProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
 	// 载荷
-	buf.Write(p.Payload)
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      REQUEST,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
+	if _, err := w.Write(p.Payload); err != nil {
 		return err
 	}
 
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *RequestPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *RequestPacket) decode(r io.Reader, header FixedHeader) error {
 	// 请求ID
 	var err error
 	p.RequestID, err = DecodeUint32(r)
@@ -168,47 +159,39 @@ func (p *ResponsePacket) Type() PacketType {
 	return RESPONSE
 }
 
-func (p *ResponsePacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *ResponsePacket) encode(w io.Writer) error {
 	// 请求ID (8 bytes)
-	if err := EncodeUint32(&buf, p.RequestID); err != nil {
+	if err := EncodeUint32(w, p.RequestID); err != nil {
 		return err
 	}
 
 	// 目标客户端ID
-	if err := EncodeString(&buf, p.TargetClientID); err != nil {
+	if err := EncodeString(w, p.TargetClientID); err != nil {
 		return err
 	}
 
 	// 原因码 (1 byte)
-	buf.WriteByte(byte(p.ReasonCode))
+	if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
+		return err
+	}
 
 	// 属性
 	if p.Properties == nil {
 		p.Properties = NewResponseProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
 	// 载荷
-	buf.Write(p.Payload)
-
-	// 固定头部
-	header := FixedHeader{
-		Type:      RESPONSE,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
+	if _, err := w.Write(p.Payload); err != nil {
 		return err
 	}
 
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *ResponsePacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *ResponsePacket) decode(r io.Reader, header FixedHeader) error {
 	// 请求ID
 	var err error
 	p.RequestID, err = DecodeUint32(r)

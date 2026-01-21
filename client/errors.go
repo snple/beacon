@@ -65,6 +65,13 @@ var (
 	ErrQueueEmpty = errors.New("queue is empty")
 )
 
+// 内部错误类型
+var (
+	ErrInvalidMessage       = errors.New("invalid message")
+	ErrInvalidRetainMessage = errors.New("invalid retain message")
+	ErrPacketTooLarge       = errors.New("packet size exceeds client maxPacketSize")
+)
+
 // PollTimeoutError 轮询超时错误（携带超时时间）
 type PollTimeoutError struct {
 	Timeout time.Duration

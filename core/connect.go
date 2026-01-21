@@ -138,7 +138,7 @@ func (c *Core) readConnectPacket(conn net.Conn) (*packet.ConnectPacket, error) {
 	defer conn.SetDeadline(time.Time{}) // 清除超时
 
 	// 读取 CONNECT 包
-	pkt, err := packet.ReadPacket(conn)
+	pkt, err := packet.ReadPacket(conn, c.MaxPacketSize())
 	if err != nil {
 		c.logger.Debug("Failed to read CONNECT packet", zap.Error(err), zap.String("remote", conn.RemoteAddr().String()))
 		conn.Close()
@@ -284,7 +284,7 @@ func (c *Core) sendConnack(conn net.Conn, sessionPresent bool, code packet.Reaso
 		connack.Properties.KeepAlive = uint16(packet.DefaultKeepAlive)
 	}
 
-	packet.WritePacket(conn, connack)
+	packet.WritePacket(conn, connack, c.options.MaxPacketSize)
 }
 
 // handleClientDisconnect 处理客户端断开连接

@@ -66,7 +66,12 @@ func (c *Client) handleRequest(p *packet.RequestPacket) error {
 			nil,
 		)
 		resp.Properties.ReasonString = "Request rejected by hook"
-		return c.writePacket(resp)
+		if err := c.writePacket(resp); err != nil {
+			c.logger.Warn("Failed to send RESPONSE packet", zap.Error(err))
+			return err
+		}
+
+		return nil
 	}
 
 	req := &Request{
@@ -83,6 +88,9 @@ func (c *Client) handleRequest(p *packet.RequestPacket) error {
 			zap.String("action", p.Action))
 		return nil
 	default:
+		c.logger.Warn("Request queue full, request dropped",
+			zap.Uint32("requestID", p.RequestID),
+			zap.String("action", p.Action))
 		// 队列已满，返回服务器繁忙错误
 		resp := packet.NewResponsePacket(
 			p.RequestID,
@@ -91,7 +99,12 @@ func (c *Client) handleRequest(p *packet.RequestPacket) error {
 			nil,
 		)
 		resp.Properties.ReasonString = "Client request queue full"
-		return c.writePacket(resp)
+		if err := c.writePacket(resp); err != nil {
+			c.logger.Warn("Failed to send RESPONSE packet", zap.Error(err))
+			return err
+		}
+
+		return nil
 	}
 }
 
@@ -159,7 +172,11 @@ func (c *Client) RegisterMultiple(actions []string) error {
 	c.actionsMu.Unlock()
 
 	registerPkt := packet.NewRegisterPacket(actions)
-	return c.writePacket(registerPkt)
+	if err := c.writePacket(registerPkt); err != nil {
+		c.logger.Error("Failed to send REGISTER", zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 // Unregister 向 core 注销一个 action
@@ -189,7 +206,11 @@ func (c *Client) UnregisterMultiple(actions []string) error {
 	c.actionsMu.Unlock()
 
 	unregisterPkt := packet.NewUnregisterPacket(actions)
-	return c.writePacket(unregisterPkt)
+	if err := c.writePacket(unregisterPkt); err != nil {
+		c.logger.Error("Failed to send UNREGISTER", zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 // handleRegack 处理 REGACK 包
@@ -261,7 +282,14 @@ func (req *Request) Response(res *Response) error {
 	res.Packet.TargetClientID = req.Packet.SourceClientID
 
 	// 发送响应
-	return req.client.writePacket(res.Packet)
+	if err := req.client.writePacket(res.Packet); err != nil {
+		req.client.logger.Error("Failed to send RESPONSE",
+			zap.Uint32("requestID", res.Packet.RequestID),
+			zap.String("targetClientID", res.Packet.TargetClientID),
+			zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 // Request 发送请求并等待响应

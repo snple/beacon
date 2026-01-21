@@ -47,12 +47,12 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 	connect1.KeepSession = true
 	connect1.KeepAlive = 60
 
-	if err := packet.WritePacket(conn1, connect1); err != nil {
+	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err := packet.ReadPacket(conn1)
+	pkt, err := packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,12 +72,12 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 	}
-	if err := packet.WritePacket(conn1, sub); err != nil {
+	if err := packet.WritePacket(conn1, sub, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1)
+	pkt, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,12 +120,12 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 	connect2.KeepSession = true
 	connect2.KeepAlive = 60
 
-	if err := packet.WritePacket(conn2, connect2); err != nil {
+	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err = packet.ReadPacket(conn2)
+	pkt, err = packet.ReadPacket(conn2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,12 +191,12 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 	connect1.KeepSession = false
 	connect1.KeepAlive = 60
 
-	if err := packet.WritePacket(conn1, connect1); err != nil {
+	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err := packet.ReadPacket(conn1)
+	pkt, err := packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,12 +213,12 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 	}
-	if err := packet.WritePacket(conn1, sub); err != nil {
+	if err := packet.WritePacket(conn1, sub, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1)
+	pkt, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,12 +245,12 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 	connect2.KeepSession = false
 	connect2.KeepAlive = 60
 
-	if err := packet.WritePacket(conn2, connect2); err != nil {
+	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err = packet.ReadPacket(conn2)
+	pkt, err = packet.ReadPacket(conn2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,12 +291,12 @@ func TestSessionTakeover(t *testing.T) {
 	connect1.KeepSession = true
 	connect1.KeepAlive = 60
 
-	if err := packet.WritePacket(conn1, connect1); err != nil {
+	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err := packet.ReadPacket(conn1)
+	pkt, err := packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,12 +331,12 @@ func TestSessionTakeover(t *testing.T) {
 	connect2.KeepSession = true
 	connect2.KeepAlive = 60
 
-	if err := packet.WritePacket(conn2, connect2); err != nil {
+	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err = packet.ReadPacket(conn2)
+	pkt, err = packet.ReadPacket(conn2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestSessionTakeover(t *testing.T) {
 
 	// 第一个连接应该收到 DISCONNECT
 	go func() {
-		disconnectPkt, err := packet.ReadPacket(conn1)
+		disconnectPkt, err := packet.ReadPacket(conn1, 0)
 		if err == nil {
 			if disconnect, ok := disconnectPkt.(*packet.DisconnectPacket); ok {
 				if disconnect.ReasonCode != packet.ReasonSessionTakenOver {
@@ -420,12 +420,12 @@ func TestSessionExpiry(t *testing.T) {
 	connect1.Properties = packet.NewConnectProperties()
 	connect1.Properties.SessionTimeout = 2 // 2秒后过期
 
-	if err := packet.WritePacket(conn1, connect1); err != nil {
+	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err := packet.ReadPacket(conn1)
+	pkt, err := packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,12 +442,12 @@ func TestSessionExpiry(t *testing.T) {
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 	}
-	if err := packet.WritePacket(conn1, sub); err != nil {
+	if err := packet.WritePacket(conn1, sub, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1)
+	pkt, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,12 +510,12 @@ func TestOfflineMessageQueue(t *testing.T) {
 	connect1.KeepSession = true
 	connect1.KeepAlive = 60
 
-	if err := packet.WritePacket(conn1, connect1); err != nil {
+	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err := packet.ReadPacket(conn1)
+	pkt, err := packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,12 +525,12 @@ func TestOfflineMessageQueue(t *testing.T) {
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 	}
-	if err := packet.WritePacket(conn1, sub); err != nil {
+	if err := packet.WritePacket(conn1, sub, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1)
+	pkt, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,12 +586,12 @@ func TestOfflineMessageQueue(t *testing.T) {
 	connect2.KeepSession = true
 	connect2.KeepAlive = 60
 
-	if err := packet.WritePacket(conn2, connect2); err != nil {
+	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err = packet.ReadPacket(conn2)
+	pkt, err = packet.ReadPacket(conn2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +604,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 	}
 
 	// 应该收到离线消息
-	pkt, err = packet.ReadPacket(conn2)
+	pkt, err = packet.ReadPacket(conn2, 0)
 	if err != nil {
 		t.Fatal("Should receive offline message:", err)
 	}
@@ -624,7 +624,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 
 	// 发送 PUBACK
 	puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonSuccess)
-	if err := packet.WritePacket(conn2, puback); err != nil {
+	if err := packet.WritePacket(conn2, puback, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -667,12 +667,12 @@ func TestWillMessage(t *testing.T) {
 	connect1.KeepSession = false
 	connect1.KeepAlive = 60
 
-	if err := packet.WritePacket(conn1, connect1); err != nil {
+	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err := packet.ReadPacket(conn1)
+	pkt, err := packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,12 +682,12 @@ func TestWillMessage(t *testing.T) {
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "will/topic", Options: packet.SubscribeOptions{QoS: packet.QoS0}},
 	}
-	if err := packet.WritePacket(conn1, sub); err != nil {
+	if err := packet.WritePacket(conn1, sub, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1)
+	pkt, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,12 +706,12 @@ func TestWillMessage(t *testing.T) {
 		QoS:     packet.QoS0,
 	}
 
-	if err := packet.WritePacket(conn2, connect2); err != nil {
+	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// 读取 CONNACK
-	pkt, err = packet.ReadPacket(conn2)
+	pkt, err = packet.ReadPacket(conn2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,7 +721,7 @@ func TestWillMessage(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// 订阅者应该收到遗嘱消息
-	pkt, err = packet.ReadPacket(conn1)
+	pkt, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal("Should receive will message:", err)
 	}
@@ -766,21 +766,21 @@ func TestWillMessage_NormalDisconnect(t *testing.T) {
 	connect1.KeepSession = false
 	connect1.KeepAlive = 60
 
-	if err := packet.WritePacket(conn1, connect1); err != nil {
+	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
 	}
 
-	_, _ = packet.ReadPacket(conn1)
+	_, _ = packet.ReadPacket(conn1, 0)
 
 	sub := packet.NewSubscribePacket(nson.NewId())
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "will/topic", Options: packet.SubscribeOptions{QoS: packet.QoS0}},
 	}
-	if err := packet.WritePacket(conn1, sub); err != nil {
+	if err := packet.WritePacket(conn1, sub, 0); err != nil {
 		t.Fatal(err)
 	}
 
-	_, _ = packet.ReadPacket(conn1)
+	_, _ = packet.ReadPacket(conn1, 0)
 
 	// 带遗嘱的客户端
 	conn2 := createMockConn(addr, t)
@@ -797,15 +797,15 @@ func TestWillMessage_NormalDisconnect(t *testing.T) {
 		QoS:     packet.QoS0,
 	}
 
-	if err := packet.WritePacket(conn2, connect2); err != nil {
+	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
 	}
 
-	_, _ = packet.ReadPacket(conn2)
+	_, _ = packet.ReadPacket(conn2, 0)
 
 	// 正常断开（发送 DISCONNECT）
 	disconnect := packet.NewDisconnectPacket(packet.ReasonNormalDisconnect)
-	if err := packet.WritePacket(conn2, disconnect); err != nil {
+	if err := packet.WritePacket(conn2, disconnect, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -815,7 +815,7 @@ func TestWillMessage_NormalDisconnect(t *testing.T) {
 	// 订阅者不应该收到遗嘱消息
 	// 设置读取超时
 	conn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	_, err = packet.ReadPacket(conn1)
+	_, err = packet.ReadPacket(conn1, 0)
 	if err == nil {
 		t.Fatal("Should not receive will message on normal disconnect")
 	}

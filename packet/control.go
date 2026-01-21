@@ -1,7 +1,6 @@
 package packet
 
 import (
-	"bytes"
 	"io"
 )
 
@@ -20,30 +19,19 @@ func (p *PingPacket) Type() PacketType {
 	return PING
 }
 
-func (p *PingPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *PingPacket) encode(w io.Writer) error {
 	// 格式：Seq(4) + Timestamp(8)
-	if err := EncodeUint32(&buf, p.Seq); err != nil {
+	if err := EncodeUint32(w, p.Seq); err != nil {
 		return err
 	}
-	if err := EncodeUint64(&buf, p.Timestamp); err != nil {
-		return err
-	}
-
-	header := FixedHeader{
-		Type:      PING,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
+	if err := EncodeUint64(w, p.Timestamp); err != nil {
 		return err
 	}
 
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *PingPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *PingPacket) decode(r io.Reader, header FixedHeader) error {
 	// 格式：Seq(4) + Timestamp(8)
 	if header.Remaining != 12 {
 		return ErrMalformedPacket
@@ -79,31 +67,22 @@ func (p *PongPacket) Type() PacketType {
 	return PONG
 }
 
-func (p *PongPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *PongPacket) encode(w io.Writer) error {
 	// 格式：Seq(4) + Echo(8) + Load(1)
-	if err := EncodeUint32(&buf, p.Seq); err != nil {
+	if err := EncodeUint32(w, p.Seq); err != nil {
 		return err
 	}
-	if err := EncodeUint64(&buf, p.Echo); err != nil {
+	if err := EncodeUint64(w, p.Echo); err != nil {
 		return err
 	}
-	buf.WriteByte(p.Load)
-
-	header := FixedHeader{
-		Type:      PONG,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
+	if err := WriteByte(w, p.Load); err != nil {
 		return err
 	}
 
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *PongPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *PongPacket) decode(r io.Reader, header FixedHeader) error {
 	// 格式：Seq(4) + Echo(8) + Load(1)
 	if header.Remaining != 13 {
 		return ErrMalformedPacket
@@ -147,9 +126,7 @@ func (p *DisconnectPacket) Type() PacketType {
 	return DISCONNECT
 }
 
-func (p *DisconnectPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *DisconnectPacket) encode(w io.Writer) error {
 	if p.ReasonCode == ReasonNormalDisconnect && p.Properties == nil {
 		header := FixedHeader{
 			Type:      DISCONNECT,
@@ -158,28 +135,21 @@ func (p *DisconnectPacket) Encode(w io.Writer) error {
 		return header.Encode(w)
 	}
 
-	buf.WriteByte(byte(p.ReasonCode))
+	if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
+		return err
+	}
 
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
-	header := FixedHeader{
-		Type:      DISCONNECT,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *DisconnectPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *DisconnectPacket) decode(r io.Reader, header FixedHeader) error {
 	if header.Remaining == 0 {
 		p.ReasonCode = ReasonNormalDisconnect
 		return nil
@@ -219,31 +189,22 @@ func (p *AuthPacket) Type() PacketType {
 	return AUTH
 }
 
-func (p *AuthPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
-	buf.WriteByte(byte(p.ReasonCode))
+func (p *AuthPacket) encode(w io.Writer) error {
+	if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
+		return err
+	}
 
 	if p.Properties == nil {
 		p.Properties = NewAuthProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
-	header := FixedHeader{
-		Type:      AUTH,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *AuthPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *AuthPacket) decode(r io.Reader, header FixedHeader) error {
 	if header.Remaining == 0 {
 		p.ReasonCode = ReasonSuccess
 		return nil
@@ -291,35 +252,33 @@ func (p *TracePacket) Type() PacketType {
 	return TRACE
 }
 
-func (p *TracePacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *TracePacket) encode(w io.Writer) error {
 	// 编码字段
-	if err := EncodeString(&buf, p.TraceID); err != nil {
+	if err := EncodeString(w, p.TraceID); err != nil {
 		return err
 	}
-	if err := EncodeString(&buf, p.Event); err != nil {
+	if err := EncodeString(w, p.Event); err != nil {
 		return err
 	}
-	if err := EncodeString(&buf, p.ClientID); err != nil {
+	if err := EncodeString(w, p.ClientID); err != nil {
 		return err
 	}
-	if err := EncodeString(&buf, p.Topic); err != nil {
+	if err := EncodeString(w, p.Topic); err != nil {
 		return err
 	}
-	if err := EncodeUint64(&buf, p.Timestamp); err != nil {
+	if err := EncodeUint64(w, p.Timestamp); err != nil {
 		return err
 	}
 
 	// 编码 Details（使用 map 编码）
-	if err := EncodeUint16(&buf, uint16(len(p.Details))); err != nil {
+	if err := EncodeUint16(w, uint16(len(p.Details))); err != nil {
 		return err
 	}
 	for k, v := range p.Details {
-		if err := EncodeString(&buf, k); err != nil {
+		if err := EncodeString(w, k); err != nil {
 			return err
 		}
-		if err := EncodeString(&buf, v); err != nil {
+		if err := EncodeString(w, v); err != nil {
 			return err
 		}
 	}
@@ -328,23 +287,14 @@ func (p *TracePacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
-	header := FixedHeader{
-		Type:      TRACE,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *TracePacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *TracePacket) decode(r io.Reader, header FixedHeader) error {
 	var err error
 
 	p.TraceID, err = DecodeString(r)

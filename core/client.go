@@ -1,7 +1,6 @@
 package core
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -111,7 +110,7 @@ func (c *Client) writePacket(pkt packet.Packet) error {
 	conn := c.getConn()
 
 	if conn == nil || conn.closed.Load() {
-		return errors.New("client not connected")
+		return ErrClientClosed
 	}
 
 	return conn.writePacket(pkt)

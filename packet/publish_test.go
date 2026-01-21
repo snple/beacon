@@ -42,7 +42,7 @@ func TestPublishFlagsEncoding(t *testing.T) {
 
 			// 编码
 			var buf bytes.Buffer
-			if err := pub.Encode(&buf); err != nil {
+			if err := WritePacket(&buf, pub, 0); err != nil {
 				t.Fatalf("Encode failed: %v", err)
 			}
 
@@ -55,7 +55,7 @@ func TestPublishFlagsEncoding(t *testing.T) {
 
 			// 解码 PUBLISH 包
 			decoded := &PublishPacket{}
-			if err := decoded.Decode(r, header); err != nil {
+			if err := decoded.decode(r, header); err != nil {
 				t.Fatalf("Decode failed: %v", err)
 			}
 
@@ -169,7 +169,7 @@ func TestConnectWillFlagsEncoding(t *testing.T) {
 
 			// 编码
 			var buf bytes.Buffer
-			if err := conn.Encode(&buf); err != nil {
+			if err := WritePacket(&buf, conn, 0); err != nil {
 				t.Fatalf("Encode failed: %v", err)
 			}
 
@@ -182,7 +182,7 @@ func TestConnectWillFlagsEncoding(t *testing.T) {
 
 			// 解码 CONNECT 包
 			decoded := &ConnectPacket{}
-			if err := decoded.Decode(r, header); err != nil {
+			if err := decoded.decode(r, header); err != nil {
 				t.Fatalf("Decode failed: %v", err)
 			}
 

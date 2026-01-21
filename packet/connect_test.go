@@ -13,7 +13,7 @@ func TestConnectPacket_EncodeDecodeBasic(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := pkt.Encode(&buf); err != nil {
+	if err := WritePacket(&buf, pkt, 0); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 
@@ -24,7 +24,7 @@ func TestConnectPacket_EncodeDecodeBasic(t *testing.T) {
 		t.Fatalf("解码固定头部失败: %v", err)
 	}
 
-	if err := decoded.Decode(&buf, header); err != nil {
+	if err := decoded.decode(&buf, header); err != nil {
 		t.Fatalf("解码失败: %v", err)
 	}
 
@@ -55,7 +55,7 @@ func TestConnectPacket_EncodeDecodeWithCleanSession(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := pkt.Encode(&buf); err != nil {
+	if err := WritePacket(&buf, pkt, 0); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 
@@ -66,7 +66,7 @@ func TestConnectPacket_EncodeDecodeWithCleanSession(t *testing.T) {
 		t.Fatalf("解码固定头部失败: %v", err)
 	}
 
-	if err := decoded.Decode(&buf, header); err != nil {
+	if err := decoded.decode(&buf, header); err != nil {
 		t.Fatalf("解码失败: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func TestConnectPacket_EncodeDecodeWithWill(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := pkt.Encode(&buf); err != nil {
+	if err := WritePacket(&buf, pkt, 0); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestConnectPacket_EncodeDecodeWithWill(t *testing.T) {
 		t.Fatalf("解码固定头部失败: %v", err)
 	}
 
-	if err := decoded.Decode(&buf, header); err != nil {
+	if err := decoded.decode(&buf, header); err != nil {
 		t.Fatalf("解码失败: %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestConnectPacket_EncodeDecodeWithProperties(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := pkt.Encode(&buf); err != nil {
+	if err := WritePacket(&buf, pkt, 0); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 
@@ -161,7 +161,7 @@ func TestConnectPacket_EncodeDecodeWithProperties(t *testing.T) {
 		t.Fatalf("解码固定头部失败: %v", err)
 	}
 
-	if err := decoded.Decode(&buf, header); err != nil {
+	if err := decoded.decode(&buf, header); err != nil {
 		t.Fatalf("解码失败: %v", err)
 	}
 
@@ -202,7 +202,7 @@ func TestConnackPacket_EncodeDecode(t *testing.T) {
 
 	// 编码
 	var buf bytes.Buffer
-	if err := pkt.Encode(&buf); err != nil {
+	if err := WritePacket(&buf, pkt, 0); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 
@@ -213,7 +213,7 @@ func TestConnackPacket_EncodeDecode(t *testing.T) {
 		t.Fatalf("解码固定头部失败: %v", err)
 	}
 
-	if err := decoded.Decode(&buf, header); err != nil {
+	if err := decoded.decode(&buf, header); err != nil {
 		t.Fatalf("解码失败: %v", err)
 	}
 
@@ -247,7 +247,7 @@ func TestConnackPacket_ErrorReasonCode(t *testing.T) {
 
 		// 编码
 		var buf bytes.Buffer
-		if err := pkt.Encode(&buf); err != nil {
+		if err := WritePacket(&buf, pkt, 0); err != nil {
 			t.Fatalf("编码失败 (code=%v): %v", code, err)
 		}
 
@@ -258,7 +258,7 @@ func TestConnackPacket_ErrorReasonCode(t *testing.T) {
 			t.Fatalf("解码固定头部失败 (code=%v): %v", code, err)
 		}
 
-		if err := decoded.Decode(&buf, header); err != nil {
+		if err := decoded.decode(&buf, header); err != nil {
 			t.Fatalf("解码失败 (code=%v): %v", code, err)
 		}
 

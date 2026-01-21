@@ -1,22 +1,20 @@
 package client
 
 import (
-	"fmt"
-
 	"github.com/snple/beacon/packet"
 
 	"go.uber.org/zap"
 )
 
 // handleAuth 处理服务器发来的 AUTH 包
-func (c *Client) handleAuth(p *packet.AuthPacket) {
+func (c *Client) handleAuth(p *packet.AuthPacket) error {
 	c.logger.Debug("Received AUTH packet",
 		zap.String("reasonCode", p.ReasonCode.String()))
 
 	// 如果没有设置钩子，默认不处理
 	if c.options.Hooks.AuthHandler == nil {
 		c.logger.Warn("Received AUTH packet but no AuthHandler configured")
-		return
+		return nil
 	}
 
 	// 调用 OnAuth 钩子（直接传递原始 packet）
@@ -29,9 +27,7 @@ func (c *Client) handleAuth(p *packet.AuthPacket) {
 	// 根据回调结果决定是否发送响应 AUTH 包
 	if err != nil {
 		c.logger.Error("Authentication handler error", zap.Error(err))
-		// 认证失败，断开连接
-		c.close(fmt.Errorf("authentication failed: %w", err))
-		return
+		return err
 	}
 
 	if continueAuth {
@@ -44,7 +40,7 @@ func (c *Client) handleAuth(p *packet.AuthPacket) {
 
 		if err := c.writePacket(authResp); err != nil {
 			c.logger.Error("Failed to send AUTH response", zap.Error(err))
-			c.close(err)
+			return err
 		} else {
 			c.logger.Debug("Sent AUTH response",
 				zap.String("reasonCode", packet.ReasonContinueAuth.String()))
@@ -60,6 +56,7 @@ func (c *Client) handleAuth(p *packet.AuthPacket) {
 
 			if err := c.writePacket(authResp); err != nil {
 				c.logger.Error("Failed to send final AUTH response", zap.Error(err))
+				return err
 			} else {
 				c.logger.Debug("Sent final AUTH response",
 					zap.String("reasonCode", packet.ReasonSuccess.String()))
@@ -67,6 +64,8 @@ func (c *Client) handleAuth(p *packet.AuthPacket) {
 		}
 		c.logger.Info("Authentication completed successfully")
 	}
+
+	return nil
 }
 
 // SendAuth 发送 AUTH 包（用于主动发起认证或重新认证）

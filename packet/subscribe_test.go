@@ -38,7 +38,7 @@ func TestSubscribeOptionsEncoding(t *testing.T) {
 			})
 
 			var buf bytes.Buffer
-			if err := sub.Encode(&buf); err != nil {
+			if err := WritePacket(&buf, sub, 0); err != nil {
 				t.Fatalf("Encode failed: %v", err)
 			}
 
@@ -49,7 +49,7 @@ func TestSubscribeOptionsEncoding(t *testing.T) {
 			}
 
 			decoded := &SubscribePacket{}
-			if err := decoded.Decode(r, header); err != nil {
+			if err := decoded.decode(r, header); err != nil {
 				t.Fatalf("Decode failed: %v", err)
 			}
 

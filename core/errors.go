@@ -78,7 +78,8 @@ func (e *ClientNotFoundError) Error() string {
 }
 
 func (e *ClientNotFoundError) Is(target error) bool {
-	return target == ErrClientNotFound
+	_, ok := target.(*ClientNotFoundError)
+	return ok
 }
 
 // NewClientNotFoundError 创建客户端未找到错误
@@ -96,7 +97,8 @@ func (e *ClientClosedError) Error() string {
 }
 
 func (e *ClientClosedError) Is(target error) bool {
-	return target == ErrClientClosed
+	_, ok := target.(*ClientClosedError)
+	return ok
 }
 
 // NewClientClosedError 创建客户端已关闭错误
@@ -114,7 +116,8 @@ func (e *ClientNotAvailableError) Error() string {
 }
 
 func (e *ClientNotAvailableError) Is(target error) bool {
-	return target == ErrClientNotAvailable
+	_, ok := target.(*ClientNotAvailableError)
+	return ok
 }
 
 // NewClientNotAvailableError 创建客户端不可用错误
@@ -132,7 +135,8 @@ func (e *ActionNotFoundError) Error() string {
 }
 
 func (e *ActionNotFoundError) Is(target error) bool {
-	return target == ErrActionNotFound
+	_, ok := target.(*ActionNotFoundError)
+	return ok
 }
 
 // NewActionNotFoundError 创建 action 未找到错误
@@ -150,7 +154,8 @@ func (e *NoAvailableHandlerError) Error() string {
 }
 
 func (e *NoAvailableHandlerError) Is(target error) bool {
-	return target == ErrNoAvailableHandler
+	_, ok := target.(*NoAvailableHandlerError)
+	return ok
 }
 
 // NewNoAvailableHandlerError 创建没有可用处理器错误

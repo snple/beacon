@@ -219,9 +219,7 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 	}
 
 	// 写入位掩码 (2 bytes)
-	if err := EncodeUint16(&buf, flags); err != nil {
-		return err
-	}
+	EncodeUint16(&buf, flags)
 
 	// 按顺序写入存在的属性
 	if flags&connPropSessionExpiry != 0 {
@@ -377,9 +375,7 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 	}
 
 	// 写入位掩码 (2 bytes)
-	if err := EncodeUint16(&buf, flags); err != nil {
-		return err
-	}
+	EncodeUint16(&buf, flags)
 
 	// 按顺序写入存在的属性
 	if flags&connackPropClientID != 0 {
@@ -587,9 +583,7 @@ func (p *PublishProperties) Encode(w io.Writer) error {
 	}
 
 	// 写入位掩码 (2 bytes)
-	if err := EncodeUint16(&buf, flags); err != nil {
-		return err
-	}
+	EncodeUint16(&buf, flags)
 
 	// 按顺序写入存在的属性
 	if flags&pubPropExpiryTime != 0 {
@@ -767,9 +761,7 @@ func (p *ReasonProperties) Encode(w io.Writer) error {
 	}
 
 	// 写入位掩码 (2 bytes)
-	if err := EncodeUint16(&buf, flags); err != nil {
-		return err
-	}
+	EncodeUint16(&buf, flags)
 
 	// 按顺序写入存在的属性
 	if flags&reasonPropReasonString != 0 {

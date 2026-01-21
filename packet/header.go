@@ -185,3 +185,16 @@ func DecodeId(r io.Reader) (nson.Id, error) {
 	_, err := io.ReadFull(r, id[:])
 	return id, err
 }
+
+// WriteByte 写入单个字节
+func WriteByte(w io.Writer, b byte) error {
+	_, err := w.Write([]byte{b})
+	return err
+}
+
+// ReadByte 读取单个字节
+func ReadByte(r io.Reader) (byte, error) {
+	var b [1]byte
+	_, err := io.ReadFull(r, b[:])
+	return b[0], err
+}

@@ -42,16 +42,16 @@ func (p *ConnectPacket) Type() PacketType {
 	return CONNECT
 }
 
-func (p *ConnectPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *ConnectPacket) encode(w io.Writer) error {
 	// 协议名称
-	if err := EncodeString(&buf, p.ProtocolName); err != nil {
+	if err := EncodeString(w, p.ProtocolName); err != nil {
 		return err
 	}
 
 	// 协议版本
-	buf.WriteByte(p.ProtocolVersion)
+	if err := WriteByte(w, p.ProtocolVersion); err != nil {
+		return err
+	}
 
 	// 连接标志 (包含 CleanSession, Will)
 	// 注意: Will QoS 和 Will Retain 现在在遗嘱消息的 Flags 字节中编码
@@ -62,15 +62,17 @@ func (p *ConnectPacket) Encode(w io.Writer) error {
 	if p.Will {
 		flags |= 0x04
 	}
-	buf.WriteByte(flags)
+	if err := WriteByte(w, flags); err != nil {
+		return err
+	}
 
 	// 客户端标识
-	if err := EncodeString(&buf, p.ClientID); err != nil {
+	if err := EncodeString(w, p.ClientID); err != nil {
 		return err
 	}
 
 	// Keep Alive
-	if err := EncodeUint16(&buf, p.KeepAlive); err != nil {
+	if err := EncodeUint16(w, p.KeepAlive); err != nil {
 		return err
 	}
 
@@ -78,7 +80,7 @@ func (p *ConnectPacket) Encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewConnectProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
@@ -96,10 +98,12 @@ func (p *ConnectPacket) Encode(w io.Writer) error {
 		if p.WillPacket.Dup {
 			willFlags |= 0x04 // Bit 2: Dup
 		}
-		buf.WriteByte(willFlags)
+		if err := WriteByte(w, willFlags); err != nil {
+			return err
+		}
 
 		// 遗嘱主题
-		if err := EncodeString(&buf, p.WillPacket.Topic); err != nil {
+		if err := EncodeString(w, p.WillPacket.Topic); err != nil {
 			return err
 		}
 
@@ -107,28 +111,20 @@ func (p *ConnectPacket) Encode(w io.Writer) error {
 		if p.WillPacket.Properties == nil {
 			p.WillPacket.Properties = NewPublishProperties()
 		}
-		if err := p.WillPacket.Properties.Encode(&buf); err != nil {
+		if err := p.WillPacket.Properties.Encode(w); err != nil {
 			return err
 		}
 
 		// 遗嘱载荷 (直接写入，与 PublishPacket 一致)
-		buf.Write(p.WillPacket.Payload)
+		if _, err := w.Write(p.WillPacket.Payload); err != nil {
+			return err
+		}
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      CONNECT,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 	// 协议名称
 	var err error
 	p.ProtocolName, err = DecodeString(r)
@@ -240,41 +236,33 @@ func (p *ConnackPacket) Type() PacketType {
 	return CONNACK
 }
 
-func (p *ConnackPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *ConnackPacket) encode(w io.Writer) error {
 	// 会话存在标志
 	var flags byte
 	if p.SessionPresent {
 		flags |= 0x01
 	}
-	buf.WriteByte(flags)
+	if err := WriteByte(w, flags); err != nil {
+		return err
+	}
 
 	// 原因码
-	buf.WriteByte(byte(p.ReasonCode))
+	if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
+		return err
+	}
 
 	// 属性
 	if p.Properties == nil {
 		p.Properties = NewConnackProperties()
 	}
-	if err := p.Properties.Encode(&buf); err != nil {
+	if err := p.Properties.Encode(w); err != nil {
 		return err
 	}
 
-	// 固定头部
-	header := FixedHeader{
-		Type:      CONNACK,
-		Remaining: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return nil
 }
 
-func (p *ConnackPacket) Decode(r io.Reader, header FixedHeader) error {
+func (p *ConnackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 连接确认标志
 	var flags [1]byte
 	if _, err := io.ReadFull(r, flags[:]); err != nil {

@@ -45,7 +45,11 @@ func (c *Client) handleAuth(p *packet.AuthPacket) error {
 		}
 		authResp.Properties.UserProperties["error"] = err.Error()
 
-		conn.writePacket(authResp)
+		if err := conn.writePacket(authResp); err != nil {
+			c.core.logger.Error("Failed to send AUTH response",
+				zap.String("clientID", c.ID),
+				zap.Error(err))
+		}
 
 		c.core.logger.Warn("Authentication failed",
 			zap.String("clientID", c.ID),

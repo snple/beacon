@@ -11,18 +11,42 @@ type Packet interface {
 	// Type 返回数据包类型
 	Type() PacketType
 
-	// Encode 编码数据包到 Writer
-	Encode(w io.Writer) error
+	// encode 编码数据包到 Writer
+	encode(w io.Writer) error
 
 	// Decode 从 Reader 解码数据包
-	Decode(r io.Reader, header FixedHeader) error
+	decode(r io.Reader, header FixedHeader) error
+}
+
+// PacketTooLargeError 数据包过大错误
+type PacketTooLargeError struct {
+	Size       uint32
+	MaxAllowed uint32
+}
+
+func (e *PacketTooLargeError) Error() string {
+	return fmt.Sprintf("packet size %d exceeds maximum allowed %d", e.Size, e.MaxAllowed)
+}
+
+func (e *PacketTooLargeError) Is(target error) bool {
+	_, ok := target.(*PacketTooLargeError)
+	return ok
 }
 
 // ReadPacket 从 Reader 读取并解析数据包
-func ReadPacket(r io.Reader) (Packet, error) {
+// maxPacketSize: 最大允许的包大小（0 表示无限制）
+func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 	var header FixedHeader
 	if err := header.Decode(r); err != nil {
 		return nil, err
+	}
+
+	// 检查包大小是否超过限制
+	if maxPacketSize > 0 && header.Remaining > maxPacketSize {
+		return nil, &PacketTooLargeError{
+			Size:       header.Remaining,
+			MaxAllowed: maxPacketSize,
+		}
 	}
 
 	// 读取剩余数据
@@ -80,7 +104,7 @@ func ReadPacket(r io.Reader) (Packet, error) {
 
 	// 解码包体
 	buf := bytes.NewReader(data)
-	if err := pkt.Decode(buf, header); err != nil {
+	if err := pkt.decode(buf, header); err != nil {
 		return nil, fmt.Errorf("failed to decode %v packet: %w", header.Type, err)
 	}
 
@@ -88,6 +112,34 @@ func ReadPacket(r io.Reader) (Packet, error) {
 }
 
 // WritePacket 将数据包写入 Writer
-func WritePacket(w io.Writer, pkt Packet) error {
-	return pkt.Encode(w)
+func WritePacket(w io.Writer, pkt Packet, maxPacketSize uint32) error {
+	// 先编码包体到缓冲区
+	var buf bytes.Buffer
+	if err := pkt.encode(&buf); err != nil {
+		return fmt.Errorf("failed to encode %v packet: %w", pkt.Type(), err)
+	}
+
+	// 检查包大小是否超过限制
+	totalSize := uint32(buf.Len() + 5) // 包体大小 + 固定头部大小
+	if maxPacketSize > 0 && totalSize > maxPacketSize {
+		return &PacketTooLargeError{
+			Size:       totalSize,
+			MaxAllowed: maxPacketSize,
+		}
+	}
+
+	// 构造固定头部
+	header := FixedHeader{
+		Type:      pkt.Type(),
+		Remaining: uint32(buf.Len()),
+	}
+
+	// 先写入固定头部
+	if err := header.Encode(w); err != nil {
+		return err
+	}
+
+	// 再写入包体
+	_, err := w.Write(buf.Bytes())
+	return err
 }
