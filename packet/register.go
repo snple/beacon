@@ -397,7 +397,11 @@ func (p *RegisterProperties) Encode(w io.Writer) error {
 
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
-	if err := EncodeVariableInt(w, propLen); err != nil {
+	if propLen > MaxPacketSize {
+		return ErrPacketTooLarge
+	}
+
+	if err := EncodeUint32(w, propLen); err != nil {
 		return err
 	}
 	if propLen > 0 {
@@ -409,13 +413,17 @@ func (p *RegisterProperties) Encode(w io.Writer) error {
 
 // Decode 解码注册属性（使用位掩码优化）
 func (p *RegisterProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeVariableInt(r)
+	propLen, err := DecodeUint32(r)
 	if err != nil {
 		return err
 	}
 
 	if propLen == 0 {
 		return nil
+	}
+
+	if propLen > MaxPacketSize {
+		return ErrMalformedPacket
 	}
 
 	data := make([]byte, propLen)
@@ -447,7 +455,7 @@ func (p *RegisterProperties) Decode(r io.Reader) error {
 		if p.UserProperties == nil {
 			p.UserProperties = make(map[string]string)
 		}
-		for i := uint16(0); i < count; i++ {
+		for range count {
 			key, err := DecodeString(buf)
 			if err != nil {
 				return err

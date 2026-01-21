@@ -46,12 +46,12 @@ func NewConnectProperties() *ConnectProperties {
 // ConnackProperties CONNACK 专用属性（服务器响应）
 // 使用位掩码优化编码，减少字节开销
 type ConnackProperties struct {
-	// 会话管理
-	SessionTimeout uint32 // 会话过期时间（秒）
-
 	// 服务器分配
 	ClientID  string // 服务器分配的 Client ID
 	KeepAlive uint16 // 服务器要求的心跳间隔
+
+	// 会话管理
+	SessionTimeout uint32 // 会话过期时间（秒）
 
 	// 流量控制
 	MaxPacketSize uint32 // 最大包大小
@@ -65,13 +65,13 @@ type ConnackProperties struct {
 
 // ConnackProperties 位掩码常量
 const (
-	connackPropSessionTimeout uint16 = 1 << 0 // bit 0
 	connackPropClientID       uint16 = 1 << 1 // bit 1
 	connackPropKeepAlive      uint16 = 1 << 2 // bit 2
-	connackPropMaxPacketSize  uint16 = 1 << 3 // bit 3
-	connackPropReceiveWindow  uint16 = 1 << 4 // bit 4
-	connackPropTraceID        uint16 = 1 << 5 // bit 5
-	connackPropUserProperties uint16 = 1 << 6 // bit 6
+	connackPropSessionTimeout uint16 = 1 << 3 // bit 3
+	connackPropMaxPacketSize  uint16 = 1 << 4 // bit 4
+	connackPropReceiveWindow  uint16 = 1 << 5 // bit 5
+	connackPropTraceID        uint16 = 1 << 6 // bit 6
+	connackPropUserProperties uint16 = 1 << 7 // bit 7
 )
 
 // NewConnackProperties 创建新的连接响应属性
@@ -253,7 +253,7 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
-	if err := EncodeVariableInt(w, propLen); err != nil {
+	if err := EncodeUint32(w, propLen); err != nil {
 		return err
 	}
 	if propLen > 0 {
@@ -265,7 +265,7 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 
 // Decode 解码连接属性（使用位掩码优化）
 func (p *ConnectProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeVariableInt(r)
+	propLen, err := DecodeUint32(r)
 	if err != nil {
 		return err
 	}
@@ -354,14 +354,14 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 
 	// 计算位掩码
 	var flags uint16
-	if p.SessionTimeout > 0 {
-		flags |= connackPropSessionTimeout
-	}
 	if p.ClientID != "" {
 		flags |= connackPropClientID
 	}
 	if p.KeepAlive > 0 {
 		flags |= connackPropKeepAlive
+	}
+	if p.SessionTimeout > 0 {
+		flags |= connackPropSessionTimeout
 	}
 	if p.MaxPacketSize > 0 {
 		flags |= connackPropMaxPacketSize
@@ -382,14 +382,14 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 	}
 
 	// 按顺序写入存在的属性
-	if flags&connackPropSessionTimeout != 0 {
-		EncodeUint32(&buf, p.SessionTimeout)
-	}
 	if flags&connackPropClientID != 0 {
 		EncodeString(&buf, p.ClientID)
 	}
 	if flags&connackPropKeepAlive != 0 {
 		EncodeUint16(&buf, p.KeepAlive)
+	}
+	if flags&connackPropSessionTimeout != 0 {
+		EncodeUint32(&buf, p.SessionTimeout)
 	}
 	if flags&connackPropMaxPacketSize != 0 {
 		EncodeUint32(&buf, p.MaxPacketSize)
@@ -411,7 +411,11 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
-	if err := EncodeVariableInt(w, propLen); err != nil {
+	if propLen > MaxPacketSize {
+		return ErrPacketTooLarge
+	}
+
+	if err := EncodeUint32(w, propLen); err != nil {
 		return err
 	}
 	if propLen > 0 {
@@ -423,13 +427,17 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 
 // Decode 解码连接响应属性（使用位掩码优化）
 func (p *ConnackProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeVariableInt(r)
+	propLen, err := DecodeUint32(r)
 	if err != nil {
 		return err
 	}
 
 	if propLen == 0 {
 		return nil
+	}
+
+	if propLen > MaxPacketSize {
+		return ErrMalformedPacket
 	}
 
 	data := make([]byte, propLen)
@@ -446,12 +454,6 @@ func (p *ConnackProperties) Decode(r io.Reader) error {
 	}
 
 	// 按顺序读取存在的属性
-	if flags&connackPropSessionTimeout != 0 {
-		p.SessionTimeout, err = DecodeUint32(buf)
-		if err != nil {
-			return err
-		}
-	}
 	if flags&connackPropClientID != 0 {
 		p.ClientID, err = DecodeString(buf)
 		if err != nil {
@@ -464,6 +466,13 @@ func (p *ConnackProperties) Decode(r io.Reader) error {
 			return err
 		}
 	}
+	if flags&connackPropSessionTimeout != 0 {
+		p.SessionTimeout, err = DecodeUint32(buf)
+		if err != nil {
+			return err
+		}
+	}
+
 	if flags&connackPropMaxPacketSize != 0 {
 		p.MaxPacketSize, err = DecodeUint32(buf)
 		if err != nil {
@@ -615,7 +624,11 @@ func (p *PublishProperties) Encode(w io.Writer) error {
 
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
-	if err := EncodeVariableInt(w, propLen); err != nil {
+	if propLen > MaxPacketSize {
+		return ErrPacketTooLarge
+	}
+
+	if err := EncodeUint32(w, propLen); err != nil {
 		return err
 	}
 	if propLen > 0 {
@@ -627,13 +640,17 @@ func (p *PublishProperties) Encode(w io.Writer) error {
 
 // Decode 解码发布属性（使用位掩码优化）
 func (p *PublishProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeVariableInt(r)
+	propLen, err := DecodeUint32(r)
 	if err != nil {
 		return err
 	}
 
 	if propLen == 0 {
 		return nil
+	}
+
+	if propLen > MaxPacketSize {
+		return ErrMalformedPacket
 	}
 
 	data := make([]byte, propLen)
@@ -769,7 +786,11 @@ func (p *ReasonProperties) Encode(w io.Writer) error {
 
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
-	if err := EncodeVariableInt(w, propLen); err != nil {
+	if propLen > MaxPacketSize {
+		return ErrPacketTooLarge
+	}
+
+	if err := EncodeUint32(w, propLen); err != nil {
 		return err
 	}
 	if propLen > 0 {
@@ -781,13 +802,17 @@ func (p *ReasonProperties) Encode(w io.Writer) error {
 
 // Decode 解码响应属性（使用位掩码优化）
 func (p *ReasonProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeVariableInt(r)
+	propLen, err := DecodeUint32(r)
 	if err != nil {
 		return err
 	}
 
 	if propLen == 0 {
 		return nil
+	}
+
+	if propLen > MaxPacketSize {
+		return ErrMalformedPacket
 	}
 
 	data := make([]byte, propLen)

@@ -306,16 +306,15 @@ func (r ReasonCode) IsError() bool {
 
 // 默认值
 const (
-	DefaultKeepAlive     = 60        // 默认心跳间隔（秒）
-	DefaultMaxPacketSize = 268435456 // 256 MB
+	DefaultKeepAlive     = 60       // 默认心跳间隔（秒）
+	DefaultMaxPacketSize = 16777216 // 16 MB
 )
 
 // 最大值限制
 const (
-	MaxClientIDLength   = 65535
-	MaxTopicLength      = 65535
-	MaxPacketSize       = 268435456 // 256 MB
-	MaxVariableIntValue = 268435455 // 可变长度整数最大值
+	MaxClientIDLength = 65535
+	MaxTopicLength    = 65535
+	MaxPacketSize     = 268435456 // 256 MB
 )
 
 // Topic 通配符常量

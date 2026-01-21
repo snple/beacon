@@ -327,7 +327,11 @@ func (p *RequestProperties) Encode(w io.Writer) error {
 
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
-	if err := EncodeVariableInt(w, propLen); err != nil {
+	if propLen > MaxPacketSize {
+		return ErrPacketTooLarge
+	}
+
+	if err := EncodeUint32(w, propLen); err != nil {
 		return err
 	}
 	if propLen > 0 {
@@ -339,13 +343,17 @@ func (p *RequestProperties) Encode(w io.Writer) error {
 
 // Decode 解码请求属性（使用位掩码优化）
 func (p *RequestProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeVariableInt(r)
+	propLen, err := DecodeUint32(r)
 	if err != nil {
 		return err
 	}
 
 	if propLen == 0 {
 		return nil
+	}
+
+	if propLen > MaxPacketSize {
+		return ErrMalformedPacket
 	}
 
 	data := make([]byte, propLen)
@@ -480,7 +488,11 @@ func (p *ResponseProperties) Encode(w io.Writer) error {
 
 	// 写入属性长度和数据
 	propLen := uint32(buf.Len())
-	if err := EncodeVariableInt(w, propLen); err != nil {
+	if propLen > MaxPacketSize {
+		return ErrPacketTooLarge
+	}
+
+	if err := EncodeUint32(w, propLen); err != nil {
 		return err
 	}
 	if propLen > 0 {
@@ -492,13 +504,17 @@ func (p *ResponseProperties) Encode(w io.Writer) error {
 
 // Decode 解码响应属性（使用位掩码优化）
 func (p *ResponseProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeVariableInt(r)
+	propLen, err := DecodeUint32(r)
 	if err != nil {
 		return err
 	}
 
 	if propLen == 0 {
 		return nil
+	}
+
+	if propLen > MaxPacketSize {
+		return ErrMalformedPacket
 	}
 
 	data := make([]byte, propLen)

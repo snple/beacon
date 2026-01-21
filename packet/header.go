@@ -55,60 +55,6 @@ func (h *FixedHeader) Size() int {
 	return 5 // 1字节类型 + 4字节剩余长度
 }
 
-// EncodeVariableInt 编码可变长度整数
-func EncodeVariableInt(w io.Writer, value uint32) error {
-	if value > MaxVariableIntValue {
-		return ErrPacketTooLarge
-	}
-
-	for {
-		encodedByte := byte(value % 128)
-		value /= 128
-		if value > 0 {
-			encodedByte |= 0x80
-		}
-		if _, err := w.Write([]byte{encodedByte}); err != nil {
-			return err
-		}
-		if value == 0 {
-			break
-		}
-	}
-	return nil
-}
-
-// DecodeVariableInt 解码可变长度整数
-func DecodeVariableInt(r io.Reader) (uint32, error) {
-	var value uint32
-	var multiplier uint32 = 1
-	var encodedByte [1]byte
-
-	for range 4 {
-		if _, err := io.ReadFull(r, encodedByte[:]); err != nil {
-			return 0, err
-		}
-		value += uint32(encodedByte[0]&127) * multiplier
-		if encodedByte[0]&128 == 0 {
-			return value, nil
-		}
-		multiplier *= 128
-	}
-
-	return 0, ErrMalformedPacket
-}
-
-// VariableIntSize 返回可变长度整数编码后的大小
-func VariableIntSize(value uint32) int {
-	if value < 128 {
-		return 1
-	} else if value < 16384 {
-		return 2
-	} else if value < 2097152 {
-		return 3
-	}
-	return 4
-}
-
 // EncodeString 编码 UTF-8 字符串
 func EncodeString(w io.Writer, s string) error {
 	length := uint16(len(s))

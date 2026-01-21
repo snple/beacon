@@ -18,8 +18,8 @@ type ConnectPacket struct {
 	// 客户端标识
 	ClientID string
 
-	// Keep Alive
-	KeepAlive uint16
+	// 连接保持
+	KeepAlive uint16 // 心跳间隔（秒）
 
 	// 属性
 	Properties *ConnectProperties
