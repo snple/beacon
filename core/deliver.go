@@ -268,6 +268,48 @@ func (c *Client) deliver(msg *Message) error {
 	return nil
 }
 
+// triggerSend 触发发送协程（非阻塞）
+// 使用 processing 标志避免重复启动
+func (c *conn) triggerSend() {
+	if c.processing.CompareAndSwap(false, true) {
+		go c.processSendQueue()
+	}
+}
+
+// processSendQueue 处理发送队列中的消息
+func (c *conn) processSendQueue() {
+	defer c.processing.Store(false)
+
+	for !c.closed.Load() {
+		// 尝试从队列取消息
+		msg, ok := c.sendQueue.tryDequeue()
+		if !ok {
+			// 队列已空
+			break
+		}
+
+		// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
+		if msg.IsExpired() {
+			c.client.core.stats.MessagesDropped.Add(1)
+			continue
+		}
+
+		// 发送消息
+		if err := c.sendMessage(msg); err != nil {
+			c.client.core.logger.Debug("Failed to send message from queue",
+				zap.String("clientID", c.client.ID),
+				zap.String("topic", msg.Packet.Topic),
+				zap.Error(err))
+
+			// 如果是 QoS1 且持久化失败，则已经在持久化层有备份
+			// 如果是 QoS0，这里也已经持久化到队列，等待重传机制处理
+		}
+
+		// 发送成功，统计消息发送数
+		c.client.core.stats.MessagesSent.Add(1)
+	}
+}
+
 // pendingMessage 等待确认的消息
 type pendingMessage struct {
 	msg        *Message // 最终的 PUBLISH 包（只读）
@@ -275,7 +317,7 @@ type pendingMessage struct {
 }
 
 // sendMessage 发送消息到客户端
-func (c *Client) sendMessage(msg *Message) error {
+func (c *conn) sendMessage(msg *Message) error {
 	if msg.Packet == nil {
 		return ErrInvalidMessage
 	}
@@ -291,10 +333,10 @@ func (c *Client) sendMessage(msg *Message) error {
 
 	// 调用 OnDeliver 钩子，检查是否允许投递
 	deliverCtx := &DeliverContext{
-		ClientID: c.ID,
+		ClientID: c.client.ID,
 		Packet:   &pub,
 	}
-	if !c.core.options.Hooks.callOnDeliver(deliverCtx) {
+	if !c.client.core.options.Hooks.callOnDeliver(deliverCtx) {
 		return ErrDeliveryRejected // 钩子拒绝投递
 	}
 
@@ -308,17 +350,17 @@ func (c *Client) sendMessage(msg *Message) error {
 		// QoS=1: 加入 pendingAck 等待确认
 		// 注意：如果是重传的消息，pendingAck 中可能已经存在该记录
 		// 此时需要更新 lastSentAt 为实际发送时间
-		c.session.pendingAckMu.Lock()
-		c.session.pendingAck[pub.PacketID] = pendingMessage{
+		c.client.session.pendingAckMu.Lock()
+		c.client.session.pendingAck[pub.PacketID] = pendingMessage{
 			msg:        msg,
 			lastSentAt: time.Now().Unix(),
 		}
-		c.session.pendingAckMu.Unlock()
+		c.client.session.pendingAckMu.Unlock()
 	} else {
 		// QoS=0: TCP 写成功就从发送队列删除
-		if err := c.queue.Delete(pub.PacketID); err != nil {
-			c.core.logger.Debug("Failed to delete QoS0 message from queue after send",
-				zap.String("clientID", c.ID),
+		if err := c.client.queue.Delete(pub.PacketID); err != nil {
+			c.client.core.logger.Debug("Failed to delete QoS0 message from queue after send",
+				zap.String("clientID", c.client.ID),
 				zap.String("packetID", pub.PacketID.Hex()),
 				zap.Error(err))
 		}

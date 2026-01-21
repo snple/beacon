@@ -216,51 +216,6 @@ func (c *conn) writePacket(pkt packet.Packet) error {
 	return c.writer.Flush()
 }
 
-// triggerSend 触发发送协程（非阻塞）
-// 使用 processing 标志避免重复启动
-func (c *conn) triggerSend() {
-	if c.processing.CompareAndSwap(false, true) {
-		go c.processSendQueue()
-	}
-}
-
-// processSendQueue 处理发送队列中的消息
-func (c *conn) processSendQueue() {
-	defer c.processing.Store(false)
-
-	for !c.closed.Load() {
-		// 尝试从队列取消息
-		msg, ok := c.sendQueue.tryDequeue()
-		if !ok {
-			// 队列已空
-			break
-		}
-
-		// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
-		if msg.IsExpired() {
-			c.client.core.stats.MessagesDropped.Add(1)
-			continue
-		}
-
-		// 发送消息
-		if err := c.client.sendMessage(msg); err != nil {
-			c.client.core.logger.Debug("Failed to send message from queue",
-				zap.String("clientID", c.client.ID),
-				zap.String("topic", msg.Packet.Topic),
-				zap.Error(err))
-
-			// 如果是 QoS1 且持久化失败，则已经在持久化层有备份
-			// 如果是 QoS0，则丢弃
-			if msg.QoS == packet.QoS0 {
-				c.client.core.stats.MessagesDropped.Add(1)
-			}
-		}
-
-		// 发送成功，统计消息发送数
-		c.client.core.stats.MessagesSent.Add(1)
-	}
-}
-
 // close 关闭连接
 func (c *conn) close(reason packet.ReasonCode) {
 	c.closeOnce.Do(func() {
