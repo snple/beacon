@@ -10,6 +10,7 @@ func TestConnectPacket_EncodeDecodeBasic(t *testing.T) {
 	pkt := NewConnectPacket()
 	pkt.ClientID = "test-client-123"
 	pkt.KeepAlive = 60
+	pkt.SessionTimeout = 300
 
 	// 编码
 	var buf bytes.Buffer
@@ -41,8 +42,8 @@ func TestConnectPacket_EncodeDecodeBasic(t *testing.T) {
 	if decoded.KeepAlive != pkt.KeepAlive {
 		t.Errorf("KeepAlive 不匹配: 期望 %d, 得到 %d", pkt.KeepAlive, decoded.KeepAlive)
 	}
-	if decoded.KeepSession != pkt.KeepSession {
-		t.Errorf("KeepSession 标志不匹配")
+	if decoded.SessionTimeout != pkt.SessionTimeout {
+		t.Errorf("SessionTimeout 标志不匹配: 期望 %d, 得到 %d", pkt.SessionTimeout, decoded.SessionTimeout)
 	}
 }
 
@@ -50,8 +51,8 @@ func TestConnectPacket_EncodeDecodeWithCleanSession(t *testing.T) {
 	// 创建带 CleanSession 标志的 CONNECT 包
 	pkt := NewConnectPacket()
 	pkt.ClientID = "test-client-456"
-	pkt.KeepSession = true
 	pkt.KeepAlive = 120
+	pkt.SessionTimeout = 0
 
 	// 编码
 	var buf bytes.Buffer
@@ -71,14 +72,14 @@ func TestConnectPacket_EncodeDecodeWithCleanSession(t *testing.T) {
 	}
 
 	// 验证
-	if !decoded.KeepSession {
-		t.Error("KeepSession 标志应该为 true")
-	}
 	if decoded.ClientID != pkt.ClientID {
 		t.Errorf("ClientID 不匹配: 期望 %s, 得到 %s", pkt.ClientID, decoded.ClientID)
 	}
 	if decoded.KeepAlive != pkt.KeepAlive {
 		t.Errorf("KeepAlive 不匹配: 期望 %d, 得到 %d", pkt.KeepAlive, decoded.KeepAlive)
+	}
+	if decoded.SessionTimeout != pkt.SessionTimeout {
+		t.Errorf("SessionTimeout 标志不匹配: 期望 %d, 得到 %d", pkt.SessionTimeout, decoded.SessionTimeout)
 	}
 }
 
@@ -91,7 +92,6 @@ func TestConnectPacket_EncodeDecodeWithWill(t *testing.T) {
 	pkt.WillPacket.QoS = QoS1
 	pkt.WillPacket.Retain = true
 	pkt.WillPacket.Properties.ContentType = "text/plain"
-
 	// 编码
 	var buf bytes.Buffer
 	if err := WritePacket(&buf, pkt, 0); err != nil {
@@ -138,10 +138,9 @@ func TestConnectPacket_EncodeDecodeWithProperties(t *testing.T) {
 	// 创建带属性的 CONNECT 包
 	pkt := NewConnectPacket()
 	pkt.ClientID = "test-client-props"
+	pkt.SessionTimeout = 300
 
 	// 设置一些属性
-	sessionTimeout := uint32(3600)
-	pkt.Properties.SessionTimeout = sessionTimeout
 	pkt.Properties.AuthMethod = "SCRAM-SHA-256"
 	pkt.Properties.AuthData = []byte("auth-data")
 	pkt.Properties.TraceID = "trace-123"
@@ -166,8 +165,8 @@ func TestConnectPacket_EncodeDecodeWithProperties(t *testing.T) {
 	}
 
 	// 验证属性
-	if decoded.Properties.SessionTimeout != sessionTimeout {
-		t.Errorf("SessionTimeout 不匹配")
+	if decoded.SessionTimeout != pkt.SessionTimeout {
+		t.Errorf("SessionTimeout 不匹配： 期望 %d, 得到 %d", pkt.SessionTimeout, decoded.SessionTimeout)
 	}
 	if decoded.Properties.AuthMethod != pkt.Properties.AuthMethod {
 		t.Errorf("AuthMethod 不匹配: 期望 %s, 得到 %s",

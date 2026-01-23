@@ -11,20 +11,20 @@ type ConnectPacket struct {
 	ProtocolName    string
 	ProtocolVersion uint8
 
-	// 连接标志
-	KeepSession bool // 保留会话
-	Will        bool // 遗嘱标志
-
 	// 客户端标识
 	ClientID string
 
 	// 连接保持
 	KeepAlive uint16 // 心跳间隔（秒）
 
+	// 会话管理
+	SessionTimeout uint32 // 会话过期时间（秒）
+
 	// 属性
 	Properties *ConnectProperties
 
 	// 遗嘱消息
+	Will       bool // 遗嘱标志
 	WillPacket *PublishPacket
 }
 
@@ -53,19 +53,6 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 连接标志 (包含 CleanSession, Will)
-	// 注意: Will QoS 和 Will Retain 现在在遗嘱消息的 Flags 字节中编码
-	var flags byte
-	if p.KeepSession {
-		flags |= 0x02
-	}
-	if p.Will {
-		flags |= 0x04
-	}
-	if err := WriteByte(w, flags); err != nil {
-		return err
-	}
-
 	// 客户端标识
 	if err := EncodeString(w, p.ClientID); err != nil {
 		return err
@@ -90,6 +77,7 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 		// Bit 0: QoS (0 或 1)
 		// Bit 1: Retain
 		// Bit 2: Dup
+		// Bit 3: Will
 		var willFlags uint8
 		willFlags |= uint8(p.WillPacket.QoS) & 0x01 // Bit 0: QoS
 		if p.WillPacket.Retain {
@@ -98,6 +86,9 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 		if p.WillPacket.Dup {
 			willFlags |= 0x04 // Bit 2: Dup
 		}
+		willFlags |= 0x08 // Bit 3: Will
+
+		// 写入遗嘱 Flags 字节
 		if err := WriteByte(w, willFlags); err != nil {
 			return err
 		}
@@ -117,6 +108,11 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 
 		// 遗嘱载荷 (直接写入，与 PublishPacket 一致)
 		if _, err := w.Write(p.WillPacket.Payload); err != nil {
+			return err
+		}
+	} else {
+		// 如果没有遗嘱消息,写入一个空的遗嘱标志字节
+		if err := WriteByte(w, 0x00); err != nil {
 			return err
 		}
 	}
@@ -139,16 +135,6 @@ func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 	}
 	p.ProtocolVersion = version[0]
 
-	// 连接标志
-	var flags [1]byte
-	if _, err := io.ReadFull(r, flags[:]); err != nil {
-		return err
-	}
-	p.KeepSession = flags[0]&0x02 != 0
-	p.Will = flags[0]&0x04 != 0
-
-	// 注意: Will QoS 和 Will Retain 现在在遗嘱消息的 Flags 字节中编码，而不是在 Connect Flags 中
-
 	// 客户端标识
 	p.ClientID, err = DecodeString(r)
 	if err != nil {
@@ -167,6 +153,13 @@ func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 		return err
 	}
 
+	// 读取遗嘱 Flags 字节
+	var willFlags [1]byte
+	if _, err := io.ReadFull(r, willFlags[:]); err != nil {
+		return err
+	}
+	p.Will = willFlags[0]&0x08 != 0 // Bit 3: Will
+
 	// 遗嘱消息
 	if p.Will {
 		p.WillPacket = &PublishPacket{}
@@ -175,10 +168,7 @@ func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 		// Bit 0: QoS (0 或 1)
 		// Bit 1: Retain
 		// Bit 2: Dup
-		var willFlags [1]byte
-		if _, err := io.ReadFull(r, willFlags[:]); err != nil {
-			return err
-		}
+		// Bit 3: Will
 		p.WillPacket.QoS = QoS(willFlags[0] & 0x01)  // Bit 0: QoS
 		p.WillPacket.Retain = willFlags[0]&0x02 != 0 // Bit 1: Retain
 		p.WillPacket.Dup = willFlags[0]&0x04 != 0    // Bit 2: Dup

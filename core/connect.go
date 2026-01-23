@@ -104,7 +104,6 @@ func (c *Core) handleConn(conn net.Conn) {
 	c.logger.Info("Client connected",
 		zap.String("clientID", client.ID),
 		zap.Uint16("keepAlive", client.conn.keepAlive),
-		zap.Bool("keepSession", client.session.keep),
 		zap.Uint32("sessionTimeout", client.session.timeout),
 		zap.Bool("sessionPresent", sessionPresent))
 
@@ -234,8 +233,8 @@ func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet
 	// 检查旧客户端是否在线
 	wasOnline := !existingClient.Closed()
 
-	// 情况2: KeepSession=true，复用旧 Client，只替换 Conn
-	if connect.KeepSession {
+	// 情况2: SessionTimeout>0，复用旧 Client，只替换 Conn
+	if connect.SessionTimeout > 0 {
 		// 先踢掉旧连接（如果在线），cleanup=false 表示会话被接管
 		if wasOnline {
 			existingClient.closeAndSkipHandle(packet.ReasonSessionTakenOver)
@@ -251,7 +250,7 @@ func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet
 		return existingClient, true
 	}
 
-	// 情况3: KeepSession=false，清理旧 Client，创建新 Client
+	// 情况3: SessionTimeout=0，清理旧 Client，创建新 Client
 
 	// 踢掉旧连接，cleanup=false 因为我们会手动清理
 	if wasOnline {

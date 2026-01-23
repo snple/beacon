@@ -15,7 +15,7 @@ type session struct {
 	id string
 
 	// 会话配置
-	keep    bool   // 是否保持会话
+	// keep    bool   // 是否保持会话
 	timeout uint32 // 会话过期时间（秒），0 表示断开即清理
 
 	authMethod string // 认证方法
@@ -42,7 +42,6 @@ type session struct {
 func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *session {
 	s := &session{
 		id:            clientID,
-		keep:          connect.KeepSession,
 		subscriptions: make(map[string]packet.SubscribeOptions),
 		pendingAck:    make(map[nson.Id]pendingMessage),
 		core:          core,
@@ -56,22 +55,15 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 
 	// 处理会话过期时间
 	// 规则：
-	// 1. KeepSession=false: SessionTimeout 无意义，设为 0（断开即清理）
-	// 2. KeepSession=true:
-	//    - 客户端未设置或设置为 0: 使用 core 的 MaxSessionTimeout
-	//    - 客户端设置了值: 取 min(客户端值, MaxSessionTimeout) 作为会话过期时间
-	if s.keep {
-		// KeepSession=true，需要保留会话
-		if connect.Properties != nil {
-			s.timeout = connect.Properties.SessionTimeout
-		}
-
-		// 如果客户端未设置或设置为 0，使用 core 默认值
-		if s.timeout == 0 {
-			s.timeout = core.options.MaxSessionTimeout
-		} else if core.options.MaxSessionTimeout > 0 && s.timeout > core.options.MaxSessionTimeout {
-			// 客户端设置的值超过最大值，使用最大值
-			s.timeout = core.options.MaxSessionTimeout
+	// 1. SessionTimeout=0: 会话无效，断开即清理
+	// 2. SessionTimeout>0:
+	//   - 服务器未设置 MaxSessionTimeout: 取客户端值作为会话过期时间
+	//   - 客户端设置了值: 取 min(客户端值, MaxSessionTimeout) 作为会话过期时间
+	if connect.SessionTimeout > 0 {
+		if core.options.MaxSessionTimeout > 0 {
+			s.timeout = min(connect.SessionTimeout, core.options.MaxSessionTimeout)
+		} else {
+			s.timeout = connect.SessionTimeout
 		}
 	} else {
 		s.timeout = 0

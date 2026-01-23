@@ -309,7 +309,6 @@ type ClientInfo struct {
 	Connected      bool                     `json:"connected"`
 	ConnectedAt    time.Time                `json:"connected_at"`
 	KeepAlive      uint16                   `json:"keep_alive"`
-	KeepSession    bool                     `json:"keep_session"`
 	SessionTimeout uint32                   `json:"session_timeout"`
 	Subscriptions  []ClientSubscriptionInfo `json:"subscriptions"`
 	PendingAck     int                      `json:"pending_ack"`
@@ -356,7 +355,6 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 		Connected:      !client.Closed(),
 		ConnectedAt:    client.ConnectedAt(),
 		KeepAlive:      client.KeepAlive(),
-		KeepSession:    client.KeepSession(),
 		SessionTimeout: client.SessionTimeout(),
 		Subscriptions:  subs,
 		PendingAck:     pendingAck,

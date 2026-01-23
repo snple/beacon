@@ -123,9 +123,8 @@ func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 	connect := packet.NewConnectPacket()
 	connect.ClientID = c.options.ClientID
 	connect.KeepAlive = c.options.KeepAlive
-	connect.KeepSession = c.options.KeepSession
+	connect.SessionTimeout = c.options.SessionTimeout
 
-	connect.Properties.SessionTimeout = c.options.SessionTimeout
 	connect.Properties.AuthMethod = c.options.AuthMethod
 	connect.Properties.AuthData = c.options.AuthData
 	connect.Properties.MaxPacketSize = c.options.MaxPacketSize

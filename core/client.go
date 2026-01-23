@@ -147,11 +147,6 @@ func (c *Client) Closed() bool {
 	return conn.closed.Load()
 }
 
-// KeepSession 返回是否保持会话
-func (c *Client) KeepSession() bool {
-	return c.session.keep
-}
-
 // SessionTimeout 返回会话过期时间
 func (c *Client) SessionTimeout() uint32 {
 	return c.session.timeout

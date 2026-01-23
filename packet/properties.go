@@ -8,9 +8,6 @@ import (
 // ConnectProperties CONNECT 专用属性（客户端发送）
 // 使用位掩码优化编码，减少字节开销
 type ConnectProperties struct {
-	// 会话管理
-	SessionTimeout uint32 // 会话过期时间（秒）
-
 	// 认证
 	AuthMethod string // 认证方法
 	AuthData   []byte // 认证数据
@@ -27,13 +24,12 @@ type ConnectProperties struct {
 
 // ConnectProperties 位掩码常量
 const (
-	connPropSessionExpiry  uint16 = 1 << 0 // bit 0
-	connPropAuthMethod     uint16 = 1 << 1 // bit 1
-	connPropAuthData       uint16 = 1 << 2 // bit 2
-	connPropMaxPacketSize  uint16 = 1 << 3 // bit 3
-	connPropReceiveWindow  uint16 = 1 << 4 // bit 4
-	connPropTraceID        uint16 = 1 << 5 // bit 5
-	connPropUserProperties uint16 = 1 << 6 // bit 6
+	connPropAuthMethod     uint16 = 1 << 0 // bit 0
+	connPropAuthData       uint16 = 1 << 1 // bit 1
+	connPropMaxPacketSize  uint16 = 1 << 2 // bit 2
+	connPropReceiveWindow  uint16 = 1 << 3 // bit 3
+	connPropTraceID        uint16 = 1 << 4 // bit 4
+	connPropUserProperties uint16 = 1 << 5 // bit 5
 )
 
 // NewConnectProperties 创建新的连接属性
@@ -196,9 +192,6 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 
 	// 计算位掩码
 	var flags uint16
-	if p.SessionTimeout > 0 {
-		flags |= connPropSessionExpiry
-	}
 	if p.AuthMethod != "" {
 		flags |= connPropAuthMethod
 	}
@@ -222,9 +215,6 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 	EncodeUint16(&buf, flags)
 
 	// 按顺序写入存在的属性
-	if flags&connPropSessionExpiry != 0 {
-		EncodeUint32(&buf, p.SessionTimeout)
-	}
 	if flags&connPropAuthMethod != 0 {
 		EncodeString(&buf, p.AuthMethod)
 	}
@@ -286,12 +276,6 @@ func (p *ConnectProperties) Decode(r io.Reader) error {
 	}
 
 	// 按顺序读取存在的属性
-	if flags&connPropSessionExpiry != 0 {
-		p.SessionTimeout, err = DecodeUint32(buf)
-		if err != nil {
-			return err
-		}
-	}
 	if flags&connPropAuthMethod != 0 {
 		p.AuthMethod, err = DecodeString(buf)
 		if err != nil {

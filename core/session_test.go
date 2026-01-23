@@ -44,7 +44,6 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 
 	connect1 := packet.NewConnectPacket()
 	connect1.ClientID = "test-client"
-	connect1.KeepSession = true
 	connect1.KeepAlive = 60
 
 	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
@@ -117,7 +116,6 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 
 	connect2 := packet.NewConnectPacket()
 	connect2.ClientID = "test-client"
-	connect2.KeepSession = true
 	connect2.KeepAlive = 60
 
 	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
@@ -188,8 +186,8 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 
 	connect1 := packet.NewConnectPacket()
 	connect1.ClientID = "test-client"
-	connect1.KeepSession = false
 	connect1.KeepAlive = 60
+	connect1.SessionTimeout = 0
 
 	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
@@ -242,8 +240,8 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 
 	connect2 := packet.NewConnectPacket()
 	connect2.ClientID = "test-client"
-	connect2.KeepSession = false
 	connect2.KeepAlive = 60
+	connect2.SessionTimeout = 0
 
 	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
@@ -288,8 +286,8 @@ func TestSessionTakeover(t *testing.T) {
 
 	connect1 := packet.NewConnectPacket()
 	connect1.ClientID = "test-client"
-	connect1.KeepSession = true
 	connect1.KeepAlive = 60
+	connect1.SessionTimeout = 60
 
 	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
@@ -328,8 +326,8 @@ func TestSessionTakeover(t *testing.T) {
 
 	connect2 := packet.NewConnectPacket()
 	connect2.ClientID = "test-client"
-	connect2.KeepSession = true
 	connect2.KeepAlive = 60
+	connect2.SessionTimeout = 60
 
 	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
@@ -415,10 +413,9 @@ func TestSessionExpiry(t *testing.T) {
 
 	connect1 := packet.NewConnectPacket()
 	connect1.ClientID = "test-client"
-	connect1.KeepSession = true
 	connect1.KeepAlive = 60
+	connect1.SessionTimeout = 2
 	connect1.Properties = packet.NewConnectProperties()
-	connect1.Properties.SessionTimeout = 2 // 2秒后过期
 
 	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
@@ -507,8 +504,8 @@ func TestOfflineMessageQueue(t *testing.T) {
 
 	connect1 := packet.NewConnectPacket()
 	connect1.ClientID = "test-client"
-	connect1.KeepSession = true
 	connect1.KeepAlive = 60
+	connect1.SessionTimeout = 60
 
 	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
@@ -583,8 +580,8 @@ func TestOfflineMessageQueue(t *testing.T) {
 
 	connect2 := packet.NewConnectPacket()
 	connect2.ClientID = "test-client"
-	connect2.KeepSession = true
 	connect2.KeepAlive = 60
+	connect1.SessionTimeout = 60
 
 	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
@@ -664,8 +661,8 @@ func TestWillMessage(t *testing.T) {
 
 	connect1 := packet.NewConnectPacket()
 	connect1.ClientID = "subscriber"
-	connect1.KeepSession = false
 	connect1.KeepAlive = 60
+	connect1.SessionTimeout = 0
 
 	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
@@ -697,8 +694,8 @@ func TestWillMessage(t *testing.T) {
 
 	connect2 := packet.NewConnectPacket()
 	connect2.ClientID = "will-client"
-	connect2.KeepSession = false
 	connect2.KeepAlive = 60
+	connect2.SessionTimeout = 0
 	connect2.Will = true
 	connect2.WillPacket = &packet.PublishPacket{
 		Topic:   "will/topic",
@@ -763,8 +760,8 @@ func TestWillMessage_NormalDisconnect(t *testing.T) {
 
 	connect1 := packet.NewConnectPacket()
 	connect1.ClientID = "subscriber"
-	connect1.KeepSession = false
 	connect1.KeepAlive = 60
+	connect1.SessionTimeout = 0
 
 	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
@@ -788,8 +785,8 @@ func TestWillMessage_NormalDisconnect(t *testing.T) {
 
 	connect2 := packet.NewConnectPacket()
 	connect2.ClientID = "will-client"
-	connect2.KeepSession = false
 	connect2.KeepAlive = 60
+	connect2.SessionTimeout = 0
 	connect2.Will = true
 	connect2.WillPacket = &packet.PublishPacket{
 		Topic:   "will/topic",
