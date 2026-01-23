@@ -200,14 +200,10 @@ func (c *conn) handleDisconnect(p *packet.DisconnectPacket) error {
 // writePacket 发送数据包
 func (c *conn) writePacket(pkt packet.Packet) error {
 	if c.closed.Load() {
-		return errors.New("connection closed")
+		return ErrClientClosed
 	}
 
-	if err := packet.WritePacket(c.conn, pkt, c.maxPacketSize); err != nil {
-		return err
-	}
-
-	return nil
+	return packet.WritePacket(c.conn, pkt, c.maxPacketSize)
 }
 
 // close 关闭连接

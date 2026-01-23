@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -38,13 +39,14 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 
 	addr := server.listener.Addr().String()
 
-	// 第一次连接：KeepSession=true
+	// 第一次连接：SessionTimeout = 60
 	conn1 := createMockConn(addr, t)
 	defer conn1.Close()
 
 	connect1 := packet.NewConnectPacket()
 	connect1.ClientID = "test-client"
 	connect1.KeepAlive = 60
+	connect1.SessionTimeout = 60
 
 	if err := packet.WritePacket(conn1, connect1, 0); err != nil {
 		t.Fatal(err)
@@ -88,6 +90,8 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 		t.Fatalf("Unexpected SUBACK reason codes: %v", suback.ReasonCodes)
 	}
 
+	fmt.Println(server.clients)
+
 	// 关闭第一个连接（模拟异常断开 - 不发送 DISCONNECT）
 	conn1.Close()
 	time.Sleep(100 * time.Millisecond) // 等待服务器处理断开
@@ -96,6 +100,8 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 	server.clientsMu.RLock()
 	client, exists := server.clients["test-client"]
 	server.clientsMu.RUnlock()
+
+	fmt.Println(server.clients)
 
 	if !exists {
 		t.Fatal("Client session should be preserved")
@@ -117,6 +123,7 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 	connect2 := packet.NewConnectPacket()
 	connect2.ClientID = "test-client"
 	connect2.KeepAlive = 60
+	connect2.SessionTimeout = 60
 
 	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)
@@ -566,13 +573,13 @@ func TestOfflineMessageQueue(t *testing.T) {
 	}
 
 	// 检查持久化的消息数量
-	// count, err := server.messageStore.countMessages(client.ID)
-	// if err != nil {
-	// 	t.Fatal("Failed to get messages:", err)
-	// }
-	// if count != 1 {
-	// 	t.Fatalf("Expected 1 persisted message, got %d", count)
-	// }
+	count, err := client.queue.Size()
+	if err != nil {
+		t.Fatal("Failed to get message count:", err)
+	}
+	if count != 1 {
+		t.Fatalf("Expected 1 persisted message, got %d", count)
+	}
 
 	// 重新连接
 	conn2 := createMockConn(addr, t)
@@ -581,7 +588,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 	connect2 := packet.NewConnectPacket()
 	connect2.ClientID = "test-client"
 	connect2.KeepAlive = 60
-	connect1.SessionTimeout = 60
+	connect2.SessionTimeout = 60
 
 	if err := packet.WritePacket(conn2, connect2, 0); err != nil {
 		t.Fatal(err)

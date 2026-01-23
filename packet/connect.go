@@ -58,8 +58,13 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// Keep Alive
+	// KeepAlive
 	if err := EncodeUint16(w, p.KeepAlive); err != nil {
+		return err
+	}
+
+	// SessionTimeout
+	if err := EncodeUint32(w, p.SessionTimeout); err != nil {
 		return err
 	}
 
@@ -143,6 +148,12 @@ func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 
 	// Keep Alive
 	p.KeepAlive, err = DecodeUint16(r)
+	if err != nil {
+		return err
+	}
+
+	// Session Timeout
+	p.SessionTimeout, err = DecodeUint32(r)
 	if err != nil {
 		return err
 	}
@@ -245,11 +256,7 @@ func (p *ConnackPacket) encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewConnackProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
-		return err
-	}
-
-	return nil
+	return p.Properties.Encode(w)
 }
 
 func (p *ConnackPacket) decode(r io.Reader, header FixedHeader) error {
