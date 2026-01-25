@@ -24,11 +24,8 @@ func (p *PingPacket) encode(w io.Writer) error {
 	if err := EncodeUint32(w, p.Seq); err != nil {
 		return err
 	}
-	if err := EncodeUint64(w, p.Timestamp); err != nil {
-		return err
-	}
 
-	return nil
+	return EncodeUint64(w, p.Timestamp)
 }
 
 func (p *PingPacket) decode(r io.Reader, header FixedHeader) error {
@@ -75,11 +72,8 @@ func (p *PongPacket) encode(w io.Writer) error {
 	if err := EncodeUint64(w, p.Echo); err != nil {
 		return err
 	}
-	if err := WriteByte(w, p.Load); err != nil {
-		return err
-	}
 
-	return nil
+	return WriteByte(w, p.Load)
 }
 
 func (p *PongPacket) decode(r io.Reader, header FixedHeader) error {
@@ -142,11 +136,8 @@ func (p *DisconnectPacket) encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
-		return err
-	}
 
-	return nil
+	return p.Properties.Encode(w)
 }
 
 func (p *DisconnectPacket) decode(r io.Reader, header FixedHeader) error {
@@ -197,11 +188,8 @@ func (p *AuthPacket) encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewAuthProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
-		return err
-	}
 
-	return nil
+	return p.Properties.Encode(w)
 }
 
 func (p *AuthPacket) decode(r io.Reader, header FixedHeader) error {
@@ -287,11 +275,8 @@ func (p *TracePacket) encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
-		return err
-	}
 
-	return nil
+	return p.Properties.Encode(w)
 }
 
 func (p *TracePacket) decode(r io.Reader, header FixedHeader) error {

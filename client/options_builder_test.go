@@ -15,7 +15,6 @@ func TestClientOptionsBuilder(t *testing.T) {
 		WithCore("localhost:3883").
 		WithClientID("test-client").
 		WithKeepAlive(30).
-		WithKeepSession(false).
 		WithSessionTimeout(3600).
 		WithConnectTimeout(5*time.Second).
 		WithPublishTimeout(10*time.Second).
@@ -33,9 +32,6 @@ func TestClientOptionsBuilder(t *testing.T) {
 	}
 	if opts.KeepAlive != 30 {
 		t.Errorf("expected keepAlive 30, got %d", opts.KeepAlive)
-	}
-	if opts.KeepSession {
-		t.Error("expected keepSession false")
 	}
 	if opts.SessionTimeout != 3600 {
 		t.Errorf("expected sessionTimeout 3600, got %d", opts.SessionTimeout)
@@ -132,9 +128,6 @@ func TestClientOptionsDefaults(t *testing.T) {
 	}
 	if opts.KeepAlive != 60 {
 		t.Errorf("expected default keepAlive 60, got %d", opts.KeepAlive)
-	}
-	if opts.KeepSession {
-		t.Error("expected default keepSession false")
 	}
 	if opts.ConnectTimeout != 10*time.Second {
 		t.Errorf("expected default connectTimeout 10s, got %v", opts.ConnectTimeout)

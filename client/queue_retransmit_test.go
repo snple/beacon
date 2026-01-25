@@ -18,7 +18,7 @@ func TestQueuePersistence(t *testing.T) {
 	opts := NewClientOptions().
 		WithCore(broker.GetAddress()).
 		WithClientID("test-queue-client").
-		WithKeepSession(true)
+		WithSessionTimeout(60)
 
 	c, err := NewWithOptions(opts)
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestOfflineQueueing(t *testing.T) {
 	opts := NewClientOptions().
 		WithCore(broker.GetAddress()).
 		WithClientID("test-offline-queue").
-		WithKeepSession(true).
+		WithSessionTimeout(60).
 		WithRetransmitInterval(100 * time.Millisecond) // 快速重传
 
 	c, err := NewWithOptions(opts)
@@ -114,7 +114,7 @@ func TestRetransmitMechanism(t *testing.T) {
 	opts := NewClientOptions().
 		WithCore(broker.GetAddress()).
 		WithClientID("test-retransmit").
-		WithKeepSession(true).
+		WithSessionTimeout(60).
 		WithRetransmitInterval(200 * time.Millisecond) // 快速重传用于测试
 
 	c, err := NewWithOptions(opts)
@@ -157,7 +157,7 @@ func TestQoS0Queueing(t *testing.T) {
 	opts := NewClientOptions().
 		WithCore(broker.GetAddress()).
 		WithClientID("test-qos0-queue").
-		WithKeepSession(true)
+		WithSessionTimeout(60)
 
 	c, err := NewWithOptions(opts)
 	require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestQueueExpiredMessages(t *testing.T) {
 	opts := NewClientOptions().
 		WithCore(broker.GetAddress()).
 		WithClientID("test-expired-queue").
-		WithKeepSession(true).
+		WithSessionTimeout(60).
 		WithRetransmitInterval(200 * time.Millisecond)
 
 	c, err := NewWithOptions(opts)

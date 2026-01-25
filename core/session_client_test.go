@@ -34,7 +34,7 @@ func TestClientSessionRestoration_WithKeepSession(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
-			WithKeepSession(true).
+			WithSessionTimeout(60).
 			WithSessionTimeout(3600).
 			WithKeepAlive(60),
 	)
@@ -103,7 +103,6 @@ func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
-			WithKeepSession(false).
 			WithKeepAlive(60),
 	)
 	if err != nil {
@@ -132,7 +131,6 @@ func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
-			WithKeepSession(false).
 			WithKeepAlive(60),
 	)
 	if err != nil {
@@ -180,7 +178,7 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("subscriber").
-			WithKeepSession(true).
+			WithSessionTimeout(60).
 			WithSessionTimeout(3600).
 			WithKeepAlive(60).
 			WithMessageQueueSize(10),
@@ -211,7 +209,6 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("publisher").
-			WithKeepSession(false).
 			WithKeepAlive(60),
 	)
 	if err != nil {
@@ -308,7 +305,7 @@ func TestClientSessionTakeover(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
-			WithKeepSession(true).
+			WithSessionTimeout(60).
 			WithSessionTimeout(3600).
 			WithKeepAlive(60),
 	)
@@ -333,7 +330,7 @@ func TestClientSessionTakeover(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
-			WithKeepSession(true).
+			WithSessionTimeout(60).
 			WithSessionTimeout(3600).
 			WithKeepAlive(60),
 	)
@@ -400,7 +397,7 @@ func TestClientAutoReconnect(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
-			WithKeepSession(true).
+			WithSessionTimeout(60).
 			WithSessionTimeout(3600).
 			WithKeepAlive(60),
 	)
@@ -482,7 +479,7 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
-			WithKeepSession(true).
+			WithSessionTimeout(60).
 			WithKeepAlive(60).
 			WithStore(client.StoreOptions{
 				DataDir:    storeDir,
@@ -533,7 +530,7 @@ func TestClientSessionExpiry(t *testing.T) {
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
-			WithKeepSession(true).
+			WithSessionTimeout(60).
 			WithSessionTimeout(2). // 2秒超时
 			WithKeepAlive(60),
 	)

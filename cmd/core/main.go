@@ -17,7 +17,7 @@ var (
 
 func main() {
 	// 命令行参数
-	addr := flag.String("addr", ":3883", "Listen address")
+	addr := flag.String("addr", ":5208", "Listen address")
 	maxClients := flag.Uint("max-clients", 10000, "Maximum number of clients")
 	authEnabled := flag.Bool("auth", false, "Enable authentication")
 	authSecret := flag.String("auth-secret", "", "Authentication secret key")
@@ -53,6 +53,62 @@ func main() {
 		WithStoreDir(*storeDir).
 		WithLogger(logger)
 
+	// 添加连接生命周期钩子
+	opts.WithConnectionHandler(&core.ConnectionHandlerFunc{
+		ConnectFunc: func(ctx *core.ConnectContext) {
+			logger.Info("Client connected",
+				zap.String("client_id", ctx.ClientID),
+				zap.String("remote_addr", ctx.RemoteAddr),
+				zap.Bool("session_present", ctx.SessionPresent),
+				zap.Uint16("keep_alive", ctx.Packet.KeepAlive),
+			)
+		},
+		DisconnectFunc: func(ctx *core.DisconnectContext) {
+			logger.Info("Client disconnected",
+				zap.String("client_id", ctx.ClientID),
+				zap.Int64("duration_seconds", ctx.Duration),
+			)
+		},
+	})
+
+	// 添加消息处理钩子
+	opts.WithMessageHandler(&core.MessageHandlerFunc{
+		PublishFunc: func(ctx *core.PublishContext) error {
+			logger.Debug("Message published",
+				zap.String("client_id", ctx.ClientID),
+				zap.String("topic", ctx.Packet.Topic),
+				zap.Int("payload_size", len(ctx.Packet.Payload)),
+				zap.Uint8("qos", uint8(ctx.Packet.QoS)),
+			)
+			return nil
+		},
+		DeliverFunc: func(ctx *core.DeliverContext) bool {
+			logger.Debug("Message delivered",
+				zap.String("client_id", ctx.ClientID),
+				zap.String("topic", ctx.Packet.Topic),
+				zap.Int("payload_size", len(ctx.Packet.Payload)),
+			)
+			return true
+		},
+	})
+
+	// 添加订阅管理钩子
+	opts.WithSubscriptionHandler(&core.SubscriptionHandlerFunc{
+		SubscribeFunc: func(ctx *core.SubscribeContext) error {
+			logger.Info("Client subscribed",
+				zap.String("client_id", ctx.ClientID),
+				zap.String("topic", ctx.Subscription.Topic),
+			)
+			return nil
+		},
+		UnsubscribeFunc: func(ctx *core.UnsubscribeContext) {
+			logger.Info("Client unsubscribed",
+				zap.String("client_id", ctx.ClientID),
+				zap.String("topic", ctx.Topic),
+			)
+		},
+	})
+
 	// 如果启用认证
 	if *authEnabled {
 		secret := *authSecret
@@ -62,8 +118,15 @@ func main() {
 				// 简单的 token 认证示例
 				// 从 ConnectPacket.Properties 获取认证数据
 				if ctx.Packet.Properties != nil && secret != "" && string(ctx.Packet.Properties.AuthData) != secret {
+					logger.Warn("Authentication failed",
+						zap.String("client_id", ctx.ClientID),
+						zap.String("reason", "invalid auth data"),
+					)
 					return fmt.Errorf("invalid auth data")
 				}
+				logger.Info("Authentication successful",
+					zap.String("client_id", ctx.ClientID),
+				)
 				return nil
 			},
 		})
@@ -91,6 +154,7 @@ func main() {
 	fmt.Printf("║  Persistence:      %-40v ║\n", *storeDir != "")
 	fmt.Printf("║  Storage Dir:      %-40s ║\n", *storeDir)
 	fmt.Printf("║  Auth:             %-40v ║\n", *authEnabled)
+	fmt.Printf("║  Debug:            %-40v ║\n", *debug)
 	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 	fmt.Println("Press Ctrl+C to stop the core...")

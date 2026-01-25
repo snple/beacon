@@ -44,11 +44,8 @@ func (p *RegisterPacket) encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewRegisterProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
-		return err
-	}
 
-	return nil
+	return p.Properties.Encode(w)
 }
 
 func (p *RegisterPacket) decode(r io.Reader, header FixedHeader) error {
@@ -120,11 +117,8 @@ func (p *RegackPacket) encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
-		return err
-	}
 
-	return nil
+	return p.Properties.Encode(w)
 }
 
 func (p *RegackPacket) decode(r io.Reader, header FixedHeader) error {
@@ -193,11 +187,8 @@ func (p *UnregisterPacket) encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
-		return err
-	}
 
-	return nil
+	return p.Properties.Encode(w)
 }
 
 func (p *UnregisterPacket) decode(r io.Reader, header FixedHeader) error {
@@ -263,11 +254,8 @@ func (p *UnregackPacket) encode(w io.Writer) error {
 	if p.Properties == nil {
 		p.Properties = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
-		return err
-	}
 
-	return nil
+	return p.Properties.Encode(w)
 }
 
 func (p *UnregackPacket) decode(r io.Reader, header FixedHeader) error {

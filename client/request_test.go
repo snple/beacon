@@ -53,7 +53,6 @@ func testSetupClient(t *testing.T, coreAddr string, clientID string) *Client {
 		WithCore(coreAddr).
 		WithClientID(clientID).
 		WithLogger(testLogger()).
-		WithKeepSession(false).
 		WithRequestQueueSize(100)
 
 	c, err := NewWithOptions(opts)
@@ -894,7 +893,6 @@ func TestRequest_QueueFull(t *testing.T) {
 		WithCore(addr).
 		WithClientID("small-queue-handler").
 		WithLogger(testLogger()).
-		WithKeepSession(false).
 		WithRequestQueueSize(2) // 很小的队列
 
 	handler, err := NewWithOptions(opts)

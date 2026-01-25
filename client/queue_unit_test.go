@@ -13,7 +13,7 @@ func TestQueueBasicOperations(t *testing.T) {
 	// 创建客户端配置
 	opts := NewClientOptions().
 		WithClientID("test-queue-basic").
-		WithKeepSession(true)
+		WithSessionTimeout(60)
 
 	c, err := NewWithOptions(opts)
 	require.NoError(t, err)

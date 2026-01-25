@@ -97,6 +97,14 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 		return nil
 	}
 
+	c.core.logger.Debug("Publishing message",
+		zap.String("clientID", c.ID),
+		zap.String("topic", pub.Topic),
+		zap.Uint8("qos", uint8(pub.QoS)),
+		zap.Bool("retain", pub.Retain),
+		zap.String("packetID", pub.PacketID.Hex()),
+	)
+
 	// QoS 0: 直接发布
 	// QoS 1: 发布并发送 PUBACK
 	publishSuccess := c.core.publish(msg)

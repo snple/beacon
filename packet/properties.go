@@ -39,153 +39,6 @@ func NewConnectProperties() *ConnectProperties {
 	}
 }
 
-// ConnackProperties CONNACK 专用属性（服务器响应）
-// 使用位掩码优化编码，减少字节开销
-type ConnackProperties struct {
-	// 服务器分配
-	ClientID  string // 服务器分配的 Client ID
-	KeepAlive uint16 // 服务器要求的心跳间隔
-
-	// 会话管理
-	SessionTimeout uint32 // 会话过期时间（秒）
-
-	// 流量控制
-	MaxPacketSize uint32 // 最大包大小
-	ReceiveWindow uint16 // 初始接收窗口（消息数量）
-
-	TraceID string // 追踪 ID
-
-	// 用户属性
-	UserProperties map[string]string
-}
-
-// ConnackProperties 位掩码常量
-const (
-	connackPropClientID       uint16 = 1 << 1 // bit 1
-	connackPropKeepAlive      uint16 = 1 << 2 // bit 2
-	connackPropSessionTimeout uint16 = 1 << 3 // bit 3
-	connackPropMaxPacketSize  uint16 = 1 << 4 // bit 4
-	connackPropReceiveWindow  uint16 = 1 << 5 // bit 5
-	connackPropTraceID        uint16 = 1 << 6 // bit 6
-	connackPropUserProperties uint16 = 1 << 7 // bit 7
-)
-
-// NewConnackProperties 创建新的连接响应属性
-func NewConnackProperties() *ConnackProperties {
-	return &ConnackProperties{
-		UserProperties: make(map[string]string),
-	}
-}
-
-// AuthProperties AUTH 专用属性
-// 简化的属性结构，只包含认证相关字段
-type AuthProperties struct {
-	AuthMethod     string            // 认证方法
-	AuthData       []byte            // 认证数据
-	UserProperties map[string]string // 用户属性
-}
-
-// AuthProperties 位掩码常量
-const (
-	authPropAuthMethod     uint8 = 1 << 0 // bit 0
-	authPropAuthData       uint8 = 1 << 1 // bit 1
-	authPropUserProperties uint8 = 1 << 2 // bit 2
-)
-
-// NewAuthProperties 创建新的认证属性
-func NewAuthProperties() *AuthProperties {
-	return &AuthProperties{
-		UserProperties: make(map[string]string),
-	}
-}
-
-// Encode 编码认证属性
-func (p *AuthProperties) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
-	// 计算位掩码
-	var flags uint8
-	if p.AuthMethod != "" {
-		flags |= authPropAuthMethod
-	}
-	if len(p.AuthData) > 0 {
-		flags |= authPropAuthData
-	}
-	if len(p.UserProperties) > 0 {
-		flags |= authPropUserProperties
-	}
-
-	// 写入位掩码 (1 byte)
-	buf.WriteByte(flags)
-
-	// 按顺序写入存在的属性
-	if flags&authPropAuthMethod != 0 {
-		EncodeString(&buf, p.AuthMethod)
-	}
-	if flags&authPropAuthData != 0 {
-		EncodeBinary(&buf, p.AuthData)
-	}
-	if flags&authPropUserProperties != 0 {
-		// 写入用户属性数量
-		EncodeUint16(&buf, uint16(len(p.UserProperties)))
-		for k, v := range p.UserProperties {
-			EncodeString(&buf, k)
-			EncodeString(&buf, v)
-		}
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
-}
-
-// Decode 解码认证属性
-func (p *AuthProperties) Decode(r io.Reader) error {
-	// 读取位掩码
-	var flags [1]byte
-	if _, err := io.ReadFull(r, flags[:]); err != nil {
-		return err
-	}
-
-	// 按顺序读取存在的属性
-	if flags[0]&authPropAuthMethod != 0 {
-		var err error
-		p.AuthMethod, err = DecodeString(r)
-		if err != nil {
-			return err
-		}
-	}
-
-	if flags[0]&authPropAuthData != 0 {
-		var err error
-		p.AuthData, err = DecodeBinary(r)
-		if err != nil {
-			return err
-		}
-	}
-
-	if flags[0]&authPropUserProperties != 0 {
-		count, err := DecodeUint16(r)
-		if err != nil {
-			return err
-		}
-
-		p.UserProperties = make(map[string]string, count)
-		for range count {
-			key, err := DecodeString(r)
-			if err != nil {
-				return err
-			}
-			value, err := DecodeString(r)
-			if err != nil {
-				return err
-			}
-			p.UserProperties[key] = value
-		}
-	}
-
-	return nil
-}
-
 // Encode 编码连接属性（使用位掩码优化）
 func (p *ConnectProperties) Encode(w io.Writer) error {
 	var buf bytes.Buffer
@@ -328,6 +181,44 @@ func (p *ConnectProperties) Decode(r io.Reader) error {
 	}
 
 	return nil
+}
+
+// ConnackProperties CONNACK 专用属性（服务器响应）
+// 使用位掩码优化编码，减少字节开销
+type ConnackProperties struct {
+	// 服务器分配
+	ClientID  string // 服务器分配的 Client ID
+	KeepAlive uint16 // 服务器要求的心跳间隔
+
+	// 会话管理
+	SessionTimeout uint32 // 会话过期时间（秒）
+
+	// 流量控制
+	MaxPacketSize uint32 // 最大包大小
+	ReceiveWindow uint16 // 初始接收窗口（消息数量）
+
+	TraceID string // 追踪 ID
+
+	// 用户属性
+	UserProperties map[string]string
+}
+
+// ConnackProperties 位掩码常量
+const (
+	connackPropClientID       uint16 = 1 << 0 // bit 0
+	connackPropKeepAlive      uint16 = 1 << 1 // bit 1
+	connackPropSessionTimeout uint16 = 1 << 2 // bit 2
+	connackPropMaxPacketSize  uint16 = 1 << 3 // bit 3
+	connackPropReceiveWindow  uint16 = 1 << 4 // bit 4
+	connackPropTraceID        uint16 = 1 << 5 // bit 5
+	connackPropUserProperties uint16 = 1 << 6 // bit 6
+)
+
+// NewConnackProperties 创建新的连接响应属性
+func NewConnackProperties() *ConnackProperties {
+	return &ConnackProperties{
+		UserProperties: make(map[string]string),
+	}
 }
 
 // Encode 编码连接响应属性（使用位掩码优化）
@@ -485,6 +376,115 @@ func (p *ConnackProperties) Decode(r io.Reader) error {
 				return err
 			}
 			value, err := DecodeString(buf)
+			if err != nil {
+				return err
+			}
+			p.UserProperties[key] = value
+		}
+	}
+
+	return nil
+}
+
+// AuthProperties AUTH 专用属性
+// 简化的属性结构，只包含认证相关字段
+type AuthProperties struct {
+	AuthMethod     string            // 认证方法
+	AuthData       []byte            // 认证数据
+	UserProperties map[string]string // 用户属性
+}
+
+// AuthProperties 位掩码常量
+const (
+	authPropAuthMethod     uint8 = 1 << 0 // bit 0
+	authPropAuthData       uint8 = 1 << 1 // bit 1
+	authPropUserProperties uint8 = 1 << 2 // bit 2
+)
+
+// NewAuthProperties 创建新的认证属性
+func NewAuthProperties() *AuthProperties {
+	return &AuthProperties{
+		UserProperties: make(map[string]string),
+	}
+}
+
+// Encode 编码认证属性
+func (p *AuthProperties) Encode(w io.Writer) error {
+	var buf bytes.Buffer
+
+	// 计算位掩码
+	var flags uint8
+	if p.AuthMethod != "" {
+		flags |= authPropAuthMethod
+	}
+	if len(p.AuthData) > 0 {
+		flags |= authPropAuthData
+	}
+	if len(p.UserProperties) > 0 {
+		flags |= authPropUserProperties
+	}
+
+	// 写入位掩码 (1 byte)
+	buf.WriteByte(flags)
+
+	// 按顺序写入存在的属性
+	if flags&authPropAuthMethod != 0 {
+		EncodeString(&buf, p.AuthMethod)
+	}
+	if flags&authPropAuthData != 0 {
+		EncodeBinary(&buf, p.AuthData)
+	}
+	if flags&authPropUserProperties != 0 {
+		// 写入用户属性数量
+		EncodeUint16(&buf, uint16(len(p.UserProperties)))
+		for k, v := range p.UserProperties {
+			EncodeString(&buf, k)
+			EncodeString(&buf, v)
+		}
+	}
+
+	_, err := w.Write(buf.Bytes())
+	return err
+}
+
+// Decode 解码认证属性
+func (p *AuthProperties) Decode(r io.Reader) error {
+	// 读取位掩码
+	var flags [1]byte
+	if _, err := io.ReadFull(r, flags[:]); err != nil {
+		return err
+	}
+
+	// 按顺序读取存在的属性
+	if flags[0]&authPropAuthMethod != 0 {
+		var err error
+		p.AuthMethod, err = DecodeString(r)
+		if err != nil {
+			return err
+		}
+	}
+
+	if flags[0]&authPropAuthData != 0 {
+		var err error
+		p.AuthData, err = DecodeBinary(r)
+		if err != nil {
+			return err
+		}
+	}
+
+	if flags[0]&authPropUserProperties != 0 {
+		count, err := DecodeUint16(r)
+		if err != nil {
+			return err
+		}
+
+		p.UserProperties = make(map[string]string, count)
+		for range count {
+			key, err := DecodeString(r)
+			if err != nil {
+				return err
+			}
+			value, err := DecodeString(r)
 			if err != nil {
 				return err
 			}

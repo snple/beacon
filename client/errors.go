@@ -99,6 +99,11 @@ func (e *RequestTimeoutError) Error() string {
 	return fmt.Sprintf("request timeout after %v", e.Timeout)
 }
 
+func (e *RequestTimeoutError) Is(target error) bool {
+	_, ok := target.(*RequestTimeoutError)
+	return ok
+}
+
 // NewRequestTimeoutError 创建请求超时错误
 func NewRequestTimeoutError(timeout time.Duration) error {
 	return &RequestTimeoutError{Timeout: timeout}

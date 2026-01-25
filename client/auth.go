@@ -41,10 +41,11 @@ func (c *Client) handleAuth(p *packet.AuthPacket) error {
 		if err := c.writePacket(authResp); err != nil {
 			c.logger.Error("Failed to send AUTH response", zap.Error(err))
 			return err
-		} else {
-			c.logger.Debug("Sent AUTH response",
-				zap.String("reasonCode", packet.ReasonContinueAuth.String()))
 		}
+
+		c.logger.Debug("Sent AUTH response",
+			zap.String("reasonCode", packet.ReasonContinueAuth.String()))
+
 	} else {
 		// 认证成功，可选地发送最终确认
 		if responseData != nil {
@@ -57,10 +58,10 @@ func (c *Client) handleAuth(p *packet.AuthPacket) error {
 			if err := c.writePacket(authResp); err != nil {
 				c.logger.Error("Failed to send final AUTH response", zap.Error(err))
 				return err
-			} else {
-				c.logger.Debug("Sent final AUTH response",
-					zap.String("reasonCode", packet.ReasonSuccess.String()))
 			}
+
+			c.logger.Debug("Sent final AUTH response",
+				zap.String("reasonCode", packet.ReasonSuccess.String()))
 		}
 		c.logger.Info("Authentication completed successfully")
 	}

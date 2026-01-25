@@ -28,6 +28,7 @@ type Conn struct {
 	// 连接会话状态（每次连接可能不同）
 	clientID       string // 实际使用的客户端 ID（可能由服务器分配）
 	keepAlive      uint16 // 实际使用的心跳间隔
+	sessionTimeout uint32 // 会话过期时间
 	sessionPresent bool   // 服务端是否恢复了会话
 	maxPacketSize  uint32 // 允许发送的最大包大小
 	sendWindow     uint16 // 发送窗口大小
@@ -69,6 +70,11 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 		keepAlive = connack.Properties.KeepAlive
 	}
 
+	sessionTimeout := c.options.SessionTimeout
+	if connack.Properties.SessionTimeout != 0 {
+		sessionTimeout = connack.Properties.SessionTimeout
+	}
+
 	maxMessageSize := c.options.MaxPacketSize
 	if connack.Properties.MaxPacketSize != 0 {
 		maxMessageSize = connack.Properties.MaxPacketSize
@@ -88,6 +94,7 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 		conn:           netConn,
 		clientID:       clientID,
 		keepAlive:      keepAlive,
+		sessionTimeout: sessionTimeout,
 		sessionPresent: sessionPresent,
 		maxPacketSize:  maxMessageSize,
 		sendWindow:     sendWindow,
@@ -99,7 +106,7 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 	}
 
 	// 清空持久化队列（clean session）
-	if !c.options.KeepSession {
+	if conn.sessionTimeout == 0 {
 		if err := c.queue.Clear(); err != nil {
 			c.logger.Warn("Failed to clear queue for clean session", zap.Error(err))
 		}
@@ -135,12 +142,13 @@ func (c *Conn) receiveLoop() {
 		if err != nil {
 			if errors.Is(err, io.EOF) || c.closed.Load() {
 				return
-			} else {
-				c.client.logger.Debug("Read packet error",
-					zap.String("clientID", c.clientID),
-					zap.Error(err))
-				c.close(err)
 			}
+
+			c.client.logger.Debug("Read packet error",
+				zap.String("clientID", c.clientID),
+				zap.Error(err))
+			c.close(err)
+
 			return
 		}
 
@@ -387,11 +395,7 @@ func (c *Conn) writePacket(pkt packet.Packet) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	if err := packet.WritePacket(c.conn, pkt, c.maxPacketSize); err != nil {
-		return err
-	}
-
-	return nil
+	return packet.WritePacket(c.conn, pkt, c.maxPacketSize)
 }
 
 // waitAck 等待包确认
