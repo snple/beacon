@@ -64,9 +64,12 @@ func (c *Core) handleConn(conn net.Conn) {
 	}
 
 	// 处理 Client ID（分配或使用客户端提供的）
-	clientID := connect.ClientID
-	if clientID == "" {
-		clientID = c.generateClientID()
+	{
+		clientID := connect.ClientID
+		if clientID == "" {
+			clientID = c.generateClientID()
+		}
+		connect.ClientID = clientID
 	}
 
 	// 认证
@@ -77,12 +80,12 @@ func (c *Core) handleConn(conn net.Conn) {
 	}
 
 	// 注册客户端并发送 CONNACK
-	client, sessionPresent := c.registerClient(clientID, conn, connect)
+	client, sessionPresent := c.registerClient(conn, connect)
 
 	// 构建 CONNACK 属性
 	connackProp := packet.NewConnackProperties()
 	connackProp.SessionTimeout = client.session.timeout
-	connackProp.ClientID = clientID
+	connackProp.ClientID = connect.ClientID
 	connackProp.KeepAlive = client.conn.keepAlive
 	connackProp.MaxPacketSize = c.options.MaxPacketSize
 	connackProp.ReceiveWindow = c.options.ReceiveWindow
@@ -212,9 +215,11 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 // 1. 无旧客户端：创建新 Client
 // 2. 有旧客户端 + KeepSession=true：复用旧 Client，替换其 Conn
 // 3. 有旧客户端 + KeepSession=false：清理旧 Client，创建新 Client
-func (c *Core) registerClient(clientID string, netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool) {
+func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool) {
 	c.clientsMu.Lock()
 	defer c.clientsMu.Unlock()
+
+	clientID := connect.ClientID
 
 	existingClient, exists := c.clients[clientID]
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/client"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
@@ -197,7 +199,14 @@ func runSubscribeMode(ctx context.Context, c *client.Client, topic string) {
 		}
 
 		msgCount++
-		fmt.Printf("✓ [%d] Received message on '%s': %s\n", msgCount, msg.Topic(), string(msg.Payload()))
+
+		buf := bytes.NewBuffer(msg.Payload())
+		value, err := nson.DecodeMap(buf)
+		if err != nil {
+			fmt.Printf("✓ [%d] Received message on '%s': %s\n", msgCount, msg.Topic(), string(msg.Payload()))
+		} else {
+			fmt.Printf("✓ [%d] Received message on '%s': %v\n", msgCount, msg.Topic(), value)
+		}
 	}
 
 	fmt.Printf("\n✓ Received %d message(s)\n", msgCount)
@@ -258,7 +267,7 @@ func runPollingMode(ctx context.Context, c *client.Client, action string) {
 	for {
 		req, err := c.PollRequest(ctx, 5*time.Second)
 		if err != nil {
-			if err == client.ErrPollTimeout {
+			if errors.Is(err, client.ErrPollTimeout) {
 				continue
 			}
 			if ctx.Err() != nil {

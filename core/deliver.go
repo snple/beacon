@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -125,6 +126,7 @@ func (c *Core) deliver(msg *Message) {
 	}
 	clients := make([]clientWithQoS, 0, len(subscribers))
 	for clientID, subQoS := range subscribers {
+		fmt.Printf("clientid: %v\n", clientID)
 		if client, ok := c.clients[clientID]; ok {
 			// 确定发送 QoS (取订阅 QoS 和消息 QoS 的较小值)
 			qos := min(subQoS, msg.QoS)
