@@ -12,11 +12,11 @@ import (
 
 // TestQueuePersistence 测试消息队列持久化
 func TestQueuePersistence(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
 	opts := NewClientOptions().
-		WithCore(broker.GetAddress()).
+		WithCore(addr).
 		WithClientID("test-queue-client").
 		WithSessionTimeout(60)
 
@@ -45,11 +45,11 @@ func TestQueuePersistence(t *testing.T) {
 
 // TestOfflineQueueing 测试离线时消息入队
 func TestOfflineQueueing(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
 	opts := NewClientOptions().
-		WithCore(broker.GetAddress()).
+		WithCore(addr).
 		WithClientID("test-offline-queue").
 		WithSessionTimeout(60).
 		WithRetransmitInterval(100 * time.Millisecond) // 快速重传
@@ -108,11 +108,11 @@ func TestOfflineQueueing(t *testing.T) {
 
 // TestRetransmitMechanism 测试重传机制
 func TestRetransmitMechanism(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
 	opts := NewClientOptions().
-		WithCore(broker.GetAddress()).
+		WithCore(addr).
 		WithClientID("test-retransmit").
 		WithSessionTimeout(60).
 		WithRetransmitInterval(200 * time.Millisecond) // 快速重传用于测试
@@ -151,11 +151,11 @@ func TestRetransmitMechanism(t *testing.T) {
 
 // TestQoS0Queueing 测试 QoS0 消息的队列行为
 func TestQoS0Queueing(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
 	opts := NewClientOptions().
-		WithCore(broker.GetAddress()).
+		WithCore(addr).
 		WithClientID("test-qos0-queue").
 		WithSessionTimeout(60)
 
@@ -186,11 +186,11 @@ func TestQoS0Queueing(t *testing.T) {
 
 // TestQueueExpiredMessages 测试过期消息的处理
 func TestQueueExpiredMessages(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
 	opts := NewClientOptions().
-		WithCore(broker.GetAddress()).
+		WithCore(addr).
 		WithClientID("test-expired-queue").
 		WithSessionTimeout(60).
 		WithRetransmitInterval(200 * time.Millisecond)

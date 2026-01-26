@@ -30,11 +30,10 @@ func testSetupCore(t *testing.T, opts *CoreOptions) *Core {
 	if opts == nil {
 		opts = NewCoreOptions()
 	}
-	opts.WithAddress("127.0.0.1:0"). // 使用随机端口
-						WithLogger(testIntegrationLogger()).
-						WithConnectTimeout(5).
-						WithRequestQueueSize(100).
-						WithMessageQueueSize(100)
+	opts.WithLogger(testIntegrationLogger()).
+		WithConnectTimeout(5).
+		WithRequestQueueSize(100).
+		WithMessageQueueSize(100)
 
 	core, err := NewWithOptions(opts)
 	if err != nil {
@@ -81,7 +80,7 @@ func TestPubSub_BasicQoS0(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 创建发布者和订阅者
 	publisher := testSetupClient(t, addr, "publisher1", nil)
@@ -128,7 +127,7 @@ func TestPubSub_BasicQoS1(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-qos1", nil)
 	defer publisher.Close()
@@ -170,7 +169,7 @@ func TestPubSub_WildcardSingleLevel(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-wild", nil)
 	defer publisher.Close()
@@ -225,7 +224,7 @@ func TestPubSub_WildcardMultiLevel(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-multi", nil)
 	defer publisher.Close()
@@ -280,7 +279,7 @@ func TestPubSub_MultipleSubscribers(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-multi-sub", nil)
 	defer publisher.Close()
@@ -344,7 +343,7 @@ func TestPubSub_Unsubscribe(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-unsub", nil)
 	defer publisher.Close()
@@ -389,7 +388,7 @@ func TestPubSub_TargetClientID(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-target", nil)
 	defer publisher.Close()
@@ -450,7 +449,7 @@ func TestRetain_Basic(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 发布保留消息
 	publisher := testSetupClient(t, addr, "pub-retain", nil)
@@ -510,7 +509,7 @@ func TestRetain_Update(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-retain-update", nil)
 	defer publisher.Close()
@@ -576,7 +575,7 @@ func TestRetain_WildcardMatch(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-retain-wild", nil)
 	defer publisher.Close()
@@ -649,7 +648,7 @@ func TestWill_Basic(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 创建监听遗嘱消息的订阅者
 	watcher := testSetupClient(t, addr, "will-watcher", nil)
@@ -706,7 +705,7 @@ func TestWill_NormalDisconnect(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 创建监听者
 	watcher := testSetupClient(t, addr, "will-watcher2", nil)
@@ -757,7 +756,7 @@ func TestWill_WithQoS1(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 创建监听者（使用 QoS1 订阅）
 	watcher := testSetupClient(t, addr, "will-watcher-qos1", nil)
@@ -819,7 +818,7 @@ func TestExpiry_MessageExpires(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-expiry", nil)
 	defer publisher.Close()
@@ -859,7 +858,7 @@ func TestExpiry_CustomExpiry(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-custom-expiry", nil)
 	defer publisher.Close()
@@ -922,7 +921,7 @@ func TestHooks_OnConnect(t *testing.T) {
 	core := testSetupCore(t, coreOpts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 连接多个客户端
 	clients := make([]*client.Client, 3)
@@ -973,7 +972,7 @@ func TestHooks_OnPublish(t *testing.T) {
 	core := testSetupCore(t, coreOpts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "hook-pub", nil)
 	defer publisher.Close()
@@ -1045,7 +1044,7 @@ func TestHooks_OnDeliver(t *testing.T) {
 	core := testSetupCore(t, coreOpts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "deliver-pub", nil)
 	defer publisher.Close()
@@ -1111,7 +1110,7 @@ func TestHooks_OnSubscribe(t *testing.T) {
 	core := testSetupCore(t, coreOpts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	c := testSetupClient(t, addr, "sub-hook-client", nil)
 	defer c.Close()
@@ -1134,7 +1133,7 @@ func TestHooks_ClientOnMessage(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "client-hook-pub", nil)
 	defer publisher.Close()
@@ -1215,7 +1214,7 @@ func TestConnection_Reconnect(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 创建客户端（autoReconnect 在 Connect 成功后自动启用）
 	opts := client.NewClientOptions().
@@ -1258,7 +1257,7 @@ func TestConnection_MaxClients(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 连接两个客户端（应该成功）
 	c1 := testSetupClient(t, addr, "max-client1", nil)
@@ -1290,7 +1289,7 @@ func TestConnection_ClientTakeover(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 第一个客户端连接
 	c1, err := client.NewWithOptions(
@@ -1351,7 +1350,7 @@ func TestStats_Basic(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 初始状态
 	stats := core.GetStats()
@@ -1403,7 +1402,7 @@ func TestManagement_ListClients(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	c1 := testSetupClient(t, addr, "list-client1", nil)
 	defer c1.Close()
@@ -1435,7 +1434,7 @@ func TestManagement_GetClientInfo(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	c := testSetupClient(t, addr, "info-client", nil)
 	defer c.Close()
@@ -1470,7 +1469,7 @@ func TestManagement_DisconnectClient(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	c := testSetupClient(t, addr, "disconnect-client", nil)
 	defer c.Close()
@@ -1495,7 +1494,7 @@ func TestManagement_GetTopicSubscribers(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	c1 := testSetupClient(t, addr, "topic-sub1", nil)
 	defer c1.Close()
@@ -1526,7 +1525,7 @@ func TestRetain_EmptyPayloadClear(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-retain-clear", nil)
 	defer publisher.Close()
@@ -1585,7 +1584,7 @@ func TestRetain_MultiLevelWildcard(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-retain-multi", nil)
 	defer publisher.Close()
@@ -1660,7 +1659,7 @@ func TestRetain_QoSDowngrade(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-retain-qos", nil)
 	defer publisher.Close()
@@ -1727,7 +1726,7 @@ func TestRetain_Persistence(t *testing.T) {
 		WithStoreDir(tmpDir)
 
 	core := testSetupCore(t, opts)
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	publisher := testSetupClient(t, addr, "pub-persist", nil)
 
@@ -1745,7 +1744,7 @@ func TestRetain_Persistence(t *testing.T) {
 	core2 := testSetupCore(t, opts)
 	defer core2.Stop()
 
-	addr2 := core2.GetAddress()
+	addr2 := testServe(t, core2)
 
 	// 新订阅者应收到持久化的保留消息
 	subscriber := testSetupClient(t, addr2, "sub-persist", nil)
@@ -1789,7 +1788,7 @@ func TestRetain_ConcurrentPublish(t *testing.T) {
 	core := testSetupCore(t, opts)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 创建多个发布者
 	numPublishers := 10

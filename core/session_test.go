@@ -24,7 +24,6 @@ func createMockConn(addr string, t *testing.T) net.Conn {
 func TestSessionRestoration_KeepSession(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600), // 1小时
 	)
@@ -37,7 +36,7 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 第一次连接：SessionTimeout = 60
 	conn1 := createMockConn(addr, t)
@@ -173,7 +172,6 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 func TestSessionRestoration_CleanSession(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()),
 	)
 	if err != nil {
@@ -185,7 +183,7 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 第一次连接：KeepSession=false
 	conn1 := createMockConn(addr, t)
@@ -272,7 +270,6 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 func TestSessionTakeover(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
@@ -285,7 +282,7 @@ func TestSessionTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 第一次连接
 	conn1 := createMockConn(addr, t)
@@ -398,7 +395,6 @@ func TestSessionTakeover(t *testing.T) {
 func TestSessionExpiry(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(2).                   // 2秒最大过期时间
 			WithExpiredCheckInterval(10 * time.Second), // 10秒检查间隔（最小值）
@@ -412,7 +408,7 @@ func TestSessionExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 连接并订阅
 	conn1 := createMockConn(addr, t)
@@ -489,7 +485,6 @@ func TestSessionExpiry(t *testing.T) {
 func TestOfflineMessageQueue(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600).
 			WithRetransmitInterval(1 * time.Second), // 使用1秒重传间隔以加速测试
@@ -503,7 +498,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 第一次连接并订阅
 	conn1 := createMockConn(addr, t)
@@ -648,7 +643,6 @@ func TestOfflineMessageQueue(t *testing.T) {
 func TestWillMessage(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()),
 	)
 	if err != nil {
@@ -660,7 +654,7 @@ func TestWillMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 第一个客户端：订阅遗嘱主题
 	conn1 := createMockConn(addr, t)
@@ -746,10 +740,7 @@ func TestWillMessage(t *testing.T) {
 
 // TestWillMessage_NormalDisconnect 测试正常断开时不发送遗嘱消息
 func TestWillMessage_NormalDisconnect(t *testing.T) {
-	server, err := NewWithOptions(
-		NewCoreOptions().
-			WithAddress(":0"),
-	)
+	server, err := NewWithOptions(NewCoreOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,7 +750,7 @@ func TestWillMessage_NormalDisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 订阅者
 	conn1 := createMockConn(addr, t)

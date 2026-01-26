@@ -19,7 +19,7 @@ func TestReceiveMaxPacketSize_PublishTooLarge(t *testing.T) {
 	defer core.Stop()
 
 	// 创建客户端（无发送限制）
-	cli := testSetupClient(t, core.GetAddress(), "test-client", nil)
+	cli := testSetupClient(t, testServe(t, core), "test-client", nil)
 	defer cli.Close()
 
 	// 订阅主题
@@ -69,7 +69,7 @@ func TestReceiveMaxPacketSize_RequestTooLarge(t *testing.T) {
 	defer core.Stop()
 
 	// 创建处理器客户端
-	handler := testSetupClient(t, core.GetAddress(), "handler", nil)
+	handler := testSetupClient(t, testServe(t, core), "handler", nil)
 	defer handler.Close()
 
 	if err := handler.Register("test.action"); err != nil {
@@ -91,7 +91,7 @@ func TestReceiveMaxPacketSize_RequestTooLarge(t *testing.T) {
 	}()
 
 	// 创建请求客户端
-	requester := testSetupClient(t, core.GetAddress(), "requester", nil)
+	requester := testSetupClient(t, testServe(t, core), "requester", nil)
 	defer requester.Close()
 
 	time.Sleep(50 * time.Millisecond)
@@ -130,7 +130,7 @@ func TestReceiveMaxPacketSize_SmallPacketsWork(t *testing.T) {
 	defer core.Stop()
 
 	// 创建客户端
-	cli := testSetupClient(t, core.GetAddress(), "test-client", nil)
+	cli := testSetupClient(t, testServe(t, core), "test-client", nil)
 	defer cli.Close()
 
 	// 订阅主题
@@ -190,7 +190,7 @@ func TestReceiveMaxPacketSize_NoLimit(t *testing.T) {
 	defer core.Stop()
 
 	// 创建客户端
-	cli := testSetupClient(t, core.GetAddress(), "test-client", nil)
+	cli := testSetupClient(t, testServe(t, core), "test-client", nil)
 	defer cli.Close()
 
 	// 订阅主题

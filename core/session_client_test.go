@@ -14,7 +14,6 @@ func TestClientSessionRestoration_WithKeepSession(t *testing.T) {
 	// 启动服务器
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
@@ -27,7 +26,7 @@ func TestClientSessionRestoration_WithKeepSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 创建客户端并连接
 	c, err := client.NewWithOptions(
@@ -84,7 +83,6 @@ func TestClientSessionRestoration_WithKeepSession(t *testing.T) {
 func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()),
 	)
 	if err != nil {
@@ -96,7 +94,7 @@ func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 第一次连接：KeepSession=false
 	c1, err := client.NewWithOptions(
@@ -157,7 +155,6 @@ func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 func TestClientOfflineMessageDelivery(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600).
 			WithRetransmitInterval(1 * time.Second), // 1秒重传间隔
@@ -171,7 +168,7 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 创建订阅客户端
 	subscriber, err := client.NewWithOptions(
@@ -285,7 +282,6 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 func TestClientSessionTakeover(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
@@ -298,7 +294,7 @@ func TestClientSessionTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 第一个客户端连接
 	c1, err := client.NewWithOptions(
@@ -378,7 +374,6 @@ func TestClientSessionTakeover(t *testing.T) {
 func TestClientAutoReconnect(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
@@ -390,7 +385,7 @@ func TestClientAutoReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 创建客户端
 	c, err := client.NewWithOptions(
@@ -459,7 +454,6 @@ func TestClientAutoReconnect(t *testing.T) {
 func TestClientQoS1MessagePersistence(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()),
 	)
 	if err != nil {
@@ -471,7 +465,7 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 创建带持久化的客户端
 	storeDir := t.TempDir()
@@ -510,7 +504,6 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 func TestClientSessionExpiry(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithAddress(":0").
 			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
@@ -523,7 +516,7 @@ func TestClientSessionExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	addr := server.listener.Addr().String()
+	addr := testServe(t, server)
 
 	// 创建客户端，设置2秒会话超时
 	c, err := client.NewWithOptions(

@@ -19,7 +19,7 @@ func TestMaxPacketSize_MessageDropped(t *testing.T) {
 
 	// 创建客户端，设置一个很小的 maxPacketSize
 	opts := client.NewClientOptions()
-	opts.WithCore(core.GetAddress()).
+	opts.WithCore(testServe(t, core)).
 		WithClientID("test-client").
 		WithMaxPacketSize(100) // 设置很小的最大包大小
 
@@ -95,7 +95,7 @@ func TestMaxPacketSize_QoS0AndQoS1(t *testing.T) {
 
 	// 创建客户端，设置一个很小的 maxPacketSize
 	opts := client.NewClientOptions()
-	opts.WithCore(core.GetAddress()).
+	opts.WithCore(testServe(t, core)).
 		WithClientID("test-client-qos").
 		WithMaxPacketSize(100)
 
@@ -154,7 +154,7 @@ func TestMaxPacketSize_NoLimit(t *testing.T) {
 	defer core.Stop()
 
 	// 创建客户端，不设置 maxPacketSize（默认为 0，表示不限制）
-	c := testSetupClient(t, core.GetAddress(), "test-client-no-limit", nil)
+	c := testSetupClient(t, testServe(t, core), "test-client-no-limit", nil)
 	defer c.Close()
 
 	// 订阅主题
@@ -195,7 +195,7 @@ func TestMaxPacketSize_WithLongTopic(t *testing.T) {
 
 	// 创建客户端，设置较小的 maxPacketSize
 	opts := client.NewClientOptions()
-	opts.WithCore(core.GetAddress()).
+	opts.WithCore(testServe(t, core)).
 		WithClientID("test-client-long-topic").
 		WithMaxPacketSize(150)
 

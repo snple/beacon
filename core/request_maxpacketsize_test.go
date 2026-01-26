@@ -18,12 +18,12 @@ func TestRequestResponse_MaxPacketSize_RequestTooLarge(t *testing.T) {
 	defer core.Stop()
 
 	// 创建请求客户端（无限制）
-	requester := testSetupClient(t, core.GetAddress(), "requester", nil)
+	requester := testSetupClient(t, testServe(t, core), "requester", nil)
 	defer requester.Close()
 
 	// 创建处理器客户端（设置很小的 maxPacketSize）
 	handlerOpts := client.NewClientOptions()
-	handlerOpts.WithCore(core.GetAddress()).
+	handlerOpts.WithCore(testServe(t, core)).
 		WithClientID("handler").
 		WithMaxPacketSize(200) // 设置很小的最大包大小
 
@@ -99,7 +99,7 @@ func TestRequestResponse_MaxPacketSize_ResponseTooLarge(t *testing.T) {
 
 	// 创建请求客户端（设置很小的 maxPacketSize）
 	requesterOpts := client.NewClientOptions()
-	requesterOpts.WithCore(core.GetAddress()).
+	requesterOpts.WithCore(testServe(t, core)).
 		WithClientID("requester").
 		WithMaxPacketSize(200) // 设置很小的最大包大小
 
@@ -114,7 +114,7 @@ func TestRequestResponse_MaxPacketSize_ResponseTooLarge(t *testing.T) {
 	}
 
 	// 创建处理器客户端（无限制）
-	handler := testSetupClient(t, core.GetAddress(), "handler", nil)
+	handler := testSetupClient(t, testServe(t, core), "handler", nil)
 	defer handler.Close()
 
 	// 注册 action
@@ -174,10 +174,10 @@ func TestRequestResponse_MaxPacketSize_NoLimit(t *testing.T) {
 	defer core.Stop()
 
 	// 创建请求和处理器客户端（都不设置 maxPacketSize）
-	requester := testSetupClient(t, core.GetAddress(), "requester", nil)
+	requester := testSetupClient(t, testServe(t, core), "requester", nil)
 	defer requester.Close()
 
-	handler := testSetupClient(t, core.GetAddress(), "handler", nil)
+	handler := testSetupClient(t, testServe(t, core), "handler", nil)
 	defer handler.Close()
 
 	// 注册 action
@@ -247,7 +247,7 @@ func TestRequestResponse_MaxPacketSize_SmallPacketsWork(t *testing.T) {
 
 	// 创建客户端（设置适中的 maxPacketSize）
 	requesterOpts := client.NewClientOptions()
-	requesterOpts.WithCore(core.GetAddress()).
+	requesterOpts.WithCore(testServe(t, core)).
 		WithClientID("requester").
 		WithMaxPacketSize(1000)
 
@@ -262,7 +262,7 @@ func TestRequestResponse_MaxPacketSize_SmallPacketsWork(t *testing.T) {
 	}
 
 	handlerOpts := client.NewClientOptions()
-	handlerOpts.WithCore(core.GetAddress()).
+	handlerOpts.WithCore(testServe(t, core)).
 		WithClientID("handler").
 		WithMaxPacketSize(1000)
 

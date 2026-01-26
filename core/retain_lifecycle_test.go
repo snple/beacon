@@ -14,7 +14,7 @@ func TestRetainMessage_LifecycleIndependence(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 场景 1：客户端发布保留消息后正常断开
 	t.Run("RetainMessageAfterNormalDisconnect", func(t *testing.T) {
@@ -197,7 +197,7 @@ func TestRetainMessage_WithWildcard(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
-	addr := core.GetAddress()
+	addr := testServe(t, core)
 
 	// 发布多个保留消息
 	publisher := testSetupClient(t, addr, "publisher", nil)

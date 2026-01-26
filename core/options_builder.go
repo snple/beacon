@@ -1,7 +1,6 @@
 package core
 
 import (
-	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -12,10 +11,6 @@ import (
 
 // CoreOptions Core 配置选项（Builder 模式）
 type CoreOptions struct {
-	// 网络配置
-	Address   string      // 监听地址 (如 ":3883")
-	TLSConfig *tls.Config // TLS 配置 (可选)
-
 	// 连接限制
 	MaxClients     uint32 // 最大客户端数
 	MaxPacketSize  uint32 // 最大包大小
@@ -56,7 +51,6 @@ type CoreOptions struct {
 // NewCoreOptions 创建新的 Core 配置选项
 func NewCoreOptions() *CoreOptions {
 	return &CoreOptions{
-		Address:               ":3883",
 		MaxClients:            10000,
 		MaxPacketSize:         1048576, // 1MB
 		ConnectTimeout:        10,
@@ -72,18 +66,6 @@ func NewCoreOptions() *CoreOptions {
 		MessageQueueSize:      100,
 		StoreOptions:          DefaultStoreOptions(),
 	}
-}
-
-// WithAddress 设置监听地址
-func (o *CoreOptions) WithAddress(addr string) *CoreOptions {
-	o.Address = addr
-	return o
-}
-
-// WithTLS 设置 TLS 配置
-func (o *CoreOptions) WithTLS(tlsConfig *tls.Config) *CoreOptions {
-	o.TLSConfig = tlsConfig
-	return o
 }
 
 // WithMaxClients 设置最大客户端数
@@ -227,11 +209,6 @@ func (o *CoreOptions) applyDefaults() {
 
 // Validate 验证配置的有效性
 func (o *CoreOptions) Validate() error {
-	// 验证网络配置
-	if o.Address == "" {
-		return fmt.Errorf("address cannot be empty")
-	}
-
 	// 验证连接限制
 	if o.MaxClients <= 0 {
 		return fmt.Errorf("maxClients must be >= 0, got %d", o.MaxClients)

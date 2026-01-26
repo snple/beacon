@@ -13,9 +13,7 @@ import (
 
 func main() {
 	// 创建并启动 Core
-	c, err := core.NewWithOptions(
-		core.NewCoreOptions().WithAddress(":3883"),
-	)
+	c, err := core.NewWithOptions(core.NewCoreOptions())
 	if err != nil {
 		log.Fatal("Failed to create core:", err)
 	}
@@ -23,6 +21,13 @@ func main() {
 		log.Fatal(err)
 	}
 	defer c.Stop()
+
+	// 在后台启动TCP服务
+	go func() {
+		if err := c.ServeTCP(":3883"); err != nil {
+			log.Fatal("TCP server error:", err)
+		}
+	}()
 
 	fmt.Println("Core started on :3883")
 	fmt.Println("=== Core 管理 API 示例 ===")

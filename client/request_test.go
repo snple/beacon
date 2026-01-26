@@ -8,64 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/packet"
-	"go.uber.org/zap"
 )
-
-// ============================================================================
-// 测试辅助函数
-// ============================================================================
-
-// testLogger 创建测试用的 logger
-func testLogger() *zap.Logger {
-	logger, _ := zap.NewDevelopment()
-	return logger
-}
-
-// testSetupCore 创建测试用的 Core
-func testSetupCore(t *testing.T) *core.Core {
-	t.Helper()
-
-	opts := core.NewCoreOptions().
-		WithAddress("127.0.0.1:0").
-		WithLogger(testLogger()).
-		WithConnectTimeout(5).
-		WithRequestQueueSize(100)
-
-	c, err := core.NewWithOptions(opts)
-	if err != nil {
-		t.Fatalf("Failed to create core: %v", err)
-	}
-
-	if err := c.Start(); err != nil {
-		t.Fatalf("Failed to start core: %v", err)
-	}
-
-	return c
-}
-
-// testSetupClient 创建测试用的 Client
-func testSetupClient(t *testing.T, coreAddr string, clientID string) *Client {
-	t.Helper()
-
-	opts := NewClientOptions().
-		WithCore(coreAddr).
-		WithClientID(clientID).
-		WithLogger(testLogger()).
-		WithRequestQueueSize(100)
-
-	c, err := NewWithOptions(opts)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
-
-	if err := c.Connect(); err != nil {
-		t.Fatalf("Failed to connect client: %v", err)
-	}
-
-	return c
-}
 
 // ============================================================================
 // 基本请求-响应测试
@@ -73,10 +17,8 @@ func testSetupClient(t *testing.T, coreAddr string, clientID string) *Client {
 
 // TestRequest_BasicClientToClient 测试客户端之间的基本请求-响应
 func TestRequest_BasicClientToClient(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
-
-	addr := broker.GetAddress()
 
 	// 创建请求发起者
 	requester := testSetupClient(t, addr, "requester")
@@ -129,10 +71,9 @@ func TestRequest_BasicClientToClient(t *testing.T) {
 
 // TestRequest_MultipleActions 测试多个 action
 func TestRequest_MultipleActions(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -200,10 +141,9 @@ func TestRequest_MultipleActions(t *testing.T) {
 
 // TestRequest_WithTargetClientID 测试指定目标客户端
 func TestRequest_WithTargetClientID(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -277,10 +217,9 @@ func TestRequest_WithTargetClientID(t *testing.T) {
 
 // TestRequest_Timeout 测试请求超时
 func TestRequest_Timeout(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -328,10 +267,9 @@ func TestRequest_Timeout(t *testing.T) {
 
 // TestRequest_ContextTimeout 测试 Context 超时
 func TestRequest_ContextTimeout(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -373,10 +311,9 @@ func TestRequest_ContextTimeout(t *testing.T) {
 
 // TestRequest_ActionNotFound 测试 action 不存在
 func TestRequest_ActionNotFound(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -398,10 +335,9 @@ func TestRequest_ActionNotFound(t *testing.T) {
 
 // TestRequest_ClientNotFound 测试目标客户端不存在
 func TestRequest_ClientNotFound(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -425,10 +361,9 @@ func TestRequest_ClientNotFound(t *testing.T) {
 
 // TestRequest_ErrorResponse 测试错误响应
 func TestRequest_ErrorResponse(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -481,10 +416,9 @@ func TestRequest_ErrorResponse(t *testing.T) {
 
 // TestRequest_Concurrent 测试并发请求
 func TestRequest_Concurrent(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -559,10 +493,9 @@ func TestRequest_Concurrent(t *testing.T) {
 
 // TestRequest_ConcurrentHandlers 测试多个处理者负载均衡
 func TestRequest_ConcurrentHandlers(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -634,10 +567,9 @@ func TestRequest_ConcurrentHandlers(t *testing.T) {
 
 // TestRequest_RegisterUnregister 测试注册和注销 action
 func TestRequest_RegisterUnregister(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -712,10 +644,9 @@ func TestRequest_RegisterUnregister(t *testing.T) {
 
 // TestRequest_GetRegisteredActions 测试获取已注册的 actions
 func TestRequest_GetRegisteredActions(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	handler := testSetupClient(t, addr, "handler")
 	defer handler.Close()
@@ -755,10 +686,9 @@ func TestRequest_GetRegisteredActions(t *testing.T) {
 
 // TestRequest_WithProperties 测试请求属性
 func TestRequest_WithProperties(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -822,10 +752,9 @@ func TestRequest_WithProperties(t *testing.T) {
 
 // TestRequest_ResponseWithProperties 测试响应属性
 func TestRequest_ResponseWithProperties(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -880,10 +809,9 @@ func TestRequest_ResponseWithProperties(t *testing.T) {
 
 // TestRequest_QueueFull 测试请求队列满
 func TestRequest_QueueFull(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()
@@ -953,10 +881,9 @@ func TestRequest_QueueFull(t *testing.T) {
 
 // TestRequest_HandlerDisconnect 测试处理者断线
 func TestRequest_HandlerDisconnect(t *testing.T) {
-	broker := testSetupCore(t)
+	broker, addr := testSetupCore(t)
 	defer broker.Stop()
 
-	addr := broker.GetAddress()
 
 	requester := testSetupClient(t, addr, "requester")
 	defer requester.Close()

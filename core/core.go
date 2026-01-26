@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,11 +44,10 @@ type Core struct {
 	stats Stats
 
 	// 生命周期
-	listener net.Listener
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	running  atomic.Bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	running atomic.Bool
 }
 
 // Stats core 统计信息
@@ -147,12 +145,6 @@ func (c *Core) Start() error {
 		return ErrCoreAlreadyRunning
 	}
 
-	// 启动网络监听
-	listener, err := c.startListener()
-	if err != nil {
-		return err
-	}
-	c.listener = listener
 	c.running.Store(true)
 
 	// 恢复持久化的消息
@@ -181,18 +173,12 @@ func (c *Core) startBackgroundWorkers() {
 		c.wg.Add(1)
 		go c.retransmitLoop()
 	}
-
-	// 接受连接
-	c.wg.Add(1)
-	go c.accept()
 }
 
 // logStartupInfo 记录启动信息
 func (c *Core) logStartupInfo() {
 	c.logger.Info("core started",
-		zap.String("address", c.options.Address),
-		zap.Uint32("maxClients", c.options.MaxClients),
-		zap.Bool("tls", c.options.TLSConfig != nil))
+		zap.Uint32("maxClients", c.options.MaxClients))
 }
 
 // Stop 停止 core
@@ -204,11 +190,6 @@ func (c *Core) Stop() error {
 	c.logger.Info("Stopping core...")
 	c.running.Store(false)
 	c.cancel()
-
-	// 关闭监听器，停止接受新连接
-	if c.listener != nil {
-		c.listener.Close()
-	}
 
 	// 断开所有普通客户端
 	c.clientsMu.Lock()
@@ -451,15 +432,6 @@ func (c *Core) GetTotalClientsCount() int {
 	count := len(c.clients)
 	c.clientsMu.RUnlock()
 	return count
-}
-
-// GetAddress 返回 core 监听的地址
-// 如果使用了随机端口（:0），则返回实际分配的地址
-func (c *Core) GetAddress() string {
-	if c.listener != nil {
-		return c.listener.Addr().String()
-	}
-	return c.options.Address
 }
 
 // GetLogger 获取当前使用的 Logger

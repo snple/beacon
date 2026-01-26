@@ -47,7 +47,6 @@ func main() {
 
 	// 构建 core 选项
 	opts := core.NewCoreOptions().
-		WithAddress(*addr).
 		WithMaxClients(uint32(*maxClients)).
 		WithRetainEnabled(true).
 		WithStoreDir(*storeDir).
@@ -143,6 +142,15 @@ func main() {
 		logger.Error("Failed to start core", zap.Error(err))
 		os.Exit(1)
 	}
+
+	// 在后台启动TCP服务
+	go func() {
+		logger.Info("Starting TCP server", zap.String("address", *addr))
+		if err := core.ServeTCP(*addr); err != nil {
+			logger.Error("TCP server error", zap.Error(err))
+			os.Exit(1)
+		}
+	}()
 
 	// 打印启动信息
 	fmt.Println("╔════════════════════════════════════════════════════════════════╗")

@@ -1,7 +1,6 @@
 package core
 
 import (
-	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
@@ -10,48 +9,26 @@ import (
 	"go.uber.org/zap"
 )
 
-// startListener 启动网络监听器
-func (c *Core) startListener() (net.Listener, error) {
-	var listener net.Listener
-	var err error
-
-	if c.options.TLSConfig != nil {
-		listener, err = tls.Listen("tcp", c.options.Address, c.options.TLSConfig)
-		c.logger.Info("Starting core with TLS", zap.String("address", c.options.Address))
-	} else {
-		listener, err = net.Listen("tcp", c.options.Address)
-		c.logger.Warn("Starting core without TLS (not recommended for production)",
-			zap.String("address", c.options.Address))
+// HandleConn 处理一个已建立的连接
+// 这是 Core 的主要 API，用户可以从任何 net.Listener 获取连接后调用此方法
+// 支持 TCP、TLS、WebSocket、QUIC 等任何实现了 net.Conn 接口的连接
+func (c *Core) HandleConn(conn net.Conn) error {
+	if !c.running.Load() {
+		conn.Close()
+		return fmt.Errorf("core is not running")
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to start listener: %w", err)
+	// 检查客户端数量限制
+	if c.options.MaxClients > 0 && uint32(c.stats.ClientsConnected.Load()) >= c.options.MaxClients {
+		c.logger.Warn("Max clients reached, rejecting connection",
+			zap.String("remote", conn.RemoteAddr().String()))
+		conn.Close()
+		return fmt.Errorf("max clients reached")
 	}
-	return listener, nil
-}
 
-func (c *Core) accept() {
-	defer c.wg.Done()
-
-	for c.running.Load() {
-		conn, err := c.listener.Accept()
-		if err != nil {
-			if c.running.Load() {
-				c.logger.Error("Accept error", zap.Error(err))
-			}
-			continue
-		}
-
-		// 检查客户端数量限制
-		if c.options.MaxClients > 0 && uint32(c.stats.ClientsConnected.Load()) >= c.options.MaxClients {
-			c.logger.Warn("Max clients reached, rejecting connection")
-			conn.Close()
-			continue
-		}
-
-		c.wg.Add(1)
-		go c.handleConn(conn)
-	}
+	c.wg.Add(1)
+	go c.handleConn(conn)
+	return nil
 }
 
 func (c *Core) handleConn(conn net.Conn) {
