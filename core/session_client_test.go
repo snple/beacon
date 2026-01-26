@@ -42,7 +42,8 @@ func TestClientSessionRestoration_WithKeepSession(t *testing.T) {
 	}
 	defer c.Close()
 
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -64,7 +65,8 @@ func TestClientSessionRestoration_WithKeepSession(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 重新连接
-	if err := c.Connect(); err != nil {
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -108,7 +110,8 @@ func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 	}
 	defer c1.Close()
 
-	if err := c1.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c1.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -136,7 +139,8 @@ func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 	}
 	defer c2.Close()
 
-	if err := c2.Connect(); err != nil {
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c2.ConnectWithDialer(dialer2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,7 +189,8 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 	}
 	defer subscriber.Close()
 
-	if err := subscriber.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := subscriber.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -213,7 +218,8 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 	}
 	defer publisher.Close()
 
-	if err := publisher.Connect(); err != nil {
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := publisher.ConnectWithDialer(dialer2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -244,7 +250,8 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 	// }
 
 	// 订阅者重新连接
-	if err := subscriber.Connect(); err != nil {
+	dialer3 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := subscriber.ConnectWithDialer(dialer3); err != nil {
 		t.Fatal(err)
 	}
 
@@ -310,7 +317,8 @@ func TestClientSessionTakeover(t *testing.T) {
 	}
 	defer c1.Close()
 
-	if err := c1.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c1.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -335,7 +343,8 @@ func TestClientSessionTakeover(t *testing.T) {
 	}
 	defer c2.Close()
 
-	if err := c2.Connect(); err != nil {
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c2.ConnectWithDialer(dialer2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -401,7 +410,8 @@ func TestClientAutoReconnect(t *testing.T) {
 	}
 	defer c.Close()
 
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -485,7 +495,8 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 	}
 	defer c.Close()
 
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -532,7 +543,8 @@ func TestClientSessionExpiry(t *testing.T) {
 	}
 	defer c.Close()
 
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -573,7 +585,8 @@ func TestClientSessionExpiry(t *testing.T) {
 	}
 
 	// 重新连接，SessionPresent应该为false
-	if err := c.Connect(); err != nil {
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer2); err != nil {
 		t.Fatal(err)
 	}
 

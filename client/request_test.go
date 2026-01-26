@@ -829,7 +829,8 @@ func TestRequest_QueueFull(t *testing.T) {
 	}
 	defer handler.Close()
 
-	if err := handler.Connect(); err != nil {
+	dialer := &TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := handler.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect handler: %v", err)
 	}
 

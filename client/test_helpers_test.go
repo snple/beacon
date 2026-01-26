@@ -3,6 +3,7 @@ package client
 import (
 	"net"
 	"testing"
+	"time"
 
 	"github.com/snple/beacon/core"
 	"go.uber.org/zap"
@@ -65,7 +66,11 @@ func testSetupClient(t *testing.T, coreAddr string, clientID string) *Client {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	if err := c.Connect(); err != nil {
+	dialer := &TCPDialer{
+		Address:     coreAddr,
+		DialTimeout: 10 * time.Second,
+	}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect client: %v", err)
 	}
 

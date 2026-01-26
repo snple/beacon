@@ -15,6 +15,8 @@ import (
 func TestRequestResponse_MaxPacketSize_RequestTooLarge(t *testing.T) {
 	// 创建 core
 	core := testSetupCore(t, nil)
+
+	addr := testServe(t, core)
 	defer core.Stop()
 
 	// 创建请求客户端（无限制）
@@ -33,7 +35,8 @@ func TestRequestResponse_MaxPacketSize_RequestTooLarge(t *testing.T) {
 	}
 	defer handler.Close()
 
-	if err := handler.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := handler.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect handler: %v", err)
 	}
 
@@ -95,6 +98,8 @@ func TestRequestResponse_MaxPacketSize_RequestTooLarge(t *testing.T) {
 func TestRequestResponse_MaxPacketSize_ResponseTooLarge(t *testing.T) {
 	// 创建 core
 	core := testSetupCore(t, nil)
+
+	addr := testServe(t, core)
 	defer core.Stop()
 
 	// 创建请求客户端（设置很小的 maxPacketSize）
@@ -109,7 +114,8 @@ func TestRequestResponse_MaxPacketSize_ResponseTooLarge(t *testing.T) {
 	}
 	defer requester.Close()
 
-	if err := requester.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := requester.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect requester: %v", err)
 	}
 
@@ -173,11 +179,13 @@ func TestRequestResponse_MaxPacketSize_NoLimit(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
+	addr := testServe(t, core)
+
 	// 创建请求和处理器客户端（都不设置 maxPacketSize）
-	requester := testSetupClient(t, testServe(t, core), "requester", nil)
+	requester := testSetupClient(t, addr, "requester", nil)
 	defer requester.Close()
 
-	handler := testSetupClient(t, testServe(t, core), "handler", nil)
+	handler := testSetupClient(t, addr, "handler", nil)
 	defer handler.Close()
 
 	// 注册 action
@@ -243,6 +251,8 @@ func TestRequestResponse_MaxPacketSize_NoLimit(t *testing.T) {
 func TestRequestResponse_MaxPacketSize_SmallPacketsWork(t *testing.T) {
 	// 创建 core
 	core := testSetupCore(t, nil)
+
+	addr := testServe(t, core)
 	defer core.Stop()
 
 	// 创建客户端（设置适中的 maxPacketSize）
@@ -257,7 +267,8 @@ func TestRequestResponse_MaxPacketSize_SmallPacketsWork(t *testing.T) {
 	}
 	defer requester.Close()
 
-	if err := requester.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := requester.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect requester: %v", err)
 	}
 
@@ -272,7 +283,8 @@ func TestRequestResponse_MaxPacketSize_SmallPacketsWork(t *testing.T) {
 	}
 	defer handler.Close()
 
-	if err := handler.Connect(); err != nil {
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := handler.ConnectWithDialer(dialer2); err != nil {
 		t.Fatalf("Failed to connect handler: %v", err)
 	}
 

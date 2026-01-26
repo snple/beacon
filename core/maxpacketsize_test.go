@@ -17,9 +17,11 @@ func TestMaxPacketSize_MessageDropped(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
+	addr := testServe(t, core)
+
 	// 创建客户端，设置一个很小的 maxPacketSize
 	opts := client.NewClientOptions()
-	opts.WithCore(testServe(t, core)).
+	opts.WithCore(addr).
 		WithClientID("test-client").
 		WithMaxPacketSize(100) // 设置很小的最大包大小
 
@@ -28,7 +30,8 @@ func TestMaxPacketSize_MessageDropped(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect client: %v", err)
 	}
 	defer c.Close()
@@ -93,9 +96,11 @@ func TestMaxPacketSize_QoS0AndQoS1(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
+	addr := testServe(t, core)
+
 	// 创建客户端，设置一个很小的 maxPacketSize
 	opts := client.NewClientOptions()
-	opts.WithCore(testServe(t, core)).
+	opts.WithCore(addr).
 		WithClientID("test-client-qos").
 		WithMaxPacketSize(100)
 
@@ -104,7 +109,8 @@ func TestMaxPacketSize_QoS0AndQoS1(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect client: %v", err)
 	}
 	defer c.Close()
@@ -193,9 +199,11 @@ func TestMaxPacketSize_WithLongTopic(t *testing.T) {
 	core := testSetupCore(t, nil)
 	defer core.Stop()
 
+	addr := testServe(t, core)
+
 	// 创建客户端，设置较小的 maxPacketSize
 	opts := client.NewClientOptions()
-	opts.WithCore(testServe(t, core)).
+	opts.WithCore(addr).
 		WithClientID("test-client-long-topic").
 		WithMaxPacketSize(150)
 
@@ -204,7 +212,8 @@ func TestMaxPacketSize_WithLongTopic(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect client: %v", err)
 	}
 	defer c.Close()

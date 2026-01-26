@@ -86,6 +86,9 @@ type Client struct {
 	connMu    sync.RWMutex
 	connectMu sync.Mutex
 
+	// 连接拨号器（用于自动重连）
+	dialer Dialer
+
 	// 连接状态
 	connected atomic.Bool
 

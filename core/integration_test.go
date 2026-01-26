@@ -64,7 +64,11 @@ func testSetupClient(t *testing.T, coreAddr string, clientID string, opts *clien
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{
+		Address:     coreAddr,
+		DialTimeout: 10 * time.Second,
+	}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatalf("Failed to connect client: %v", err)
 	}
 
@@ -673,7 +677,8 @@ func TestWill_Basic(t *testing.T) {
 		t.Fatalf("Failed to create will client: %v", err)
 	}
 
-	err = willClient.Connect()
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = willClient.ConnectWithDialer(dialer)
 	if err != nil {
 		t.Fatalf("Failed to connect will client: %v", err)
 	}
@@ -730,7 +735,8 @@ func TestWill_NormalDisconnect(t *testing.T) {
 		t.Fatalf("Failed to create will client: %v", err)
 	}
 
-	err = willClient.Connect()
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = willClient.ConnectWithDialer(dialer)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
@@ -781,7 +787,8 @@ func TestWill_WithQoS1(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	err = willClient.Connect()
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = willClient.ConnectWithDialer(dialer)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
@@ -1160,7 +1167,8 @@ func TestHooks_ClientOnMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create subscriber: %v", err)
 	}
-	err = subscriber.Connect()
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = subscriber.ConnectWithDialer(dialer)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
@@ -1228,7 +1236,8 @@ func TestConnection_Reconnect(t *testing.T) {
 	}
 	defer c.Close()
 
-	err = c.Connect()
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c.ConnectWithDialer(dialer)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
@@ -1278,7 +1287,8 @@ func TestConnection_MaxClients(t *testing.T) {
 	}
 	defer c3.Close()
 
-	err = c3.Connect()
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c3.ConnectWithDialer(dialer)
 	if err == nil {
 		t.Error("Third client should fail to connect")
 	}
@@ -1302,7 +1312,8 @@ func TestConnection_ClientTakeover(t *testing.T) {
 		t.Fatalf("Failed to create c1: %v", err)
 	}
 
-	err = c1.Connect()
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c1.ConnectWithDialer(dialer)
 	if err != nil {
 		t.Fatalf("Failed to connect c1: %v", err)
 	}
@@ -1320,7 +1331,8 @@ func TestConnection_ClientTakeover(t *testing.T) {
 		t.Fatalf("Failed to create c2: %v", err)
 	}
 
-	err = c2.Connect()
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c2.ConnectWithDialer(dialer2)
 	if err != nil {
 		t.Fatalf("Failed to connect c2: %v", err)
 	}

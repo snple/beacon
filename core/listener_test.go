@@ -52,7 +52,8 @@ func TestHandleConn(t *testing.T) {
 	}
 	defer cli.Close()
 
-	if err := cli.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := cli.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,7 +127,8 @@ func TestServe(t *testing.T) {
 	}
 	defer cli.Close()
 
-	if err := cli.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := cli.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -183,7 +185,8 @@ func TestMultipleListeners(t *testing.T) {
 	}
 	defer cli1.Close()
 
-	if err := cli1.Connect(); err != nil {
+	dialer1 := &client.TCPDialer{Address: addr1, DialTimeout: 10 * time.Second}
+	if err := cli1.ConnectWithDialer(dialer1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,7 +201,8 @@ func TestMultipleListeners(t *testing.T) {
 	}
 	defer cli2.Close()
 
-	if err := cli2.Connect(); err != nil {
+	dialer2 := &client.TCPDialer{Address: addr2, DialTimeout: 10 * time.Second}
+	if err := cli2.ConnectWithDialer(dialer2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -249,7 +253,8 @@ func TestHandleConnMaxClients(t *testing.T) {
 	}
 	defer cli1.Close()
 
-	if err := cli1.Connect(); err != nil {
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := cli1.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -268,7 +273,8 @@ func TestHandleConnMaxClients(t *testing.T) {
 	defer cli2.Close()
 
 	// 第二个连接应该失败或超时
-	err = cli2.Connect()
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = cli2.ConnectWithDialer(dialer2)
 	if err == nil {
 		t.Error("expected second client to be rejected, but it connected successfully")
 	}

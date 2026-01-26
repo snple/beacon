@@ -1,8 +1,6 @@
 package client
 
 import (
-	"context"
-	"crypto/tls"
 	"net"
 	"time"
 
@@ -17,8 +15,10 @@ type WillMessage struct {
 	Expiry time.Duration // 相对过期时间（如 30*time.Second），0 表示不过期
 }
 
-// Connect 连接到 core
-func (c *Client) Connect() error {
+// ConnectWithDialer 使用自定义 Dialer 连接到 core
+// 用户可以实现 Dialer 接口来支持自定义传输层（WebSocket、QUIC 等）
+// 支持自动重连（重连时会调用 dialer.Dial()）
+func (c *Client) ConnectWithDialer(dialer Dialer) error {
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
 
@@ -26,6 +26,44 @@ func (c *Client) Connect() error {
 		return ErrAlreadyConnected
 	}
 
+	// 保存 dialer 用于重连
+	c.connMu.Lock()
+	c.dialer = dialer
+	c.connMu.Unlock()
+
+	// 建立连接
+	netConn, err := dialer.Dial()
+	if err != nil {
+		return err
+	}
+
+	return c.connectWithConn(netConn)
+}
+
+// ConnectWithConn 使用已建立的连接
+// 注意：此方法会禁用自动重连，因为客户端不知道如何重新建立连接
+// 如果需要自动重连，请使用 ConnectWithDialer
+func (c *Client) ConnectWithConn(conn net.Conn) error {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
+	if c.connected.Load() {
+		return ErrAlreadyConnected
+	}
+
+	// 清除 dialer，禁用自动重连
+	c.connMu.Lock()
+	c.dialer = nil
+	c.connMu.Unlock()
+
+	// 禁用自动重连
+	c.autoReconnect.Store(false)
+
+	return c.connectWithConn(conn)
+}
+
+// connectWithConn 内部方法：使用已建立的连接完成握手和初始化
+func (c *Client) connectWithConn(netConn net.Conn) error {
 	// 获取旧连接（用于状态迁移）
 	c.connMu.Lock()
 	oldConn := c.conn
@@ -35,12 +73,6 @@ func (c *Client) Connect() error {
 	// 等待之前的连接完全关闭
 	if oldConn != nil {
 		oldConn.wait()
-	}
-
-	// 建立 TCP 连接
-	netConn, err := c.dialTCP()
-	if err != nil {
-		return err
 	}
 
 	// 握手：发送 CONNECT，接收 CONNACK
@@ -56,10 +88,13 @@ func (c *Client) Connect() error {
 	// 设置为当前连接
 	c.connMu.Lock()
 	c.conn = conn
+	// 如果有 dialer，启用自动重连
+	if c.dialer != nil {
+		c.autoReconnect.Store(true)
+	}
 	c.connMu.Unlock()
 
 	c.connected.Store(true)
-	c.autoReconnect.Store(true)
 
 	// 启动连接的所有协程
 	conn.start()
@@ -83,38 +118,6 @@ func (c *Client) Connect() error {
 	})
 
 	return nil
-}
-
-// dialTCP 建立 TCP 连接
-func (c *Client) dialTCP() (net.Conn, error) {
-	address := c.options.Core
-	useTLS := false
-	if len(address) > 6 && address[:6] == "tls://" {
-		address = address[6:]
-		useTLS = true
-	}
-
-	ctx, cancel := context.WithTimeout(c.ctx, c.options.ConnectTimeout)
-	defer cancel()
-
-	var conn net.Conn
-	var err error
-
-	if useTLS || c.options.TLSConfig != nil {
-		tlsConfig := c.options.TLSConfig
-		if tlsConfig == nil {
-			tlsConfig = &tls.Config{}
-		}
-		conn, err = (&tls.Dialer{Config: tlsConfig}).DialContext(ctx, "tcp", address)
-	} else {
-		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
-	}
-
-	if err != nil {
-		return nil, NewConnectionError("connect", err)
-	}
-
-	return conn, nil
 }
 
 // handshake 执行 CONNECT/CONNACK 握手

@@ -25,7 +25,8 @@ func TestQueuePersistence(t *testing.T) {
 	defer c.Close()
 
 	// 连接到服务器
-	err = c.Connect()
+	dialer := &TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c.ConnectWithDialer(dialer)
 	require.NoError(t, err)
 
 	// 发布一条 QoS1 消息
@@ -59,7 +60,8 @@ func TestOfflineQueueing(t *testing.T) {
 	defer c.Close()
 
 	// 先连接一次（初始化 queue）
-	err = c.Connect()
+	dialer := &TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c.ConnectWithDialer(dialer)
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
 
@@ -85,7 +87,7 @@ func TestOfflineQueueing(t *testing.T) {
 	assert.Greater(t, size, uint64(0), "Queue should contain offline message")
 
 	// 重新连接
-	err = c.Connect()
+	err = c.ConnectWithDialer(dialer)
 	require.NoError(t, err)
 
 	// 订阅主题，以便能收到消息并发送 PUBACK
@@ -122,7 +124,8 @@ func TestRetransmitMechanism(t *testing.T) {
 	defer c.Close()
 
 	// 连接
-	err = c.Connect()
+	dialer := &TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c.ConnectWithDialer(dialer)
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
 
@@ -164,7 +167,8 @@ func TestQoS0Queueing(t *testing.T) {
 	defer c.Close()
 
 	// 先连接
-	err = c.Connect()
+	dialer := &TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c.ConnectWithDialer(dialer)
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
 
@@ -200,7 +204,8 @@ func TestQueueExpiredMessages(t *testing.T) {
 	defer c.Close()
 
 	// 连接
-	err = c.Connect()
+	dialer := &TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	err = c.ConnectWithDialer(dialer)
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
 
@@ -222,7 +227,7 @@ func TestQueueExpiredMessages(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	// 重新连接
-	err = c.Connect()
+	err = c.ConnectWithDialer(dialer)
 	require.NoError(t, err)
 
 	// 等待重传机制处理（应该删除过期消息）

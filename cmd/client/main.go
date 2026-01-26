@@ -106,7 +106,11 @@ func main() {
 	defer c.Close()
 
 	// 连接到 core
-	if err := c.Connect(); err != nil {
+	dialer := &client.TCPDialer{
+		Address:     *core,
+		DialTimeout: 10 * time.Second,
+	}
+	if err := c.ConnectWithDialer(dialer); err != nil {
 		logger.Fatal("Failed to connect", zap.Error(err))
 	}
 

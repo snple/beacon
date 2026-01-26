@@ -89,9 +89,21 @@ func (c *Client) reconnectLoop() {
 				c.logger.Info("Attempting to reconnect...",
 					zap.Duration("delay", currentDelay))
 
-				err := c.Connect()
+				// 使用 dialer 重连（如果可用）
+				var err error
+				c.connMu.RLock()
+				dialer := c.dialer
+				c.connMu.RUnlock()
+
+				if dialer != nil {
+					err = c.ConnectWithDialer(dialer)
+				} else {
+					c.logger.Warn("No dialer available, cannot reconnect")
+					break
+				}
+
 				if err != nil {
-					// Connect() might return ErrAlreadyConnected if user connected in parallel.
+					// ConnectWithDialer() might return ErrAlreadyConnected if user connected in parallel.
 					c.logger.Warn("Reconnection attempt failed",
 						zap.Error(err))
 
