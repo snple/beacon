@@ -25,6 +25,20 @@ type SubscribeOptions struct {
 	RetainHandling    uint8 // 保留消息处理方式 (0, 1, 2)
 }
 
+// SubscribeOptions 位掩码常量
+// 位分配:
+//   - bit 0: QoS (1 bit, 值为 0 或 1)
+//   - bit 1: NoLocal
+//   - bit 2: RetainAsPublished
+//   - bit 3-4: RetainHandling (2 bits)
+const (
+	subOptQoS             uint8 = 1 << 0      // bit 0
+	subOptNoLocal         uint8 = 1 << 1      // bit 1
+	subOptRetainPublished uint8 = 1 << 2      // bit 2
+	subOptRetainHandling  uint8 = 0x03 << 3   // bit 3-4, 掩码
+	subOptRetainShift     uint8 = 3            // RetainHandling 移位量
+)
+
 // Subscription 单个订阅
 type Subscription struct {
 	Topic   string
@@ -179,16 +193,16 @@ func (p *SubscribePacket) encode(w io.Writer) error {
 		if err := EncodeString(w, sub.Topic); err != nil {
 			return err
 		}
-		// 订阅选项
+		// 订阅选项编码 (使用位掩码)
 		var options byte
-		options |= byte(sub.Options.QoS)
+		options |= byte(sub.Options.QoS) & subOptQoS
 		if sub.Options.NoLocal {
-			options |= 0x04
+			options |= subOptNoLocal
 		}
 		if sub.Options.RetainAsPublished {
-			options |= 0x08
+			options |= subOptRetainPublished
 		}
-		options |= (sub.Options.RetainHandling & 0x03) << 4
+		options |= (sub.Options.RetainHandling & 0x03) << subOptRetainShift
 		if err := WriteByte(w, options); err != nil {
 			return err
 		}
@@ -227,10 +241,10 @@ func (p *SubscribePacket) decode(r io.Reader, header FixedHeader) error {
 			sub := Subscription{
 				Topic: topic,
 				Options: SubscribeOptions{
-					QoS:               QoS(options[0] & 0x03),
-					NoLocal:           options[0]&0x04 != 0,
-					RetainAsPublished: options[0]&0x08 != 0,
-					RetainHandling:    (options[0] >> 4) & 0x03,
+					QoS:               QoS(options[0] & subOptQoS),
+					NoLocal:           options[0]&subOptNoLocal != 0,
+					RetainAsPublished: options[0]&subOptRetainPublished != 0,
+					RetainHandling:    (options[0] & subOptRetainHandling) >> subOptRetainShift,
 				},
 			}
 			p.Subscriptions = append(p.Subscriptions, sub)

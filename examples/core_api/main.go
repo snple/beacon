@@ -116,8 +116,8 @@ func main() {
 	topic := "sensors/temperature"
 	subscribers := c.GetTopicSubscribers(topic)
 	fmt.Printf("   主题 '%s' 的订阅者:\n", topic)
-	for _, clientID := range subscribers {
-		fmt.Printf("   - %s\n", clientID)
+	for _, opts := range subscribers {
+		fmt.Printf("   - %v\n", opts)
 	}
 
 	// 7. 获取客户端订阅列表

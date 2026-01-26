@@ -2,7 +2,6 @@ package core
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -120,34 +119,44 @@ func (c *Core) deliver(msg *Message) {
 
 	// 一次性获取所有需要的客户端，减少锁竞争
 	c.clientsMu.RLock()
-	type clientWithQoS struct {
+	type clientWithOptions struct {
 		client *Client
-		qos    packet.QoS
+		opts   packet.SubscribeOptions
 	}
-	clients := make([]clientWithQoS, 0, len(subscribers))
-	for clientID, subQoS := range subscribers {
-		fmt.Printf("clientid: %v\n", clientID)
+	clients := make([]clientWithOptions, 0, len(subscribers))
+	for clientID, subOpts := range subscribers {
 		if client, ok := c.clients[clientID]; ok {
-			// 确定发送 QoS (取订阅 QoS 和消息 QoS 的较小值)
-			qos := min(subQoS, msg.QoS)
-			clients = append(clients, clientWithQoS{client: client, qos: qos})
+			clients = append(clients, clientWithOptions{client: client, opts: subOpts})
 		}
 	}
 	c.clientsMu.RUnlock()
 
 	// 在锁外发送消息给普通客户端
-	for _, cq := range clients {
+	for _, co := range clients {
+		// 检查 NoLocal 选项
+		// 如果订阅者启用了 NoLocal，且消息来源是订阅者自己，则跳过投递
+		if co.opts.NoLocal {
+			if msg.Packet.Properties != nil && msg.Packet.Properties.SourceClientID == co.client.ID {
+				c.logger.Debug("Skipping delivery due to NoLocal option",
+					zap.String("clientID", co.client.ID),
+					zap.String("topic", msg.Packet.Topic),
+					zap.String("sourceClientID", msg.Packet.Properties.SourceClientID))
+				continue
+			}
+		}
+
 		// !!! 这里要复制消息，因为不同客户端的 QoS 可能不同，不能影响原消息 !!!
 		copiedMsg := msg.Copy() // 复制消息，不过 PublishPacket 仍是指针，没有深拷贝
-		copiedMsg.QoS = cq.qos  // 设置实际发送的 QoS
+		// 确定发送 QoS (取订阅 QoS 和消息 QoS 的较小值)
+		copiedMsg.QoS = min(co.opts.QoS, msg.QoS)
 
 		// 直接调用 Deliver，持久化逻辑在其中统一处理
 		// 注意：不要在这里检查 IsClosed()，因为：
 		// 1. 消息即使客户端离线也需要持久化
 		// 2. client.deliver() 内部会处理离线情况
-		if err := cq.client.deliver(&copiedMsg); err != nil {
+		if err := co.client.deliver(&copiedMsg); err != nil {
 			c.logger.Debug("message delivery failed",
-				zap.String("clientID", cq.client.ID),
+				zap.String("clientID", co.client.ID),
 				zap.String("topic", copiedMsg.Packet.Topic),
 				zap.Error(err))
 		}

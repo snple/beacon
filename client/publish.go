@@ -276,7 +276,15 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 
 	sub := packet.NewSubscribePacket(c.allocatePacketID())
 	for _, topic := range topics {
-		sub.AddSubscription(topic, opts.QoS)
+		sub.Subscriptions = append(sub.Subscriptions, packet.Subscription{
+			Topic: topic,
+			Options: packet.SubscribeOptions{
+				QoS:               opts.QoS,
+				NoLocal:           opts.NoLocal,
+				RetainAsPublished: opts.RetainAsPublished,
+				RetainHandling:    0, // 默认总是发送保留消息
+			},
+		})
 	}
 
 	// 先记录订阅

@@ -215,7 +215,7 @@ func (c *Core) MaxPacketSize() uint32 {
 
 // Subscribe 订阅主题
 func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
-	isNew := c.subTree.subscribe(clientID, sub.Topic, sub.Options.QoS)
+	isNew := c.subTree.subscribe(clientID, sub.Topic, sub.Options)
 	if isNew {
 		c.stats.SubscriptionsCount.Add(1)
 	}
@@ -285,21 +285,21 @@ type StatsSnapshot struct {
 
 // ClientInfo 客户端信息
 type ClientInfo struct {
-	ClientID       string                   `json:"client_id"`
-	RemoteAddr     string                   `json:"remote_addr"`
-	Connected      bool                     `json:"connected"`
-	ConnectedAt    time.Time                `json:"connected_at"`
-	KeepAlive      uint16                   `json:"keep_alive"`
-	SessionTimeout uint32                   `json:"session_timeout"`
-	Subscriptions  []ClientSubscriptionInfo `json:"subscriptions"`
-	PendingAck     int                      `json:"pending_ack"`
-	ReceiveWindow  uint16                   `json:"receive_window"`
+	ClientID       string
+	RemoteAddr     string
+	Connected      bool
+	ConnectedAt    time.Time
+	KeepAlive      uint16
+	SessionTimeout uint32
+	Subscriptions  []ClientSubscriptionInfo
+	PendingAck     int
+	ReceiveWindow  uint16
 }
 
 // ClientSubscriptionInfo 客户端订阅信息（不含 ClientID）
 type ClientSubscriptionInfo struct {
-	Topic string     `json:"topic"`
-	QoS   packet.QoS `json:"qos"`
+	Topic string
+	packet.SubscribeOptions
 }
 
 // GetClientInfo 获取客户端详细信息
@@ -317,8 +317,8 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 	subs := make([]ClientSubscriptionInfo, 0, len(client.session.subscriptions))
 	for topic, opts := range client.session.subscriptions {
 		subs = append(subs, ClientSubscriptionInfo{
-			Topic: topic,
-			QoS:   opts.QoS,
+			Topic:            topic,
+			SubscribeOptions: opts,
 		})
 	}
 	client.session.subsMu.RUnlock()
@@ -408,8 +408,8 @@ func (c *Core) GetClientSubscriptions(clientID string) ([]ClientSubscriptionInfo
 	subs := make([]ClientSubscriptionInfo, 0, len(client.session.subscriptions))
 	for topic, opts := range client.session.subscriptions {
 		subs = append(subs, ClientSubscriptionInfo{
-			Topic: topic,
-			QoS:   opts.QoS,
+			Topic:            topic,
+			SubscribeOptions: opts,
 		})
 	}
 
@@ -417,7 +417,7 @@ func (c *Core) GetClientSubscriptions(clientID string) ([]ClientSubscriptionInfo
 }
 
 // GetTopicSubscribers 获取订阅指定主题的所有客户端
-func (c *Core) GetTopicSubscribers(topic string) map[string]packet.QoS {
+func (c *Core) GetTopicSubscribers(topic string) map[string]packet.SubscribeOptions {
 	return c.subTree.matchTopic(topic)
 }
 

@@ -11,8 +11,8 @@ func TestSubscriptionDeduplication(t *testing.T) {
 	tree := newSubTree()
 
 	// 客户端订阅多个重叠的模式
-	tree.subscribe("client1", "sensor/**", packet.QoS0)
-	tree.subscribe("client1", "sensor/*/temp", packet.QoS1)
+	tree.subscribe("client1", "sensor/**", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client1", "sensor/*/temp", packet.SubscribeOptions{QoS: packet.QoS1})
 
 	// 测试 match（自动去重并保留最高 QoS）
 	t.Run("Match_AutoDedup", func(t *testing.T) {
@@ -24,14 +24,14 @@ func TestSubscriptionDeduplication(t *testing.T) {
 		}
 
 		// 验证是 client1
-		qos, ok := matches["client1"]
+		opts, ok := matches["client1"]
 		if !ok {
 			t.Error("Expected client1 in results")
 		}
 
 		// 应该保留最高的 QoS (QoS1)
-		if qos != packet.QoS1 {
-			t.Errorf("Expected QoS1, got %v", qos)
+		if opts.QoS != packet.QoS1 {
+			t.Errorf("Expected QoS1, got %v", opts.QoS)
 		}
 	})
 }
@@ -91,19 +91,19 @@ func TestQoSMaxSelection(t *testing.T) {
 
 			// 添加所有订阅
 			for _, sub := range tt.subscriptions {
-				tree.subscribe("client1", sub.topic, sub.qos)
+				tree.subscribe("client1", sub.topic, packet.SubscribeOptions{QoS: sub.qos})
 			}
 
 			// 匹配主题
 			matches := tree.matchTopic(tt.testTopic)
-			qos, ok := matches["client1"]
+			opts, ok := matches["client1"]
 			if !ok {
 				t.Error("Expected client1 in results")
 				return
 			}
 
-			if qos != tt.expectedQoS {
-				t.Errorf("Expected QoS %v, got %v", tt.expectedQoS, qos)
+			if opts.QoS != tt.expectedQoS {
+				t.Errorf("Expected QoS %v, got %v", tt.expectedQoS, opts.QoS)
 			}
 		})
 	}
@@ -114,9 +114,9 @@ func TestMultipleSubscriptionsWithWildcards(t *testing.T) {
 	tree := newSubTree()
 
 	// 设置多个重叠的订阅
-	tree.subscribe("client1", "sensor/**", packet.QoS0)          // 匹配所有 sensor 下的主题
-	tree.subscribe("client1", "sensor/temp/**", packet.QoS0)     // 匹配 sensor/temp 下的所有主题
-	tree.subscribe("client1", "sensor/*/location1", packet.QoS1) // 匹配特定位置
+	tree.subscribe("client1", "sensor/**", packet.SubscribeOptions{QoS: packet.QoS0})          // 匹配所有 sensor 下的主题
+	tree.subscribe("client1", "sensor/temp/**", packet.SubscribeOptions{QoS: packet.QoS0})     // 匹配 sensor/temp 下的所有主题
+	tree.subscribe("client1", "sensor/*/location1", packet.SubscribeOptions{QoS: packet.QoS1}) // 匹配特定位置
 
 	// 测试发布到 sensor/temp/location1
 	topic := "sensor/temp/location1"
@@ -128,14 +128,14 @@ func TestMultipleSubscriptionsWithWildcards(t *testing.T) {
 	}
 
 	// 验证 client1 的 QoS 是最高的 (QoS1)
-	qos, ok := matches["client1"]
+	opts, ok := matches["client1"]
 	if !ok {
 		t.Error("Expected client1 in results")
 		return
 	}
 
-	if qos != packet.QoS1 {
-		t.Errorf("Expected QoS1 (highest), got %v", qos)
+	if opts.QoS != packet.QoS1 {
+		t.Errorf("Expected QoS1 (highest), got %v", opts.QoS)
 	}
 }
 
@@ -144,14 +144,14 @@ func TestMixedClientsWithOverlappingSubscriptions(t *testing.T) {
 	tree := newSubTree()
 
 	// client1 有重叠订阅
-	tree.subscribe("client1", "sensor/**", packet.QoS0)
-	tree.subscribe("client1", "sensor/temp/*", packet.QoS1)
+	tree.subscribe("client1", "sensor/**", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client1", "sensor/temp/*", packet.SubscribeOptions{QoS: packet.QoS1})
 
 	// client2 有单个订阅
-	tree.subscribe("client2", "sensor/temp/room1", packet.QoS1)
+	tree.subscribe("client2", "sensor/temp/room1", packet.SubscribeOptions{QoS: packet.QoS1})
 	// client3 有重叠订阅
-	tree.subscribe("client3", "sensor/**", packet.QoS1)
-	tree.subscribe("client3", "**", packet.QoS0)
+	tree.subscribe("client3", "sensor/**", packet.SubscribeOptions{QoS: packet.QoS1})
+	tree.subscribe("client3", "**", packet.SubscribeOptions{QoS: packet.QoS0})
 
 	topic := "sensor/temp/room1"
 
@@ -169,13 +169,13 @@ func TestMixedClientsWithOverlappingSubscriptions(t *testing.T) {
 	}
 
 	for clientID, expectedQoS := range expected {
-		actualQoS, exists := matches[clientID]
+		actualOpts, exists := matches[clientID]
 		if !exists {
 			t.Errorf("Client %s not found in matches", clientID)
 			continue
 		}
-		if actualQoS != expectedQoS {
-			t.Errorf("Client %s: expected QoS %v, got %v", clientID, expectedQoS, actualQoS)
+		if actualOpts.QoS != expectedQoS {
+			t.Errorf("Client %s: expected QoS %v, got %v", clientID, expectedQoS, actualOpts.QoS)
 		}
 	}
 }

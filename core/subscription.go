@@ -12,10 +12,10 @@ import (
 // ============================================================================
 
 // SubInfo 订阅信息
-type SubInfo struct {
-	ClientID string
-	QoS      packet.QoS
-}
+// type SubInfo struct {
+// 	ClientID string
+// 	QoS      packet.QoS
+// }
 
 // ============================================================================
 // SubTree - 订阅树（用于主题匹配）
@@ -31,13 +31,13 @@ type subTree struct {
 // topicNode 主题树节点
 type topicNode struct {
 	children    map[string]*topicNode
-	subscribers map[string]packet.QoS // clientID -> QoS
+	subscribers map[string]packet.SubscribeOptions // clientID -> SubscribeOptions
 }
 
 func newTopicNode() *topicNode {
 	return &topicNode{
 		children:    make(map[string]*topicNode),
-		subscribers: make(map[string]packet.QoS),
+		subscribers: make(map[string]packet.SubscribeOptions),
 	}
 }
 
@@ -54,11 +54,11 @@ func newSubTree() *subTree {
 
 // subscribe 添加单个订阅
 // 返回 true 表示是新订阅，false 表示更新已有订阅
-func (t *subTree) subscribe(clientID, topic string, qos packet.QoS) bool {
+func (t *subTree) subscribe(clientID, topic string, opts packet.SubscribeOptions) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	return t.addSubscription(clientID, topic, qos)
+	return t.addSubscription(clientID, topic, opts)
 }
 
 // subscribeMultiple 批量订阅主题
@@ -76,7 +76,7 @@ func (t *subTree) subscribeMultiple(clientID string, subscriptions []packet.Subs
 			continue
 		}
 
-		t.addSubscription(clientID, sub.Topic, sub.Options.QoS)
+		t.addSubscription(clientID, sub.Topic, sub.Options)
 		results[sub.Topic] = packet.ReasonSuccess
 	}
 
@@ -124,18 +124,18 @@ func (t *subTree) unsubscribeClient(clientID string) int {
 // 主题匹配
 // ============================================================================
 
-// matchTopic 匹配主题，返回订阅者 map（自动去重，保留最高 QoS）
-// 返回 map[clientID]QoS
-func (t *subTree) matchTopic(topic string) map[string]packet.QoS {
+// matchTopic 匹配主题，返回订阅者 map（自动去重，保留最高 QoS 的选项）
+// 返回 map[clientID]SubscribeOptions
+func (t *subTree) matchTopic(topic string) map[string]packet.SubscribeOptions {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	result := make(map[string]packet.QoS)
+	result := make(map[string]packet.SubscribeOptions)
 	t.matchNode(t.root, topic, 0, result)
 	return result
 }
 
-func (t *subTree) matchNode(node *topicNode, topic string, startIdx int, result map[string]packet.QoS) {
+func (t *subTree) matchNode(node *topicNode, topic string, startIdx int, result map[string]packet.SubscribeOptions) {
 	// 找下一个分隔符
 	endIdx := strings.IndexByte(topic[startIdx:], '/')
 	var part string
@@ -154,41 +154,41 @@ func (t *subTree) matchNode(node *topicNode, topic string, startIdx int, result 
 		// 到达主题末尾，收集订阅者
 		// 精确匹配
 		if child := node.children[part]; child != nil {
-			for clientID, qos := range child.subscribers {
-				if existingQoS, exists := result[clientID]; !exists || qos > existingQoS {
-					result[clientID] = qos
+			for clientID, opts := range child.subscribers {
+				if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
+					result[clientID] = opts
 				}
 			}
 			// 检查精确匹配后的 ** 通配符
 			if multiNode := child.children[packet.TopicWildcardMulti]; multiNode != nil {
-				for clientID, qos := range multiNode.subscribers {
-					if existingQoS, exists := result[clientID]; !exists || qos > existingQoS {
-						result[clientID] = qos
+				for clientID, opts := range multiNode.subscribers {
+					if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
+						result[clientID] = opts
 					}
 				}
 			}
 		}
 		// * 单层通配符匹配
 		if plusNode := node.children[packet.TopicWildcardSingle]; plusNode != nil {
-			for clientID, qos := range plusNode.subscribers {
-				if existingQoS, exists := result[clientID]; !exists || qos > existingQoS {
-					result[clientID] = qos
+			for clientID, opts := range plusNode.subscribers {
+				if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
+					result[clientID] = opts
 				}
 			}
 			// 检查 * 后的 ** 通配符
 			if multiNode := plusNode.children[packet.TopicWildcardMulti]; multiNode != nil {
-				for clientID, qos := range multiNode.subscribers {
-					if existingQoS, exists := result[clientID]; !exists || qos > existingQoS {
-						result[clientID] = qos
+				for clientID, opts := range multiNode.subscribers {
+					if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
+						result[clientID] = opts
 					}
 				}
 			}
 		}
 		// ** 多层通配符匹配
 		if hashNode := node.children[packet.TopicWildcardMulti]; hashNode != nil {
-			for clientID, qos := range hashNode.subscribers {
-				if existingQoS, exists := result[clientID]; !exists || qos > existingQoS {
-					result[clientID] = qos
+			for clientID, opts := range hashNode.subscribers {
+				if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
+					result[clientID] = opts
 				}
 			}
 		}
@@ -207,9 +207,9 @@ func (t *subTree) matchNode(node *topicNode, topic string, startIdx int, result 
 
 	// ** 多层通配符匹配 (匹配剩余所有层级)
 	if hashNode := node.children[packet.TopicWildcardMulti]; hashNode != nil {
-		for clientID, qos := range hashNode.subscribers {
-			if existingQoS, exists := result[clientID]; !exists || qos > existingQoS {
-				result[clientID] = qos
+		for clientID, opts := range hashNode.subscribers {
+			if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
+				result[clientID] = opts
 			}
 		}
 	}
@@ -243,7 +243,7 @@ func (t *subTree) getClientTopics(clientID string) []string {
 
 // addSubscription 添加订阅
 // 返回 true 表示是新订阅
-func (t *subTree) addSubscription(clientID, topic string, qos packet.QoS) bool {
+func (t *subTree) addSubscription(clientID, topic string, opts packet.SubscribeOptions) bool {
 	parts := splitTopic(topic)
 	node := t.root
 
@@ -255,7 +255,7 @@ func (t *subTree) addSubscription(clientID, topic string, qos packet.QoS) bool {
 	}
 
 	_, exists := node.subscribers[clientID]
-	node.subscribers[clientID] = qos
+	node.subscribers[clientID] = opts
 	return !exists
 }
 

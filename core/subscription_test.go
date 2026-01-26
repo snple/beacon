@@ -11,13 +11,13 @@ func TestSubscriptionTree_Subscribe(t *testing.T) {
 	tree := newSubTree()
 
 	// 测试单个订阅
-	isNew := tree.subscribe("client1", "topic1", packet.QoS0)
+	isNew := tree.subscribe("client1", "topic1", packet.SubscribeOptions{QoS: packet.QoS0})
 	if !isNew {
 		t.Error("Expected new subscription")
 	}
 
 	// 测试重复订阅（更新 QoS）
-	isNew = tree.subscribe("client1", "topic1", packet.QoS1)
+	isNew = tree.subscribe("client1", "topic1", packet.SubscribeOptions{QoS: packet.QoS1})
 	if isNew {
 		t.Error("Expected existing subscription")
 	}
@@ -73,9 +73,9 @@ func TestSubscriptionTree_Unsubscribe(t *testing.T) {
 	tree := newSubTree()
 
 	// 订阅一些主题
-	tree.subscribe("client1", "topic1", packet.QoS0)
-	tree.subscribe("client1", "topic2", packet.QoS0)
-	tree.subscribe("client2", "topic3", packet.QoS0)
+	tree.subscribe("client1", "topic1", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client1", "topic2", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client2", "topic3", packet.SubscribeOptions{QoS: packet.QoS0})
 
 	// 测试单个取消订阅
 	removed := tree.unsubscribe("client1", "topic1")
@@ -112,11 +112,11 @@ func TestSubscriptionTree_UnsubscribeClient(t *testing.T) {
 	tree := newSubTree()
 
 	// 订阅多个客户端的主题
-	tree.subscribe("client1", "topic1", packet.QoS0)
-	tree.subscribe("client1", "topic2", packet.QoS0)
-	tree.subscribe("client1", "topic3", packet.QoS0)
-	tree.subscribe("client2", "topic4", packet.QoS0)
-	tree.subscribe("client2", "topic5", packet.QoS0)
+	tree.subscribe("client1", "topic1", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client1", "topic2", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client1", "topic3", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client2", "topic4", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client2", "topic5", packet.SubscribeOptions{QoS: packet.QoS0})
 
 	// 取消 client1 的所有订阅
 	count := tree.unsubscribeClient("client1")
@@ -141,10 +141,10 @@ func TestSubscriptionTree_Match(t *testing.T) {
 	tree := newSubTree()
 
 	// 订阅各种模式（订阅者使用通配符）
-	tree.subscribe("client1", "sensor/temp", packet.QoS0) // 精确订阅
-	tree.subscribe("client2", "sensor/*", packet.QoS1)    // 单层通配符
-	tree.subscribe("client3", "sensor/**", packet.QoS0)   // 多层通配符
-	tree.subscribe("client4", "+/temp", packet.QoS1)      // 旧通配符格式（测试不匹配）
+	tree.subscribe("client1", "sensor/temp", packet.SubscribeOptions{QoS: packet.QoS0}) // 精确订阅
+	tree.subscribe("client2", "sensor/*", packet.SubscribeOptions{QoS: packet.QoS1})    // 单层通配符
+	tree.subscribe("client3", "sensor/**", packet.SubscribeOptions{QoS: packet.QoS0})   // 多层通配符
+	tree.subscribe("client4", "+/temp", packet.SubscribeOptions{QoS: packet.QoS1})      // 旧通配符格式（测试不匹配）
 
 	tests := []struct {
 		topic           string
@@ -191,11 +191,11 @@ func TestSubscriptionTree_Match(t *testing.T) {
 				t.Logf("Got matches: %+v", matches)
 			}
 			for clientID, expectedQoS := range tt.expectedClients {
-				if qos, ok := matches[clientID]; !ok {
+				if opts, ok := matches[clientID]; !ok {
 					t.Errorf("Expected client %s to match topic %s", clientID, tt.topic)
-				} else if qos != expectedQoS {
+				} else if opts.QoS != expectedQoS {
 					t.Errorf("Expected QoS %d for client %s, got %d",
-						expectedQoS, clientID, qos)
+						expectedQoS, clientID, opts.QoS)
 				}
 			}
 		})
@@ -207,16 +207,16 @@ func TestSubscriptionTree_MatchQoSPriority(t *testing.T) {
 	tree := newSubTree()
 
 	// 同一个客户端订阅多个匹配的主题，使用不同的 QoS
-	tree.subscribe("client1", "sensor/+", packet.QoS0)
-	tree.subscribe("client1", "sensor/**", packet.QoS1)
-	tree.subscribe("client1", "sensor/temp", packet.QoS0)
+	tree.subscribe("client1", "sensor/+", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client1", "sensor/**", packet.SubscribeOptions{QoS: packet.QoS1})
+	tree.subscribe("client1", "sensor/temp", packet.SubscribeOptions{QoS: packet.QoS0})
 
 	// 匹配应该返回最高的 QoS
 	matches := tree.matchTopic("sensor/temp")
-	if qos, ok := matches["client1"]; !ok {
+	if opts, ok := matches["client1"]; !ok {
 		t.Error("Expected client1 to match")
-	} else if qos != packet.QoS1 {
-		t.Errorf("Expected QoS1 (highest), got QoS%d", qos)
+	} else if opts.QoS != packet.QoS1 {
+		t.Errorf("Expected QoS1 (highest), got QoS%d", opts.QoS)
 	}
 }
 
@@ -225,10 +225,10 @@ func TestSubscriptionTree_GetClientTopics(t *testing.T) {
 	tree := newSubTree()
 
 	// 订阅多个主题
-	tree.subscribe("client1", "topic1", packet.QoS0)
-	tree.subscribe("client1", "topic2", packet.QoS0)
-	tree.subscribe("client1", "topic3/subtopic", packet.QoS0)
-	tree.subscribe("client2", "topic4", packet.QoS0)
+	tree.subscribe("client1", "topic1", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client1", "topic2", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client1", "topic3/subtopic", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client2", "topic4", packet.SubscribeOptions{QoS: packet.QoS0})
 
 	// 获取 client1 的订阅
 	topics := tree.getClientTopics("client1")
@@ -257,10 +257,10 @@ func TestSubscriptionTree_WildcardEdgeCases(t *testing.T) {
 	tree := newSubTree()
 
 	// 订阅各种通配符组合
-	tree.subscribe("client1", "*", packet.QoS0)
-	tree.subscribe("client2", "**", packet.QoS0)
-	tree.subscribe("client3", "*/*", packet.QoS0)
-	tree.subscribe("client4", "topic/*/**", packet.QoS0)
+	tree.subscribe("client1", "*", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client2", "**", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client3", "*/*", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client4", "topic/*/**", packet.SubscribeOptions{QoS: packet.QoS0})
 
 	tests := []struct {
 		topic           string
@@ -310,8 +310,8 @@ func TestSubscriptionTree_Concurrent(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(id int) {
 			clientID := "client" + string(rune('0'+id))
-			tree.subscribe(clientID, "topic1", packet.QoS0)
-			tree.subscribe(clientID, "topic2", packet.QoS1)
+			tree.subscribe(clientID, "topic1", packet.SubscribeOptions{QoS: packet.QoS0})
+			tree.subscribe(clientID, "topic2", packet.SubscribeOptions{QoS: packet.QoS1})
 			tree.matchTopic("topic1")
 			tree.getClientTopics(clientID)
 			tree.unsubscribeClient(clientID)
@@ -334,11 +334,11 @@ func TestSubscriptionTree_ComplexHierarchy(t *testing.T) {
 	tree := newSubTree()
 
 	// 构建复杂的订阅层级
-	tree.subscribe("client1", "home/living-room/temp", packet.QoS0)
-	tree.subscribe("client2", "home/living-room/*", packet.QoS1)
-	tree.subscribe("client3", "home/*/temp", packet.QoS0)
-	tree.subscribe("client4", "home/**", packet.QoS1)
-	tree.subscribe("client5", "*/*/*", packet.QoS0)
+	tree.subscribe("client1", "home/living-room/temp", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client2", "home/living-room/*", packet.SubscribeOptions{QoS: packet.QoS1})
+	tree.subscribe("client3", "home/*/temp", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("client4", "home/**", packet.SubscribeOptions{QoS: packet.QoS1})
+	tree.subscribe("client5", "*/*/*", packet.SubscribeOptions{QoS: packet.QoS0})
 
 	// 测试复杂匹配
 	matches := tree.matchTopic("home/living-room/temp")
