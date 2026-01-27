@@ -1,7 +1,6 @@
 package packet
 
 import (
-	"bytes"
 	"io"
 )
 
@@ -19,48 +18,33 @@ func (p *StreamDataPacket) Type() PacketType {
 	return STREAM_DATA
 }
 
-func (p *StreamDataPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *StreamDataPacket) encode(w io.Writer) error {
 	// StreamID
-	if err := EncodeUint32(&buf, p.StreamID); err != nil {
+	if err := EncodeUint32(w, p.StreamID); err != nil {
 		return err
 	}
 
 	// SequenceID
-	if err := EncodeUint32(&buf, p.SequenceID); err != nil {
+	if err := EncodeUint32(w, p.SequenceID); err != nil {
 		return err
 	}
 
 	// Flags
-	if err := EncodeUint8(&buf, p.Flags); err != nil {
+	if err := EncodeUint8(w, p.Flags); err != nil {
 		return err
 	}
 
 	// Data
-	if err := EncodeBinary(&buf, p.Data); err != nil {
+	if err := EncodeBinary(w, p.Data); err != nil {
 		return err
 	}
 
 	// Properties
-	if err := EncodeProperties(&buf, p.Properties); err != nil {
-		return err
-	}
+	return EncodeProperties(w, p.Properties)
 
-	// 写入固定头部和包体
-	header := FixedHeader{
-		Type:   STREAM_DATA,
-		Length: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
 }
 
-func (p *StreamDataPacket) Decode(r io.Reader) error {
+func (p *StreamDataPacket) decode(r io.Reader) error {
 	var err error
 
 	p.StreamID, err = DecodeUint32(r)

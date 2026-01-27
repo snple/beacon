@@ -1,7 +1,6 @@
 package packet
 
 import (
-	"bytes"
 	"io"
 )
 
@@ -21,48 +20,32 @@ func (p *ConnectPacket) Type() PacketType {
 	return CONNECT
 }
 
-func (p *ConnectPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *ConnectPacket) encode(w io.Writer) error {
 	// ClientID
-	if err := EncodeString(&buf, p.ClientID); err != nil {
+	if err := EncodeString(w, p.ClientID); err != nil {
 		return err
 	}
 
 	// AuthMethod
-	if err := EncodeString(&buf, p.AuthMethod); err != nil {
+	if err := EncodeString(w, p.AuthMethod); err != nil {
 		return err
 	}
 
 	// AuthData
-	if err := EncodeBinary(&buf, p.AuthData); err != nil {
+	if err := EncodeBinary(w, p.AuthData); err != nil {
 		return err
 	}
 
 	// KeepAlive
-	if err := EncodeUint16(&buf, p.KeepAlive); err != nil {
+	if err := EncodeUint16(w, p.KeepAlive); err != nil {
 		return err
 	}
 
 	// Properties
-	if err := EncodeProperties(&buf, p.Properties); err != nil {
-		return err
-	}
-
-	// 写入固定头部和包体
-	header := FixedHeader{
-		Type:   CONNECT,
-		Length: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return EncodeProperties(w, p.Properties)
 }
 
-func (p *ConnectPacket) Decode(r io.Reader) error {
+func (p *ConnectPacket) decode(r io.Reader) error {
 	var err error
 
 	p.ClientID, err = DecodeString(r)
@@ -101,43 +84,27 @@ func (p *ConnackPacket) Type() PacketType {
 	return CONNACK
 }
 
-func (p *ConnackPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *ConnackPacket) encode(w io.Writer) error {
 	// ReasonCode
-	if err := EncodeUint8(&buf, uint8(p.ReasonCode)); err != nil {
+	if err := EncodeUint8(w, uint8(p.ReasonCode)); err != nil {
 		return err
 	}
 
 	// ServerID
-	if err := EncodeString(&buf, p.ServerID); err != nil {
+	if err := EncodeString(w, p.ServerID); err != nil {
 		return err
 	}
 
 	// Message
-	if err := EncodeString(&buf, p.Message); err != nil {
+	if err := EncodeString(w, p.Message); err != nil {
 		return err
 	}
 
 	// Properties
-	if err := EncodeProperties(&buf, p.Properties); err != nil {
-		return err
-	}
-
-	// 写入固定头部和包体
-	header := FixedHeader{
-		Type:   CONNACK,
-		Length: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return EncodeProperties(w, p.Properties)
 }
 
-func (p *ConnackPacket) Decode(r io.Reader) error {
+func (p *ConnackPacket) decode(r io.Reader) error {
 	code, err := DecodeUint8(r)
 	if err != nil {
 		return err

@@ -13,8 +13,8 @@ const MaxPacketSize uint32 = 16 * 1024 * 1024 // 16MiB
 // Packet 数据包接口
 type Packet interface {
 	Type() PacketType
-	Encode(w io.Writer) error
-	Decode(r io.Reader) error
+	encode(w io.Writer) error
+	decode(r io.Reader) error
 }
 
 // FixedHeader 固定头部（所有数据包通用）
@@ -91,8 +91,8 @@ func ReadPacket(r io.Reader) (Packet, error) {
 	}
 
 	// 解码包体
-	if err := pkt.Decode(bytes.NewReader(body)); err != nil {
-		return nil, err
+	if err := pkt.decode(bytes.NewReader(body)); err != nil {
+		return nil, fmt.Errorf("failed to decode %v packet body: %w", header.Type, err)
 	}
 
 	return pkt, nil
@@ -100,7 +100,31 @@ func ReadPacket(r io.Reader) (Packet, error) {
 
 // WritePacket 写入数据包到连接
 func WritePacket(w io.Writer, pkt Packet) error {
-	return pkt.Encode(w)
+	// 先编码包体到缓冲区
+	var buf bytes.Buffer
+	if err := pkt.encode(&buf); err != nil {
+		return fmt.Errorf("failed to encode %v packet: %w", pkt.Type(), err)
+	}
+
+	// 检查包大小是否超过限制
+	if buf.Len() > int(MaxPacketSize) {
+		return &StreamProtocolError{Code: MalformedPacket, Message: fmt.Sprintf("packet too large: %d", buf.Len())}
+	}
+
+	// 构造固定头部
+	header := FixedHeader{
+		Type:   pkt.Type(),
+		Length: uint32(buf.Len()),
+	}
+
+	// 先写入固定头部
+	if err := header.Encode(w); err != nil {
+		return err
+	}
+
+	// 再写入包体
+	_, err := w.Write(buf.Bytes())
+	return err
 }
 
 // StreamProtocolError 流协议错误
@@ -120,15 +144,11 @@ func (p *PingPacket) Type() PacketType {
 	return PING
 }
 
-func (p *PingPacket) Encode(w io.Writer) error {
-	header := FixedHeader{
-		Type:   PING,
-		Length: 0,
-	}
-	return header.Encode(w)
+func (p *PingPacket) encode(w io.Writer) error {
+	return nil
 }
 
-func (p *PingPacket) Decode(r io.Reader) error {
+func (p *PingPacket) decode(r io.Reader) error {
 	return nil
 }
 
@@ -139,14 +159,10 @@ func (p *PongPacket) Type() PacketType {
 	return PONG
 }
 
-func (p *PongPacket) Encode(w io.Writer) error {
-	header := FixedHeader{
-		Type:   PONG,
-		Length: 0,
-	}
-	return header.Encode(w)
+func (p *PongPacket) encode(w io.Writer) error {
+	return nil
 }
 
-func (p *PongPacket) Decode(r io.Reader) error {
+func (p *PongPacket) decode(r io.Reader) error {
 	return nil
 }
