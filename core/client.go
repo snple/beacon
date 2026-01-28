@@ -73,7 +73,7 @@ func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Cli
 func (c *Client) initQueue() error {
 	c.queue = NewQueue(c.core.store.db, fmt.Sprintf("client:%s:", c.ID))
 
-	c.core.logger.Info("Message queue initialized (InMemory)")
+	c.core.logger.Info("Message queue initialized")
 	return nil
 }
 
