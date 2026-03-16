@@ -50,7 +50,7 @@ func (c *Core) cleanupExpiredSessions() {
 			c.clientsMu.Unlock()
 
 			// 清理客户端相关资源
-			c.cleanupClient(clientID)
+			c.cleanupClient(clientID, client)
 
 			c.logger.Info("Expired session removed", zap.String("clientID", clientID))
 		} else {
@@ -59,8 +59,9 @@ func (c *Core) cleanupExpiredSessions() {
 	}
 }
 
-// cleanupClient 清理客户端相关资源（需要先获取 clientsMu 锁）
-func (c *Core) cleanupClient(clientID string) {
+// cleanupClient 清理客户端相关资源。
+// 当 client 非 nil 时，使用传入的已脱离 clients map 的客户端对象完成资源清理。
+func (c *Core) cleanupClient(clientID string, client *Client) {
 	// 清理订阅
 	subCount := c.subTree.unsubscribeClient(clientID)
 	if subCount > 0 {
@@ -76,11 +77,13 @@ func (c *Core) cleanupClient(clientID string) {
 	}
 
 	// 清理消息队列
-	c.clientsMu.RLock()
-	client, exists := c.clients[clientID]
-	c.clientsMu.RUnlock()
+	if client == nil {
+		c.clientsMu.RLock()
+		client = c.clients[clientID]
+		c.clientsMu.RUnlock()
+	}
 
-	if exists {
+	if client != nil {
 		if err := client.queue.Clear(); err != nil {
 			c.logger.Warn("Failed to clear client message queue",
 				zap.String("clientID", clientID),

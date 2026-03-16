@@ -78,6 +78,10 @@ func (c *Client) handleUnregister(p *packet.UnregisterPacket) error {
 
 // handleRequest 处理 REQUEST 包
 func (c *Client) handleRequest(p *packet.RequestPacket) error {
+	if p.RequestID == 0 {
+		return packet.ErrMalformedPacket
+	}
+
 	c.core.logger.Debug("Handle REQUEST",
 		zap.String("clientID", c.ID),
 		zap.Uint32("requestID", p.RequestID),
@@ -227,6 +231,8 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 				zap.Error(err))
 			return err
 		}
+
+		return nil
 	}
 
 	return nil
@@ -235,6 +241,10 @@ func (c *Client) handleRequestToClient(p *packet.RequestPacket) error {
 // handleResponse 处理 RESPONSE 包
 // 纯转发模式：直接根据 TargetClientID 转发响应，保持原始 RequestID 不变
 func (c *Client) handleResponse(p *packet.ResponsePacket) error {
+	if p.RequestID == 0 || p.TargetClientID == "" {
+		return packet.ErrMalformedPacket
+	}
+
 	c.core.logger.Debug("Handle RESPONSE",
 		zap.String("clientID", c.ID),
 		zap.Uint32("requestID", p.RequestID),

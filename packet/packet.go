@@ -6,6 +6,25 @@ import (
 	"io"
 )
 
+// minRemainingLength 各包类型所需的最小 Remaining Length
+// 只列出有明确最小值的类型，未列出的类型（如 DISCONNECT, AUTH）允许 Remaining = 0
+var minRemainingLength = map[PacketType]uint32{
+	CONNECT:     16, // ProtocolName(2+0) + Version(1) + ClientID(2+0) + KeepAlive(2) + SessionTimeout(4) + Properties(4+0) + WillFlags(1)
+	CONNACK:     6,  // SessionPresent(1) + ReasonCode(1) + Properties(4+0)
+	PUBLISH:     19, // Flags(1) + Topic(2+0) + PacketID(12) + Properties(4+0)
+	PUBACK:      12, // PacketID(12)
+	SUBSCRIBE:   19, // PacketID(12) + Properties(4+0) + Topic(2+0) + Options(1)
+	SUBACK:      17, // PacketID(12) + Properties(4+0) + ReasonCode(1)
+	UNSUBSCRIBE: 18, // PacketID(12) + Properties(4+0) + Topic(2+0)
+	UNSUBACK:    17, // PacketID(12) + Properties(4+0) + ReasonCode(1)
+	PING:        12, // Seq(4) + Timestamp(8)
+	PONG:        13, // Seq(4) + Echo(8) + Load(1)
+	REQUEST:     14, // RequestID(4) + Action(2+0) + Target(2+0) + Source(2+0) + Properties(4+0)
+	RESPONSE:    11, // RequestID(4) + Target(2+0) + ReasonCode(1) + Properties(4+0)
+	REGISTER:    8,  // Count(2) + Action(2+0) + RegisterProperties(4+0)
+	UNREGISTER:  8,  // Count(2) + Action(2+0) + Properties(4+0)
+}
+
 // Packet 数据包接口
 type Packet interface {
 	// Type 返回数据包类型
@@ -32,6 +51,20 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 			header.Remaining,
 			maxPacketSize,
 		)
+	}
+
+	// 即使 maxPacketSize=0（无限制），也不允许超过协议硬上限
+	if header.Remaining > MaxPacketSize {
+		return nil, NewPacketTooLargeError(
+			header.Remaining,
+			MaxPacketSize,
+		)
+	}
+
+	// 检查最小 Remaining Length（防止明显畸形的包分配内存）
+	if minLen, ok := minRemainingLength[header.Type]; ok && header.Remaining < minLen {
+		return nil, fmt.Errorf("%w: %v requires at least %d bytes, got %d",
+			ErrMalformedPacket, header.Type, minLen, header.Remaining)
 	}
 
 	// 读取剩余数据

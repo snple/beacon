@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 )
 
@@ -184,10 +185,20 @@ func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 		p.WillPacket.Retain = willFlags[0]&0x02 != 0 // Bit 1: Retain
 		p.WillPacket.Dup = willFlags[0]&0x04 != 0    // Bit 2: Dup
 
+		// 验证 QoS
+		if !p.WillPacket.QoS.IsValid() {
+			return ErrInvalidQoS
+		}
+
 		// 遗嘱主题
 		p.WillPacket.Topic, err = DecodeString(r)
 		if err != nil {
 			return err
+		}
+
+		// 验证遗嘱主题
+		if !ValidateTopicName(p.WillPacket.Topic) {
+			return fmt.Errorf("invalid will topic: %s", p.WillPacket.Topic)
 		}
 
 		// 遗嘱属性

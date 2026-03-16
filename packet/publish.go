@@ -38,7 +38,7 @@ func NewPublishPacket(topic string, payload []byte) *PublishPacket {
 	}
 }
 
-// Copy 复制 PUBACK 包, 浅拷贝 Properties
+// Copy 复制 PUBLISH 包（浅拷贝 Properties）
 func (p *PublishPacket) Copy() PublishPacket {
 	if p == nil {
 		return PublishPacket{}
@@ -53,6 +53,34 @@ func (p *PublishPacket) Copy() PublishPacket {
 		Properties: p.Properties,
 		Payload:    p.Payload,
 	}
+}
+
+// DeepCopy 深拷贝 PUBLISH 包（包括 Properties 和 Payload）
+func (p *PublishPacket) DeepCopy() PublishPacket {
+	if p == nil {
+		return PublishPacket{}
+	}
+
+	pktCopy := PublishPacket{
+		Dup:      p.Dup,
+		QoS:      p.QoS,
+		Retain:   p.Retain,
+		Topic:    p.Topic,
+		PacketID: p.PacketID,
+	}
+
+	// 深拷贝 Payload
+	if p.Payload != nil {
+		pktCopy.Payload = make([]byte, len(p.Payload))
+		copy(pktCopy.Payload, p.Payload)
+	}
+
+	// 深拷贝 Properties
+	if p.Properties != nil {
+		pktCopy.Properties = p.Properties.DeepCopy()
+	}
+
+	return pktCopy
 }
 
 func (p *PublishPacket) Type() PacketType {

@@ -28,7 +28,7 @@ type ClientOptions struct {
 	ConnectTimeout time.Duration     // 连接超时
 	PublishTimeout time.Duration     // 发布超时 (默认 30 秒)
 	MaxPacketSize  uint32            // 客户端能接收的最大数据包大小（0 表示无限制）
-	ReceveWindow   uint16            // 客户端接收窗口大小（默认 32）
+	ReceiveWindow  uint16            // 客户端接收窗口大小（默认 32）
 	TraceID        string            // 追踪 ID
 	UserProperties map[string]string // 连接时发送的用户属性
 
@@ -61,7 +61,7 @@ func NewClientOptions() *ClientOptions {
 		ConnectTimeout:     defaultConnectTimeout,
 		PublishTimeout:     defaultPublishTimeout,
 		MaxPacketSize:      defaultMaxPacketSize,
-		ReceveWindow:       defaultReceiveWindow,
+		ReceiveWindow:      defaultReceiveWindow,
 		RetransmitInterval: defaultRetransmitInterval,
 		RequestQueueSize:   100,
 		MessageQueueSize:   100,

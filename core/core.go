@@ -43,6 +43,9 @@ type Core struct {
 	// 统计信息
 	stats Stats
 
+	// 连接速率限制
+	connRateLimiter *connRateLimiter
+
 	// 生命周期
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -98,6 +101,11 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		cancel:          cancel,
 	}
 
+	// 初始化连接速率限制器
+	if opts.ConnectionRateLimit > 0 {
+		b.connRateLimiter = newConnRateLimiter(opts.ConnectionRateLimit, opts.ConnectionRateBurst)
+	}
+
 	// 初始化消息持久化存储（必须先于 initQueue）
 	if err := b.initStore(); err != nil {
 		return nil, err
@@ -133,7 +141,7 @@ func (c *Core) initStore() error {
 
 // initQueue 初始化消息队列
 func (c *Core) initQueue() error {
-	c.queue = NewQueue(c.store.db, "core:")
+	c.queue = NewQueue(c.store.db(), "core:")
 
 	c.logger.Info("Message queue initialized (InMemory)")
 	return nil

@@ -21,6 +21,8 @@ type conn struct {
 
 	// TCP 连接
 	conn net.Conn
+	// 保护写入操作
+	writeMu sync.Mutex
 
 	// 连接参数
 	keepAlive   uint16
@@ -202,6 +204,9 @@ func (c *conn) writePacket(pkt packet.Packet) error {
 	if c.closed.Load() {
 		return ErrClientClosed
 	}
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 
 	return packet.WritePacket(c.conn, pkt, c.maxPacketSize)
 }

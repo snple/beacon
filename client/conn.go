@@ -260,15 +260,24 @@ func (c *Conn) handlePublish(p *packet.PublishPacket) error {
 	select {
 	case c.client.messageQueue <- msg:
 		c.logger.Debug("Enqueued message for polling", zap.String("topic", p.Topic))
-		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
-			if err := c.writePacket(puback); err != nil {
-				c.logger.Warn("Failed to send PUBACK", zap.Error(err))
-				return err
-			}
-		}
 	default:
-		c.logger.Warn("Message queue full, message dropped", zap.String("topic", p.Topic))
+		// 队列满：QoS 1 不回复 PUBACK，让服务端重传；QoS 0 直接丢弃
+		if p.QoS == packet.QoS1 {
+			c.logger.Warn("Message queue full, not ACKing QoS1 message for redelivery",
+				zap.String("topic", p.Topic))
+			return nil
+		}
+		c.logger.Warn("Message queue full, QoS0 message dropped", zap.String("topic", p.Topic))
+		return nil
+	}
+
+	// 消息成功入队后再发送 PUBACK
+	if p.QoS == packet.QoS1 {
+		puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
+		if err := c.writePacket(puback); err != nil {
+			c.logger.Warn("Failed to send PUBACK", zap.Error(err))
+			return err
+		}
 	}
 
 	return nil
@@ -326,6 +335,14 @@ func (c *Conn) handlePong(p *packet.PongPacket) {
 			return
 		}
 	}
+
+	// Seq 不匹配时记录日志，尝试用 Echo 时间戳作为后备
+	if p.Seq != 0 {
+		c.logger.Debug("PONG seq mismatch, using echo timestamp fallback",
+			zap.Uint32("expected", c.lastPingSeq.Load()),
+			zap.Uint32("got", p.Seq))
+	}
+
 	if p.Echo > 0 && uint64(now) > p.Echo {
 		c.lastRTTNanos.Store(int64(uint64(now) - p.Echo))
 	}

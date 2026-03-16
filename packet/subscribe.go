@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"strings"
 
@@ -32,11 +33,11 @@ type SubscribeOptions struct {
 //   - bit 2: RetainAsPublished
 //   - bit 3-4: RetainHandling (2 bits)
 const (
-	subOptQoS             uint8 = 1 << 0      // bit 0
-	subOptNoLocal         uint8 = 1 << 1      // bit 1
-	subOptRetainPublished uint8 = 1 << 2      // bit 2
-	subOptRetainHandling  uint8 = 0x03 << 3   // bit 3-4, 掩码
-	subOptRetainShift     uint8 = 3            // RetainHandling 移位量
+	subOptQoS             uint8 = 1 << 0    // bit 0
+	subOptNoLocal         uint8 = 1 << 1    // bit 1
+	subOptRetainPublished uint8 = 1 << 2    // bit 2
+	subOptRetainHandling  uint8 = 0x03 << 3 // bit 3-4, 掩码
+	subOptRetainShift     uint8 = 3         // RetainHandling 移位量
 )
 
 // Subscription 单个订阅
@@ -230,12 +231,16 @@ func (p *SubscribePacket) decode(r io.Reader, header FixedHeader) error {
 		for br.Len() > 0 {
 			topic, err := DecodeString(br)
 			if err != nil {
-				break
+				return fmt.Errorf("failed to decode subscription topic: %w", err)
+			}
+
+			if !ValidateTopicFilter(topic) {
+				return fmt.Errorf("invalid topic filter: %s", topic)
 			}
 
 			var options [1]byte
 			if _, err := io.ReadFull(br, options[:]); err != nil {
-				break
+				return fmt.Errorf("failed to decode subscription options: %w", err)
 			}
 
 			sub := Subscription{
@@ -387,7 +392,7 @@ func (p *UnsubscribePacket) decode(r io.Reader, header FixedHeader) error {
 		for br.Len() > 0 {
 			topic, err := DecodeString(br)
 			if err != nil {
-				break
+				return fmt.Errorf("failed to decode unsubscribe topic: %w", err)
 			}
 			p.Topics = append(p.Topics, topic)
 		}

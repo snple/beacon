@@ -41,32 +41,27 @@ var (
 )
 
 // tryEnqueue 尝试将消息放入队列
-// 返回 true 表示成功，false 表示队列已满或消息已在队列中
+// 返回 nil 表示成功，非 nil 表示队列已满或消息已在队列中
 // 对于 QoS 1 消息，通过 PacketID 去重，防止同一消息被重复加入队列
 func (q *sendQueue) tryEnqueue(msg *Message) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	// QoS 1 消息需要检查是否已在队列中
 	if !msg.Packet.PacketID.IsZero() {
-		q.mu.Lock()
 		if q.inQueue[msg.Packet.PacketID] {
-			// 消息已在队列中，拒绝重复添加
-			q.mu.Unlock()
 			return ErrMessageAlreadyInQueue
 		}
-		q.mu.Unlock()
 	}
 
 	select {
 	case q.queue <- msg:
 		q.used.Add(1)
-		// QoS 1 消息标记为已在队列中
 		if !msg.Packet.PacketID.IsZero() {
-			q.mu.Lock()
 			q.inQueue[msg.Packet.PacketID] = true
-			q.mu.Unlock()
 		}
 		return nil
 	default:
-		// 队列已满
 		return ErrSendQueueFull
 	}
 }

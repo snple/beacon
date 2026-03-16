@@ -2,9 +2,15 @@ package packet
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/danclive/nson-go"
+)
+
+const (
+	MaxStringLength = 65535 // uint16 最大值
+	MaxBinaryLength = 65535 // uint16 最大值
 )
 
 // FixedHeader 固定头部
@@ -49,6 +55,9 @@ func (h *FixedHeader) Size() int {
 
 // EncodeString 编码 UTF-8 字符串
 func EncodeString(w io.Writer, s string) error {
+	if len(s) > MaxStringLength {
+		return fmt.Errorf("string length %d exceeds maximum %d", len(s), MaxStringLength)
+	}
 	length := uint16(len(s))
 	if err := binary.Write(w, binary.BigEndian, length); err != nil {
 		return err
@@ -79,6 +88,9 @@ func DecodeString(r io.Reader) (string, error) {
 
 // EncodeBinary 编码二进制数据
 func EncodeBinary(w io.Writer, data []byte) error {
+	if len(data) > MaxBinaryLength {
+		return fmt.Errorf("binary length %d exceeds maximum %d", len(data), MaxBinaryLength)
+	}
 	length := uint16(len(data))
 	if err := binary.Write(w, binary.BigEndian, length); err != nil {
 		return err

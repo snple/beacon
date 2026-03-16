@@ -49,6 +49,10 @@ func (r *Response) Payload() []byte {
 // handleRequest 处理收到的 REQUEST 包
 // 采用轮询模式：将请求放入队列，让外部代码通过 PollRequest() 接收并处理
 func (c *Client) handleRequest(p *packet.RequestPacket) error {
+	if p.RequestID == 0 || p.SourceClientID == "" {
+		return packet.ErrMalformedPacket
+	}
+
 	c.logger.Debug("Received REQUEST",
 		zap.Uint32("requestID", p.RequestID),
 		zap.String("action", p.Action),
@@ -110,6 +114,13 @@ func (c *Client) handleRequest(p *packet.RequestPacket) error {
 
 // handleResponse 处理收到的 RESPONSE 包
 func (c *Client) handleResponse(pkt *packet.ResponsePacket) error {
+	if pkt.RequestID == 0 || pkt.TargetClientID == "" {
+		return packet.ErrMalformedPacket
+	}
+	if clientID := c.ClientID(); clientID != "" && pkt.TargetClientID != clientID {
+		return packet.ErrMalformedPacket
+	}
+
 	c.logger.Debug("Received RESPONSE",
 		zap.Uint32("requestID", pkt.RequestID),
 		zap.String("reasonCode", pkt.ReasonCode.String()),

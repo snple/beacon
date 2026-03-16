@@ -26,6 +26,15 @@ func (c *Core) HandleConn(conn net.Conn) error {
 		return fmt.Errorf("max clients reached")
 	}
 
+	// 检查连接速率限制
+	if c.connRateLimiter != nil && !c.connRateLimiter.Allow() {
+		c.logger.Warn("Connection rate exceeded, rejecting connection",
+			zap.String("remote", conn.RemoteAddr().String()))
+		c.sendConnack(conn, false, packet.ReasonConnectionRateExceeded, nil)
+		conn.Close()
+		return fmt.Errorf("connection rate exceeded")
+	}
+
 	c.wg.Add(1)
 	go c.handleConn(conn)
 	return nil
@@ -57,7 +66,8 @@ func (c *Core) handleConn(conn net.Conn) {
 	}
 
 	// 注册客户端并发送 CONNACK
-	client, sessionPresent := c.registerClient(conn, connect)
+	client, sessionPresent, replacedOnline := c.registerClient(conn, connect)
+	servedConn := client.getConn()
 
 	// 构建 CONNACK 属性
 	connackProp := packet.NewConnackProperties()
@@ -76,7 +86,9 @@ func (c *Core) handleConn(conn net.Conn) {
 	c.sendConnack(conn, sessionPresent, packet.ReasonSuccess, connackProp)
 
 	// 更新统计信息
-	c.stats.ClientsConnected.Add(1)
+	if !replacedOnline {
+		c.stats.ClientsConnected.Add(1)
+	}
 	if !sessionPresent {
 		c.stats.ClientsTotal.Add(1)
 	}
@@ -97,7 +109,14 @@ func (c *Core) handleConn(conn net.Conn) {
 	c.options.Hooks.callOnConnect(connectCtx)
 
 	// 开始处理客户端消息
-	client.serve()
+	if servedConn != nil {
+		servedConn.serve()
+	}
+
+	// 连接已被新连接替换，旧连接不应再执行断开清理。
+	if client.getConn() != servedConn {
+		return
+	}
 
 	if client.skipHandle.Load() {
 		// 会话被接管，跳过断开处理
@@ -192,7 +211,7 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 // 1. 无旧客户端：创建新 Client
 // 2. 有旧客户端 + KeepSession=true：复用旧 Client，替换其 Conn
 // 3. 有旧客户端 + KeepSession=false：清理旧 Client，创建新 Client
-func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool) {
+func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool, bool) {
 	c.clientsMu.Lock()
 	defer c.clientsMu.Unlock()
 
@@ -204,7 +223,7 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 	if !exists {
 		client := newClient(netConn, connect, c)
 		c.clients[clientID] = client
-		return client, false
+		return client, false, false
 	}
 
 	// 从离线会话列表中移除
@@ -229,7 +248,7 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 			zap.String("clientID", clientID),
 			zap.Bool("wasOnline", wasOnline))
 
-		return existingClient, true
+		return existingClient, true, wasOnline
 	}
 
 	// 情况3: SessionTimeout=0，清理旧 Client，创建新 Client
@@ -247,7 +266,7 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 	client := newClient(netConn, connect, c)
 	c.clients[clientID] = client
 
-	return client, false
+	return client, false, wasOnline
 }
 
 // sendConnack 发送 CONNACK 包
@@ -308,7 +327,7 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		c.clientsMu.Unlock()
 
 		// 清理客户端相关资源
-		c.cleanupClient(client.ID)
+		c.cleanupClient(client.ID, client)
 		return
 	}
 

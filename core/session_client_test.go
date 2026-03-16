@@ -511,6 +511,81 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 
 }
 
+// TestClientSessionTakeover_ClientsConnectedCount 测试在线会话接管不会重复增加在线连接计数。
+func TestClientSessionTakeover_ClientsConnectedCount(t *testing.T) {
+	server, err := NewWithOptions(
+		NewCoreOptions().
+			WithStoreDir(t.TempDir()).
+			WithMaxSessionTimeout(3600),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	addr := testServe(t, server)
+
+	first, err := client.NewWithOptions(
+		client.NewClientOptions().
+			WithCore(addr).
+			WithClientID("shared-client").
+			WithSessionTimeout(3600).
+			WithKeepAlive(60),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	firstDialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := first.ConnectWithDialer(firstDialer); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	stats := server.GetStats()
+	if stats.ClientsConnected != 1 {
+		t.Fatalf("expected 1 connected client after first connect, got %d", stats.ClientsConnected)
+	}
+
+	second, err := client.NewWithOptions(
+		client.NewClientOptions().
+			WithCore(addr).
+			WithClientID("shared-client").
+			WithSessionTimeout(3600).
+			WithKeepAlive(60),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	secondDialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := second.ConnectWithDialer(secondDialer); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	stats = server.GetStats()
+	if stats.ClientsConnected != 1 {
+		t.Fatalf("expected 1 connected client after session takeover, got %d", stats.ClientsConnected)
+	}
+
+	if err := second.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	stats = server.GetStats()
+	if stats.ClientsConnected != 0 {
+		t.Fatalf("expected 0 connected clients after disconnect, got %d", stats.ClientsConnected)
+	}
+}
+
 // TestClientSessionExpiry 测试客户端会话过期
 func TestClientSessionExpiry(t *testing.T) {
 	server, err := NewWithOptions(

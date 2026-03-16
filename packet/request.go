@@ -392,6 +392,10 @@ func (p *RequestProperties) Decode(r io.Reader) error {
 		}
 	}
 
+	if buf.Len() > 0 {
+		return ErrMalformedPacket
+	}
+
 	return nil
 }
 

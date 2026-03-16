@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/snple/beacon/packet"
+	"go.uber.org/zap"
 )
 
 // ============================================================================
@@ -66,6 +67,53 @@ func TestRequest_BasicClientToClient(t *testing.T) {
 
 	if string(resp.Packet.Payload) != "hello" {
 		t.Errorf("Expected payload 'hello', got '%s'", string(resp.Packet.Payload))
+	}
+}
+
+// TestRequest_ClientUsesPerRequestTimeout 测试请求超时完全由客户端本地控制。
+func TestRequest_ClientUsesPerRequestTimeout(t *testing.T) {
+	broker, addr := testSetupCore(t)
+	defer broker.Stop()
+
+	requester := testSetupClient(t, addr, "requester")
+	defer requester.Close()
+
+	handler := testSetupClient(t, addr, "slow-handler")
+	defer handler.Close()
+
+	if err := handler.Register("slow.request"); err != nil {
+		t.Fatalf("Failed to register action: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	go func() {
+		for {
+			req, err := handler.PollRequest(context.Background(), 5*time.Second)
+			if err != nil {
+				return
+			}
+
+			time.Sleep(1500 * time.Millisecond)
+			req.Response(NewResponse([]byte("client timeout controls request")))
+		}
+	}()
+
+	req := NewRequest("slow.request", []byte("payload")).WithTimeout(3)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := requester.Request(ctx, req)
+	if err != nil {
+		t.Fatalf("Expected request to succeed with client-side timeout, got: %v", err)
+	}
+
+	if !resp.IsSuccess() {
+		t.Fatalf("Expected success response, got reason: %s", resp.Error())
+	}
+
+	if string(resp.Packet.Payload) != "client timeout controls request" {
+		t.Fatalf("Unexpected payload: %q", string(resp.Packet.Payload))
 	}
 }
 
@@ -911,5 +959,58 @@ func TestRequest_HandlerDisconnect(t *testing.T) {
 
 	if resp.Packet.ReasonCode != packet.ReasonActionNotFound {
 		t.Errorf("Expected ReasonActionNotFound, got %v", resp.Packet.ReasonCode)
+	}
+}
+
+func TestHandleRequest_RejectsMissingSourceClientID(t *testing.T) {
+	c := &Client{
+		logger:       zap.NewNop(),
+		requestQueue: make(chan *Request, 1),
+	}
+
+	err := c.handleRequest(&packet.RequestPacket{
+		RequestID:      1,
+		Action:         "echo",
+		SourceClientID: "",
+		Properties:     packet.NewRequestProperties(),
+	})
+	if err != packet.ErrMalformedPacket {
+		t.Fatalf("expected ErrMalformedPacket, got %v", err)
+	}
+}
+
+func TestHandleResponse_RejectsWrongTargetClientID(t *testing.T) {
+	c := &Client{
+		logger:          zap.NewNop(),
+		options:         NewClientOptions().WithClientID("client-a"),
+		pendingRequests: make(map[uint32]chan *Response),
+	}
+
+	err := c.handleResponse(&packet.ResponsePacket{
+		RequestID:      1,
+		TargetClientID: "client-b",
+		ReasonCode:     packet.ReasonSuccess,
+		Properties:     packet.NewResponseProperties(),
+	})
+	if err != packet.ErrMalformedPacket {
+		t.Fatalf("expected ErrMalformedPacket, got %v", err)
+	}
+}
+
+func TestHandleResponse_RejectsMissingTargetClientID(t *testing.T) {
+	c := &Client{
+		logger:          zap.NewNop(),
+		options:         NewClientOptions().WithClientID("client-a"),
+		pendingRequests: make(map[uint32]chan *Response),
+	}
+
+	err := c.handleResponse(&packet.ResponsePacket{
+		RequestID:      1,
+		TargetClientID: "",
+		ReasonCode:     packet.ReasonSuccess,
+		Properties:     packet.NewResponseProperties(),
+	})
+	if err != packet.ErrMalformedPacket {
+		t.Fatalf("expected ErrMalformedPacket, got %v", err)
 	}
 }

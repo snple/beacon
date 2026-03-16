@@ -115,6 +115,10 @@ func (p *ConnectProperties) Decode(r io.Reader) error {
 		return nil
 	}
 
+	if propLen > MaxPacketSize {
+		return ErrMalformedPacket
+	}
+
 	data := make([]byte, propLen)
 	if _, err := io.ReadFull(r, data); err != nil {
 		return err
@@ -178,6 +182,10 @@ func (p *ConnectProperties) Decode(r io.Reader) error {
 			}
 			p.UserProperties[key] = value
 		}
+	}
+
+	if buf.Len() > 0 {
+		return ErrMalformedPacket
 	}
 
 	return nil
@@ -383,6 +391,10 @@ func (p *ConnackProperties) Decode(r io.Reader) error {
 		}
 	}
 
+	if buf.Len() > 0 {
+		return ErrMalformedPacket
+	}
+
 	return nil
 }
 
@@ -533,6 +545,36 @@ func NewPublishProperties() *PublishProperties {
 	return &PublishProperties{
 		UserProperties: make(map[string]string),
 	}
+}
+
+// DeepCopy 深拷贝发布属性
+func (p *PublishProperties) DeepCopy() *PublishProperties {
+	if p == nil {
+		return nil
+	}
+
+	cp := &PublishProperties{
+		ExpiryTime:      p.ExpiryTime,
+		ContentType:     p.ContentType,
+		TraceID:         p.TraceID,
+		TargetClientID:  p.TargetClientID,
+		SourceClientID:  p.SourceClientID,
+		ResponseTopic:   p.ResponseTopic,
+	}
+
+	if p.CorrelationData != nil {
+		cp.CorrelationData = make([]byte, len(p.CorrelationData))
+		copy(cp.CorrelationData, p.CorrelationData)
+	}
+
+	if p.UserProperties != nil {
+		cp.UserProperties = make(map[string]string, len(p.UserProperties))
+		for k, v := range p.UserProperties {
+			cp.UserProperties[k] = v
+		}
+	}
+
+	return cp
 }
 
 // Encode 编码发布属性（使用位掩码优化）
@@ -708,6 +750,10 @@ func (p *PublishProperties) Decode(r io.Reader) error {
 		}
 	}
 
+	if buf.Len() > 0 {
+		return ErrMalformedPacket
+	}
+
 	return nil
 }
 
@@ -830,6 +876,10 @@ func (p *ReasonProperties) Decode(r io.Reader) error {
 			}
 			p.UserProperties[key] = value
 		}
+	}
+
+	if buf.Len() > 0 {
+		return ErrMalformedPacket
 	}
 
 	return nil

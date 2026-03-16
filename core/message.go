@@ -36,14 +36,20 @@ func (m *Message) IsExpired() bool {
 	return time.Now().Unix() > m.Packet.Properties.ExpiryTime
 }
 
-// Copy 复制消息结构体（浅拷贝 Packet 指针）
+// Copy 复制消息结构体（深拷贝 Packet）
 func (m *Message) Copy() Message {
 	if m == nil {
 		return Message{}
 	}
 
+	var pkt *packet.PublishPacket
+	if m.Packet != nil {
+		copied := m.Packet.DeepCopy()
+		pkt = &copied
+	}
+
 	return Message{
-		Packet:    m.Packet,
+		Packet:    pkt,
 		Dup:       m.Dup,
 		QoS:       m.QoS,
 		Retain:    m.Retain,
