@@ -93,8 +93,14 @@ func (c *Client) retransmitQueuedMessages() int {
 			continue
 		}
 
-		// 标记为重发
-		msg.Dup = true
+		// 队列是 FIFO 的。如果头部消息已经发出且还在等待 PUBACK，
+		// 当前连接不能跳过它去重发后面的消息，否则会打乱顺序并重复发送头部消息。
+		conn.pendingAckMu.Lock()
+		_, exists := conn.pendingAck[msg.Packet.PacketID]
+		conn.pendingAckMu.Unlock()
+		if exists {
+			break
+		}
 
 		// 尝试放入发送队列
 		if err := conn.sendQueue.tryEnqueue(msg); err != nil {

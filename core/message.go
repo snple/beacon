@@ -36,20 +36,16 @@ func (m *Message) IsExpired() bool {
 	return time.Now().Unix() > m.Packet.Properties.ExpiryTime
 }
 
-// Copy 复制消息结构体（深拷贝 Packet）
+// Copy 复制消息结构体。
+// Packet 内容层在 Message 生命周期内视为只读，真正出站时会在 sendMessage 中构造一次性 packet，
+// 因此这里共享 Packet 指针即可，避免为每个订阅者做不必要的深拷贝。
 func (m *Message) Copy() Message {
 	if m == nil {
 		return Message{}
 	}
 
-	var pkt *packet.PublishPacket
-	if m.Packet != nil {
-		copied := m.Packet.DeepCopy()
-		pkt = &copied
-	}
-
 	return Message{
-		Packet:    pkt,
+		Packet:    m.Packet,
 		Dup:       m.Dup,
 		QoS:       m.QoS,
 		Retain:    m.Retain,

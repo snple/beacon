@@ -200,9 +200,6 @@ func (c *Client) retransmitQueuedMessages() int {
 			break
 		}
 
-		// 转换为 Message
-		msg.Dup = true // 标记为重发
-
 		// 尝试放入发送队列
 		if err := conn.sendQueue.tryEnqueue(msg); err != nil {
 			if errors.Is(err, ErrMessageAlreadyInQueue) {

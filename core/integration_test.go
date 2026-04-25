@@ -430,6 +430,9 @@ func TestPubSub_TargetClientID(t *testing.T) {
 	if string(msg.Packet.Payload) != "only for you" {
 		t.Errorf("Target got wrong payload: %s", string(msg.Packet.Payload))
 	}
+	if msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID != "target-client" {
+		t.Fatalf("Expected TargetClientID=target-client, got %#v", msg.Packet.Properties)
+	}
 
 	// other 不应该收到消息
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -438,6 +441,173 @@ func TestPubSub_TargetClientID(t *testing.T) {
 	_, err = other.PollMessage(ctx2, 300*time.Millisecond)
 	if err == nil {
 		t.Error("Other should not receive directed message")
+	}
+}
+
+func TestPubSub_TargetClientID_NotRetainedForGeneralSubscribers(t *testing.T) {
+	core := testSetupCore(t, NewCoreOptions().WithRetainEnabled(true))
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	publisher := testSetupClient(t, addr, "pub-target-retain", nil)
+	defer publisher.Close()
+
+	target := testSetupClient(t, addr, "target-retain-client", nil)
+	defer target.Close()
+
+	if err := publisher.PublishToClient(
+		"target-retain-client",
+		"direct/retain",
+		[]byte("private retained"),
+		client.NewPublishOptions().WithRetain(true),
+	); err != nil {
+		t.Fatalf("Failed to publish retained targeted message: %v", err)
+	}
+
+	ctxTarget, cancelTarget := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelTarget()
+
+	msg, err := target.PollMessage(ctxTarget, 2*time.Second)
+	if err != nil {
+		t.Fatalf("Target failed to receive directed retained message: %v", err)
+	}
+	if string(msg.Packet.Payload) != "private retained" {
+		t.Fatalf("Target got wrong payload: %s", string(msg.Packet.Payload))
+	}
+
+	other := testSetupClient(t, addr, "other-retain-client", nil)
+	defer other.Close()
+
+	if err := other.Subscribe("direct/retain"); err != nil {
+		t.Fatalf("Other failed to subscribe: %v", err)
+	}
+
+	ctxOther, cancelOther := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancelOther()
+	_, err = other.PollMessage(ctxOther, 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("general subscriber should not receive retained replay of targeted message")
+	}
+	if !errors.Is(err, client.ErrPollTimeout) {
+		t.Fatalf("expected ErrPollTimeout, got %v", err)
+	}
+}
+
+func TestCorePublishToClient_SetsTargetClientIDProperty(t *testing.T) {
+	core := testSetupCore(t, nil)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	target := testSetupClient(t, addr, "core-target-client", nil)
+	defer target.Close()
+
+	if err := core.PublishToClient("core-target-client", "direct/core", []byte("from core"), PublishOptions{}); err != nil {
+		t.Fatalf("Failed to publish from core: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	msg, err := target.PollMessage(ctx, 2*time.Second)
+	if err != nil {
+		t.Fatalf("Target failed to receive: %v", err)
+	}
+	if msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID != "core-target-client" {
+		t.Fatalf("Expected TargetClientID=core-target-client, got %#v", msg.Packet.Properties)
+	}
+}
+
+func TestCorePublishToClient_PreservesQoSAndRetain(t *testing.T) {
+	core := testSetupCore(t, nil)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	target := testSetupClient(t, addr, "core-qos-target", nil)
+	defer target.Close()
+
+	if err := core.PublishToClient("core-qos-target", "direct/core-qos", []byte("from core"), PublishOptions{QoS: packet.QoS1, Retain: true}); err != nil {
+		t.Fatalf("Failed to publish from core: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	msg, err := target.PollMessage(ctx, 2*time.Second)
+	if err != nil {
+		t.Fatalf("Target failed to receive: %v", err)
+	}
+	if msg.Packet.QoS != packet.QoS1 {
+		t.Fatalf("Expected QoS1, got %d", msg.Packet.QoS)
+	}
+	if !msg.Packet.Retain {
+		t.Fatal("Expected retain flag to be preserved")
+	}
+}
+
+func TestCorePublishToClient_PreservesUserProperties(t *testing.T) {
+	core := testSetupCore(t, nil)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	target := testSetupClient(t, addr, "core-userprops-target", nil)
+	defer target.Close()
+
+	if err := core.PublishToClient("core-userprops-target", "direct/core-userprops", []byte("from core"), PublishOptions{UserProperties: map[string]string{"x-origin": "core", "x-kind": "system"}}); err != nil {
+		t.Fatalf("Failed to publish from core: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	msg, err := target.PollMessage(ctx, 2*time.Second)
+	if err != nil {
+		t.Fatalf("Target failed to receive: %v", err)
+	}
+	if msg.Packet.Properties == nil {
+		t.Fatal("Expected publish properties to be present")
+	}
+	if got := msg.Packet.Properties.UserProperties["x-origin"]; got != "core" {
+		t.Fatalf("Expected x-origin=core, got %q", got)
+	}
+	if got := msg.Packet.Properties.UserProperties["x-kind"]; got != "system" {
+		t.Fatalf("Expected x-kind=system, got %q", got)
+	}
+}
+
+func TestCorePublishToClient_UsesDefaultMessageExpiry(t *testing.T) {
+	opts := NewCoreOptions().WithDefaultMessageExpiry(5 * time.Second)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	target := testSetupClient(t, addr, "core-expiry-target", nil)
+	defer target.Close()
+
+	before := time.Now().Unix()
+	if err := core.PublishToClient("core-expiry-target", "direct/core-expiry", []byte("from core"), PublishOptions{}); err != nil {
+		t.Fatalf("Failed to publish from core: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	msg, err := target.PollMessage(ctx, 2*time.Second)
+	if err != nil {
+		t.Fatalf("Target failed to receive: %v", err)
+	}
+	if msg.Packet.Properties == nil {
+		t.Fatal("Expected publish properties to be present")
+	}
+	if msg.Packet.Properties.ExpiryTime <= before {
+		t.Fatalf("Expected ExpiryTime to be populated from default expiry, before=%d got=%d", before, msg.Packet.Properties.ExpiryTime)
+	}
+	if msg.Packet.Properties.ExpiryTime > before+6 {
+		t.Fatalf("Expected ExpiryTime to be close to default expiry, before=%d got=%d", before, msg.Packet.Properties.ExpiryTime)
 	}
 }
 
@@ -502,6 +672,51 @@ func TestRetain_Basic(t *testing.T) {
 		t.Fatalf("Failed to receive retain message: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for retain message")
+	}
+}
+
+func TestRetain_BroadcastStoresForFutureSubscribers(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	if got := core.Broadcast("retain/broadcast", []byte("retained from core"), PublishOptions{Retain: true}); got != 0 {
+		t.Fatalf("Expected no online recipients, got %d", got)
+	}
+
+	subscriber := testSetupClient(t, addr, "sub-retain-broadcast", nil)
+	defer subscriber.Close()
+
+	msgCh := make(chan *client.Message, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		msgCh <- msg
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	if err := subscriber.Subscribe("retain/broadcast"); err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	select {
+	case msg := <-msgCh:
+		if string(msg.Packet.Payload) != "retained from core" {
+			t.Fatalf("Expected 'retained from core', got %q", string(msg.Packet.Payload))
+		}
+	case err := <-errCh:
+		t.Fatalf("Failed to receive retain message: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for retained broadcast message")
 	}
 }
 
@@ -1099,6 +1314,64 @@ func TestHooks_OnDeliver(t *testing.T) {
 	}
 }
 
+func TestHooks_OnDeliver_DoesNotLeakPerClientMutations(t *testing.T) {
+	coreOpts := NewCoreOptions().
+		WithMessageHandler(&MessageHandlerFunc{
+			DeliverFunc: func(ctx *DeliverContext) bool {
+				ctx.Packet.Properties.CorrelationData = append(ctx.Packet.Properties.CorrelationData, []byte(ctx.ClientID)...)
+				return true
+			},
+		})
+
+	core := testSetupCore(t, coreOpts)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	publisher := testSetupClient(t, addr, "deliver-mutate-pub", nil)
+	defer publisher.Close()
+
+	subA := testSetupClient(t, addr, "sub-a", nil)
+	defer subA.Close()
+
+	subB := testSetupClient(t, addr, "sub-b", nil)
+	defer subB.Close()
+
+	if err := subA.Subscribe("deliver/mutate"); err != nil {
+		t.Fatalf("subA failed to subscribe: %v", err)
+	}
+	if err := subB.Subscribe("deliver/mutate"); err != nil {
+		t.Fatalf("subB failed to subscribe: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if err := publisher.Publish("deliver/mutate", []byte("payload"), client.NewPublishOptions().WithCorrelationData([]byte("base:"))); err != nil {
+		t.Fatalf("Failed to publish: %v", err)
+	}
+
+	ctxA, cancelA := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelA()
+	msgA, err := subA.PollMessage(ctxA, 2*time.Second)
+	if err != nil {
+		t.Fatalf("subA failed to receive: %v", err)
+	}
+
+	ctxB, cancelB := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelB()
+	msgB, err := subB.PollMessage(ctxB, 2*time.Second)
+	if err != nil {
+		t.Fatalf("subB failed to receive: %v", err)
+	}
+
+	if got := string(msgA.Packet.Properties.CorrelationData); got != "base:sub-a" {
+		t.Fatalf("subA CorrelationData = %q, want %q", got, "base:sub-a")
+	}
+	if got := string(msgB.Packet.Properties.CorrelationData); got != "base:sub-b" {
+		t.Fatalf("subB CorrelationData = %q, want %q", got, "base:sub-b")
+	}
+}
+
 // TestHooks_OnSubscribe 测试订阅钩子
 func TestHooks_OnSubscribe(t *testing.T) {
 	coreOpts := NewCoreOptions().
@@ -1347,8 +1620,49 @@ func TestConnection_ClientTakeover(t *testing.T) {
 	if !c2.IsConnected() {
 		t.Error("Second client should stay connected")
 	}
+}
 
-	c1.Close()
+func TestConnection_ClientTakeover_AllowedWhenMaxClientsReached(t *testing.T) {
+	opts := NewCoreOptions().WithMaxClients(1)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	c1 := testSetupClient(t, addr, "takeover-max-client", nil)
+	defer c1.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	c2, err := client.NewWithOptions(
+		client.NewClientOptions().
+			WithCore(addr).
+			WithClientID("takeover-max-client").
+			WithLogger(testIntegrationLogger()),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create c2: %v", err)
+	}
+	defer c2.Close()
+
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c2.ConnectWithDialer(dialer); err != nil {
+		t.Fatalf("takeover should succeed even when max clients reached: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if c1.IsConnected() {
+		t.Fatal("first client should be disconnected after takeover")
+	}
+	if !c2.IsConnected() {
+		t.Fatal("second client should stay connected after takeover")
+	}
+
+	stats := core.GetStats()
+	if stats.ClientsConnected != 1 {
+		t.Fatalf("expected 1 connected client after takeover at max capacity, got %d", stats.ClientsConnected)
+	}
 }
 
 // ============================================================================
@@ -1806,6 +2120,38 @@ func TestRetain_RetainHandlingNoReplay(t *testing.T) {
 	_, err := subscriber.PollMessage(ctx, 300*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected no retained replay when RetainHandling=2")
+	}
+	if !errors.Is(err, client.ErrPollTimeout) {
+		t.Fatalf("expected ErrPollTimeout, got %v", err)
+	}
+}
+
+func TestRetain_NoLocalSkipsOwnRetainedReplay(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	publisher := testSetupClient(t, addr, "pub-retain-nolocal", nil)
+	defer publisher.Close()
+
+	if err := publisher.Publish("retain/nolocal", []byte("retained"), client.NewPublishOptions().WithRetain(true)); err != nil {
+		t.Fatalf("Failed to publish retained message: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	subOpts := client.NewSubscribeOptions().WithNoLocal(true)
+	if err := publisher.SubscribeWithOptions([]string{"retain/nolocal"}, subOpts); err != nil {
+		t.Fatalf("Failed to subscribe with NoLocal: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := publisher.PollMessage(ctx, 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected no retained replay when NoLocal=true and retained message was published by same client")
 	}
 	if !errors.Is(err, client.ErrPollTimeout) {
 		t.Fatalf("expected ErrPollTimeout, got %v", err)

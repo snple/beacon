@@ -75,16 +75,21 @@ func (q *sendQueue) tryDequeue() (*Message, bool) {
 		}
 
 		q.used.Add(-1)
-		// QoS 1 消息从 inQueue 中移除
-		if !qm.Packet.PacketID.IsZero() {
-			q.mu.Lock()
-			delete(q.inQueue, qm.Packet.PacketID)
-			q.mu.Unlock()
-		}
 		return qm, true
 	default:
 		return nil, false
 	}
+}
+
+// finish 标记消息已离开发送队列生命周期（已发送、发送失败或被丢弃）。
+func (q *sendQueue) finish(packetID nson.Id) {
+	if packetID.IsZero() {
+		return
+	}
+
+	q.mu.Lock()
+	delete(q.inQueue, packetID)
+	q.mu.Unlock()
 }
 
 // Available 返回队列可用空间

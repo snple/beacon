@@ -91,8 +91,12 @@ func ReadPacket(r io.Reader) (Packet, error) {
 	}
 
 	// 解码包体
-	if err := pkt.decode(bytes.NewReader(body)); err != nil {
+	bodyReader := bytes.NewReader(body)
+	if err := pkt.decode(bodyReader); err != nil {
 		return nil, fmt.Errorf("failed to decode %v packet body: %w", header.Type, err)
+	}
+	if bodyReader.Len() > 0 {
+		return nil, &StreamProtocolError{Code: MalformedPacket, Message: "trailing bytes in packet body"}
 	}
 
 	return pkt, nil

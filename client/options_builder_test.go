@@ -55,6 +55,60 @@ func TestClientOptionsBuilder(t *testing.T) {
 	}
 }
 
+func TestClientOptionsBuilder_ClonesMutableInputs(t *testing.T) {
+	authData := []byte("secret-token")
+	userProperties := map[string]string{"x-origin": "client"}
+
+	opts := NewClientOptions().
+		WithAuth("token", authData).
+		WithUserProperties(userProperties)
+
+	copy(authData, []byte("mutate-token"))
+	userProperties["x-origin"] = "mutated"
+
+	if got := string(opts.AuthData); got != "secret-token" {
+		t.Fatalf("expected AuthData secret-token, got %q", got)
+	}
+	if got := opts.UserProperties["x-origin"]; got != "client" {
+		t.Fatalf("expected UserProperties[x-origin]=client, got %q", got)
+	}
+}
+
+func TestClientOptionsBuilder_WithWill_ClonesCallerConfig(t *testing.T) {
+	willPayload := []byte("will payload")
+	will := &WillMessage{
+		Packet: &packet.PublishPacket{
+			Topic:      "will/topic",
+			Payload:    willPayload,
+			QoS:        packet.QoS1,
+			Retain:     true,
+			Properties: packet.NewPublishProperties(),
+		},
+		Expiry: 5 * time.Second,
+	}
+	will.Packet.Properties.ContentType = "text/plain"
+
+	opts := NewClientOptions().WithWill(will)
+
+	copy(willPayload, []byte("mutated payl"))
+	will.Packet.Topic = "mutated/topic"
+	will.Packet.Properties.ContentType = "application/json"
+	will.Expiry = 10 * time.Second
+
+	if got := opts.Will.Packet.Topic; got != "will/topic" {
+		t.Fatalf("expected will topic will/topic, got %q", got)
+	}
+	if got := string(opts.Will.Packet.Payload); got != "will payload" {
+		t.Fatalf("expected will payload 'will payload', got %q", got)
+	}
+	if got := opts.Will.Packet.Properties.ContentType; got != "text/plain" {
+		t.Fatalf("expected will content type text/plain, got %q", got)
+	}
+	if got := opts.Will.Expiry; got != 5*time.Second {
+		t.Fatalf("expected will expiry 5s, got %v", got)
+	}
+}
+
 // TestPublishOptionsBuilder 测试 PublishOptions Builder 模式
 func TestPublishOptionsBuilder(t *testing.T) {
 	opts := NewPublishOptions().

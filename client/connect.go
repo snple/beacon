@@ -137,12 +137,17 @@ func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 
 	// 遗嘱消息
 	if c.options.Will != nil && c.options.Will.Packet != nil {
-		willPkt := c.options.Will.Packet
+		willPktCopy := c.options.Will.Packet.DeepCopy()
+		willPkt := &willPktCopy
 
 		if willPkt.Topic == "" {
 			return nil, ErrWillTopicRequired
 		}
 		connect.Will = true
+
+		if willPkt.Properties == nil {
+			willPkt.Properties = packet.NewPublishProperties()
+		}
 
 		if c.options.Will.Expiry > 0 {
 			willPkt.Properties.ExpiryTime = time.Now().Unix() + int64(c.options.Will.Expiry.Seconds())

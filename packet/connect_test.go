@@ -2,6 +2,8 @@ package packet
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -282,5 +284,49 @@ func TestConnackPacket_Type(t *testing.T) {
 	pkt := NewConnackPacket(ReasonSuccess)
 	if pkt.Type() != CONNACK {
 		t.Errorf("Type() 返回值不正确: 期望 %v, 得到 %v", CONNACK, pkt.Type())
+	}
+}
+
+func TestReadPacket_MaxPacketSizeIncludesFixedHeader(t *testing.T) {
+	pkt := NewConnectPacket()
+	pkt.ClientID = "max-size-check"
+
+	var buf bytes.Buffer
+	if err := WritePacket(&buf, pkt, 0); err != nil {
+		t.Fatalf("编码失败: %v", err)
+	}
+
+	maxPacketSize := uint32(buf.Len() - 1)
+	_, err := ReadPacket(bytes.NewReader(buf.Bytes()), maxPacketSize)
+	if err == nil {
+		t.Fatal("expected ReadPacket to reject packet whose total size exceeds maxPacketSize")
+	}
+
+	var tooLargeErr *PacketTooLargeError
+	if !errors.As(err, &tooLargeErr) {
+		t.Fatalf("expected PacketTooLargeError, got %v", err)
+	}
+}
+
+func TestReadPacket_RejectsTrailingBytes(t *testing.T) {
+	pkt := NewConnectPacket()
+	pkt.ClientID = "trailing-bytes"
+
+	var buf bytes.Buffer
+	if err := WritePacket(&buf, pkt, 0); err != nil {
+		t.Fatalf("编码失败: %v", err)
+	}
+
+	data := append([]byte(nil), buf.Bytes()...)
+	remaining := binary.BigEndian.Uint32(data[1:5])
+	binary.BigEndian.PutUint32(data[1:5], remaining+1)
+	data = append(data, 0x7f)
+
+	_, err := ReadPacket(bytes.NewReader(data), 0)
+	if err == nil {
+		t.Fatal("expected ReadPacket to reject trailing bytes")
+	}
+	if !errors.Is(err, ErrMalformedPacket) {
+		t.Fatalf("expected ErrMalformedPacket, got %v", err)
 	}
 }

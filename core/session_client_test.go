@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -269,9 +270,22 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 	if string(msg.Payload()) != "offline message" {
 		t.Fatalf("Expected payload 'offline message', got '%s'", string(msg.Payload()))
 	}
+	if msg.Packet != nil && msg.Packet.Dup {
+		t.Fatal("Expected first offline delivery to have Dup=false")
+	}
 
 	// 等待ACK处理
 	time.Sleep(200 * time.Millisecond)
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel2()
+	_, err = subscriber.PollMessage(ctx2, 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("Expected no duplicate offline message after first delivery")
+	}
+	if !errors.Is(err, client.ErrPollTimeout) {
+		t.Fatalf("Expected ErrPollTimeout after first offline delivery, got %v", err)
+	}
 
 	// 验证消息已从持久化存储中删除
 	// count, err = server.messageStore.countMessages(svClient.ID)

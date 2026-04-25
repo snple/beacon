@@ -620,6 +620,9 @@ func TestOfflineMessageQueue(t *testing.T) {
 	if string(pub.Payload) != "offline message" {
 		t.Fatalf("Expected payload 'offline message', got '%s'", string(pub.Payload))
 	}
+	if pub.Dup {
+		t.Fatal("Expected first offline delivery to have Dup=false")
+	}
 
 	// 发送 PUBACK
 	puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonSuccess)

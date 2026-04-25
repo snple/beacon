@@ -18,14 +18,6 @@ func (c *Core) HandleConn(conn net.Conn) error {
 		return fmt.Errorf("core is not running")
 	}
 
-	// 检查客户端数量限制
-	if c.options.MaxClients > 0 && uint32(c.stats.ClientsConnected.Load()) >= c.options.MaxClients {
-		c.logger.Warn("Max clients reached, rejecting connection",
-			zap.String("remote", conn.RemoteAddr().String()))
-		conn.Close()
-		return fmt.Errorf("max clients reached")
-	}
-
 	// 检查连接速率限制
 	if c.connRateLimiter != nil && !c.connRateLimiter.Allow() {
 		c.logger.Warn("Connection rate exceeded, rejecting connection",
@@ -56,6 +48,15 @@ func (c *Core) handleConn(conn net.Conn) {
 			clientID = c.generateClientID()
 		}
 		connect.ClientID = clientID
+	}
+
+	if c.options.MaxClients > 0 && !c.canAcceptClientConnection(connect.ClientID) {
+		c.logger.Warn("Max clients reached, rejecting connection",
+			zap.String("clientID", connect.ClientID),
+			zap.String("remote", conn.RemoteAddr().String()))
+		c.sendConnack(conn, false, packet.ReasonServerBusy, nil)
+		conn.Close()
+		return
 	}
 
 	// 认证
@@ -117,6 +118,22 @@ func (c *Core) handleConn(conn net.Conn) {
 
 	// 客户端断开后处理
 	c.handleClientDisconnect(client)
+}
+
+func (c *Core) canAcceptClientConnection(clientID string) bool {
+	if c.options.MaxClients == 0 {
+		return true
+	}
+
+	if uint32(c.stats.ClientsConnected.Load()) < c.options.MaxClients {
+		return true
+	}
+
+	c.clientsMu.RLock()
+	existingClient, exists := c.clients[clientID]
+	c.clientsMu.RUnlock()
+
+	return exists && !existingClient.Closed()
 }
 
 // readConnectPacket 读取并验证 CONNECT 包
@@ -230,13 +247,15 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 
 	// 情况2: 新旧连接都要求保留会话，复用旧 Client，只替换 Conn
 	if connect.SessionTimeout > 0 && canResumeSession {
-		// 先踢掉旧连接（如果在线）
-		if wasOnline {
-			existingClient.Close(packet.ReasonSessionTakenOver)
-		}
+		oldConn := existingClient.getConn()
 
 		// 复用 Client，附加新连接
 		existingClient.attachConn(netConn, connect)
+
+		// 只关闭旧连接，避免误伤刚替换进去的新连接。
+		if wasOnline && oldConn != nil {
+			oldConn.close(packet.ReasonSessionTakenOver)
+		}
 
 		c.logger.Info("Session restored (reusing client, replacing conn)",
 			zap.String("clientID", clientID),
@@ -289,6 +308,15 @@ func (c *Core) sendConnack(conn net.Conn, sessionPresent bool, code packet.Reaso
 // 3. 正常断开（收到 DISCONNECT 包）：清除遗嘱消息，不发送
 // 4. 异常断开（没有 DISCONNECT 包）：发布遗嘱消息
 func (c *Core) handleClientDisconnect(client *Client) {
+	// 如果同一 ClientID 已经被新的 Client 实例接管，这里只能结束旧连接的生命周期，
+	// 不能再修改当前 map 中的新会话状态。
+	c.clientsMu.RLock()
+	currentClient, exists := c.clients[client.ID]
+	c.clientsMu.RUnlock()
+	if exists && currentClient != client {
+		return
+	}
+
 	c.stats.ClientsConnected.Add(-1)
 
 	// 调用 OnDisconnect 钩子
@@ -299,15 +327,6 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		Duration: time.Now().Unix() - client.ConnectedAt().Unix(),
 	}
 	c.options.Hooks.callOnDisconnect(disconnectCtx)
-
-	// 如果同一 ClientID 已经被新的 Client 实例接管，这里只能结束旧连接的生命周期，
-	// 不能再修改当前 map 中的新会话状态。
-	c.clientsMu.RLock()
-	currentClient, exists := c.clients[client.ID]
-	c.clientsMu.RUnlock()
-	if exists && currentClient != client {
-		return
-	}
 
 	// 检查是否为正常断开
 	isNormalDisconnect := client.DisconnectPacket() != nil

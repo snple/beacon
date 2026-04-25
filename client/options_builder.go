@@ -82,7 +82,7 @@ func (o *ClientOptions) WithClientID(id string) *ClientOptions {
 // WithAuth 设置认证信息
 func (o *ClientOptions) WithAuth(method string, data []byte) *ClientOptions {
 	o.AuthMethod = method
-	o.AuthData = data
+	o.AuthData = cloneBytes(data)
 	return o
 }
 
@@ -130,7 +130,7 @@ func (o *ClientOptions) WithTraceID(traceID string) *ClientOptions {
 
 // WithUserProperties 设置 CONNECT 的用户属性
 func (o *ClientOptions) WithUserProperties(props map[string]string) *ClientOptions {
-	o.UserProperties = props
+	o.UserProperties = cloneStringMap(props)
 	return o
 }
 
@@ -179,22 +179,33 @@ func (o *ClientOptions) WithMessageHandler(handler MessageHandler) *ClientOption
 	return o
 }
 
+func cloneWillMessage(will *WillMessage) *WillMessage {
+	if will == nil {
+		return nil
+	}
+
+	cloned := &WillMessage{Expiry: will.Expiry}
+	if will.Packet != nil {
+		packetCopy := will.Packet.DeepCopy()
+		cloned.Packet = &packetCopy
+	}
+
+	return cloned
+}
+
 // WithWill 设置遗嘱消息
 func (o *ClientOptions) WithWill(will *WillMessage) *ClientOptions {
-	o.Will = will
+	o.Will = cloneWillMessage(will)
 	return o
 }
 
 // WithWillSimple 便捷设置遗嘱消息（最常用字段）
 func (o *ClientOptions) WithWillSimple(topic string, payload []byte, qos packet.QoS, retain bool) *ClientOptions {
-	o.Will = &WillMessage{
-		Packet: &packet.PublishPacket{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     qos,
-			Retain:  retain,
-		},
-	}
+	willPacket := packet.NewPublishPacket(topic, cloneBytes(payload))
+	willPacket.QoS = qos
+	willPacket.Retain = retain
+
+	o.Will = &WillMessage{Packet: willPacket}
 	return o
 }
 

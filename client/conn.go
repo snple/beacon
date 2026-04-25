@@ -253,10 +253,17 @@ func (c *Conn) handlePublish(p *packet.PublishPacket) error {
 	case c.client.messageQueue <- msg:
 		c.logger.Debug("Enqueued message for polling", zap.String("topic", p.Topic))
 	default:
-		// 队列满：QoS 1 不回复 PUBACK，让服务端重传；QoS 0 直接丢弃
+		// 队列满：QoS 1 返回配额超限，告知服务端丢弃并清理 pendingAck；QoS 0 直接丢弃
 		if p.QoS == packet.QoS1 {
-			c.logger.Warn("Message queue full, not ACKing QoS1 message for redelivery",
+			c.logger.Warn("Message queue full, ACKing QoS1 message with quota exceeded",
 				zap.String("topic", p.Topic))
+
+			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonQuotaExceeded)
+			if err := c.writePacket(puback); err != nil {
+				c.logger.Warn("Failed to send quota-exceeded PUBACK", zap.Error(err))
+				return err
+			}
+
 			return nil
 		}
 		c.logger.Warn("Message queue full, QoS0 message dropped", zap.String("topic", p.Topic))
@@ -355,11 +362,26 @@ func (c *Conn) handleAck(packetID nson.Id, err error) {
 	}
 }
 
+func (c *Conn) registerPendingAck(packetID nson.Id) chan error {
+	ch := make(chan error, 1)
+	c.pendingAckMu.Lock()
+	c.pendingAck[packetID] = ch
+	c.pendingAckMu.Unlock()
+	return ch
+}
+
+func (c *Conn) clearPendingAck(packetID nson.Id) {
+	c.pendingAckMu.Lock()
+	delete(c.pendingAck, packetID)
+	c.pendingAckMu.Unlock()
+}
+
 // sendMessage 发送消息
 func (c *Conn) sendMessage(msg *Message) error {
-	pub := msg.Packet // 复制数据包以修改 PacketID
+	pub := msg.Packet.Copy()
+	pub.Dup = msg.Dup
 
-	if err := c.writePacket(pub); err != nil {
+	if err := c.writePacket(&pub); err != nil {
 		if errors.Is(err, &packet.PacketTooLargeError{}) {
 			// 数据包超过客户端允许的最大大小，丢弃消息
 			c.client.logger.Warn("Message dropped: packet size exceeds client maxPacketSize",

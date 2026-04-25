@@ -251,6 +251,7 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 		c.sendRetainedMessages(
 			sub.Topic,
 			isNewSubs[i],
+			sub.Options.NoLocal,
 			sub.Options.RetainAsPublished,
 			sub.Options.RetainHandling,
 			sub.Options.QoS,
@@ -316,7 +317,7 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 // sendRetainedMessages 逐条发送订阅时的保留消息
 // 避免一次性加载所有消息到内存
 func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
-	retainAsPublished bool, retainHandling uint8, subQoS packet.QoS) {
+	noLocal bool, retainAsPublished bool, retainHandling uint8, subQoS packet.QoS) {
 	// retainHandling == 2: 不发送保留消息
 	if retainHandling == 2 {
 		return
@@ -351,6 +352,9 @@ func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 			continue
 		}
 		if msg == nil {
+			continue
+		}
+		if noLocal && msg.Packet != nil && msg.Packet.Properties != nil && msg.Packet.Properties.SourceClientID == c.ID {
 			continue
 		}
 

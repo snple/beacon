@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"maps"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -14,39 +15,7 @@ import (
 func (c *Core) publish(msg Message) bool {
 	// 进入队列前重新分配 PacketID，以确保顺序和唯一性
 	msg.PacketID = nson.NewId()
-
-	// 处理保留消息
-	if msg.Retain && c.options.RetainEnabled {
-		if len(msg.Packet.Payload) == 0 {
-			// 删除保留消息
-			c.retainStore.remove(msg.Packet.Topic)
-			// 从持久化存储中删除
-			c.store.deleteRetain(msg.Packet.Topic)
-		} else {
-			// 计算过期时间
-			var expiryTime int64
-			if msg.Packet.Properties != nil && msg.Packet.Properties.ExpiryTime > 0 {
-				expiryTime = msg.Packet.Properties.ExpiryTime
-			}
-
-			// 先存入 retainStore 索引
-			if err := c.retainStore.set(msg.Packet.Topic, expiryTime); err != nil {
-				c.logger.Error("Failed to set retain message index",
-					zap.String("topic", msg.Packet.Topic),
-					zap.Error(err))
-			}
-
-			// 持久化保留消息到 messageStore
-			if c.store != nil {
-				// !!! 这里传指针
-				if err := c.store.setRetain(msg.Packet.Topic, &msg); err != nil {
-					c.logger.Error("Failed to persist retain message",
-						zap.String("topic", msg.Packet.Topic),
-						zap.Error(err))
-				}
-			}
-		}
-	}
+	c.handleRetainedMessage(&msg)
 
 	// 放入消息队列（现在使用 Queue.Enqueue）
 	if err := c.queue.Enqueue(&msg); err != nil {
@@ -71,18 +40,122 @@ func (c *Core) publish(msg Message) bool {
 	return true
 }
 
+func (c *Core) handleRetainedMessage(msg *Message) {
+	if msg == nil || msg.Packet == nil {
+		return
+	}
+
+	// 处理保留消息。带 TargetClientID 的定向消息不能进入通用 retained 存储，
+	// 否则后续普通订阅者会收到本应只发给单个客户端的历史消息。
+	if msg.Retain && c.options.RetainEnabled && (msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID == "") {
+		if len(msg.Packet.Payload) == 0 {
+			c.retainStore.remove(msg.Packet.Topic)
+			c.store.deleteRetain(msg.Packet.Topic)
+			return
+		}
+
+		var expiryTime int64
+		if msg.Packet.Properties != nil && msg.Packet.Properties.ExpiryTime > 0 {
+			expiryTime = msg.Packet.Properties.ExpiryTime
+		}
+
+		if err := c.retainStore.set(msg.Packet.Topic, expiryTime); err != nil {
+			c.logger.Error("Failed to set retain message index",
+				zap.String("topic", msg.Packet.Topic),
+				zap.Error(err))
+		}
+
+		if c.store != nil {
+			if err := c.store.setRetain(msg.Packet.Topic, msg); err != nil {
+				c.logger.Error("Failed to persist retain message",
+					zap.String("topic", msg.Packet.Topic),
+					zap.Error(err))
+			}
+		}
+	}
+}
+
+func (c *Core) newPublishMessage(pub *packet.PublishPacket) Message {
+	return Message{
+		Packet:    pub,
+		QoS:       pub.QoS,
+		Retain:    pub.Retain,
+		Timestamp: time.Now().Unix(),
+	}
+}
+
+func (c *Core) newServerPublishPacket(topic string, payload []byte, targetClientID string, options PublishOptions) *packet.PublishPacket {
+	pub := packet.NewPublishPacket(topic, cloneBytes(payload))
+	pub.QoS = options.QoS
+	pub.Retain = options.Retain
+
+	c.applyPublishProperties(pub, targetClientID, options)
+	c.applyPublishExpiry(pub, options)
+
+	return pub
+}
+
 // PublishOptions 发布选项
 type PublishOptions struct {
-	QoS         packet.QoS
-	Retain      bool
-	TraceID     string
-	ContentType string
-	Expiry      uint32
+	QoS            packet.QoS
+	Retain         bool
+	TraceID        string
+	ContentType    string
+	Expiry         uint32
+	UserProperties map[string]string
 
 	// 请求-响应模式属性
-	TargetClientID  string // 目标客户端ID，用于点对点消息
 	ResponseTopic   string // 响应主题
 	CorrelationData []byte // 关联数据
+}
+
+func cloneBytes(data []byte) []byte {
+	if data == nil {
+		return nil
+	}
+	cloned := make([]byte, len(data))
+	copy(cloned, data)
+	return cloned
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(src))
+	maps.Copy(cloned, src)
+	return cloned
+}
+
+func (c *Core) applyPublishProperties(pub *packet.PublishPacket, targetClientID string, options PublishOptions) {
+	if pub == nil || pub.Properties == nil {
+		return
+	}
+
+	pub.Properties.TraceID = options.TraceID
+	pub.Properties.ContentType = options.ContentType
+	pub.Properties.TargetClientID = targetClientID
+	pub.Properties.ResponseTopic = options.ResponseTopic
+	pub.Properties.CorrelationData = cloneBytes(options.CorrelationData)
+	pub.Properties.UserProperties = cloneStringMap(options.UserProperties)
+}
+
+func (c *Core) applyPublishExpiry(pub *packet.PublishPacket, options PublishOptions) {
+	if pub == nil || pub.Properties == nil {
+		return
+	}
+
+	var expiry time.Time
+	switch {
+	case options.Expiry > 0:
+		expiry = time.Now().Add(time.Duration(options.Expiry) * time.Second)
+	case c.options.DefaultMessageExpiry > 0:
+		expiry = time.Now().Add(c.options.DefaultMessageExpiry)
+	default:
+		return
+	}
+
+	pub.Properties.ExpiryTime = expiry.Unix()
 }
 
 func (c *Core) dispatchLoop() {
@@ -304,6 +377,7 @@ func (c *conn) processSendQueue() {
 
 			// 从持久化队列删除
 			c.client.queue.Delete(msg.PacketID)
+			c.sendQueue.finish(msg.PacketID)
 
 			// 统计消息丢弃数
 			c.client.core.stats.MessagesDropped.Add(1)
@@ -317,9 +391,37 @@ func (c *conn) processSendQueue() {
 				zap.String("topic", msg.Packet.Topic),
 				zap.Error(err))
 
+			if errors.Is(err, ErrDeliveryRejected) {
+				if delErr := c.client.queue.Delete(msg.PacketID); delErr != nil {
+					c.client.core.logger.Debug("Failed to delete delivery-rejected message from queue",
+						zap.String("clientID", c.client.ID),
+						zap.String("packetID", msg.PacketID.Hex()),
+						zap.Error(delErr))
+				}
+				c.sendQueue.finish(msg.PacketID)
+				c.client.core.stats.MessagesDropped.Add(1)
+				continue
+			}
+
+			// 后续重试应明确标记为重复投递，但在 sendMessage 返回前仍保持 sendQueue 去重，
+			// 以免同一条消息在写入进行中被重复入队。
+			msg.Dup = true
+			if err := c.client.queue.Enqueue(msg); err != nil {
+				c.client.core.logger.Warn("Failed to persist Dup flag after send failure",
+					zap.String("clientID", c.client.ID),
+					zap.String("topic", msg.Packet.Topic),
+					zap.String("packetID", msg.PacketID.Hex()),
+					zap.Error(err))
+			}
+
+			c.sendQueue.finish(msg.PacketID)
+
 			// 如果是 QoS1 且持久化失败，则已经在持久化层有备份
 			// 如果是 QoS0，这里也已经持久化到队列，等待重传机制处理
+			continue
 		}
+
+		c.sendQueue.finish(msg.PacketID)
 
 		// 发送成功，统计消息发送数
 		c.client.core.stats.MessagesSent.Add(1)
@@ -338,11 +440,9 @@ func (c *conn) sendMessage(msg *Message) error {
 		return ErrInvalidMessage
 	}
 
-	// 基于只读 PublishPacket 构造一次性出站 packet
-
-	// 构建最终发送的 PUBLISH 包
-	// !!! 这里要复制消息，因为要修改 QoS 和 PacketID 等字段，不能影响原始消息 !!!
-	pub := msg.Packet.Copy()
+	// 基于只读 PublishPacket 构造一次性出站 packet。
+	// 这里需要深拷贝，隔离 OnDeliver 钩子和编码过程中的局部修改，避免污染共享消息内容层。
+	pub := msg.Packet.DeepCopy()
 	pub.Dup = msg.Dup
 	pub.QoS = msg.QoS
 	pub.Retain = msg.Retain
@@ -410,22 +510,8 @@ func (c *conn) sendMessage(msg *Message) error {
 // PublishToClient 向指定客户端发送消息
 // 如果客户端在线但未订阅该主题，仍然会将消息投递给该客户端
 func (c *Core) PublishToClient(clientID string, topic string, payload []byte, options PublishOptions) error {
-	pub := packet.NewPublishPacket(topic, payload)
-	pub.QoS = options.QoS
-	pub.Retain = options.Retain
-
-	pub.Properties.TraceID = options.TraceID
-	pub.Properties.ContentType = options.ContentType
-	pub.Properties.TargetClientID = options.TargetClientID
-	pub.Properties.ResponseTopic = options.ResponseTopic
-	pub.Properties.CorrelationData = options.CorrelationData
-
-	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
-
-	if options.Expiry > 0 {
-		expiryTime := time.Now().Add(time.Duration(options.Expiry) * time.Second)
-		msg.Packet.Properties.ExpiryTime = expiryTime.Unix()
-	}
+	pub := c.newServerPublishPacket(topic, payload, clientID, options)
+	msg := c.newPublishMessage(pub)
 
 	c.clientsMu.RLock()
 	client, exists := c.clients[clientID]
@@ -452,25 +538,14 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 	}
 	c.clientsMu.RUnlock()
 
-	pub := packet.NewPublishPacket(topic, payload)
-	pub.QoS = options.QoS
-	pub.Retain = options.Retain
-
-	pub.Properties.TraceID = options.TraceID
-	pub.Properties.ContentType = options.ContentType
-	pub.Properties.ResponseTopic = options.ResponseTopic
-	pub.Properties.CorrelationData = options.CorrelationData
-
-	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
-
-	if options.Expiry > 0 {
-		expiryTime := time.Now().Add(time.Duration(options.Expiry) * time.Second)
-		msg.Packet.Properties.ExpiryTime = expiryTime.Unix()
-	}
+	pub := c.newServerPublishPacket(topic, payload, "", options)
+	msg := c.newPublishMessage(pub)
+	c.handleRetainedMessage(&msg)
 
 	successCount := 0
 	for _, client := range clients {
-		if err := client.deliver(&msg); err == nil {
+		copiedMsg := msg.Copy()
+		if err := client.deliver(&copiedMsg); err == nil {
 			successCount++
 		}
 	}

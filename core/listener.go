@@ -48,6 +48,17 @@ func (c *Core) Serve(listener net.Listener) error {
 }
 
 func (c *Core) serve(listener net.Listener) error {
+	stopClose := make(chan struct{})
+	defer close(stopClose)
+
+	go func() {
+		select {
+		case <-c.ctx.Done():
+			_ = listener.Close()
+		case <-stopClose:
+		}
+	}()
+
 	for c.running.Load() {
 		conn, err := listener.Accept()
 		if err != nil {

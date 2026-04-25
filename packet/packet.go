@@ -41,18 +41,20 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 		return nil, err
 	}
 
+	totalSize := header.Remaining + 5
+
 	// 检查包大小是否超过限制
-	if maxPacketSize > 0 && header.Remaining > maxPacketSize {
+	if maxPacketSize > 0 && totalSize > maxPacketSize {
 		return nil, NewPacketTooLargeError(
-			header.Remaining,
+			totalSize,
 			maxPacketSize,
 		)
 	}
 
 	// 即使 maxPacketSize=0（无限制），也不允许超过协议硬上限
-	if header.Remaining > MaxPacketSize {
+	if totalSize > MaxPacketSize {
 		return nil, NewPacketTooLargeError(
-			header.Remaining,
+			totalSize,
 			MaxPacketSize,
 		)
 	}
@@ -108,6 +110,9 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 	buf := bytes.NewReader(data)
 	if err := pkt.decode(buf, header); err != nil {
 		return nil, fmt.Errorf("failed to decode %v packet: %w", header.Type, err)
+	}
+	if buf.Len() > 0 {
+		return nil, fmt.Errorf("failed to decode %v packet: %w", header.Type, ErrMalformedPacket)
 	}
 
 	return pkt, nil

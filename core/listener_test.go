@@ -284,3 +284,40 @@ func TestHandleConnMaxClients(t *testing.T) {
 		t.Errorf("expected 1 client connected, got %d", c.stats.ClientsConnected.Load())
 	}
 }
+
+func TestServe_ReturnsAfterCoreStopWithoutClosingListener(t *testing.T) {
+	c, err := NewWithOptions(NewCoreOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Serve(listener)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if err := c.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve returned unexpected error after Stop: %v", err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("Serve should return after Core.Stop without requiring listener.Close")
+	}
+}

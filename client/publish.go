@@ -1,6 +1,7 @@
 package client
 
 import (
+	"maps"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -8,6 +9,24 @@ import (
 
 	"go.uber.org/zap"
 )
+
+func cloneBytes(data []byte) []byte {
+	if data == nil {
+		return nil
+	}
+	cloned := make([]byte, len(data))
+	copy(cloned, data)
+	return cloned
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(src))
+	maps.Copy(cloned, src)
+	return cloned
+}
 
 // Publish 发布消息（使用 Builder 模式选项，推荐）
 //
@@ -39,7 +58,7 @@ func (c *Client) Publish(topic string, payload []byte, opts *PublishOptions) err
 		expiryTime = time.Now().Unix() + int64(opts.Expiry)
 	}
 
-	pkg := packet.NewPublishPacket(topic, payload)
+	pkg := packet.NewPublishPacket(topic, cloneBytes(payload))
 	pkg.QoS = opts.QoS
 	pkg.Retain = opts.Retain
 
@@ -51,10 +70,10 @@ func (c *Client) Publish(topic string, payload []byte, opts *PublishOptions) err
 	// 请求-响应模式属性
 	pkg.Properties.TargetClientID = opts.TargetClientID
 	pkg.Properties.ResponseTopic = opts.ResponseTopic
-	pkg.Properties.CorrelationData = opts.CorrelationData
+	pkg.Properties.CorrelationData = cloneBytes(opts.CorrelationData)
 
 	// 用户属性
-	pkg.Properties.UserProperties = opts.UserProperties
+	pkg.Properties.UserProperties = cloneStringMap(opts.UserProperties)
 
 	msg := Message{
 		Packet:    pkg,
@@ -69,7 +88,10 @@ func (c *Client) PublishToClient(targetClientID, topic string, payload []byte, o
 		opts = NewPublishOptions()
 	}
 
-	return c.Publish(topic, payload, opts.WithTargetClientID(targetClientID))
+	optsCopy := *opts
+	optsCopy.TargetClientID = targetClientID
+
+	return c.Publish(topic, payload, &optsCopy)
 }
 
 // publishMessage 内部发布消息方法
@@ -138,7 +160,12 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("packetID", msg.Packet.PacketID.Hex()))
 
-		return err
+		return nil
+	}
+
+	var waitCh chan error
+	if msg.Packet.QoS == packet.QoS1 {
+		waitCh = conn.registerPendingAck(msg.Packet.PacketID)
 	}
 
 	// 5. 消息已入队，触发发送
@@ -146,7 +173,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 
 	// 6. QoS1: 等待 ACK（仅对首次发布的消息）
 	if msg.Packet.QoS == packet.QoS1 {
-		return c.waitForPublishAck(conn, msg.Packet.PacketID, timeout)
+		return c.waitForPublishAck(conn, msg.Packet.PacketID, waitCh, timeout)
 	}
 
 	return nil
@@ -158,20 +185,9 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 // 1. 仅对首次发布的消息调用（重传消息不等待）
 // 2. 如果超时或连接断开，消息仍在持久化中，会被重传机制处理
 // 3. 使用 defer 确保 pendingAck 始终被清理
-func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, timeout time.Duration) error {
-	// 创建等待通道
-	waitCh := make(chan error, 1)
-
-	conn.pendingAckMu.Lock()
-	conn.pendingAck[packetID] = waitCh
-	conn.pendingAckMu.Unlock()
-
+func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, waitCh chan error, timeout time.Duration) error {
 	// 确保退出时清理 pendingAck
-	defer func() {
-		conn.pendingAckMu.Lock()
-		delete(conn.pendingAck, packetID)
-		conn.pendingAckMu.Unlock()
-	}()
+	defer conn.clearPendingAck(packetID)
 
 	timeoutCh := time.After(timeout)
 	select {
@@ -224,6 +240,7 @@ func (c *Conn) processSendQueue() {
 			if c.client.queue != nil {
 				c.client.queue.Delete(msg.Packet.PacketID)
 			}
+			c.sendQueue.finish(msg.Packet.PacketID)
 			continue
 		}
 
@@ -233,12 +250,18 @@ func (c *Conn) processSendQueue() {
 				zap.Error(err),
 				zap.String("topic", msg.Packet.Topic),
 				zap.String("packetID", msg.Packet.PacketID.Hex()))
-			// 发送失败，消息已出队
-			// QoS1 消息仍在持久化队列中，重传机制会处理
-			// QoS0 消息应从持久化队列删除（已尽力发送）
-			if msg.Packet.QoS == packet.QoS0 && c.client.queue != nil {
-				c.client.queue.Delete(msg.Packet.PacketID)
+
+			msg.Dup = true
+			if c.client.queue != nil {
+				if err := c.client.queue.Enqueue(msg); err != nil {
+					c.logger.Warn("Failed to persist Dup flag after send failure",
+						zap.String("topic", msg.Packet.Topic),
+						zap.String("packetID", msg.Packet.PacketID.Hex()),
+						zap.Error(err))
+				}
 			}
+
+			c.sendQueue.finish(msg.Packet.PacketID)
 		} else {
 			// 发送成功
 			// QoS0: 从持久化队列删除（TCP 写成功即可）
@@ -246,6 +269,7 @@ func (c *Conn) processSendQueue() {
 				c.client.queue.Delete(msg.Packet.PacketID)
 			}
 			// QoS1: 等待 PUBACK，在 handlePuback 中删除
+			c.sendQueue.finish(msg.Packet.PacketID)
 		}
 	}
 }
