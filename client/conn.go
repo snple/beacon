@@ -213,14 +213,6 @@ func (c *Conn) handlePacket(pkt packet.Packet) error {
 		c.handlePong(p)
 	case *packet.DisconnectPacket:
 		c.close(NewServerDisconnectError(p.ReasonCode.String()))
-	case *packet.RequestPacket:
-		return c.client.handleRequest(p)
-	case *packet.ResponsePacket:
-		return c.client.handleResponse(p)
-	case *packet.RegackPacket:
-		c.client.handleRegack(p)
-	case *packet.UnregackPacket:
-		c.client.handleUnregack(p)
 	case *packet.AuthPacket:
 		c.client.handleAuth(p)
 	case *packet.TracePacket:
@@ -269,6 +261,13 @@ func (c *Conn) handlePublish(p *packet.PublishPacket) error {
 		}
 	default:
 		c.logger.Warn("Message queue full, message dropped", zap.String("topic", p.Topic))
+		if p.QoS == packet.QoS1 {
+			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonQuotaExceeded)
+			if err := c.writePacket(puback); err != nil {
+				c.logger.Warn("Failed to send PUBACK for full message queue", zap.Error(err))
+				return err
+			}
+		}
 	}
 
 	return nil

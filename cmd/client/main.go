@@ -14,7 +14,6 @@ import (
 
 	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/client"
-	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
@@ -26,19 +25,17 @@ func main() {
 	// 命令行参数
 	core := flag.String("core", "localhost:5208", "Core address")
 	clientID := flag.String("client-id", "", "Client ID (default: auto-generated)")
-	mode := flag.String("mode", "pub", "Mode: pub (publish), sub (subscribe), req (request), poll (polling)")
+	mode := flag.String("mode", "pub", "Mode: pub (publish), sub (subscribe)")
 
 	// 消息相关参数
 	topic := flag.String("topic", "test/topic", "Topic for pub/sub mode")
 	message := flag.String("message", "Hello, Beacon!", "Message payload for pub mode")
-	action := flag.String("action", "echo", "Action name for req/poll mode")
-
 	// 连接参数
 	keepAlive := flag.Uint("keepalive", 60, "Keep alive interval (seconds)")
 	sessionTimeout := flag.Uint("session-timeout", 0, "Session timeout (seconds)")
 
 	// 其他参数
-	count := flag.Int("count", 1, "Number of messages to publish/request")
+	count := flag.Int("count", 1, "Number of messages to publish")
 	interval := flag.Duration("interval", 1*time.Second, "Interval between messages")
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug logging")
@@ -133,10 +130,6 @@ func main() {
 		runPublishMode(ctx, c, *topic, *message, *count, *interval)
 	case "sub", "subscribe":
 		runSubscribeMode(ctx, c, *topic)
-	case "req", "request":
-		runRequestMode(ctx, c, *action, *message, *count, *interval)
-	case "poll", "polling":
-		runPollingMode(ctx, c, *action)
 	default:
 		logger.Fatal("Unknown mode", zap.String("mode", *mode))
 	}
@@ -214,92 +207,4 @@ func runSubscribeMode(ctx context.Context, c *client.Client, topic string) {
 	}
 
 	fmt.Printf("\n✓ Received %d message(s)\n", msgCount)
-}
-
-func runRequestMode(ctx context.Context, c *client.Client, action, message string, count int, interval time.Duration) {
-	fmt.Printf("Sending %d request(s) to action '%s'...\n\n", count, action)
-
-	successCount := 0
-	for i := 0; i < count; i++ {
-		select {
-		case <-ctx.Done():
-			goto done
-		default:
-		}
-
-		msg := fmt.Sprintf("%s #%d", message, i+1)
-		reqPkt := &client.Request{
-			Packet: &packet.RequestPacket{
-				Action:  action,
-				Payload: []byte(msg),
-			},
-		}
-
-		reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		resp, err := c.Request(reqCtx, reqPkt)
-		cancel()
-
-		if err != nil {
-			fmt.Printf("✗ Request #%d failed: %v\n", i+1, err)
-			continue
-		}
-
-		fmt.Printf("✓ Request #%d succeeded: %s\n", i+1, string(resp.Payload()))
-		successCount++
-
-		if i < count-1 && interval > 0 {
-			time.Sleep(interval)
-		}
-	}
-
-done:
-	fmt.Printf("\n✓ Completed %d/%d request(s)\n", successCount, count)
-}
-
-func runPollingMode(ctx context.Context, c *client.Client, action string) {
-	fmt.Printf("Registering action '%s' and waiting for requests...\n\n", action)
-
-	if err := c.Register(action); err != nil {
-		fmt.Printf("✗ Failed to register action: %v\n", err)
-		return
-	}
-
-	fmt.Println("✓ Registered, waiting for requests (Ctrl+C to exit)...")
-	fmt.Println()
-
-	reqCount := 0
-	for {
-		req, err := c.PollRequest(ctx, 5*time.Second)
-		if err != nil {
-			if errors.Is(err, client.ErrPollTimeout) {
-				continue
-			}
-			if ctx.Err() != nil {
-				break
-			}
-			fmt.Printf("✗ Error polling request: %v\n", err)
-			break
-		}
-
-		reqCount++
-		fmt.Printf("✓ [%d] Received request on '%s': %s\n", reqCount, req.Packet.Action, string(req.Packet.Payload))
-
-		// Echo 响应
-		respPayload := fmt.Sprintf("Echo: %s", string(req.Packet.Payload))
-		resp := &client.Response{
-			Packet: &packet.ResponsePacket{
-				RequestID:      req.Packet.RequestID,
-				TargetClientID: req.Packet.SourceClientID,
-				ReasonCode:     packet.ReasonSuccess,
-				Payload:        []byte(respPayload),
-			},
-		}
-		if err := req.Response(resp); err != nil {
-			fmt.Printf("✗ Failed to send response: %v\n", err)
-		} else {
-			fmt.Printf("  → Sent response: %s\n", respPayload)
-		}
-	}
-
-	fmt.Printf("\n✓ Processed %d request(s)\n", reqCount)
 }

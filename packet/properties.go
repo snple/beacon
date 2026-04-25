@@ -506,11 +506,11 @@ type PublishProperties struct {
 
 	TraceID string `nson:"trace"` // 分布式追踪 ID
 
-	// 请求-响应模式
+	// 消息总线 / 请求-响应元数据
 	TargetClientID  string `nson:"tgt"`  // 目标客户端ID，用于点对点消息
 	SourceClientID  string `nson:"src"`  // 来源客户端ID，标识发送者
-	ResponseTopic   string `nson:"resp"` // 响应主题，接收方可往此主题发回响应
-	CorrelationData []byte `nson:"corr"` // 关联数据，用于匹配请求和响应
+	ResponseTopic   string `nson:"resp"` // 响应主题，用于基于 PUBLISH 的请求-响应或异步回执
+	CorrelationData []byte `nson:"corr"` // 关联数据，用于匹配请求与响应或任务回执
 
 	// 用户属性
 	UserProperties map[string]string `nson:"uprops"` // 用户属性

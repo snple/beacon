@@ -96,11 +96,11 @@ func (c *Core) handleConn(conn net.Conn) {
 	}
 	c.options.Hooks.callOnConnect(connectCtx)
 
-	// 开始处理客户端消息
-	client.serve()
-
-	if client.skipHandle.Load() {
-		// 会话被接管，跳过断开处理
+	// 开始处理客户端消息。
+	// 如果 serve 期间连接已被新连接替换，说明当前连接是被接管的旧连接，
+	// 退出时不能再清理当前 Client 对应的会话。
+	servedConn := client.serve()
+	if servedConn == nil || client.getConn() != servedConn {
 		return
 	}
 
@@ -215,11 +215,13 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 	// 检查旧客户端是否在线
 	wasOnline := !existingClient.Closed()
 
-	// 情况2: SessionTimeout>0，复用旧 Client，只替换 Conn
-	if connect.SessionTimeout > 0 {
-		// 先踢掉旧连接（如果在线），cleanup=false 表示会话被接管
+	canResumeSession := existingClient.session.timeout > 0
+
+	// 情况2: 新旧连接都要求保留会话，复用旧 Client，只替换 Conn
+	if connect.SessionTimeout > 0 && canResumeSession {
+		// 先踢掉旧连接（如果在线）
 		if wasOnline {
-			existingClient.closeAndSkipHandle(packet.ReasonSessionTakenOver)
+			existingClient.Close(packet.ReasonSessionTakenOver)
 		}
 
 		// 复用 Client，附加新连接
@@ -234,9 +236,9 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 
 	// 情况3: SessionTimeout=0，清理旧 Client，创建新 Client
 
-	// 踢掉旧连接，cleanup=false 因为我们会手动清理
+	// 踢掉旧连接，因为我们会手动清理旧会话
 	if wasOnline {
-		existingClient.closeAndSkipHandle(packet.ReasonSessionTakenOver)
+		existingClient.Close(packet.ReasonSessionTakenOver)
 	}
 
 	// 清理旧资源（在持有锁的情况下调用不需要锁的版本）
@@ -286,6 +288,15 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		Duration: time.Now().Unix() - client.ConnectedAt().Unix(),
 	}
 	c.options.Hooks.callOnDisconnect(disconnectCtx)
+
+	// 如果同一 ClientID 已经被新的 Client 实例接管，这里只能结束旧连接的生命周期，
+	// 不能再修改当前 map 中的新会话状态。
+	c.clientsMu.RLock()
+	currentClient, exists := c.clients[client.ID]
+	c.clientsMu.RUnlock()
+	if exists && currentClient != client {
+		return
+	}
 
 	// 检查是否为正常断开
 	isNormalDisconnect := client.DisconnectPacket() != nil

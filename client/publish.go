@@ -282,7 +282,7 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 				QoS:               opts.QoS,
 				NoLocal:           opts.NoLocal,
 				RetainAsPublished: opts.RetainAsPublished,
-				RetainHandling:    0, // 默认总是发送保留消息
+				RetainHandling:    opts.RetainHandling,
 			},
 		})
 	}

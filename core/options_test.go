@@ -21,7 +21,6 @@ func TestCoreOptionsBuilder(t *testing.T) {
 		WithExpiredCheckInterval(300 * time.Second).
 		WithRetransmitInterval(60 * time.Second).
 		WithRetainEnabled(false).
-		WithRequestQueueSize(200).
 		WithLogger(logger)
 
 	if opts.MaxClients != 5000 {
@@ -53,9 +52,6 @@ func TestCoreOptionsBuilder(t *testing.T) {
 	}
 	if opts.RetainEnabled {
 		t.Error("expected retainEnabled false")
-	}
-	if opts.RequestQueueSize != 200 {
-		t.Errorf("expected requestQueueSize 200, got %d", opts.RequestQueueSize)
 	}
 	if opts.Logger != logger {
 		t.Error("expected logger to be set")

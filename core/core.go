@@ -37,9 +37,6 @@ type Core struct {
 	// 保留消息
 	retainStore *retainStore
 
-	// REQUEST/RESPONSE 支持（轮询模式）
-	actionRegistry *actionRegistry // action 注册表
-
 	// 统计信息
 	stats Stats
 
@@ -93,7 +90,6 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		subTree:         newSubTree(),
 		queueTrigger:    make(chan struct{}, 1),
 		retainStore:     newRetainStore(),
-		actionRegistry:  newActionRegistry(),
 		ctx:             ctx,
 		cancel:          cancel,
 	}

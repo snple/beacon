@@ -32,7 +32,6 @@ func testSetupCore(t *testing.T, opts *CoreOptions) *Core {
 	}
 	opts.WithLogger(testIntegrationLogger()).
 		WithConnectTimeout(5).
-		WithRequestQueueSize(100).
 		WithMessageQueueSize(100)
 
 	core, err := NewWithOptions(opts)
@@ -56,7 +55,6 @@ func testSetupClient(t *testing.T, coreAddr string, clientID string, opts *clien
 	opts.WithCore(coreAddr).
 		WithClientID(clientID).
 		WithLogger(testIntegrationLogger()).
-		WithRequestQueueSize(100).
 		WithMessageQueueSize(100)
 
 	c, err := client.NewWithOptions(opts)
@@ -1725,6 +1723,172 @@ func TestRetain_QoSDowngrade(t *testing.T) {
 		t.Fatalf("Failed to receive: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for message")
+	}
+}
+
+func TestRetain_RetainAsPublishedFalse(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	publisher := testSetupClient(t, addr, "pub-retain-rap", nil)
+	defer publisher.Close()
+
+	if err := publisher.Publish("retain/rap", []byte("retained"), client.NewPublishOptions().WithRetain(true)); err != nil {
+		t.Fatalf("Failed to publish retained message: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	subscriber := testSetupClient(t, addr, "sub-retain-rap", nil)
+	defer subscriber.Close()
+
+	msgCh := make(chan *client.Message, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		msgCh <- msg
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	subOpts := client.NewSubscribeOptions().WithRetainAsPublished(false)
+	if err := subscriber.SubscribeWithOptions([]string{"retain/rap"}, subOpts); err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	select {
+	case msg := <-msgCh:
+		if msg.Packet.Retain {
+			t.Fatal("expected retained replay to clear Retain flag when RetainAsPublished=false")
+		}
+	case err := <-errCh:
+		t.Fatalf("Failed to receive: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for retained replay")
+	}
+}
+
+func TestRetain_RetainHandlingNoReplay(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
+	core := testSetupCore(t, opts)
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	publisher := testSetupClient(t, addr, "pub-retain-rh", nil)
+	defer publisher.Close()
+
+	if err := publisher.Publish("retain/no-replay", []byte("retained"), client.NewPublishOptions().WithRetain(true)); err != nil {
+		t.Fatalf("Failed to publish retained message: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	subscriber := testSetupClient(t, addr, "sub-retain-rh", nil)
+	defer subscriber.Close()
+
+	subOpts := client.NewSubscribeOptions().WithRetainHandling(2)
+	if err := subscriber.SubscribeWithOptions([]string{"retain/no-replay"}, subOpts); err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := subscriber.PollMessage(ctx, 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected no retained replay when RetainHandling=2")
+	}
+	if !errors.Is(err, client.ErrPollTimeout) {
+		t.Fatalf("expected ErrPollTimeout, got %v", err)
+	}
+}
+
+func TestQoS1Publish_QueueFullReturnsQuotaExceeded(t *testing.T) {
+	core := testSetupCore(t, NewCoreOptions().WithRetransmitInterval(time.Second))
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	publisher := testSetupClient(t, addr, "pub-queue-full", nil)
+	defer publisher.Close()
+
+	subOpts := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("sub-queue-full").
+		WithLogger(testIntegrationLogger()).
+		WithMessageQueueSize(1)
+	subscriber, err := client.NewWithOptions(subOpts)
+	if err != nil {
+		t.Fatalf("Failed to create subscriber: %v", err)
+	}
+	defer subscriber.Close()
+
+	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := subscriber.ConnectWithDialer(dialer); err != nil {
+		t.Fatalf("Failed to connect subscriber: %v", err)
+	}
+
+	if err := subscriber.SubscribeWithOptions([]string{"queue/full"}, client.NewSubscribeOptions().WithQoS(packet.QoS1)); err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if err := publisher.Publish("queue/full", []byte("first"), client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(2*time.Second)); err != nil {
+		t.Fatalf("First publish should succeed: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	if err := publisher.Publish("queue/full", []byte("second"), client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(2*time.Second)); err != nil {
+		t.Fatalf("Second publish should still be accepted by core: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	core.clientsMu.RLock()
+	svClient := core.clients["sub-queue-full"]
+	core.clientsMu.RUnlock()
+	if svClient == nil {
+		t.Fatal("subscriber session should still exist")
+	}
+
+	svClient.session.pendingAckMu.Lock()
+	pendingAckCount := len(svClient.session.pendingAck)
+	svClient.session.pendingAckMu.Unlock()
+	if pendingAckCount != 0 {
+		t.Fatalf("expected subscriber pendingAck to be cleared after quota-exceeded PUBACK, got %d", pendingAckCount)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	msg, err := subscriber.PollMessage(ctx, time.Second)
+	if err != nil {
+		t.Fatalf("expected first message to remain queued: %v", err)
+	}
+	if string(msg.Packet.Payload) != "first" {
+		t.Fatalf("expected first payload, got %q", string(msg.Packet.Payload))
+	}
+
+	time.Sleep(1200 * time.Millisecond)
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel2()
+	_, err = subscriber.PollMessage(ctx2, 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected dropped second message to not be replayed")
+	}
+	if !errors.Is(err, client.ErrPollTimeout) {
+		t.Fatalf("expected ErrPollTimeout, got %v", err)
 	}
 }
 

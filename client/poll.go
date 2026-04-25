@@ -43,29 +43,3 @@ func (c *Client) PollMessage(ctx context.Context, timeout time.Duration) (*Messa
 		return nil, ErrClientClosed
 	}
 }
-
-// PollRequest 轮询获取接收到的请求（阻塞调用）
-// 返回下一个请求，或在超时时返回 ErrPollTimeout
-// 队列大小由 WithRequestQueueSize 配置参数决定（默认 100）
-func (c *Client) PollRequest(ctx context.Context, timeout time.Duration) (*Request, error) {
-	if !c.connected.Load() {
-		return nil, ErrNotConnected
-	}
-
-	// 创建超时上下文
-	pollCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	select {
-	case req := <-c.requestQueue:
-		req.client = c // 设置client引用，用于Response方法
-		return req, nil
-	case <-pollCtx.Done():
-		if pollCtx.Err() == context.DeadlineExceeded {
-			return nil, NewPollTimeoutError(timeout)
-		}
-		return nil, pollCtx.Err()
-	case <-c.ctx.Done():
-		return nil, ErrClientClosed
-	}
-}

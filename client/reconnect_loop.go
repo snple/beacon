@@ -11,7 +11,7 @@ import (
 //
 // Design goals:
 //   - Reconnect is transport-level (TCP/TLS) reconnection.
-//   - Client-side state (subscriptions/actions registry, sendQueue, persisted QoS1 store) is preserved.
+//   - Client-side state (subscriptions, sendQueue, persisted QoS1 store) is preserved.
 //   - sendQueue remains intact across reconnections, allowing offline message buffering.
 //   - In-flight waits are unblocked on disconnect by Connection.close(); reconnect does not try to
 //     keep synchronous callers waiting across a disconnect.
@@ -48,13 +48,6 @@ func (c *Client) reconnectLoop() {
 				savedTopics = append(savedTopics, topic)
 			}
 			c.subscribedTopicsMu.RUnlock()
-
-			c.actionsMu.RLock()
-			savedActions := make([]string, 0, len(c.registeredActions))
-			for action := range c.registeredActions {
-				savedActions = append(savedActions, action)
-			}
-			c.actionsMu.RUnlock()
 
 			// 获取当前队列数量
 			var queuedMessages int
@@ -127,16 +120,11 @@ func (c *Client) reconnectLoop() {
 					zap.Bool("sessionPresent", sessionPresent),
 					zap.Int("queuedMessages", queuedMessages))
 
-				// If the server did not restore the session, re-subscribe and re-register.
+				// If the server did not restore the session, re-subscribe.
 				if !sessionPresent {
 					if len(savedTopics) > 0 {
 						if err := c.Subscribe(savedTopics...); err != nil {
 							c.logger.Warn("Failed to restore subscriptions", zap.Error(err))
-						}
-					}
-					if len(savedActions) > 0 {
-						if err := c.RegisterMultiple(savedActions); err != nil {
-							c.logger.Warn("Failed to re-register actions", zap.Error(err))
 						}
 					}
 				}

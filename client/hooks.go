@@ -132,31 +132,6 @@ func (f MessageHandlerFunc) OnPublish(ctx *PublishContext) bool {
 }
 
 // ============================================================================
-// 请求钩子 (RequestHandler)
-// ============================================================================
-
-// RequestHandler 请求处理器接口
-type RequestHandler interface {
-	// OnRequest 收到请求时调用（在请求入队之前）
-	// 使用原始 packet 引用，避免数据拷贝
-	// 返回 false 时请求不会入队
-	OnRequest(ctx *RequestContext) bool
-}
-
-// RequestContext 请求上下文
-// 使用原始 packet 引用，避免数据拷贝
-type RequestContext struct {
-	Packet *packet.RequestPacket // 原始 REQUEST 包（引用，不要修改）
-}
-
-// RequestHandlerFunc 函数类型适配器
-type RequestHandlerFunc func(ctx *RequestContext) bool
-
-func (f RequestHandlerFunc) OnRequest(ctx *RequestContext) bool {
-	return f(ctx)
-}
-
-// ============================================================================
 // 钩子集合 (Hooks)
 // ============================================================================
 
@@ -173,9 +148,6 @@ type Hooks struct {
 
 	// 消息钩子
 	MessageHandler MessageHandler
-
-	// 请求钩子
-	RequestHandler RequestHandler
 }
 
 // callOnConnect 调用 OnConnect 钩子
@@ -211,14 +183,6 @@ func (h *Hooks) callOnTrace(ctx *TraceContext) {
 func (h *Hooks) callOnPublish(ctx *PublishContext) bool {
 	if h.MessageHandler != nil {
 		return h.MessageHandler.OnPublish(ctx)
-	}
-	return true
-}
-
-// callOnRequest 调用 OnRequest 钩子
-func (h *Hooks) callOnRequest(ctx *RequestContext) bool {
-	if h.RequestHandler != nil {
-		return h.RequestHandler.OnRequest(ctx)
 	}
 	return true
 }

@@ -152,14 +152,6 @@ func (c *conn) handlePacket(pkt packet.Packet) error {
 		return c.handlePing(p)
 	case *packet.DisconnectPacket:
 		return c.handleDisconnect(p)
-	case *packet.RegisterPacket:
-		return c.client.handleRegister(p)
-	case *packet.UnregisterPacket:
-		return c.client.handleUnregister(p)
-	case *packet.RequestPacket:
-		return c.client.handleRequest(p)
-	case *packet.ResponsePacket:
-		return c.client.handleResponse(p)
 	case *packet.AuthPacket:
 		return c.client.handleAuth(p)
 	case *packet.TracePacket:

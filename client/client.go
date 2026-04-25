@@ -18,7 +18,6 @@ const (
 	defaultKeepAlive          = 60 // 默认心跳间隔（秒）
 	defaultConnectTimeout     = 10 * time.Second
 	defaultPublishTimeout     = 30 * time.Second
-	defaultRequestTimeout     = 30 * time.Second
 	defaultRetransmitInterval = 5 * time.Second // QoS1 消息重传间隔
 
 	// 流量控制
@@ -69,17 +68,13 @@ func (m *Message) Payload() []byte {
 }
 
 // Client 客户端（会话管理器）
-// 负责管理跨连接的会话状态：订阅、注册的 actions、消息队列、持久化存储等
+// 负责管理跨连接的会话状态：订阅、消息队列、持久化存储等
 type Client struct {
 	options *ClientOptions
 
 	// 订阅主题列表
 	subscribedTopics   map[string]bool
 	subscribedTopicsMu sync.RWMutex
-
-	// 已注册的 actions
-	registeredActions map[string]bool
-	actionsMu         sync.RWMutex
 
 	// 当前活跃的连接（可能为 nil）
 	conn      *Conn
@@ -92,13 +87,7 @@ type Client struct {
 	// 连接状态
 	connected atomic.Bool
 
-	// REQUEST/RESPONSE 支持
-	nextRequestID   atomic.Uint32
-	pendingRequests map[uint32]chan *Response
-	pendingReqMu    sync.Mutex
-
 	// 轮询模式队列
-	requestQueue chan *Request
 	messageQueue chan *Message
 
 	// 自动重连
@@ -148,16 +137,13 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	}
 
 	c := &Client{
-		options:           opts,
-		subscribedTopics:  make(map[string]bool),
-		registeredActions: make(map[string]bool),
-		ctx:               ctx,
-		cancel:            cancel,
-		connLostCh:        make(chan error, 1),
-		logger:            logger,
-		messageQueue:      make(chan *Message, opts.MessageQueueSize),
-		requestQueue:      make(chan *Request, opts.RequestQueueSize),
-		pendingRequests:   make(map[uint32]chan *Response),
+		options:          opts,
+		subscribedTopics: make(map[string]bool),
+		ctx:              ctx,
+		cancel:           cancel,
+		connLostCh:       make(chan error, 1),
+		logger:           logger,
+		messageQueue:     make(chan *Message, opts.MessageQueueSize),
 	}
 
 	// 初始化消息存储
@@ -230,20 +216,6 @@ func (c *Client) close(err error) error {
 			conn.wait()
 		}
 
-		// 清理等待中的请求
-		c.pendingReqMu.Lock()
-		for _, ch := range c.pendingRequests {
-			select {
-			case ch <- &Response{
-				Packet: &packet.ResponsePacket{
-					ReasonCode: packet.ReasonServerShuttingDown,
-				},
-			}:
-			default:
-			}
-		}
-		c.pendingRequests = make(map[uint32]chan *Response)
-		c.pendingReqMu.Unlock()
 	})
 	return nil
 }

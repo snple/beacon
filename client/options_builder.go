@@ -42,7 +42,6 @@ type ClientOptions struct {
 	RetransmitInterval time.Duration // QoS 1 消息重传间隔（默认 5 秒）
 
 	// 轮询配置
-	RequestQueueSize int // 请求队列缓冲大小（默认 100）
 	MessageQueueSize int // 消息队列缓冲大小（默认 100）
 
 	// 日志配置
@@ -63,7 +62,6 @@ func NewClientOptions() *ClientOptions {
 		MaxPacketSize:      defaultMaxPacketSize,
 		ReceveWindow:       defaultReceiveWindow,
 		RetransmitInterval: defaultRetransmitInterval,
-		RequestQueueSize:   100,
 		MessageQueueSize:   100,
 		StoreOptions:       DefaultStoreOptions(),
 	}
@@ -181,12 +179,6 @@ func (o *ClientOptions) WithMessageHandler(handler MessageHandler) *ClientOption
 	return o
 }
 
-// WithRequestHandler 设置请求钩子
-func (o *ClientOptions) WithRequestHandler(handler RequestHandler) *ClientOptions {
-	o.Hooks.RequestHandler = handler
-	return o
-}
-
 // WithWill 设置遗嘱消息
 func (o *ClientOptions) WithWill(will *WillMessage) *ClientOptions {
 	o.Will = will
@@ -224,12 +216,6 @@ func (o *ClientOptions) WithRetransmitInterval(d time.Duration) *ClientOptions {
 	return o
 }
 
-// WithRequestQueueSize 设置请求队列缓冲大小
-func (o *ClientOptions) WithRequestQueueSize(size int) *ClientOptions {
-	o.RequestQueueSize = size
-	return o
-}
-
 // WithMessageQueueSize 设置消息队列缓冲大小
 func (o *ClientOptions) WithMessageQueueSize(size int) *ClientOptions {
 	o.MessageQueueSize = size
@@ -252,9 +238,6 @@ func (o *ClientOptions) applyDefaults() {
 	}
 	if o.RetransmitInterval == 0 {
 		o.RetransmitInterval = defaultRetransmitInterval
-	}
-	if o.RequestQueueSize == 0 {
-		o.RequestQueueSize = 100
 	}
 	if o.MessageQueueSize == 0 {
 		o.MessageQueueSize = 100
@@ -356,6 +339,7 @@ type SubscribeOptions struct {
 	QoS               packet.QoS
 	NoLocal           bool
 	RetainAsPublished bool
+	RetainHandling    uint8
 }
 
 // NewSubscribeOptions 创建新的订阅选项
@@ -380,5 +364,12 @@ func (o *SubscribeOptions) WithNoLocal(noLocal bool) *SubscribeOptions {
 // WithRetainAsPublished 保留消息按原样发送
 func (o *SubscribeOptions) WithRetainAsPublished(rap bool) *SubscribeOptions {
 	o.RetainAsPublished = rap
+	return o
+}
+
+// WithRetainHandling 设置保留消息处理方式。
+// 0: 总是发送，1: 仅新订阅发送，2: 不发送。
+func (o *SubscribeOptions) WithRetainHandling(mode uint8) *SubscribeOptions {
+	o.RetainHandling = mode
 	return o
 }

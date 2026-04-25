@@ -67,14 +67,6 @@ func (c *Core) cleanupClient(clientID string) {
 		c.stats.SubscriptionsCount.Add(-int64(subCount))
 	}
 
-	// 清理注册的 actions
-	actions := c.actionRegistry.unregisterClient(clientID)
-	if len(actions) > 0 {
-		c.logger.Debug("Unregistered actions on disconnect",
-			zap.String("clientID", clientID),
-			zap.Strings("actions", actions))
-	}
-
 	// 清理消息队列
 	c.clientsMu.RLock()
 	client, exists := c.clients[clientID]
@@ -95,14 +87,6 @@ func (c *Core) cleanupClientWithoutLock(clientID string, client *Client) {
 	subCount := c.subTree.unsubscribeClient(clientID)
 	if subCount > 0 {
 		c.stats.SubscriptionsCount.Add(-int64(subCount))
-	}
-
-	// 清理注册的 actions
-	actions := c.actionRegistry.unregisterClient(clientID)
-	if len(actions) > 0 {
-		c.logger.Debug("Unregistered actions on disconnect",
-			zap.String("clientID", clientID),
-			zap.Strings("actions", actions))
 	}
 
 	// 清理消息队列

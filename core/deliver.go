@@ -345,6 +345,7 @@ func (c *conn) sendMessage(msg *Message) error {
 	pub := msg.Packet.Copy()
 	pub.Dup = msg.Dup
 	pub.QoS = msg.QoS
+	pub.Retain = msg.Retain
 	pub.PacketID = msg.PacketID // 无论 QoS=0 还是 QoS=1 都使用 PacketID
 
 	// 调用 OnDeliver 钩子，检查是否允许投递

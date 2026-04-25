@@ -5,8 +5,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/snple/beacon/client"
 )
 
 // TestReceiveMaxPacketSize_PublishTooLarge 测试客户端发送过大的 PUBLISH 包被拒绝
@@ -55,67 +53,6 @@ func TestReceiveMaxPacketSize_PublishTooLarge(t *testing.T) {
 			statsBeforeDrop, statsAfterDrop)
 	} else {
 		t.Logf("Large packet was dropped and client disconnected (MessagesDropped: %d -> %d)",
-			statsBeforeDrop, statsAfterDrop)
-	}
-}
-
-// TestReceiveMaxPacketSize_RequestTooLarge 测试客户端发送过大的 REQUEST 包被拒绝
-func TestReceiveMaxPacketSize_RequestTooLarge(t *testing.T) {
-	// 创建 core，设置很小的接收包大小限制
-	coreOpts := NewCoreOptions()
-	coreOpts.WithMaxPacketSize(200)
-
-	core := testSetupCore(t, coreOpts)
-	defer core.Stop()
-
-	// 创建处理器客户端
-	handler := testSetupClient(t, testServe(t, core), "handler", nil)
-	defer handler.Close()
-
-	if err := handler.Register("test.action"); err != nil {
-		t.Fatalf("Failed to register action: %v", err)
-	}
-
-	// 启动请求处理器
-	go func() {
-		for {
-			req, err := handler.PollRequest(context.Background(), 5*time.Second)
-			if err != nil {
-				return
-			}
-			if req != nil {
-				resp := client.NewResponse([]byte("response"))
-				req.Response(resp)
-			}
-		}
-	}()
-
-	// 创建请求客户端
-	requester := testSetupClient(t, testServe(t, core), "requester", nil)
-	defer requester.Close()
-
-	time.Sleep(50 * time.Millisecond)
-
-	statsBeforeDrop := core.GetStats().MessagesDropped
-
-	// 发送一个大的 REQUEST 包
-	largePayload := bytes.Repeat([]byte("y"), 300)
-	req := client.NewRequest("test.action", largePayload)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := requester.Request(ctx, req)
-	if err != nil {
-		t.Logf("Request failed or timed out (expected): %v", err)
-	}
-
-	// 验证消息被丢弃
-	time.Sleep(200 * time.Millisecond)
-	statsAfterDrop := core.GetStats().MessagesDropped
-	if statsAfterDrop <= statsBeforeDrop {
-		t.Logf("Warning: MessagesDropped counter did not increase")
-	} else {
-		t.Logf("Large REQUEST packet was dropped (MessagesDropped: %d -> %d)",
 			statsBeforeDrop, statsAfterDrop)
 	}
 }

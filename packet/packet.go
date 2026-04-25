@@ -71,18 +71,6 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 		pkt = &AuthPacket{}
 	case TRACE:
 		pkt = &TracePacket{}
-	case REQUEST:
-		pkt = &RequestPacket{}
-	case RESPONSE:
-		pkt = &ResponsePacket{}
-	case REGISTER:
-		pkt = &RegisterPacket{}
-	case REGACK:
-		pkt = &RegackPacket{}
-	case UNREGISTER:
-		pkt = &UnregisterPacket{}
-	case UNREGACK:
-		pkt = &UnregackPacket{}
 	default:
 		return nil, ErrInvalidPacketType
 	}

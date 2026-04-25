@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/snple/beacon/packet"
@@ -38,9 +37,6 @@ type Client struct {
 
 	// Core 引用
 	core *Core
-
-	// 其他状态
-	skipHandle atomic.Bool // true: 跳过断开处理（会话被接管时）
 }
 
 // newClient 创建新的客户端（全新会话）
@@ -85,8 +81,6 @@ func (c *Client) attachConn(netConn net.Conn, connect *packet.ConnectPacket) {
 	c.connMu.Lock()
 	// 替换连接
 	c.conn = conn
-	// 重置跳过断开处理标志
-	c.skipHandle.Store(false)
 	c.connMu.Unlock()
 }
 
@@ -97,12 +91,15 @@ func (c *Client) getConn() *conn {
 }
 
 // serve 开始处理客户端消息（委托给 Conn）
-func (c *Client) serve() {
+// 返回实际服务的连接实例，便于调用方在连接被接管时避免清理新连接对应的会话。
+func (c *Client) serve() *conn {
 	conn := c.getConn()
 
 	if conn != nil {
 		conn.serve()
 	}
+
+	return conn
 }
 
 // writePacket 发送数据包（委托给 Conn）
@@ -118,18 +115,6 @@ func (c *Client) writePacket(pkt packet.Packet) error {
 
 // Close 关闭客户端连接
 func (c *Client) Close(reason packet.ReasonCode) {
-	conn := c.getConn()
-
-	if conn != nil {
-		conn.close(reason)
-	}
-}
-
-// closeAndSkipHandle 关闭客户端连接且跳过断开处理
-// 用于会话被接管时
-func (c *Client) closeAndSkipHandle(reason packet.ReasonCode) {
-	c.skipHandle.Store(true)
-
 	conn := c.getConn()
 
 	if conn != nil {

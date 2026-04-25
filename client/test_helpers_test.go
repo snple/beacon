@@ -21,8 +21,7 @@ func testSetupCore(t *testing.T) (*core.Core, string) {
 
 	opts := core.NewCoreOptions().
 		WithLogger(testLogger()).
-		WithConnectTimeout(5).
-		WithRequestQueueSize(100)
+		WithConnectTimeout(5)
 
 	c, err := core.NewWithOptions(opts)
 	if err != nil {
@@ -58,8 +57,7 @@ func testSetupClient(t *testing.T, coreAddr string, clientID string) *Client {
 	opts := NewClientOptions().
 		WithCore(coreAddr).
 		WithClientID(clientID).
-		WithLogger(testLogger()).
-		WithRequestQueueSize(100)
+		WithLogger(testLogger())
 
 	c, err := NewWithOptions(opts)
 	if err != nil {

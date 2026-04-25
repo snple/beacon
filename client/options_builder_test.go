@@ -21,7 +21,6 @@ func TestClientOptionsBuilder(t *testing.T) {
 		WithTraceID("trace-123").
 		WithUserProperty("key1", "value1").
 		WithUserProperty("key2", "value2").
-		WithRequestQueueSize(200).
 		WithMessageQueueSize(500)
 
 	if opts.Core != "localhost:3883" {
@@ -50,9 +49,6 @@ func TestClientOptionsBuilder(t *testing.T) {
 	}
 	if opts.UserProperties["key2"] != "value2" {
 		t.Errorf("expected UserProperties[key2]=value2, got %s", opts.UserProperties["key2"])
-	}
-	if opts.RequestQueueSize != 200 {
-		t.Errorf("expected RequestQueueSize 200, got %d", opts.RequestQueueSize)
 	}
 	if opts.MessageQueueSize != 500 {
 		t.Errorf("expected MessageQueueSize 500, got %d", opts.MessageQueueSize)
@@ -106,7 +102,8 @@ func TestSubscribeOptionsBuilder(t *testing.T) {
 	opts := NewSubscribeOptions().
 		WithQoS(packet.QoS1).
 		WithNoLocal(true).
-		WithRetainAsPublished(true)
+		WithRetainAsPublished(true).
+		WithRetainHandling(2)
 
 	if opts.QoS != packet.QoS1 {
 		t.Errorf("expected QoS1, got %v", opts.QoS)
@@ -116,6 +113,9 @@ func TestSubscribeOptionsBuilder(t *testing.T) {
 	}
 	if !opts.RetainAsPublished {
 		t.Error("expected RetainAsPublished true")
+	}
+	if opts.RetainHandling != 2 {
+		t.Errorf("expected RetainHandling 2, got %d", opts.RetainHandling)
 	}
 }
 
@@ -134,9 +134,6 @@ func TestClientOptionsDefaults(t *testing.T) {
 	}
 	if opts.PublishTimeout != 30*time.Second {
 		t.Errorf("expected default publishTimeout 30s, got %v", opts.PublishTimeout)
-	}
-	if opts.RequestQueueSize != 100 {
-		t.Errorf("expected default requestQueueSize 100, got %d", opts.RequestQueueSize)
 	}
 	if opts.MessageQueueSize != 100 {
 		t.Errorf("expected default messageQueueSize 100, got %d", opts.MessageQueueSize)
@@ -184,79 +181,6 @@ func TestClientOptionsWithHooks(t *testing.T) {
 	}
 }
 
-// TestRequestBuilderPattern 测试 Request 的 Builder 模式
-func TestRequestBuilderPattern(t *testing.T) {
-	req := NewRequest("test-action", []byte("payload")).
-		WithTimeout(60).
-		WithTraceID("req-trace").
-		WithContentType("text/plain").
-		WithUserProperty("key1", "value1")
-
-	if req.Packet.Action != "test-action" {
-		t.Errorf("expected action test-action, got %s", req.Packet.Action)
-	}
-	if string(req.Packet.Payload) != "payload" {
-		t.Errorf("expected payload 'payload', got %s", string(req.Packet.Payload))
-	}
-	if req.Packet.Properties.Timeout != 60 {
-		t.Errorf("expected timeout 60, got %d", req.Packet.Properties.Timeout)
-	}
-	if req.Packet.Properties.TraceID != "req-trace" {
-		t.Errorf("expected traceID req-trace, got %s", req.Packet.Properties.TraceID)
-	}
-	if req.Packet.Properties.ContentType != "text/plain" {
-		t.Errorf("expected contentType text/plain, got %s", req.Packet.Properties.ContentType)
-	}
-	if req.Packet.Properties.UserProperties["key1"] != "value1" {
-		t.Errorf("expected UserProperties[key1]=value1, got %s", req.Packet.Properties.UserProperties["key1"])
-	}
-}
-
-// TestResponseBuilderPattern 测试 Response 的 Builder 模式
-func TestResponseBuilderPattern(t *testing.T) {
-	resp := NewResponse([]byte("response data")).
-		WithTraceID("resp-trace").
-		WithContentType("application/json").
-		WithUserProperty("resp-key", "resp-value")
-
-	if !resp.IsSuccess() {
-		t.Error("expected response to be success")
-	}
-	if string(resp.Packet.Payload) != "response data" {
-		t.Errorf("expected payload 'response data', got %s", string(resp.Packet.Payload))
-	}
-	if resp.Packet.Properties.TraceID != "resp-trace" {
-		t.Errorf("expected traceID resp-trace, got %s", resp.Packet.Properties.TraceID)
-	}
-	if resp.Packet.Properties.ContentType != "application/json" {
-		t.Errorf("expected contentType application/json, got %s", resp.Packet.Properties.ContentType)
-	}
-	if resp.Packet.Properties.UserProperties["resp-key"] != "resp-value" {
-		t.Errorf("expected UserProperties[resp-key]=resp-value, got %s", resp.Packet.Properties.UserProperties["resp-key"])
-	}
-}
-
-// TestErrorResponse 测试错误响应
-func TestErrorResponse(t *testing.T) {
-	resp := NewErrorResponse(packet.ReasonNotAuthorized, "permission denied").
-		WithTraceID("error-trace")
-
-	if resp.IsSuccess() {
-		t.Error("expected response to be failure")
-	}
-	if resp.Packet.ReasonCode != packet.ReasonNotAuthorized {
-		t.Errorf("expected ReasonNotAuthorized, got %v", resp.Packet.ReasonCode)
-	}
-	if resp.Packet.Properties.ReasonString != "permission denied" {
-		t.Errorf("expected reasonString 'permission denied', got %s", resp.Packet.Properties.ReasonString)
-	}
-	if resp.Packet.Properties.TraceID != "error-trace" {
-		t.Errorf("expected traceID error-trace, got %s", resp.Packet.Properties.TraceID)
-	}
-	if resp.Error() != "permission denied" {
-		t.Errorf("expected Error() 'permission denied', got %s", resp.Error())
-	}
-}
 
 // TestPollMessageNotConnected 测试未连接时 PollMessage
 func TestPollMessageNotConnected(t *testing.T) {

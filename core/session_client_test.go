@@ -379,6 +379,84 @@ func TestClientSessionTakeover(t *testing.T) {
 	}
 }
 
+func TestClientSessionTakeover_FromCleanSessionStartsFresh(t *testing.T) {
+	server, err := NewWithOptions(
+		NewCoreOptions().
+			WithStoreDir(t.TempDir()).
+			WithMaxSessionTimeout(3600),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	addr := testServe(t, server)
+
+	c1, err := client.NewWithOptions(
+		client.NewClientOptions().
+			WithCore(addr).
+			WithClientID("fresh-session-client").
+			WithKeepAlive(60),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c1.Close()
+
+	dialer1 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c1.ConnectWithDialer(dialer1); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c1.Subscribe("test/topic"); err != nil {
+		t.Fatal(err)
+	}
+
+	c2, err := client.NewWithOptions(
+		client.NewClientOptions().
+			WithCore(addr).
+			WithClientID("fresh-session-client").
+			WithSessionTimeout(60).
+			WithKeepAlive(60),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+
+	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
+	if err := c2.ConnectWithDialer(dialer2); err != nil {
+		t.Fatal(err)
+	}
+
+	if c2.SessionPresent() {
+		t.Fatal("Session takeover from clean session should start fresh")
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	if c1.IsConnected() {
+		t.Fatal("First client should be disconnected after takeover")
+	}
+
+	server.clientsMu.RLock()
+	svClient, exists := server.clients["fresh-session-client"]
+	server.clientsMu.RUnlock()
+	if !exists {
+		t.Fatal("Client should exist after takeover")
+	}
+
+	svClient.session.subsMu.RLock()
+	_, hasSubscription := svClient.session.subscriptions["test/topic"]
+	svClient.session.subsMu.RUnlock()
+	if hasSubscription {
+		t.Fatal("Fresh session should not inherit subscriptions from clean session")
+	}
+}
+
 // TestClientAutoReconnect 测试客户端自动重连
 func TestClientAutoReconnect(t *testing.T) {
 	server, err := NewWithOptions(

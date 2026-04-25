@@ -186,46 +186,6 @@ func TestMessageHandlerFunc_OnPublish(t *testing.T) {
 }
 
 // ============================================================================
-// RequestHandler 测试
-// ============================================================================
-
-func TestRequestHandlerFunc_OnRequest(t *testing.T) {
-	tests := []struct {
-		name         string
-		handler      RequestHandlerFunc
-		expectResult bool
-	}{
-		{
-			name: "allow request",
-			handler: RequestHandlerFunc(func(ctx *RequestContext) bool {
-				return true
-			}),
-			expectResult: true,
-		},
-		{
-			name: "reject request",
-			handler: RequestHandlerFunc(func(ctx *RequestContext) bool {
-				return false
-			}),
-			expectResult: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reqPkt := packet.NewRequestPacket(1, "test.action", nil)
-			ctx := &RequestContext{
-				Packet: reqPkt,
-			}
-			result := tt.handler.OnRequest(ctx)
-			if result != tt.expectResult {
-				t.Errorf("OnRequest() = %v, want %v", result, tt.expectResult)
-			}
-		})
-	}
-}
-
-// ============================================================================
 // Hooks 集成测试
 // ============================================================================
 
@@ -379,49 +339,6 @@ func TestHooks_CallOnPublish(t *testing.T) {
 	}
 }
 
-func TestHooks_CallOnRequest(t *testing.T) {
-	tests := []struct {
-		name         string
-		hooks        *Hooks
-		expectResult bool
-	}{
-		{
-			name:         "nil RequestHandler allows request",
-			hooks:        &Hooks{},
-			expectResult: true,
-		},
-		{
-			name: "RequestHandler returns true allows request",
-			hooks: &Hooks{
-				RequestHandler: RequestHandlerFunc(func(ctx *RequestContext) bool {
-					return true
-				}),
-			},
-			expectResult: true,
-		},
-		{
-			name: "RequestHandler returns false blocks request",
-			hooks: &Hooks{
-				RequestHandler: RequestHandlerFunc(func(ctx *RequestContext) bool {
-					return false
-				}),
-			},
-			expectResult: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reqPkt := packet.NewRequestPacket(1, "test.action", nil)
-			ctx := &RequestContext{Packet: reqPkt}
-			result := tt.hooks.callOnRequest(ctx)
-			if result != tt.expectResult {
-				t.Errorf("callOnRequest() = %v, want %v", result, tt.expectResult)
-			}
-		})
-	}
-}
-
 // ============================================================================
 // Hooks 执行验证测试 - 确保 hooks 真的被调用
 // ============================================================================
@@ -463,7 +380,6 @@ func TestHooksExecution_MultipleHandlers(t *testing.T) {
 	disconnectCalled := false
 	traceCalled := false
 	publishCalled := false
-	requestCalled := false
 
 	hooks := &Hooks{
 		ConnectionHandler: &ConnectionHandlerFunc{
@@ -481,10 +397,6 @@ func TestHooksExecution_MultipleHandlers(t *testing.T) {
 			publishCalled = true
 			return true
 		}),
-		RequestHandler: RequestHandlerFunc(func(ctx *RequestContext) bool {
-			requestCalled = true
-			return true
-		}),
 	}
 
 	// 调用所有 hooks
@@ -494,8 +406,6 @@ func TestHooksExecution_MultipleHandlers(t *testing.T) {
 	hooks.callOnTrace(&TraceContext{Packet: tracePkt})
 	pubPkt := packet.NewPublishPacket("test", nil)
 	hooks.callOnPublish(&PublishContext{Packet: pubPkt})
-	reqPkt := packet.NewRequestPacket(1, "test", nil)
-	hooks.callOnRequest(&RequestContext{Packet: reqPkt})
 
 	// 验证所有 hooks 都被调用
 	if !connectCalled {
@@ -509,8 +419,5 @@ func TestHooksExecution_MultipleHandlers(t *testing.T) {
 	}
 	if !publishCalled {
 		t.Error("OnPublish was not called")
-	}
-	if !requestCalled {
-		t.Error("OnRequest was not called")
 	}
 }

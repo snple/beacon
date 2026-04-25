@@ -262,58 +262,6 @@ func (f TraceHandlerFunc) OnTrace(ctx *TraceContext) {
 }
 
 // ============================================================================
-// 请求钩子 (RequestHandler)
-// ============================================================================
-
-// RequestHandler 请求处理器接口
-// 用于在请求的不同生命周期阶段执行自定义逻辑
-type RequestHandler interface {
-	// OnRequest 收到客户端请求时调用
-	// 在请求进入队列之前调用
-	// 可用于：请求验证、访问控制、审计日志等
-	// 返回 error 时请求会被拒绝
-	OnRequest(ctx *RequestContext) error
-
-	// OnResponse 向客户端发送响应时调用
-	// 在响应发送之前调用
-	// 可用于：响应日志、响应转换等
-	OnResponse(ctx *ResponseContext)
-}
-
-// RequestContext 请求钩子上下文
-// 使用原始 packet 引用，避免数据拷贝
-type RequestContext struct {
-	ClientID string                // 请求来源客户端 ID
-	Packet   *packet.RequestPacket // 原始 REQUEST 包（引用，不要修改）
-}
-
-// ResponseContext 响应钩子上下文
-// 使用原始 packet 引用，避免数据拷贝
-type ResponseContext struct {
-	ClientID string                 // 目标客户端 ID
-	Packet   *packet.ResponsePacket // 原始 RESPONSE 包（引用，不要修改）
-}
-
-// RequestHandlerFunc 函数类型适配器
-type RequestHandlerFunc struct {
-	RequestFunc  func(ctx *RequestContext) error
-	ResponseFunc func(ctx *ResponseContext)
-}
-
-func (h *RequestHandlerFunc) OnRequest(ctx *RequestContext) error {
-	if h.RequestFunc != nil {
-		return h.RequestFunc(ctx)
-	}
-	return nil
-}
-
-func (h *RequestHandlerFunc) OnResponse(ctx *ResponseContext) {
-	if h.ResponseFunc != nil {
-		h.ResponseFunc(ctx)
-	}
-}
-
-// ============================================================================
 // 钩子管理器 (HookManager)
 // ============================================================================
 
@@ -334,9 +282,6 @@ type Hooks struct {
 
 	// 追踪钩子
 	TraceHandler TraceHandler
-
-	// 请求钩子
-	RequestHandler RequestHandler
 }
 
 // callOnPublish 调用 OnPublish 钩子
@@ -406,20 +351,5 @@ func (h *Hooks) callOnAuth(ctx *AuthContext) (bool, []byte, error) {
 func (h *Hooks) callOnTrace(ctx *TraceContext) {
 	if h.TraceHandler != nil {
 		h.TraceHandler.OnTrace(ctx)
-	}
-}
-
-// callOnRequest 调用 OnRequest 钩子
-func (h *Hooks) callOnRequest(ctx *RequestContext) error {
-	if h.RequestHandler != nil {
-		return h.RequestHandler.OnRequest(ctx)
-	}
-	return nil
-}
-
-// callOnResponse 调用 OnResponse 钩子
-func (h *Hooks) callOnResponse(ctx *ResponseContext) {
-	if h.RequestHandler != nil {
-		h.RequestHandler.OnResponse(ctx)
 	}
 }

@@ -34,24 +34,6 @@ var (
 	ErrSourceClientIDEmpty = errors.New("source client ID cannot be empty")
 )
 
-// 请求响应相关错误
-var (
-	// ErrRequestCoreNotSet 请求的 core 引用未设置
-	ErrRequestCoreNotSet = errors.New("core request core not set")
-
-	// ErrResultNil 响应结果为空
-	ErrResultNil = errors.New("result cannot be nil")
-
-	// ErrResponseHandlerClosed 响应处理器已关闭
-	ErrResponseHandlerClosed = errors.New("response handler closed")
-
-	// ErrActionNotFound action 未找到
-	ErrActionNotFound = errors.New("action not found")
-
-	// ErrNoAvailableHandler 没有可用的处理器
-	ErrNoAvailableHandler = errors.New("no available handler")
-)
-
 // 协议相关错误
 var (
 	// ErrInvalidConnectPacket 第一个包不是 CONNECT
@@ -123,42 +105,4 @@ func (e *ClientNotAvailableError) Is(target error) bool {
 // NewClientNotAvailableError 创建客户端不可用错误
 func NewClientNotAvailableError(clientID string) error {
 	return &ClientNotAvailableError{ClientID: clientID}
-}
-
-// ActionNotFoundError action 未找到错误（携带 action 名称）
-type ActionNotFoundError struct {
-	Action string
-}
-
-func (e *ActionNotFoundError) Error() string {
-	return fmt.Sprintf("action not found: %s", e.Action)
-}
-
-func (e *ActionNotFoundError) Is(target error) bool {
-	_, ok := target.(*ActionNotFoundError)
-	return ok
-}
-
-// NewActionNotFoundError 创建 action 未找到错误
-func NewActionNotFoundError(action string) error {
-	return &ActionNotFoundError{Action: action}
-}
-
-// NoAvailableHandlerError 没有可用处理器错误（携带 action 名称）
-type NoAvailableHandlerError struct {
-	Action string
-}
-
-func (e *NoAvailableHandlerError) Error() string {
-	return fmt.Sprintf("no available handler for action: %s", e.Action)
-}
-
-func (e *NoAvailableHandlerError) Is(target error) bool {
-	_, ok := target.(*NoAvailableHandlerError)
-	return ok
-}
-
-// NewNoAvailableHandlerError 创建没有可用处理器错误
-func NewNoAvailableHandlerError(action string) error {
-	return &NoAvailableHandlerError{Action: action}
 }

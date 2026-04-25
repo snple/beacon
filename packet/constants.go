@@ -24,12 +24,6 @@ const (
 	DISCONNECT  PacketType = 11 // 断开连接
 	AUTH        PacketType = 12 // 认证交换
 	TRACE       PacketType = 13 // 消息追踪
-	REQUEST     PacketType = 14 // 请求消息
-	RESPONSE    PacketType = 15 // 响应消息
-	REGISTER    PacketType = 16 // 注册 action/method
-	REGACK      PacketType = 17 // 注册确认
-	UNREGISTER  PacketType = 18 // 注销 action/method
-	UNREGACK    PacketType = 19 // 注销确认
 )
 
 func (t PacketType) String() string {
@@ -60,18 +54,6 @@ func (t PacketType) String() string {
 		return "AUTH"
 	case TRACE:
 		return "TRACE"
-	case REQUEST:
-		return "REQUEST"
-	case RESPONSE:
-		return "RESPONSE"
-	case REGISTER:
-		return "REGISTER"
-	case REGACK:
-		return "REGACK"
-	case UNREGISTER:
-		return "UNREGISTER"
-	case UNREGACK:
-		return "UNREGACK"
 	default:
 		return "UNKNOWN"
 	}
@@ -166,16 +148,6 @@ const (
 	ReasonSharedSubNotSupported ReasonCode = 0x9D // 不支持共享订阅
 	ReasonPriorityNotSupported  ReasonCode = 0x9E // 不支持优先级
 
-	// ========== 请求/响应相关错误 (0xC0-0xCF) ==========
-	ReasonActionNotFound     ReasonCode = 0xC0 // Action 不存在
-	ReasonClientNotFound     ReasonCode = 0xC1 // 目标客户端不存在
-	ReasonClientNotAvailable ReasonCode = 0xC2 // 目标客户端不可用
-	ReasonRequestTimeout     ReasonCode = 0xC3 // 请求超时
-	ReasonNoAvailableHandler ReasonCode = 0xC4 // 没有可用的处理器
-	ReasonRequestCancelled   ReasonCode = 0xC5 // 请求被取消
-	ReasonDuplicateAction    ReasonCode = 0xC6 // Action 已被注册
-	ReasonActionInvalid      ReasonCode = 0xC7 // Action 名称无效
-	ReasonBadRequest         ReasonCode = 0xC8 // 错误的请求
 )
 
 func (r ReasonCode) String() string {
@@ -277,26 +249,6 @@ func (r ReasonCode) String() string {
 		return "Shared subscription not supported"
 	case ReasonPriorityNotSupported:
 		return "Priority not supported"
-
-	// ========== 请求/响应相关错误 ==========
-	case ReasonActionNotFound:
-		return "Action not found"
-	case ReasonClientNotFound:
-		return "Client not found"
-	case ReasonClientNotAvailable:
-		return "Client not available"
-	case ReasonRequestTimeout:
-		return "Request timeout"
-	case ReasonNoAvailableHandler:
-		return "No available handler"
-	case ReasonRequestCancelled:
-		return "Request cancelled"
-	case ReasonDuplicateAction:
-		return "Duplicate action"
-	case ReasonActionInvalid:
-		return "Action invalid"
-	case ReasonBadRequest:
-		return "Bad request"
 
 	default:
 		return "Unknown reason"

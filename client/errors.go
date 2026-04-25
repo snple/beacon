@@ -18,27 +18,10 @@ var (
 	ErrClientClosed = errors.New("client closed")
 )
 
-// 请求响应相关错误
-var (
-	// ErrRequestClientNotSet 请求的 client 引用未设置
-	ErrRequestClientNotSet = errors.New("request client not set")
-
-	// ErrRequestNil 请求为空
-	ErrRequestNil = errors.New("request cannot be nil")
-
-	// ErrResultNil 响应结果为空
-	ErrResultNil = errors.New("result cannot be nil")
-
-	ErrActionEmpty = errors.New("action cannot be empty")
-)
-
 // 订阅/注册相关错误
 var (
 	// ErrTopicsEmpty 主题列表为空
 	ErrTopicsEmpty = errors.New("topics cannot be empty")
-
-	// ErrActionsEmpty actions 列表为空
-	ErrActionsEmpty = errors.New("actions cannot be empty")
 
 	// ErrWillTopicRequired 遗嘱主题是必需的
 	ErrWillTopicRequired = errors.New("will topic is required")
@@ -88,25 +71,6 @@ func (e *PollTimeoutError) Is(target error) bool {
 // NewPollTimeoutError 创建轮询超时错误
 func NewPollTimeoutError(timeout time.Duration) error {
 	return &PollTimeoutError{Timeout: timeout}
-}
-
-// RequestTimeoutError 请求超时错误
-type RequestTimeoutError struct {
-	Timeout time.Duration
-}
-
-func (e *RequestTimeoutError) Error() string {
-	return fmt.Sprintf("request timeout after %v", e.Timeout)
-}
-
-func (e *RequestTimeoutError) Is(target error) bool {
-	_, ok := target.(*RequestTimeoutError)
-	return ok
-}
-
-// NewRequestTimeoutError 创建请求超时错误
-func NewRequestTimeoutError(timeout time.Duration) error {
-	return &RequestTimeoutError{Timeout: timeout}
 }
 
 // ConnectionError 连接错误（带详细原因）

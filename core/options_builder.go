@@ -27,9 +27,6 @@ type CoreOptions struct {
 	DefaultMessageExpiry time.Duration // 默认消息过期时间（0 表示永不过期）
 	ExpiredCheckInterval time.Duration // 过期消息检查间隔
 
-	// 请求超时
-	DefaultRequestTimeout time.Duration // 默认请求超时（默认 30 秒）
-
 	// QoS 重传
 	RetransmitInterval time.Duration // QoS 1 消息重传间隔（默认 30 秒）
 
@@ -38,7 +35,6 @@ type CoreOptions struct {
 
 	// 功能开关
 	RetainEnabled    bool   // 启用保留消息
-	RequestQueueSize uint16 // REQUEST 轮询队列缓冲大小（默认 100）
 	MessageQueueSize uint16 // MESSAGE 轮询队列缓冲大小（默认 100）
 
 	// 持久化存储
@@ -57,14 +53,12 @@ func NewCoreOptions() *CoreOptions {
 		KeepAlive:             60,
 		MaxSessionTimeout:     3600,
 		ReceiveWindow:         1000,
-		DefaultMessageExpiry:  24 * time.Hour,
-		ExpiredCheckInterval:  180 * time.Second,
-		DefaultRequestTimeout: 30 * time.Second,
-		RetransmitInterval:    30 * time.Second,
-		RetainEnabled:         true,
-		RequestQueueSize:      100,
-		MessageQueueSize:      100,
-		StoreOptions:          DefaultStoreOptions(),
+		DefaultMessageExpiry: 24 * time.Hour,
+		ExpiredCheckInterval: 180 * time.Second,
+		RetransmitInterval:   30 * time.Second,
+		RetainEnabled:        true,
+		MessageQueueSize:     100,
+		StoreOptions:         DefaultStoreOptions(),
 	}
 }
 
@@ -158,21 +152,9 @@ func (o *CoreOptions) WithTraceHandler(handler TraceHandler) *CoreOptions {
 	return o
 }
 
-// WithRequestHandler 设置请求处理钩子
-func (o *CoreOptions) WithRequestHandler(handler RequestHandler) *CoreOptions {
-	o.Hooks.RequestHandler = handler
-	return o
-}
-
 // WithRetainEnabled 设置是否启用保留消息
 func (o *CoreOptions) WithRetainEnabled(enabled bool) *CoreOptions {
 	o.RetainEnabled = enabled
-	return o
-}
-
-// WithRequestQueueSize 设置 REQUEST 轮询队列的缓冲大小
-func (o *CoreOptions) WithRequestQueueSize(size uint16) *CoreOptions {
-	o.RequestQueueSize = size
 	return o
 }
 
