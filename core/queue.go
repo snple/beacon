@@ -100,7 +100,7 @@ func (q *Queue) Peek() (*Message, error) {
 		it.Seek(q.prefix)
 
 		if !it.ValidForPrefix(q.prefix) {
-			return fmt.Errorf("queue is empty")
+			return ErrQueueEmpty
 		}
 
 		item := it.Item()
@@ -199,31 +199,36 @@ func (q *Queue) IsEmpty() (bool, error) {
 	return empty, err
 }
 
-// Clear 清空队列
+// Clear 清空队列（分批删除，避免大量消息时 OOM）
 func (q *Queue) Clear() error {
-	return q.db.Update(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchValues = false
-		opts.Prefix = q.prefix
-		it := txn.NewIterator(opts)
-		defer it.Close()
+	const batchSize = 1000
 
-		// 收集所有需要删除的 key
-		var keys [][]byte
-		for it.Seek(q.prefix); it.ValidForPrefix(q.prefix); it.Next() {
-			key := it.Item().KeyCopy(nil)
-			keys = append(keys, key)
-		}
+	for {
+		deleted := 0
+		err := q.db.Update(func(txn *badger.Txn) error {
+			opts := badger.DefaultIteratorOptions
+			opts.PrefetchValues = false
+			opts.Prefix = q.prefix
+			it := txn.NewIterator(opts)
+			defer it.Close()
 
-		// 删除所有 key
-		for _, key := range keys {
-			if err := txn.Delete(key); err != nil {
-				return err
+			for it.Seek(q.prefix); it.ValidForPrefix(q.prefix) && deleted < batchSize; it.Next() {
+				key := it.Item().KeyCopy(nil)
+				if err := txn.Delete(key); err != nil {
+					return err
+				}
+				deleted++
 			}
-		}
 
-		return nil
-	})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if deleted < batchSize {
+			return nil
+		}
+	}
 }
 
 // GetFirstId 获取队列中第一个元素的 PacketID（用于测试和调试）

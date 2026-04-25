@@ -159,8 +159,8 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 
 	c.store = store
 
-	// 初始化消息队列（基于 store.db）
-	c.queue = NewQueue(store.db, "queue:")
+	// 初始化消息队列
+	c.queue = NewQueue(store.db(), "queue:")
 
 	logger.Info("Message queue initialized")
 

@@ -1,7 +1,6 @@
 package packet
 
 import (
-	"bytes"
 	"io"
 )
 
@@ -20,53 +19,38 @@ func (p *StreamOpenPacket) Type() PacketType {
 	return STREAM_OPEN
 }
 
-func (p *StreamOpenPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *StreamOpenPacket) encode(w io.Writer) error {
 	// StreamID
-	if err := EncodeUint32(&buf, p.StreamID); err != nil {
+	if err := EncodeUint32(w, p.StreamID); err != nil {
 		return err
 	}
 
 	// Topic
-	if err := EncodeString(&buf, p.Topic); err != nil {
+	if err := EncodeString(w, p.Topic); err != nil {
 		return err
 	}
 
 	// SourceClientID
-	if err := EncodeString(&buf, p.SourceClientID); err != nil {
+	if err := EncodeString(w, p.SourceClientID); err != nil {
 		return err
 	}
 
 	// TargetClientID
-	if err := EncodeString(&buf, p.TargetClientID); err != nil {
+	if err := EncodeString(w, p.TargetClientID); err != nil {
 		return err
 	}
 
 	// Metadata
-	if err := EncodeBinary(&buf, p.Metadata); err != nil {
+	if err := EncodeBinary(w, p.Metadata); err != nil {
 		return err
 	}
 
 	// Properties
-	if err := EncodeProperties(&buf, p.Properties); err != nil {
-		return err
-	}
+	return EncodeProperties(w, p.Properties)
 
-	// 写入固定头部和包体
-	header := FixedHeader{
-		Type:   STREAM_OPEN,
-		Length: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
 }
 
-func (p *StreamOpenPacket) Decode(r io.Reader) error {
+func (p *StreamOpenPacket) decode(r io.Reader) error {
 	var err error
 
 	p.StreamID, err = DecodeUint32(r)
@@ -112,48 +96,32 @@ func (p *StreamAckPacket) Type() PacketType {
 	return STREAM_ACK
 }
 
-func (p *StreamAckPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *StreamAckPacket) encode(w io.Writer) error {
 	// StreamID
-	if err := EncodeUint32(&buf, p.StreamID); err != nil {
+	if err := EncodeUint32(w, p.StreamID); err != nil {
 		return err
 	}
 
 	// ReasonCode
-	if err := EncodeUint8(&buf, uint8(p.ReasonCode)); err != nil {
+	if err := EncodeUint8(w, uint8(p.ReasonCode)); err != nil {
 		return err
 	}
 
 	// Message
-	if err := EncodeString(&buf, p.Message); err != nil {
+	if err := EncodeString(w, p.Message); err != nil {
 		return err
 	}
 
 	// Metadata
-	if err := EncodeBinary(&buf, p.Metadata); err != nil {
+	if err := EncodeBinary(w, p.Metadata); err != nil {
 		return err
 	}
 
 	// Properties
-	if err := EncodeProperties(&buf, p.Properties); err != nil {
-		return err
-	}
-
-	// 写入固定头部和包体
-	header := FixedHeader{
-		Type:   STREAM_ACK,
-		Length: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return EncodeProperties(w, p.Properties)
 }
 
-func (p *StreamAckPacket) Decode(r io.Reader) error {
+func (p *StreamAckPacket) decode(r io.Reader) error {
 	var err error
 
 	p.StreamID, err = DecodeUint32(r)
@@ -192,38 +160,22 @@ func (p *StreamClosePacket) Type() PacketType {
 	return STREAM_CLOSE
 }
 
-func (p *StreamClosePacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *StreamClosePacket) encode(w io.Writer) error {
 	// StreamID
-	if err := EncodeUint32(&buf, p.StreamID); err != nil {
+	if err := EncodeUint32(w, p.StreamID); err != nil {
 		return err
 	}
 
 	// ReasonCode
-	if err := EncodeUint8(&buf, uint8(p.ReasonCode)); err != nil {
+	if err := EncodeUint8(w, uint8(p.ReasonCode)); err != nil {
 		return err
 	}
 
 	// Message
-	if err := EncodeString(&buf, p.Message); err != nil {
-		return err
-	}
-
-	// 写入固定头部和包体
-	header := FixedHeader{
-		Type:   STREAM_CLOSE,
-		Length: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return EncodeString(w, p.Message)
 }
 
-func (p *StreamClosePacket) Decode(r io.Reader) error {
+func (p *StreamClosePacket) decode(r io.Reader) error {
 	var err error
 
 	p.StreamID, err = DecodeUint32(r)
@@ -251,28 +203,12 @@ func (p *StreamReadyPacket) Type() PacketType {
 	return STREAM_READY
 }
 
-func (p *StreamReadyPacket) Encode(w io.Writer) error {
-	var buf bytes.Buffer
-
+func (p *StreamReadyPacket) encode(w io.Writer) error {
 	// Properties
-	if err := EncodeProperties(&buf, p.Properties); err != nil {
-		return err
-	}
-
-	// 写入固定头部和包体
-	header := FixedHeader{
-		Type:   STREAM_READY,
-		Length: uint32(buf.Len()),
-	}
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	return EncodeProperties(w, p.Properties)
 }
 
-func (p *StreamReadyPacket) Decode(r io.Reader) error {
+func (p *StreamReadyPacket) decode(r io.Reader) error {
 	var err error
 	p.Properties, err = DecodeProperties(r)
 	return err

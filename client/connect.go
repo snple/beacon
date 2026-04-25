@@ -131,7 +131,7 @@ func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 	connect.Properties.AuthMethod = c.options.AuthMethod
 	connect.Properties.AuthData = c.options.AuthData
 	connect.Properties.MaxPacketSize = c.options.MaxPacketSize
-	connect.Properties.ReceiveWindow = c.options.ReceveWindow
+	connect.Properties.ReceiveWindow = c.options.ReceiveWindow
 	connect.Properties.TraceID = c.options.TraceID
 	connect.Properties.UserProperties = c.options.UserProperties
 

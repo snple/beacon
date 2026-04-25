@@ -146,7 +146,7 @@ func (c *Core) deliver(msg *Message) {
 		}
 
 		// !!! 这里要复制消息，因为不同客户端的 QoS 可能不同，不能影响原消息 !!!
-		copiedMsg := msg.Copy() // 复制消息，不过 PublishPacket 仍是指针，没有深拷贝
+		copiedMsg := msg.Copy() // 复制消息
 		// 确定发送 QoS (取订阅 QoS 和消息 QoS 的较小值)
 		copiedMsg.QoS = min(co.opts.QoS, msg.QoS)
 

@@ -119,6 +119,9 @@ func (c *Client) retransmitQueuedMessages() int {
 // TriggerRetransmit 手动触发重传（可由外部调用）
 func (c *Client) TriggerRetransmit() {
 	if c.retransmitting.CompareAndSwap(false, true) {
-		go c.processRetransmit()
+		go func() {
+			defer c.retransmitting.Store(false)
+			c.processRetransmit()
+		}()
 	}
 }

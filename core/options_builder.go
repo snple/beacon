@@ -37,6 +37,10 @@ type CoreOptions struct {
 	RetainEnabled    bool   // 启用保留消息
 	MessageQueueSize uint16 // MESSAGE 轮询队列缓冲大小（默认 100）
 
+	// 连接速率限制
+	ConnectionRateLimit float64 // 每秒最大新连接数（0 表示不限制）
+	ConnectionRateBurst int     // 连接速率突发容量（默认等于 ConnectionRateLimit）
+
 	// 持久化存储
 	StoreOptions StoreOptions // 消息持久化配置
 
@@ -47,12 +51,12 @@ type CoreOptions struct {
 // NewCoreOptions 创建新的 Core 配置选项
 func NewCoreOptions() *CoreOptions {
 	return &CoreOptions{
-		MaxClients:            10000,
-		MaxPacketSize:         1048576, // 1MB
-		ConnectTimeout:        10,
-		KeepAlive:             60,
-		MaxSessionTimeout:     3600,
-		ReceiveWindow:         1000,
+		MaxClients:           10000,
+		MaxPacketSize:        1048576, // 1MB
+		ConnectTimeout:       10,
+		KeepAlive:            60,
+		MaxSessionTimeout:    3600,
+		ReceiveWindow:        1000,
 		DefaultMessageExpiry: 24 * time.Hour,
 		ExpiredCheckInterval: 180 * time.Second,
 		RetransmitInterval:   30 * time.Second,
@@ -161,6 +165,13 @@ func (o *CoreOptions) WithRetainEnabled(enabled bool) *CoreOptions {
 // WithMessageQueueSize 设置 MESSAGE 轮询队列的缓冲大小
 func (o *CoreOptions) WithMessageQueueSize(size uint16) *CoreOptions {
 	o.MessageQueueSize = size
+	return o
+}
+
+// WithConnectionRateLimit 设置每秒最大新连接数（0 表示不限制）
+func (o *CoreOptions) WithConnectionRateLimit(rate float64, burst int) *CoreOptions {
+	o.ConnectionRateLimit = rate
+	o.ConnectionRateBurst = burst
 	return o
 }
 
