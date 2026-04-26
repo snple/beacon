@@ -85,7 +85,7 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 	if !ok {
 		t.Fatalf("Expected SUBACK, got %T", pkt)
 	}
-	if len(suback.ReasonCodes) != 1 || suback.ReasonCodes[0] != packet.ReasonCode(packet.QoS1) {
+	if len(suback.ReasonCodes) != 1 || suback.ReasonCodes[0] != packet.ReasonGrantedQoS1 {
 		t.Fatalf("Unexpected SUBACK reason codes: %v", suback.ReasonCodes)
 	}
 

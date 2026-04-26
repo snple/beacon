@@ -154,7 +154,7 @@ func main() {
 
 	// 打印启动信息
 	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║              Queen core                             ║")
+	fmt.Println("║              Beacon core                             ║")
 	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
 	fmt.Printf("║  Version:          %-40s ║\n", version)
 	fmt.Printf("║  Address:          %-40s ║\n", *addr)

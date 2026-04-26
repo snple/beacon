@@ -303,8 +303,7 @@ func (c *Conn) handlePuback(p *packet.PubackPacket) {
 func (c *Conn) handleSuback(p *packet.SubackPacket) {
 	var err error
 	for i, code := range p.ReasonCodes {
-		if code != packet.ReasonSuccess && code != packet.ReasonCode(packet.QoS0) &&
-			code != packet.ReasonCode(packet.QoS1) {
+		if !code.IsSubackSuccess() {
 			err = NewSubscriptionError(i, code.String())
 			break
 		}

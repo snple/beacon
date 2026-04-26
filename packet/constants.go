@@ -92,9 +92,9 @@ const (
 	// ========== 成功类 (0x00-0x0F) ==========
 	ReasonSuccess            ReasonCode = 0x00 // 操作成功
 	ReasonNormalDisconnect   ReasonCode = 0x01 // 正常断开连接
-	ReasonGrantedQoS0        ReasonCode = 0x02 // 授予 QoS 0
-	ReasonGrantedQoS1        ReasonCode = 0x03 // 授予 QoS 1
-	ReasonDisconnectWithWill ReasonCode = 0x04 // 带遗嘱消息断开
+	ReasonDisconnectWithWill ReasonCode = 0x02 // 带遗嘱消息断开
+	ReasonGrantedQoS0        ReasonCode = 0x03 // 授予 QoS 0
+	ReasonGrantedQoS1        ReasonCode = 0x04 // 授予 QoS 1
 
 	// ========== 订阅相关 (0x10-0x17) ==========
 	ReasonNoMatchingSubscribers ReasonCode = 0x10 // 没有匹配的订阅者
@@ -157,12 +157,12 @@ func (r ReasonCode) String() string {
 		return "Success"
 	case ReasonNormalDisconnect:
 		return "Normal disconnect"
+	case ReasonDisconnectWithWill:
+		return "Disconnect with will"
 	case ReasonGrantedQoS0:
 		return "Granted QoS 0"
 	case ReasonGrantedQoS1:
 		return "Granted QoS 1"
-	case ReasonDisconnectWithWill:
-		return "Disconnect with will"
 
 	// ========== 订阅相关 ==========
 	case ReasonNoMatchingSubscribers:
@@ -253,6 +253,10 @@ func (r ReasonCode) String() string {
 	default:
 		return "Unknown reason"
 	}
+}
+
+func (r ReasonCode) IsSubackSuccess() bool {
+	return r == ReasonGrantedQoS0 || r == ReasonGrantedQoS1
 }
 
 func (r ReasonCode) IsError() bool {

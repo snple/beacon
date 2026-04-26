@@ -31,9 +31,13 @@ func TestSubscriptionTree_Subscribe(t *testing.T) {
 	if len(results) != 2 {
 		t.Errorf("Expected 2 results, got %d", len(results))
 	}
+	expectedCodes := map[string]packet.ReasonCode{
+		"topic2": packet.ReasonGrantedQoS0,
+		"topic3": packet.ReasonGrantedQoS1,
+	}
 	for topic, code := range results {
-		if code != packet.ReasonSuccess {
-			t.Errorf("Expected ReasonSuccess for %s, got %v", topic, code)
+		if code != expectedCodes[topic] {
+			t.Errorf("Expected %v for %s, got %v", expectedCodes[topic], topic, code)
 		}
 	}
 
@@ -61,7 +65,7 @@ func TestSubscriptionTree_InvalidTopic(t *testing.T) {
 				{Topic: tt.topic, Options: packet.SubscribeOptions{QoS: packet.QoS0}},
 			}
 			results := tree.subscribeMultiple("client1", subs)
-			if code, ok := results[tt.topic]; !ok || code != packet.ReasonTopicFilterInvalid {
+				if code, ok := results[tt.topic]; !ok || code != packet.ReasonTopicFilterInvalid {
 				t.Errorf("Expected ReasonTopicFilterInvalid for %s, got %v", tt.name, code)
 			}
 		})

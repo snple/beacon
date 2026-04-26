@@ -77,7 +77,14 @@ func (t *subTree) subscribeMultiple(clientID string, subscriptions []packet.Subs
 		}
 
 		t.addSubscription(clientID, sub.Topic, sub.Options)
-		results[sub.Topic] = packet.ReasonSuccess
+		switch sub.Options.QoS {
+		case packet.QoS0:
+			results[sub.Topic] = packet.ReasonGrantedQoS0
+		case packet.QoS1:
+			results[sub.Topic] = packet.ReasonGrantedQoS1
+		default:
+			results[sub.Topic] = packet.ReasonQoSNotSupported
+		}
 	}
 
 	return results

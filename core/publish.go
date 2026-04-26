@@ -214,7 +214,14 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 
 		validSubs = append(validSubs, sub)
 		isNewSubs = append(isNewSubs, isNew)
-		suback.ReasonCodes = append(suback.ReasonCodes, packet.ReasonCode(sub.Options.QoS))
+		switch sub.Options.QoS {
+		case packet.QoS0:
+			suback.ReasonCodes = append(suback.ReasonCodes, packet.ReasonGrantedQoS0)
+		case packet.QoS1:
+			suback.ReasonCodes = append(suback.ReasonCodes, packet.ReasonGrantedQoS1)
+		default:
+			suback.ReasonCodes = append(suback.ReasonCodes, packet.ReasonQoSNotSupported)
+		}
 	}
 
 	// 合并锁操作，一次性添加所有有效订阅
