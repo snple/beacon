@@ -48,6 +48,7 @@ var (
 	ErrInvalidMessage       = errors.New("invalid message")
 	ErrInvalidRetainMessage = errors.New("invalid retain message")
 	ErrDeliveryRejected     = errors.New("delivery rejected by OnDeliver hook")
+	ErrMessageTooLarge      = errors.New("message too large, dropped")
 )
 
 // ClientNotFoundError 客户端未找到错误（携带 clientID）

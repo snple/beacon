@@ -391,6 +391,14 @@ func (c *conn) processSendQueue() {
 				zap.String("topic", msg.Packet.Topic),
 				zap.Error(err))
 
+			if errors.Is(err, ErrMessageTooLarge) {
+				// 消息过大，直接丢弃不重试
+				c.client.queue.Delete(msg.PacketID)
+				c.sendQueue.finish(msg.PacketID)
+				c.client.core.stats.MessagesDropped.Add(1)
+				continue
+			}
+
 			if errors.Is(err, ErrDeliveryRejected) {
 				if delErr := c.client.queue.Delete(msg.PacketID); delErr != nil {
 					c.client.core.logger.Debug("Failed to delete delivery-rejected message from queue",
@@ -421,6 +429,16 @@ func (c *conn) processSendQueue() {
 			continue
 		}
 
+		// 发送成功：QoS0 从持久化队列删除，QoS1 等待 PUBACK
+		if msg.QoS == packet.QoS0 {
+			if delErr := c.client.queue.Delete(msg.PacketID); delErr != nil {
+				c.client.core.logger.Debug("Failed to delete QoS0 message from queue after send",
+					zap.String("clientID", c.client.ID),
+					zap.String("packetID", msg.PacketID.Hex()),
+					zap.Error(delErr))
+			}
+		}
+
 		c.sendQueue.finish(msg.PacketID)
 
 		// 发送成功，统计消息发送数
@@ -435,6 +453,7 @@ type pendingMessage struct {
 }
 
 // sendMessage 发送消息到客户端
+// 只负责发送和后处理（pendingAck 注册）；不负责持久化队列删除（由 processSendQueue 统一处理）
 func (c *conn) sendMessage(msg *Message) error {
 	if msg.Packet == nil {
 		return ErrInvalidMessage
@@ -459,24 +478,14 @@ func (c *conn) sendMessage(msg *Message) error {
 
 	if err := c.writePacket(&pub); err != nil {
 		if errors.Is(err, &packet.PacketTooLargeError{}) {
-			// 数据包超过客户端允许的最大大小，丢弃消息
+			// 数据包超过客户端允许的最大大小，返回哨兵错误由 processSendQueue 统一处理
 			c.client.core.logger.Warn("Message dropped: packet size exceeds client maxPacketSize",
 				zap.String("clientID", c.client.ID),
 				zap.String("topic", pub.Topic),
 				zap.String("packetID", pub.PacketID.Hex()),
 				zap.Error(err))
 
-			c.client.core.stats.MessagesDropped.Add(1)
-
-			// 从队列中删除该消息
-			if err := c.client.queue.Delete(pub.PacketID); err != nil {
-				c.client.core.logger.Debug("Failed to delete oversized message from queue",
-					zap.String("clientID", c.client.ID),
-					zap.String("packetID", pub.PacketID.Hex()),
-					zap.Error(err))
-			}
-
-			return nil
+			return ErrMessageTooLarge
 		}
 
 		// 其他写入错误
@@ -494,15 +503,8 @@ func (c *conn) sendMessage(msg *Message) error {
 			lastSentAt: time.Now().Unix(),
 		}
 		c.client.session.pendingAckMu.Unlock()
-	} else {
-		// QoS=0: TCP 写成功就从发送队列删除
-		if err := c.client.queue.Delete(pub.PacketID); err != nil {
-			c.client.core.logger.Debug("Failed to delete QoS0 message from queue after send",
-				zap.String("clientID", c.client.ID),
-				zap.String("packetID", pub.PacketID.Hex()),
-				zap.Error(err))
-		}
 	}
+	// QoS=0: 持久化队列删除由 processSendQueue 统一处理
 
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
@@ -185,7 +186,7 @@ func (c *Core) readConnectPacket(conn net.Conn) (*packet.ConnectPacket, error) {
 }
 
 func (c *Core) generateClientID() string {
-	return fmt.Sprintf("beacon-%d", time.Now().UnixNano())
+	return nson.NewId().Hex()
 }
 
 // authClient 认证客户端

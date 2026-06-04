@@ -11,6 +11,7 @@ import (
 // 注意：这个协程跨连接运行，不绑定到单个 Connection
 func (c *Client) retransmitLoop() {
 	defer c.retransmitting.Store(false)
+	defer c.wg.Done()
 
 	// 首次尝试重传
 	c.processRetransmit()

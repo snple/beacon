@@ -12,13 +12,14 @@ import (
 type StoreOptions = istore.Options
 
 // DefaultStoreOptions 返回默认存储配置
+// Logger 为 nil 时由 internal/store 自动创建默认 logger
 func DefaultStoreOptions() StoreOptions {
 	return StoreOptions{
 		DataDir:          "",    // InMemory 模式
 		SyncWrites:       false, // 默认异步写入，性能更好
 		ValueLogFileSize: 256,   // 256MB
 		GCInterval:       5 * time.Minute,
-		Logger:           nil,
+		Logger:           nil,   // 由 internal/store 自动创建
 	}
 }
 

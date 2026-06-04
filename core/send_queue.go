@@ -67,6 +67,8 @@ func (q *sendQueue) tryEnqueue(msg *Message) error {
 }
 
 // TryDequeue 尝试从队列中取出消息（非阻塞）
+// 调用方必须在消息处理完毕后调用 finish() 清理 inQueue 去重映射，
+// 否则该 PacketID 将永远无法再次入队
 func (q *sendQueue) tryDequeue() (*Message, bool) {
 	select {
 	case qm, ok := <-q.queue:

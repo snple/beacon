@@ -94,6 +94,11 @@ func (s *Store) DB() *badger.DB {
 	return s.db
 }
 
+// Logger 返回内部使用的 logger（由 New 自动创建或由 Options 传入）
+func (s *Store) Logger() *zap.Logger {
+	return s.logger
+}
+
 // Close 关闭存储
 func (s *Store) Close() error {
 	close(s.closeCh)

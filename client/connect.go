@@ -103,6 +103,7 @@ func (c *Client) connectWithConn(netConn net.Conn) error {
 	if c.queue != nil {
 		// 检查重传协程是否已在运行
 		if c.retransmitting.CompareAndSwap(false, true) {
+			c.wg.Add(1)
 			go c.retransmitLoop()
 		} else {
 			// 已有重传协程在运行，手动触发一次重传

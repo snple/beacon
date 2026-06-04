@@ -376,6 +376,7 @@ func (c *Conn) clearPendingAck(packetID nson.Id) {
 }
 
 // sendMessage 发送消息
+// 只负责发送；PacketTooLarge 时返回 ErrMessageTooLarge（由调用方决定丢弃还是重试）
 func (c *Conn) sendMessage(msg *Message) error {
 	pub := msg.Packet.Copy()
 	pub.Dup = msg.Dup
@@ -388,30 +389,11 @@ func (c *Conn) sendMessage(msg *Message) error {
 				zap.String("packetID", pub.PacketID.Hex()),
 				zap.Error(err))
 
-			// 从队列中删除该消息
-			if err := c.client.queue.Delete(pub.PacketID); err != nil {
-				c.client.logger.Debug("Failed to delete oversized message from queue",
-					zap.String("packetID", pub.PacketID.Hex()),
-					zap.Error(err))
-			}
-
-			return nil
+			return ErrMessageTooLarge
 		}
 
 		// 其他写入错误
 		return err
-	}
-
-	// 发送成功
-	if pub.QoS == packet.QoS0 {
-		// QoS0: 从持久化队列删除（TCP 写成功即可）
-		if c.client.queue != nil {
-			if err := c.client.queue.Delete(pub.PacketID); err != nil {
-				c.logger.Warn("Failed to delete message from queue after send",
-					zap.String("packetID", pub.PacketID.Hex()),
-					zap.Error(err))
-			}
-		}
 	}
 
 	return nil

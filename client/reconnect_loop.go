@@ -16,6 +16,8 @@ import (
 //   - In-flight waits are unblocked on disconnect by Connection.close(); reconnect does not try to
 //     keep synchronous callers waiting across a disconnect.
 func (c *Client) reconnectLoop() {
+	defer c.wg.Done()
+
 	initialDelay := 1 * time.Second
 	maxDelay := 60 * time.Second
 
@@ -67,11 +69,15 @@ func (c *Client) reconnectLoop() {
 					c.logger.Info("Automatic reconnection disabled, stopping")
 					break
 				}
+
+				// 使用 time.NewTimer + select 替代 time.After，确保 context 取消时立即响应
+				timer := time.NewTimer(currentDelay)
 				select {
 				case <-c.ctx.Done():
+					timer.Stop()
 					c.reconnecting.Store(false)
 					return
-				case <-time.After(currentDelay):
+				case <-timer.C:
 				}
 
 				if !c.autoReconnect.Load() {

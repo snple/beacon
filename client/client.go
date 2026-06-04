@@ -1,4 +1,4 @@
-// Package client 提供 Queen 协议客户端库
+// Package client 提供 Beacon 协议客户端库
 package client
 
 import (
@@ -93,8 +93,10 @@ type Client struct {
 	// 自动重连
 	autoReconnect atomic.Bool
 	reconnecting  atomic.Bool
-	reconnectWG   sync.WaitGroup
 	connLostCh    chan error
+
+	// 后台 goroutine 跟踪（reconnectLoop / retransmitLoop）
+	wg sync.WaitGroup
 
 	// 消息持久化存储
 	store *store
@@ -165,6 +167,7 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	logger.Info("Message queue initialized")
 
 	// 启动统一的重连循环（内部会检查 autoReconnect 开关）
+	c.wg.Add(1)
 	go c.reconnectLoop()
 
 	return c, nil
@@ -226,8 +229,11 @@ func (c *Client) Close() error {
 	c.autoReconnect.Store(false)
 
 	err := c.Disconnect()
-	// 关闭整个客户端生命周期
+	// 关闭整个客户端生命周期，唤醒所有等待 ctx.Done() 的 goroutine
 	c.cancel()
+
+	// 等待后台 goroutine（reconnectLoop、retransmitLoop）退出后再清理资源
+	c.wg.Wait()
 
 	// 关闭消息存储
 	if c.store != nil {

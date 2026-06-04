@@ -14,14 +14,14 @@ import (
 type StoreOptions = istore.Options
 
 // DefaultStoreOptions 返回默认存储配置
+// Logger 为 nil 时由 internal/store 自动创建默认 logger
 func DefaultStoreOptions() StoreOptions {
-	logger, _ := zap.NewDevelopment()
 	return StoreOptions{
 		DataDir:          "",
 		SyncWrites:       false, // 默认异步写入，性能更好
 		ValueLogFileSize: 1024,  // 1024MB
 		GCInterval:       5 * time.Minute,
-		Logger:           logger,
+		Logger:           nil, // 由 internal/store 自动创建
 	}
 }
 
@@ -41,7 +41,7 @@ func newStore(options StoreOptions) (*store, error) {
 
 	return &store{
 		Store:  s,
-		logger: options.Logger,
+		logger: s.Logger(), // 使用 internal/store 创建的 logger，避免重复创建
 	}, nil
 }
 

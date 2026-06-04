@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"maps"
 	"time"
 
@@ -246,6 +247,15 @@ func (c *Conn) processSendQueue() {
 
 		// 发送消息
 		if err := c.sendMessage(msg); err != nil {
+			if errors.Is(err, ErrMessageTooLarge) {
+				// 消息过大，直接丢弃不重试
+				if c.client.queue != nil {
+					c.client.queue.Delete(msg.Packet.PacketID)
+				}
+				c.sendQueue.finish(msg.Packet.PacketID)
+				continue
+			}
+
 			c.logger.Warn("Failed to send message from queue",
 				zap.Error(err),
 				zap.String("topic", msg.Packet.Topic),
