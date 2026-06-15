@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 
+	"github.com/BurntSushi/toml"
 	"github.com/snple/beacon/core"
 	"go.uber.org/zap"
 )
@@ -15,12 +17,43 @@ var (
 	version = "0.1.0"
 )
 
+// authMap 线程安全的认证表。
+type authMap struct {
+	nodes  map[string]string
+	logger *zap.Logger
+}
+
+// nodesTOML 认证文件格式：client_id → secret 映射。
+type nodesTOML struct {
+	Nodes []nodeEntry `toml:"nodes"`
+}
+
+type nodeEntry struct {
+	Serial  string `toml:"serial"`
+	Secret  string `toml:"secret"`
+}
+
+// loadNodes 加载认证文件，返回 serial → secret 映射。
+func loadNodes(path string) (map[string]string, error) {
+	var cfg nodesTOML
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return nil, fmt.Errorf("load %s: %w", path, err)
+	}
+	nodes := make(map[string]string, len(cfg.Nodes))
+	for _, n := range cfg.Nodes {
+		if n.Serial == "" || n.Secret == "" {
+			continue
+		}
+		nodes[n.Serial] = n.Secret
+	}
+	return nodes, nil
+}
+
 func main() {
 	// 命令行参数
 	addr := flag.String("addr", ":5208", "Listen address")
 	maxClients := flag.Uint("max-clients", 10000, "Maximum number of clients")
-	authEnabled := flag.Bool("auth", false, "Enable authentication")
-	authSecret := flag.String("auth-secret", "", "Authentication secret key")
+	authFile := flag.String("auth-file", "", "Path to auth file (TOML with [[nodes]] serial + secret)")
 	storeDir := flag.String("store-dir", "./data", "BadgerDB storage directory")
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug logging")
@@ -108,24 +141,42 @@ func main() {
 		},
 	})
 
-	// 如果启用认证
-	if *authEnabled {
-		secret := *authSecret
-		opts.WithAuthHandler(&core.AuthHandlerFunc{
-			// OnConnect: 处理连接时的认证
-			ConnectFunc: func(ctx *core.AuthConnectContext) error {
-				// 简单的 token 认证示例
-				// 从 ConnectPacket.Properties 获取认证数据
-				if ctx.Packet.Properties != nil && secret != "" && string(ctx.Packet.Properties.AuthData) != secret {
-					logger.Warn("Authentication failed",
-						zap.String("client_id", ctx.ClientID),
-						zap.String("reason", "invalid auth data"),
-					)
-					return fmt.Errorf("invalid auth data")
+	// 认证（通过 auth-file 指定的 TOML 文件，支持 SIGHUP 热重载）
+	var authNodes atomic.Pointer[authMap]
+	if *authFile != "" {
+		nodes, err := loadNodes(*authFile)
+		if err != nil {
+			logger.Fatal("Failed to load auth file", zap.Error(err))
+		}
+		authNodes.Store(&authMap{nodes: nodes, logger: logger})
+		logger.Info("Authentication enabled", zap.String("file", *authFile), zap.Int("nodes", len(nodes)))
+
+		// SIGHUP 热重载
+		go func() {
+			ch := make(chan os.Signal, 1)
+			signal.Notify(ch, syscall.SIGHUP)
+			for range ch {
+				nodes, err := loadNodes(*authFile)
+				if err != nil {
+					logger.Error("Failed to reload auth file", zap.Error(err))
+					continue
 				}
-				logger.Info("Authentication successful",
-					zap.String("client_id", ctx.ClientID),
-				)
+				authNodes.Store(&authMap{nodes: nodes, logger: logger})
+				logger.Info("Auth file reloaded", zap.Int("nodes", len(nodes)))
+			}
+		}()
+
+		opts.WithAuthHandler(&core.AuthHandlerFunc{
+			ConnectFunc: func(ctx *core.AuthConnectContext) error {
+				if ctx.Packet.Properties == nil || len(ctx.Packet.Properties.AuthData) == 0 {
+					return fmt.Errorf("auth required")
+				}
+				am := authNodes.Load()
+				secret, ok := am.nodes[ctx.ClientID]
+				if !ok || secret != string(ctx.Packet.Properties.AuthData) {
+					am.logger.Warn("Auth failed", zap.String("client_id", ctx.ClientID))
+					return fmt.Errorf("auth failed: %s", ctx.ClientID)
+				}
 				return nil
 			},
 		})
@@ -161,8 +212,8 @@ func main() {
 	fmt.Printf("║  Max Clients:      %-40d ║\n", *maxClients)
 	fmt.Printf("║  Persistence:      %-40v ║\n", *storeDir != "")
 	fmt.Printf("║  Storage Dir:      %-40s ║\n", *storeDir)
-	fmt.Printf("║  Auth:             %-40v ║\n", *authEnabled)
-	fmt.Printf("║  Debug:            %-40v ║\n", *debug)
+	fmt.Printf("║  Auth File:       %-40s ║\n", *authFile)
+	fmt.Printf("║  Debug:           %-40v ║\n", *debug)
 	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 	fmt.Println("Press Ctrl+C to stop the core...")
