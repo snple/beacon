@@ -328,8 +328,12 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 	}
 	c.subscribedTopicsMu.Unlock()
 
+	// 先注册等待 ACK，再发送（避免 SUBACK 先于注册到达的竞态）
+	ackCh := conn.registerPendingAck(sub.PacketID)
+
 	if err := conn.writePacket(sub); err != nil {
-		// 发送失败，回滚
+		// 发送失败，清理
+		conn.clearPendingAck(sub.PacketID)
 		c.subscribedTopicsMu.Lock()
 		for _, topic := range topics {
 			delete(c.subscribedTopics, topic)
@@ -339,17 +343,38 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 	}
 
 	// 等待确认
-	if err := conn.waitAck(sub.PacketID, 30*time.Second); err != nil {
-		// 确认失败，回滚
+	timeout := 30 * time.Second
+	if c.options != nil && c.options.PublishTimeout > 0 {
+		timeout = c.options.PublishTimeout
+	}
+	select {
+	case err := <-ackCh:
+		if err != nil {
+			c.subscribedTopicsMu.Lock()
+			for _, topic := range topics {
+				delete(c.subscribedTopics, topic)
+			}
+			c.subscribedTopicsMu.Unlock()
+			return err
+		}
+		return nil
+	case <-time.After(timeout):
+		conn.clearPendingAck(sub.PacketID)
 		c.subscribedTopicsMu.Lock()
 		for _, topic := range topics {
 			delete(c.subscribedTopics, topic)
 		}
 		c.subscribedTopicsMu.Unlock()
-		return err
+		return ErrPublishTimeout
+	case <-conn.ctx.Done():
+		conn.clearPendingAck(sub.PacketID)
+		c.subscribedTopicsMu.Lock()
+		for _, topic := range topics {
+			delete(c.subscribedTopics, topic)
+		}
+		c.subscribedTopicsMu.Unlock()
+		return ErrNotConnected
 	}
-
-	return nil
 }
 
 // Unsubscribe 取消订阅
@@ -366,12 +391,29 @@ func (c *Client) Unsubscribe(topics ...string) error {
 	unsub := packet.NewUnsubscribePacket(c.allocatePacketID())
 	unsub.Topics = topics
 
+	// 先注册等待 ACK，再发送（避免 UNSUBACK 先于注册到达的竞态）
+	ackCh := conn.registerPendingAck(unsub.PacketID)
+
 	if err := conn.writePacket(unsub); err != nil {
+		conn.clearPendingAck(unsub.PacketID)
 		return err
 	}
 
-	if err := conn.waitAck(unsub.PacketID, 30*time.Second); err != nil {
-		return err
+	timeout := 30 * time.Second
+	if c.options != nil && c.options.PublishTimeout > 0 {
+		timeout = c.options.PublishTimeout
+	}
+	select {
+	case err := <-ackCh:
+		if err != nil {
+			return err
+		}
+	case <-time.After(timeout):
+		conn.clearPendingAck(unsub.PacketID)
+		return ErrPublishTimeout
+	case <-conn.ctx.Done():
+		conn.clearPendingAck(unsub.PacketID)
+		return ErrNotConnected
 	}
 
 	// 确认成功后移除订阅记录
