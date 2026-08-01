@@ -82,6 +82,15 @@ func (c *Client) connectWithConn(netConn net.Conn) error {
 		return err
 	}
 
+	// 客户端可能已被 Close()（例如自动重连拨号期间用户主动关闭）。
+	// 此时不应再启动新连接，否则会泄漏网络连接与对应的 goroutine（M3）。
+	// 注意：底层 Dial 本身无法被 ctx 中断（Dialer 接口无 context 参数），
+	// 但拨号成功后在此处检查 ctx 可避免泄漏——新连接不会被创建。
+	if c.ctx.Err() != nil {
+		netConn.Close()
+		return ErrClientClosed
+	}
+
 	// 创建新的 Connection 对象（从旧连接迁移状态）
 	conn := newConn(c, netConn, connack)
 
@@ -100,13 +109,14 @@ func (c *Client) connectWithConn(netConn net.Conn) error {
 	conn.start()
 
 	// 启动重传协程（仅第一次连接时启动）
+	// 使用独立的 retransmitLoopStarted 标志，避免与 TriggerRetransmit 的
+	// retransmitting 一次性守卫冲突（M6：冲突会导致 retransmitLoop 永不启动）
 	if c.queue != nil {
-		// 检查重传协程是否已在运行
-		if c.retransmitting.CompareAndSwap(false, true) {
+		if c.retransmitLoopStarted.CompareAndSwap(false, true) {
 			c.wg.Add(1)
 			go c.retransmitLoop()
 		} else {
-			// 已有重传协程在运行，手动触发一次重传
+			// 循环已在运行，手动触发一次重传
 			c.TriggerRetransmit()
 		}
 	}

@@ -41,20 +41,25 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 		return nil, err
 	}
 
-	totalSize := header.Remaining + 5
+	// 注意：header.Remaining 直接来自对端（4 字节无符号，无上限校验），
+	// 可能为 0xFFFFFFFB ~ 0xFFFFFFFF。此时若直接计算 totalSize = Remaining + 5，
+	// uint32 会回绕成 0~4 的极小值，从而绕过下方所有大小检查，最终执行
+	// make([]byte, Remaining) 分配约 4GB 内存导致进程 OOM（远程可触发的安全漏洞）。
+	// 因此必须用减法形式（Remaining > Max-5）先对 Remaining 本身做溢出安全校验，
+	// 再安全地计算 totalSize。
 
-	// 检查包大小是否超过限制
-	if maxPacketSize > 0 && totalSize > maxPacketSize {
+	// 检查包大小是否超过限制（maxPacketSize=0 表示无限制）
+	if maxPacketSize > 0 && (maxPacketSize < 5 || header.Remaining > maxPacketSize-5) {
 		return nil, NewPacketTooLargeError(
-			totalSize,
+			header.Remaining+5,
 			maxPacketSize,
 		)
 	}
 
 	// 即使 maxPacketSize=0（无限制），也不允许超过协议硬上限
-	if totalSize > MaxPacketSize {
+	if header.Remaining > MaxPacketSize-5 {
 		return nil, NewPacketTooLargeError(
-			totalSize,
+			header.Remaining+5,
 			MaxPacketSize,
 		)
 	}

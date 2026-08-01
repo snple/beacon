@@ -29,8 +29,8 @@ type nodesTOML struct {
 }
 
 type nodeEntry struct {
-	Serial  string `toml:"serial"`
-	Secret  string `toml:"secret"`
+	Serial string `toml:"serial"`
+	Secret string `toml:"secret"`
 }
 
 // loadNodes 加载认证文件，返回 serial → secret 映射。

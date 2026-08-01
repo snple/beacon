@@ -554,12 +554,12 @@ func (p *PublishProperties) DeepCopy() *PublishProperties {
 	}
 
 	cp := &PublishProperties{
-		ExpiryTime:      p.ExpiryTime,
-		ContentType:     p.ContentType,
-		TraceID:         p.TraceID,
-		TargetClientID:  p.TargetClientID,
-		SourceClientID:  p.SourceClientID,
-		ResponseTopic:   p.ResponseTopic,
+		ExpiryTime:     p.ExpiryTime,
+		ContentType:    p.ContentType,
+		TraceID:        p.TraceID,
+		TargetClientID: p.TargetClientID,
+		SourceClientID: p.SourceClientID,
+		ResponseTopic:  p.ResponseTopic,
 	}
 
 	if p.CorrelationData != nil {

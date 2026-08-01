@@ -70,14 +70,27 @@ func (c *Core) handleConn(conn net.Conn) {
 	// 注册客户端并发送 CONNACK
 	client, sessionPresent, replacedOnline := c.registerClient(conn, connect)
 
+	// 通过 client.getConn() 读取连接状态。
+	// 注意：不能直接访问 client.conn，否则会绕过 connMu 的保护，
+	// 与 attachConn 的写入形成 data race（M2）。
+	clientConn := client.getConn()
+	var (
+		keepAlive uint16
+		traceID   string
+	)
+	if clientConn != nil {
+		keepAlive = clientConn.keepAlive
+		traceID = clientConn.traceID
+	}
+
 	// 构建 CONNACK 属性
 	connackProp := packet.NewConnackProperties()
 	connackProp.SessionTimeout = client.session.timeout
 	connackProp.ClientID = connect.ClientID
-	connackProp.KeepAlive = client.conn.keepAlive
+	connackProp.KeepAlive = keepAlive
 	connackProp.MaxPacketSize = c.options.MaxPacketSize
 	connackProp.ReceiveWindow = c.options.ReceiveWindow
-	connackProp.TraceID = client.conn.traceID
+	connackProp.TraceID = traceID
 
 	// 如果认证器设置了响应属性，传递给客户端
 	if authCtx != nil && len(authCtx.ResponseProperties) > 0 {
@@ -96,7 +109,7 @@ func (c *Core) handleConn(conn net.Conn) {
 
 	c.logger.Info("Client connected",
 		zap.String("clientID", client.ID),
-		zap.Uint16("keepAlive", client.conn.keepAlive),
+		zap.Uint16("keepAlive", keepAlive),
 		zap.Uint32("sessionTimeout", client.session.timeout),
 		zap.Bool("sessionPresent", sessionPresent))
 

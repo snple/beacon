@@ -33,11 +33,12 @@ func (o *Options) Validate() error {
 
 // Store 消息持久化存储
 type Store struct {
-	options Options
-	db      *badger.DB
-	logger  *zap.Logger
-	closeCh chan struct{}
-	wg      sync.WaitGroup
+	options   Options
+	db        *badger.DB
+	logger    *zap.Logger
+	closeCh   chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // New 创建存储实例
@@ -99,14 +100,17 @@ func (s *Store) Logger() *zap.Logger {
 	return s.logger
 }
 
-// Close 关闭存储
+// Close 关闭存储（幂等，可安全多次调用）
 func (s *Store) Close() error {
-	close(s.closeCh)
-	s.wg.Wait()
-	if s.db != nil {
-		return s.db.Close()
-	}
-	return nil
+	var err error
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+		s.wg.Wait()
+		if s.db != nil {
+			err = s.db.Close()
+		}
+	})
+	return err
 }
 
 // gcLoop 定期运行 GC

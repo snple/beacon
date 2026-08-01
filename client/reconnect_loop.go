@@ -55,7 +55,7 @@ func (c *Client) reconnectLoop() {
 			var queuedMessages int
 			conn := c.getConn()
 			if conn != nil {
-				queuedMessages = int(conn.sendQueue.used.Load())
+				queuedMessages = int(conn.sendQueue.used())
 			}
 
 			c.logger.Info("Starting automatic reconnection",
@@ -119,7 +119,7 @@ func (c *Client) reconnectLoop() {
 				queuedMessages := 0
 				if conn != nil {
 					sessionPresent = conn.sessionPresent
-					queuedMessages = int(conn.sendQueue.used.Load())
+					queuedMessages = int(conn.sendQueue.used())
 				}
 
 				c.logger.Info("Reconnection successful",

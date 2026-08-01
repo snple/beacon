@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"time"
 
+	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
 
 	"go.uber.org/zap"
@@ -44,6 +45,9 @@ type ClientOptions struct {
 	// 轮询配置
 	MessageQueueSize int // 消息队列缓冲大小（默认 100）
 
+	// 消息确认
+	AutoAck bool // 自动确认收到的 QoS1 消息（默认 true）；false 时需应用显式调用 Message.Ack()
+
 	// 日志配置
 	Logger *zap.Logger // 可选的日志器，nil 表示静默
 
@@ -63,6 +67,7 @@ func NewClientOptions() *ClientOptions {
 		ReceiveWindow:      defaultReceiveWindow,
 		RetransmitInterval: defaultRetransmitInterval,
 		MessageQueueSize:   100,
+		AutoAck:            true, // 默认自动确认 QoS1 消息
 		StoreOptions:       DefaultStoreOptions(),
 	}
 }
@@ -82,7 +87,7 @@ func (o *ClientOptions) WithClientID(id string) *ClientOptions {
 // WithAuth 设置认证信息
 func (o *ClientOptions) WithAuth(method string, data []byte) *ClientOptions {
 	o.AuthMethod = method
-	o.AuthData = cloneBytes(data)
+	o.AuthData = mq.CloneBytes(data)
 	return o
 }
 
@@ -130,7 +135,7 @@ func (o *ClientOptions) WithTraceID(traceID string) *ClientOptions {
 
 // WithUserProperties 设置 CONNECT 的用户属性
 func (o *ClientOptions) WithUserProperties(props map[string]string) *ClientOptions {
-	o.UserProperties = cloneStringMap(props)
+	o.UserProperties = mq.CloneStringMap(props)
 	return o
 }
 
@@ -201,7 +206,7 @@ func (o *ClientOptions) WithWill(will *WillMessage) *ClientOptions {
 
 // WithWillSimple 便捷设置遗嘱消息（最常用字段）
 func (o *ClientOptions) WithWillSimple(topic string, payload []byte, qos packet.QoS, retain bool) *ClientOptions {
-	willPacket := packet.NewPublishPacket(topic, cloneBytes(payload))
+	willPacket := packet.NewPublishPacket(topic, mq.CloneBytes(payload))
 	willPacket.QoS = qos
 	willPacket.Retain = retain
 
@@ -230,6 +235,15 @@ func (o *ClientOptions) WithRetransmitInterval(d time.Duration) *ClientOptions {
 // WithMessageQueueSize 设置消息队列缓冲大小
 func (o *ClientOptions) WithMessageQueueSize(size int) *ClientOptions {
 	o.MessageQueueSize = size
+	return o
+}
+
+// WithAutoAck 设置 QoS1 消息自动确认。
+// true（默认）：收到消息入队后自动发送 PUBACK；
+// false：需要应用处理完消息后显式调用 Message.Ack() 确认，
+// 此时 QoS1 保证的是“消息被应用处理”（处理中断电/崩溃未确认会被重传）。
+func (o *ClientOptions) WithAutoAck(autoAck bool) *ClientOptions {
+	o.AutoAck = autoAck
 	return o
 }
 

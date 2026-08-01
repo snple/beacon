@@ -2,10 +2,10 @@ package core
 
 import (
 	"errors"
-	"maps"
 	"time"
 
 	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
 
 	"go.uber.org/zap"
@@ -85,7 +85,7 @@ func (c *Core) newPublishMessage(pub *packet.PublishPacket) Message {
 }
 
 func (c *Core) newServerPublishPacket(topic string, payload []byte, targetClientID string, options PublishOptions) *packet.PublishPacket {
-	pub := packet.NewPublishPacket(topic, cloneBytes(payload))
+	pub := packet.NewPublishPacket(topic, mq.CloneBytes(payload))
 	pub.QoS = options.QoS
 	pub.Retain = options.Retain
 
@@ -109,24 +109,6 @@ type PublishOptions struct {
 	CorrelationData []byte // 关联数据
 }
 
-func cloneBytes(data []byte) []byte {
-	if data == nil {
-		return nil
-	}
-	cloned := make([]byte, len(data))
-	copy(cloned, data)
-	return cloned
-}
-
-func cloneStringMap(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	cloned := make(map[string]string, len(src))
-	maps.Copy(cloned, src)
-	return cloned
-}
-
 func (c *Core) applyPublishProperties(pub *packet.PublishPacket, targetClientID string, options PublishOptions) {
 	if pub == nil || pub.Properties == nil {
 		return
@@ -136,8 +118,8 @@ func (c *Core) applyPublishProperties(pub *packet.PublishPacket, targetClientID 
 	pub.Properties.ContentType = options.ContentType
 	pub.Properties.TargetClientID = targetClientID
 	pub.Properties.ResponseTopic = options.ResponseTopic
-	pub.Properties.CorrelationData = cloneBytes(options.CorrelationData)
-	pub.Properties.UserProperties = cloneStringMap(options.UserProperties)
+	pub.Properties.CorrelationData = mq.CloneBytes(options.CorrelationData)
+	pub.Properties.UserProperties = mq.CloneStringMap(options.UserProperties)
 }
 
 func (c *Core) applyPublishExpiry(pub *packet.PublishPacket, options PublishOptions) {
@@ -167,10 +149,25 @@ func (c *Core) dispatchLoop() {
 			return
 		case <-c.queueTrigger:
 			for {
+				// 持续高压下内层循环可能长时间不回到 select，从而饿死 ctx.Done。
+				// 每轮处理前检查 ctx，保证 Core.Stop() 能及时退出。
+				select {
+				case <-c.ctx.Done():
+					return
+				default:
+				}
+
 				// 从队列中取出消息并分发
 				msg, err := c.queue.Dequeue()
 				if err != nil {
-					// 队列为空或其他错误，继续下一轮
+					if errors.Is(err, ErrCorruptedMessage) {
+						// 损坏消息已在 Dequeue 中删除，跳过并继续处理后续消息，
+						// 避免单条坏消息永久阻塞整个分发通道
+						c.logger.Error("dropped corrupted message from dispatch queue",
+							zap.Error(err))
+						continue
+					}
+					// 队列为空或其他错误，等待下一轮触发
 					break
 				}
 
@@ -276,14 +273,16 @@ func (c *Core) deliverToTarget(msg *Message) {
 }
 
 // deliver 向客户端发送消息
-// 流控策略：
-// 1. 检查消息是否过期
-// 2. QoS1 消息先持久化
+// 流控策略（Beacon QoS 语义：QoS0 尽力保证到达性但无需 ACK；
+// QoS1 接收方处理完消息后才 ACK，保证消息被处理而非仅协议层收到）：
+// 1. 检查消息是否过期（过期直接丢弃，无论 QoS）
+// 2. QoS0 与 QoS1 都先持久化到客户端队列：
+//   - QoS0：离线或队列满时由重传机制补发，尽力保证到达（无需 ACK）
+//   - QoS1：接收方处理失败未 ACK 时重发，保证消息被处理
+//
 // 3. 尝试放入发送队列：
 //   - 成功：启动发送协程处理
-//   - 失败（队列满）：
-//   - QoS0: 直接丢弃
-//   - QoS1: 已持久化，等待重传机制处理
+//   - 失败（队列满）：消息仍在持久化队列中，等待重传机制加载发送
 func (c *Client) deliver(msg *Message) error {
 	// PacketID 属于“投递层字段”，必须对每个目标客户端独立分配
 	// 无论 QoS=0 还是 QoS=1，都需要 PacketID
@@ -349,10 +348,20 @@ func (c *Client) deliver(msg *Message) error {
 }
 
 // triggerSend 触发发送协程（非阻塞）
-// 使用 processing 标志避免重复启动
+// 使用 processing 标志避免重复启动。
+// processSendQueue 被纳入 conn.wg 跟踪，确保关闭存储前其已退出（H3）。
 func (c *conn) triggerSend() {
+	// 已关闭的连接不再启动新的发送协程，避免与 close 的 wg.Wait 竞态
+	if c.closed.Load() {
+		return
+	}
+
 	if c.processing.CompareAndSwap(false, true) {
-		go c.processSendQueue()
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.processSendQueue()
+		}()
 	}
 }
 

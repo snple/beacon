@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"testing"
 	"time"
@@ -56,6 +57,14 @@ func equalId(a, b nson.Id) bool {
 	return bytes.Equal(a[:], b[:])
 }
 
+// orderedTestID 构造按序递增的 PacketID（前 8 字节为大端计数器），
+// 使队列顺序测试不依赖 nson.NewId() 的时序实现（B5.4）
+func orderedTestID(n uint64) nson.Id {
+	var id nson.Id
+	binary.BigEndian.PutUint64(id[:8], n)
+	return id
+}
+
 // TestQueueOrdering 测试队列的消息有序性
 func TestQueueOrdering(t *testing.T) {
 	db, cleanup := setupTestDB(t)
@@ -71,12 +80,9 @@ func TestQueueOrdering(t *testing.T) {
 
 	for i := 0; i < messageCount; i++ {
 		msg := createTestMessage("test/topic", []byte{byte(i)}, packet.QoS1)
-
-		// 确保 PacketID 是按顺序生成的（稍微延迟以确保 ID 递增）
-		if i > 0 {
-			time.Sleep(1 * time.Microsecond)
-		}
-		msg.PacketID = nson.NewId()
+		// 使用显式有序 ID（从 1 开始，避免全零 ID 被 Enqueue 的 IsZero 校验拒绝），
+		// 保证入队顺序 == PacketID 递增顺序
+		msg.PacketID = orderedTestID(uint64(i) + 1)
 		messages[i] = msg
 
 		// 入队
@@ -162,11 +168,10 @@ func TestQueueOrderingWithRandomInsert(t *testing.T) {
 	messageCount := 50
 	messages := make([]*Message, messageCount)
 
-	// 先创建所有消息
+	// 先创建所有消息（使用显式有序 ID，与入队顺序解耦）
 	for i := 0; i < messageCount; i++ {
-		time.Sleep(1 * time.Microsecond)
 		msg := createTestMessage("test/topic", []byte{byte(i)}, packet.QoS1)
-		msg.PacketID = nson.NewId()
+		msg.PacketID = orderedTestID(uint64(i) + 1)
 		messages[i] = msg
 	}
 

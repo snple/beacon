@@ -197,10 +197,20 @@ func (c *Core) Stop() error {
 
 	// 断开所有普通客户端
 	c.clientsMu.Lock()
+	clients := make([]*Client, 0, len(c.clients))
 	for _, client := range c.clients {
-		client.Close(packet.ReasonServerShuttingDown)
+		clients = append(clients, client)
 	}
 	c.clientsMu.Unlock()
+
+	// 关闭每个客户端的连接，并在锁外等待其发送协程退出。
+	// 注意：不能持有 clientsMu 等待——发送协程可能通过用户 OnDeliver 钩子回调 core API。
+	for _, client := range clients {
+		client.Close(packet.ReasonServerShuttingDown)
+		if conn := client.getConn(); conn != nil {
+			conn.wait()
+		}
+	}
 
 	// 等待所有协程退出
 	c.wg.Wait()
@@ -336,14 +346,18 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 
 	info := &ClientInfo{
 		ClientID:       client.ID,
-		RemoteAddr:     conn.conn.RemoteAddr().String(), // 需要通过 conn 获取
 		Connected:      !client.Closed(),
 		ConnectedAt:    client.ConnectedAt(),
 		KeepAlive:      client.KeepAlive(),
 		SessionTimeout: client.SessionTimeout(),
 		Subscriptions:  subs,
 		PendingAck:     pendingAck,
-		ReceiveWindow:  conn.sendWindow, // 需要通过 conn 获取
+	}
+
+	// conn 可能为 nil（例如离线但会话保留的客户端），需要防御性处理，避免 nil 解引用
+	if conn != nil && conn.conn != nil {
+		info.RemoteAddr = conn.conn.RemoteAddr().String()
+		info.ReceiveWindow = conn.sendWindow
 	}
 
 	return info, nil

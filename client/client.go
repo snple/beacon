@@ -42,6 +42,23 @@ type Message struct {
 
 	// 时间相关（非协议字段，仅用于调试/观察）
 	Timestamp int64 `nson:"ts"`
+
+	// 手动确认回调：仅当 AutoAck=false 且消息为 QoS1 时非 nil。
+	// 不导出且不参与 nson 序列化，仅内存中生效。
+	ack func() error
+}
+
+// Ack 手动确认消息已处理（仅当客户端 AutoAck=false 且消息为 QoS1 时有效）。
+// 应用在收到消息并处理完成后调用；返回错误表示确认发送失败
+// （例如连接已断开，消息可能被服务端重传）。
+//
+// 注意：手动确认模式下 QoS1 为 at-least-once——若应用在处理中崩溃/断电未确认，
+// 服务端会重传该消息并再次投递。应用如需不重复处理，请按 Packet.PacketID 自行去重。
+func (m *Message) Ack() error {
+	if m.ack == nil {
+		return ErrNoPendingAck
+	}
+	return m.ack()
 }
 
 func (m *Message) IsExpired() bool {
@@ -105,6 +122,10 @@ type Client struct {
 	queue *Queue
 
 	retransmitting atomic.Bool
+
+	// 重传协程启动守卫：与 retransmitting（TriggerRetransmit 一次性守卫）分离，
+	// 避免标志冲突导致 retransmitLoop 永不启动
+	retransmitLoopStarted atomic.Bool
 
 	// 生命周期
 	ctx       context.Context
@@ -234,6 +255,16 @@ func (c *Client) Close() error {
 
 	// 等待后台 goroutine（reconnectLoop、retransmitLoop）退出后再清理资源
 	c.wg.Wait()
+
+	// 若重连协程在关闭期间恰好创建了新连接，等待其完全退出，
+	// 确保不再有任何 goroutine 访问即将关闭的存储（H3/M3 边界）。
+	c.connMu.RLock()
+	conn := c.conn
+	c.connMu.RUnlock()
+	if conn != nil {
+		conn.close(ErrClientClosed)
+		conn.wait()
+	}
 
 	// 关闭消息存储
 	if c.store != nil {

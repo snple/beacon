@@ -19,7 +19,7 @@ func DefaultStoreOptions() StoreOptions {
 		SyncWrites:       false, // 默认异步写入，性能更好
 		ValueLogFileSize: 256,   // 256MB
 		GCInterval:       5 * time.Minute,
-		Logger:           nil,   // 由 internal/store 自动创建
+		Logger:           nil, // 由 internal/store 自动创建
 	}
 }
 

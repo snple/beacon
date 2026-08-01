@@ -287,12 +287,15 @@ func (b *Core) handleAcceptStream(conn net.Conn, clientID string) bool {
 	b.logger.Info("Client waiting for stream", zap.String("clientID", clientID))
 
 	// 等待连接被取走或超时
+	timer := time.NewTimer(10 * time.Minute)
+	defer timer.Stop()
+
 	select {
 	case <-takenCh:
 		// 连接已被取走用于流
 		b.logger.Debug("Connection taken for stream", zap.String("clientID", clientID))
 		return true // 连接已被取走，不要关闭
-	case <-time.After(10 * time.Minute):
+	case <-timer.C:
 		// 超时
 	case <-b.ctx.Done():
 		// core 关闭

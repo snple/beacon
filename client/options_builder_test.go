@@ -235,7 +235,6 @@ func TestClientOptionsWithHooks(t *testing.T) {
 	}
 }
 
-
 // TestPollMessageNotConnected 测试未连接时 PollMessage
 func TestPollMessageNotConnected(t *testing.T) {
 	client, err := NewWithOptions(NewClientOptions())

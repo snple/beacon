@@ -552,7 +552,9 @@ func TestClientAutoReconnect(t *testing.T) {
 	server.Stop()
 }
 
-// TestClientQoS1MessagePersistence 测试客户端QoS1消息持久化
+// TestClientQoS1MessagePersistence 测试客户端 QoS1 消息持久化：
+// 1) 离线发布的 QoS1 消息应持久化到本地存储，并在连接后自动补发（QoS1 保证到达）；
+// 2) 在线发布的 QoS1 消息应正常送达订阅者。
 func TestClientQoS1MessagePersistence(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
@@ -568,6 +570,15 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 	}
 
 	addr := testServe(t, server)
+
+	// 订阅者
+	sub := testSetupClient(t, addr, "qos1-persist-sub", nil)
+	defer sub.Close()
+
+	if err := sub.Subscribe("test/topic"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond) // 等待订阅生效
 
 	// 创建带持久化的客户端
 	storeDir := t.TempDir()
@@ -587,20 +598,48 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 	}
 	defer c.Close()
 
+	// 1) 离线发布 QoS1：未连接时应持久化到本地队列，等待连接后补发
+	if err := c.Publish("test/topic", []byte("offline message"),
+		client.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
+		t.Fatal(err)
+	}
+
 	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
 	if err := c.ConnectWithDialer(dialer); err != nil {
 		t.Fatal(err)
 	}
 
-	// 发送QoS1消息
-	if err := c.Publish("test/topic", []byte("test message"),
+	// 订阅者应收到离线持久化的消息（连接后由重传机制补发）
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	msg, err := sub.PollMessage(ctx, 4*time.Second)
+	if err != nil {
+		t.Fatalf("subscriber should receive the persisted offline QoS1 message: %v", err)
+	}
+	if msg.Packet.Topic != "test/topic" {
+		t.Errorf("expected topic 'test/topic', got '%s'", msg.Packet.Topic)
+	}
+	if string(msg.Packet.Payload) != "offline message" {
+		t.Errorf("expected payload 'offline message', got '%s'", string(msg.Packet.Payload))
+	}
+
+	// 2) 在线发布 QoS1：应正常送达
+	if err := c.Publish("test/topic", []byte("online message"),
 		client.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
 		t.Fatal(err)
 	}
 
-	// 等待消息发送和ACK
-	time.Sleep(200 * time.Millisecond)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
 
+	msg2, err := sub.PollMessage(ctx2, 4*time.Second)
+	if err != nil {
+		t.Fatalf("subscriber should receive the online QoS1 message: %v", err)
+	}
+	if string(msg2.Packet.Payload) != "online message" {
+		t.Errorf("expected payload 'online message', got '%s'", string(msg2.Packet.Payload))
+	}
 }
 
 // TestClientSessionTakeover_ClientsConnectedCount 测试在线会话接管不会重复增加在线连接计数。

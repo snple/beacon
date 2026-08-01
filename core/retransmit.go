@@ -171,10 +171,33 @@ func (c *Client) retransmitQueuedMessages() int {
 		loadCount = overflowBatchSize
 	}
 
+	// 本 pass 内已发送的消息（Peek 非破坏性，且异步发送与 pendingAck 注册存在竞态，
+	// 避免同一条消息在一次重传中被重复加载/发送——否则会导致重复投递）
+	sentInPass := make(map[nson.Id]struct{})
+
 	for range loadCount {
 		msg, err := c.queue.Peek()
 		if err != nil {
+			if errors.Is(err, ErrCorruptedMessage) {
+				// 头部消息损坏：删除后继续处理下一条，避免阻塞重传
+				c.core.logger.Error("dropped corrupted queued message",
+					zap.String("clientID", c.ID),
+					zap.Error(err))
+				if delErr := c.queue.DeleteHead(); delErr != nil {
+					c.core.logger.Warn("failed to delete corrupted queued message",
+						zap.String("clientID", c.ID),
+						zap.Error(delErr))
+					break
+				}
+				c.core.stats.MessagesDropped.Add(1)
+				continue
+			}
 			break // 队列已空
+		}
+
+		// 本 pass 已发送过该消息（FIFO 队头，后续消息必然在其之后），停止处理
+		if _, done := sentInPass[msg.PacketID]; done {
+			break
 		}
 
 		if msg.IsExpired() {
@@ -214,6 +237,7 @@ func (c *Client) retransmitQueuedMessages() int {
 		// 成功入队，触发发送协程
 		conn.triggerSend()
 
+		sentInPass[msg.PacketID] = struct{}{}
 		sent++
 	}
 

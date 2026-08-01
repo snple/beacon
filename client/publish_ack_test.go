@@ -16,7 +16,7 @@ func TestWaitForPublishAck_AckArrivesBeforeWaiting(t *testing.T) {
 
 	conn := &Conn{
 		client:     client,
-		pendingAck: make(map[nson.Id]chan error),
+		pendingAck: make(map[nson.Id]pendingMessage),
 		ctx:        connCtx,
 	}
 

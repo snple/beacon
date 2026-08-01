@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/snple/beacon/internal/mq"
 )
 
 // 连接相关错误
@@ -35,6 +37,9 @@ var (
 	// ErrPublishTimeout 发布超时
 	ErrPublishTimeout = errors.New("publish timeout")
 
+	// ErrNoPendingAck 消息没有待确认的手动 ACK（AutoAck=true 或 QoS0 消息）
+	ErrNoPendingAck = errors.New("message has no pending manual ack")
+
 	// ErrSubscribeTimeout 订阅超时
 	ErrSubscribeTimeout = errors.New("subscribe timeout")
 
@@ -47,8 +52,17 @@ var (
 	// 队列相关错误
 	ErrQueueEmpty = errors.New("queue is empty")
 
+	// ErrCorruptedMessage 队列中的消息无法解码（数据损坏），已从队列中清除
+	ErrCorruptedMessage = errors.New("queued message is corrupted")
+
 	// ErrMessageTooLarge 消息超过允许的最大大小，应丢弃
 	ErrMessageTooLarge = errors.New("message too large, dropped")
+)
+
+// 发送队列错误（复用共享 mq 包的定义，保持 API 兼容）
+var (
+	ErrSendQueueFull         = mq.ErrSendQueueFull
+	ErrMessageAlreadyInQueue = mq.ErrMessageAlreadyInQueue
 )
 
 // 内部错误类型

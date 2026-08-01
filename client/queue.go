@@ -47,8 +47,13 @@ func (q *Queue) Enqueue(msg *Message) error {
 
 // Dequeue 从队列头部取出消息并删除
 // 使用迭代器获取最早的元素（PacketID 最小的）
+// 若头部消息无法解码（数据损坏），会将其删除并返回 ErrCorruptedMessage，
+// 以保证队列可以继续推进，避免单条坏消息永久阻塞后续消息。
 func (q *Queue) Dequeue() (*Message, error) {
 	msg := &Message{}
+
+	// 记录损坏消息的 key，用于在事务外单独提交删除
+	var corruptedKey []byte
 
 	err := q.db.Update(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -75,15 +80,48 @@ func (q *Queue) Dequeue() (*Message, error) {
 		}
 
 		// 反序列化消息
-		err = decodeMessage(msg, data)
-		if err != nil {
-			return fmt.Errorf("failed to decode message: %w", err)
+		if err = decodeMessage(msg, data); err != nil {
+			// 注意：badger 在闭包返回错误时会回滚整个事务（包括上面的 txn.Delete），
+			// 因此损坏消息的删除必须在事务外单独提交。
+			corruptedKey = key
+			return fmt.Errorf("%w: %v", ErrCorruptedMessage, err)
 		}
 		// 删除已读取的数据
 		return txn.Delete(key)
 	})
 
-	return msg, err
+	if err != nil {
+		if corruptedKey != nil {
+			// 单独提交删除损坏的头部消息，让队列继续推进
+			if delErr := q.db.Update(func(txn *badger.Txn) error {
+				return txn.Delete(corruptedKey)
+			}); delErr != nil {
+				return nil, fmt.Errorf("failed to delete corrupted message: %w", delErr)
+			}
+		}
+		return nil, err
+	}
+
+	return msg, nil
+}
+
+// DeleteHead 删除队列头部消息
+// 用于清除无法解码（损坏）的头部消息，防止其阻塞队列推进。
+func (q *Queue) DeleteHead() error {
+	return q.db.Update(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		opts.Prefix = q.prefix
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		it.Seek(q.prefix)
+		if !it.ValidForPrefix(q.prefix) {
+			return ErrQueueEmpty
+		}
+
+		return txn.Delete(it.Item().KeyCopy(nil))
+	})
 }
 
 // Peek 查看队列头部消息但不删除
@@ -111,8 +149,11 @@ func (q *Queue) Peek() (*Message, error) {
 			return err
 		}
 
-		err = decodeMessage(msg, data)
-		return err
+		// 反序列化消息；失败表示数据损坏，交由调用方决定是否清除
+		if err = decodeMessage(msg, data); err != nil {
+			return fmt.Errorf("%w: %v", ErrCorruptedMessage, err)
+		}
+		return nil
 	})
 
 	return msg, err

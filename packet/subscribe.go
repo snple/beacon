@@ -48,8 +48,8 @@ type Subscription struct {
 
 // ValidateTopicFilter 验证订阅主题过滤器是否有效
 // 通配符语法:
-//   - "*"  : 单层通配符，匹配一个层级（替代 MQTT 的 +）
-//   - "**" : 多层通配符，匹配多个层级（替代 MQTT 的 #），必须在末尾
+//   - "*"  : 单层通配符，匹配一个层级
+//   - "**" : 多层通配符，匹配多个层级，必须在末尾
 //
 // 返回 true 表示有效
 func ValidateTopicFilter(topic string) bool {
@@ -62,7 +62,7 @@ func ValidateTopicFilter(topic string) bool {
 		return false
 	}
 
-	// 不允许旧的 MQTT 通配符
+	// 不允许旧的通配符
 	if strings.ContainsAny(topic, "+#") {
 		return false
 	}

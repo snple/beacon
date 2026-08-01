@@ -14,6 +14,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// pendingMessage 待确认消息
+// ch：同步等待者的 ack 通知（publish/subscribe/unsubscribe）；
+// msg/lastSentAt：QoS1 发布消息的重传跟踪（subscribe/unsubscribe 时为 nil/0）。
+type pendingMessage struct {
+	ch         chan error
+	msg        *Message
+	lastSentAt int64 // Unix 秒
+}
+
 // Conn 表示单次 TCP 连接
 // 负责管理底层网络连接、读写协程、心跳、包确认等连接级别的状态
 type Conn struct {
@@ -38,7 +47,7 @@ type Conn struct {
 	processing atomic.Bool
 
 	// 等待确认的包（连接级别，断开后失效）
-	pendingAck   map[nson.Id]chan error
+	pendingAck   map[nson.Id]pendingMessage
 	pendingAckMu sync.Mutex
 
 	// 心跳 RTT
@@ -99,7 +108,7 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 		maxPacketSize:  maxMessageSize,
 		sendWindow:     sendWindow,
 		sendQueue:      newSendQueue(int(sendWindow)),
-		pendingAck:     make(map[nson.Id]chan error),
+		pendingAck:     make(map[nson.Id]pendingMessage),
 		ctx:            ctx,
 		cancel:         cancel,
 		logger:         c.logger,
@@ -248,6 +257,23 @@ func (c *Conn) handlePublish(p *packet.PublishPacket) error {
 
 	msg := &Message{Packet: p}
 
+	// 手动确认模式：QoS1 且 AutoAck=false。
+	// 消息入队后不自动发送 PUBACK，由应用处理完后显式调用 Message.Ack() 确认。
+	//
+	// 注意：这里不做“未确认重传去重”——若应用处理中崩溃/断电未确认，
+	// 服务端会重传该消息，必须重新投递给应用，才能保证 QoS1“消息被处理”的语义。
+	// 因此 QoS1 手动模式下为 at-least-once：应用如需不重复处理，请按
+	// msg.Packet.PacketID 自行去重（处理完成后调用 Ack() 停止服务端重传）。
+	manualAck := p.QoS == packet.QoS1 && (c.client.options == nil || !c.client.options.AutoAck)
+
+	if manualAck {
+		// 挂载确认回调（在入队前设置，避免与 PollMessage 消费产生竞态）
+		msg.ack = func() error {
+			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
+			return c.writePacket(puback)
+		}
+	}
+
 	// 非阻塞放入消息队列
 	select {
 	case c.client.messageQueue <- msg:
@@ -270,8 +296,8 @@ func (c *Conn) handlePublish(p *packet.PublishPacket) error {
 		return nil
 	}
 
-	// 消息成功入队后再发送 PUBACK
-	if p.QoS == packet.QoS1 {
+	// 自动确认模式（默认）：消息成功入队后再发送 PUBACK
+	if p.QoS == packet.QoS1 && !manualAck {
 		puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
 		if err := c.writePacket(puback); err != nil {
 			c.logger.Warn("Failed to send PUBACK", zap.Error(err))
@@ -349,22 +375,27 @@ func (c *Conn) handlePong(p *packet.PongPacket) {
 // handleAck 处理确认响应
 func (c *Conn) handleAck(packetID nson.Id, err error) {
 	c.pendingAckMu.Lock()
-	ch, ok := c.pendingAck[packetID]
+	pending, ok := c.pendingAck[packetID]
 	if ok {
 		delete(c.pendingAck, packetID)
 	}
 	c.pendingAckMu.Unlock()
 
-	if ok {
-		ch <- err
-		close(ch)
+	if ok && pending.ch != nil {
+		pending.ch <- err
+		close(pending.ch)
 	}
 }
 
 func (c *Conn) registerPendingAck(packetID nson.Id) chan error {
 	ch := make(chan error, 1)
 	c.pendingAckMu.Lock()
-	c.pendingAck[packetID] = ch
+	// 懒初始化：白盒测试/直接构造 Conn 时 map 可能为 nil（赋值会 panic，
+	// 而 delete 对 nil map 是安全的）
+	if c.pendingAck == nil {
+		c.pendingAck = make(map[nson.Id]pendingMessage)
+	}
+	c.pendingAck[packetID] = pendingMessage{ch: ch}
 	c.pendingAckMu.Unlock()
 	return ch
 }
@@ -396,6 +427,28 @@ func (c *Conn) sendMessage(msg *Message) error {
 		return err
 	}
 
+	// 发送成功：QoS1 记录消息与发送时间，供重传机制（retransmitUnackedMessages）跟踪。
+	// 与 core 侧对称：以实际发送时间作为重传计时起点。
+	if msg.Packet.QoS == packet.QoS1 {
+		packetID := msg.Packet.PacketID
+		c.pendingAckMu.Lock()
+		// 懒初始化：白盒测试/直接构造 Conn 时 map 可能为 nil（赋值会 panic）
+		if c.pendingAck == nil {
+			c.pendingAck = make(map[nson.Id]pendingMessage)
+		}
+		if pending, ok := c.pendingAck[packetID]; ok {
+			pending.msg = msg
+			pending.lastSentAt = time.Now().Unix()
+			c.pendingAck[packetID] = pending
+		} else {
+			c.pendingAck[packetID] = pendingMessage{
+				msg:        msg,
+				lastSentAt: time.Now().Unix(),
+			}
+		}
+		c.pendingAckMu.Unlock()
+	}
+
 	return nil
 }
 
@@ -408,25 +461,6 @@ func (c *Conn) writePacket(pkt packet.Packet) error {
 	defer c.writeMu.Unlock()
 
 	return packet.WritePacket(c.conn, pkt, c.maxPacketSize)
-}
-
-// waitAck 等待包确认
-func (c *Conn) waitAck(packetID nson.Id, timeout time.Duration) error {
-	ch := make(chan error, 1)
-	c.pendingAckMu.Lock()
-	c.pendingAck[packetID] = ch
-	c.pendingAckMu.Unlock()
-	select {
-	case err := <-ch:
-		return err
-	case <-time.After(timeout):
-		c.pendingAckMu.Lock()
-		delete(c.pendingAck, packetID)
-		c.pendingAckMu.Unlock()
-		return ErrPublishTimeout
-	case <-c.ctx.Done():
-		return ErrNotConnected
-	}
 }
 
 // close 关闭连接
@@ -444,13 +478,15 @@ func (c *Conn) close(err error) {
 
 		// 清理等待中的确认
 		c.pendingAckMu.Lock()
-		for _, ch := range c.pendingAck {
-			select {
-			case ch <- errors.New("conn closed"):
-			default:
+		for _, pending := range c.pendingAck {
+			if pending.ch != nil {
+				select {
+				case pending.ch <- errors.New("conn closed"):
+				default:
+				}
 			}
 		}
-		c.pendingAck = make(map[nson.Id]chan error)
+		c.pendingAck = make(map[nson.Id]pendingMessage)
 		c.pendingAckMu.Unlock()
 
 		// 通知客户端连接已断开

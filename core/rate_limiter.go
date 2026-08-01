@@ -10,7 +10,7 @@ type connRateLimiter struct {
 	mu        sync.Mutex
 	tokens    float64
 	maxTokens float64
-	rate      float64   // 每秒补充的令牌数
+	rate      float64 // 每秒补充的令牌数
 	lastCheck time.Time
 }
 

@@ -36,12 +36,13 @@ func TestQueuePersistence(t *testing.T) {
 	err = c.Publish(topic, payload, NewPublishOptions().WithQoS(packet.QoS1))
 	require.NoError(t, err)
 
-	time.Sleep(100 * time.Millisecond)
-
-	// 验证队列已清空（消息已发送并确认）
-	isEmpty, err := c.queue.IsEmpty()
-	require.NoError(t, err)
-	assert.True(t, isEmpty, "Queue should be empty after successful publish")
+	// 验证队列已清空（消息已发送并确认）——轮询等待而非固定 sleep，降低 flaky 风险
+	require.True(t, eventually(t, 3*time.Second, 20*time.Millisecond,
+		"queue should become empty after publish ack",
+		func() bool {
+			isEmpty, err := c.queue.IsEmpty()
+			return err == nil && isEmpty
+		}), "queue should be empty after successful publish")
 }
 
 // TestOfflineQueueing 测试离线时消息入队

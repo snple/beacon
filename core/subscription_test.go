@@ -65,7 +65,7 @@ func TestSubscriptionTree_InvalidTopic(t *testing.T) {
 				{Topic: tt.topic, Options: packet.SubscribeOptions{QoS: packet.QoS0}},
 			}
 			results := tree.subscribeMultiple("client1", subs)
-				if code, ok := results[tt.topic]; !ok || code != packet.ReasonTopicFilterInvalid {
+			if code, ok := results[tt.topic]; !ok || code != packet.ReasonTopicFilterInvalid {
 				t.Errorf("Expected ReasonTopicFilterInvalid for %s, got %v", tt.name, code)
 			}
 		})

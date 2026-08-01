@@ -278,6 +278,6 @@ const (
 
 // Topic 通配符常量
 const (
-	TopicWildcardSingle = "*"  // 单层通配符 (替代 MQTT 的 +)
-	TopicWildcardMulti  = "**" // 多层通配符 (替代 MQTT 的 #)
+	TopicWildcardSingle = "*"  // 单层通配符
+	TopicWildcardMulti  = "**" // 多层通配符
 )

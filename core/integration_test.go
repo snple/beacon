@@ -179,7 +179,7 @@ func TestPubSub_WildcardSingleLevel(t *testing.T) {
 	subscriber := testSetupClient(t, addr, "sub-wild", nil)
 	defer subscriber.Close()
 
-	// 订阅通配符主题（使用 * 代替 MQTT 的 +）
+	// 订阅通配符主题
 	err := subscriber.Subscribe("sensor/*/temperature")
 	if err != nil {
 		t.Fatalf("Failed to subscribe: %v", err)
@@ -234,7 +234,7 @@ func TestPubSub_WildcardMultiLevel(t *testing.T) {
 	subscriber := testSetupClient(t, addr, "sub-multi", nil)
 	defer subscriber.Close()
 
-	// 订阅多层通配符主题（使用 ** 代替 MQTT 的 #）
+	// 订阅多层通配符主题
 	err := subscriber.Subscribe("home/**")
 	if err != nil {
 		t.Fatalf("Failed to subscribe: %v", err)
@@ -810,7 +810,7 @@ func TestRetain_WildcardMatch(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// 使用通配符订阅（使用 * 代替 MQTT 的 +）
+	// 使用通配符订阅
 	subscriber := testSetupClient(t, addr, "sub-retain-wild", nil)
 	defer subscriber.Close()
 

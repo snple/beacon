@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
@@ -39,6 +40,9 @@ type conn struct {
 
 	// 消息发送控制
 	processing atomic.Bool // true: 正在处理发送队列
+
+	// 发送协程跟踪：processSendQueue 纳入 wg，确保关闭存储前其已退出
+	wg sync.WaitGroup
 
 	// 生命周期
 	ctx       context.Context
@@ -201,6 +205,21 @@ func (c *conn) writePacket(pkt packet.Packet) error {
 	defer c.writeMu.Unlock()
 
 	return packet.WritePacket(c.conn, pkt, c.maxPacketSize)
+}
+
+// coreMessagePacketID 提取 core.Message 的 PacketID（nil 安全，供 mq.SendQueue 去重用）
+func coreMessagePacketID(m *Message) nson.Id {
+	if m == nil {
+		return nson.Id{}
+	}
+	return m.PacketID
+}
+
+// wait 等待连接的所有发送协程退出
+// 用于在关闭消息存储前同步，确保不再有对持久化队列的访问。
+// 注意：不要在持有 clientsMu 时调用（发送协程可能通过用户钩子回调 core API）。
+func (c *conn) wait() {
+	c.wg.Wait()
 }
 
 // close 关闭连接

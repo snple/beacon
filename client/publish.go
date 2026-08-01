@@ -2,32 +2,14 @@ package client
 
 import (
 	"errors"
-	"maps"
 	"time"
 
 	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
 
 	"go.uber.org/zap"
 )
-
-func cloneBytes(data []byte) []byte {
-	if data == nil {
-		return nil
-	}
-	cloned := make([]byte, len(data))
-	copy(cloned, data)
-	return cloned
-}
-
-func cloneStringMap(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	cloned := make(map[string]string, len(src))
-	maps.Copy(cloned, src)
-	return cloned
-}
 
 // Publish 发布消息（使用 Builder 模式选项，推荐）
 //
@@ -59,7 +41,7 @@ func (c *Client) Publish(topic string, payload []byte, opts *PublishOptions) err
 		expiryTime = time.Now().Unix() + int64(opts.Expiry)
 	}
 
-	pkg := packet.NewPublishPacket(topic, cloneBytes(payload))
+	pkg := packet.NewPublishPacket(topic, mq.CloneBytes(payload))
 	pkg.QoS = opts.QoS
 	pkg.Retain = opts.Retain
 
@@ -71,10 +53,10 @@ func (c *Client) Publish(topic string, payload []byte, opts *PublishOptions) err
 	// 请求-响应模式属性
 	pkg.Properties.TargetClientID = opts.TargetClientID
 	pkg.Properties.ResponseTopic = opts.ResponseTopic
-	pkg.Properties.CorrelationData = cloneBytes(opts.CorrelationData)
+	pkg.Properties.CorrelationData = mq.CloneBytes(opts.CorrelationData)
 
 	// 用户属性
-	pkg.Properties.UserProperties = cloneStringMap(opts.UserProperties)
+	pkg.Properties.UserProperties = mq.CloneStringMap(opts.UserProperties)
 
 	msg := Message{
 		Packet:    pkg,
@@ -115,7 +97,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		zap.String("packetID", msg.Packet.PacketID.Hex()),
 		zap.String("traceID", msg.Packet.Properties.TraceID))
 
-	// 2. 放入持久化队列（QoS0 和 QoS1 都持久化以提高到达率）
+	// 2. 放入持久化队列（QoS0/QoS1 都持久化：QoS0 尽力保证到达，QoS1 保证处理）
 	if err := c.queue.Enqueue(&msg); err != nil {
 		c.logger.Error("Failed to enqueue message to persistent queue",
 			zap.String("topic", msg.Packet.Topic),
@@ -130,7 +112,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 	// 如果没有连接
 	if conn == nil || conn.IsClosed() {
 		if msg.Packet.QoS == packet.QoS0 {
-			// QoS0: 已持久化到队列，等待连接后发送（提高到达率）
+			// QoS0: 已持久化到队列，等待连接后发送（尽力保证到达，无需 ACK）
 			c.logger.Debug("Not connected, QoS0 message queued",
 				zap.String("topic", msg.Packet.Topic),
 				zap.String("packetID", msg.Packet.PacketID.Hex()))
@@ -143,10 +125,23 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		return nil
 	}
 
-	// 4. 尝试放入发送队列
+	// 4. QoS1：先注册 pendingAck，再放入发送队列。
+	//    避免 processSendQueue 立即发送消息、服务端 PUBACK 先于注册到达而丢失，
+	//    导致偶发 30s 假超时（与 Subscribe/Unsubscribe 的“先注册再发送”保持一致）。
+	var waitCh chan error
+	if msg.Packet.QoS == packet.QoS1 {
+		waitCh = conn.registerPendingAck(msg.Packet.PacketID)
+	}
+
+	// 5. 尝试放入发送队列
 	if err := conn.sendQueue.tryEnqueue(&msg); err != nil {
 		// 失败：
 		// !!! 由于上面重新分配了 PacketID，这里不可能出现消息已在队列中的情况 !!!
+
+		// 队列已满：清理刚注册的 pendingAck（消息留在持久化层，由重传机制发送时再注册）
+		if msg.Packet.QoS == packet.QoS1 {
+			conn.clearPendingAck(msg.Packet.PacketID)
+		}
 
 		// 队列已满
 		if msg.Packet.QoS == packet.QoS0 {
@@ -164,15 +159,10 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		return nil
 	}
 
-	var waitCh chan error
-	if msg.Packet.QoS == packet.QoS1 {
-		waitCh = conn.registerPendingAck(msg.Packet.PacketID)
-	}
-
-	// 5. 消息已入队，触发发送
+	// 6. 消息已入队，触发发送
 	conn.triggerSend()
 
-	// 6. QoS1: 等待 ACK（仅对首次发布的消息）
+	// 7. QoS1: 等待 ACK（仅对首次发布的消息）
 	if msg.Packet.QoS == packet.QoS1 {
 		return c.waitForPublishAck(conn, msg.Packet.PacketID, waitCh, timeout)
 	}
@@ -187,15 +177,19 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 // 2. 如果超时或连接断开，消息仍在持久化中，会被重传机制处理
 // 3. 使用 defer 确保 pendingAck 始终被清理
 func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, waitCh chan error, timeout time.Duration) error {
-	// 确保退出时清理 pendingAck
-	defer conn.clearPendingAck(packetID)
+	// 注意：这里不在退出时清理 pendingAck——超时后条目保留，
+	// 由 retransmitUnackedMessages 按 RetransmitInterval 继续重传直到收到 PUBACK。
+	// 收到 ACK（handleAck）或连接关闭（conn.close）时条目会被相应清理。
 
-	timeoutCh := time.After(timeout)
+	// 使用 time.NewTimer + Stop，避免 ACK 提前到达时 timer 残留到超时点（泄漏）
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case err := <-waitCh:
 		// 收到 PUBACK
 		return err
-	case <-timeoutCh:
+	case <-timer.C:
 		// 超时：消息仍在持久化中，会被重传
 		c.logger.Warn("Publish ACK timeout, message will be retransmitted",
 			zap.String("packetID", packetID.Hex()))
@@ -212,10 +206,20 @@ func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, waitCh chan err
 }
 
 // triggerSend 触发发送协程（非阻塞）
-// 使用 processing 标志避免重复启动
+// 使用 processing 标志避免重复启动。
+// processSendQueue 被纳入 conn.wg 跟踪，确保关闭/重连前其已退出（H3）。
 func (c *Conn) triggerSend() {
+	// 已关闭的连接不再启动新的发送协程，避免与 close 的 wg.Wait 竞态
+	if c.closed.Load() {
+		return
+	}
+
 	if c.processing.CompareAndSwap(false, true) {
-		go c.processSendQueue()
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.processSendQueue()
+		}()
 	}
 }
 
@@ -347,6 +351,9 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 	if c.options != nil && c.options.PublishTimeout > 0 {
 		timeout = c.options.PublishTimeout
 	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case err := <-ackCh:
 		if err != nil {
@@ -358,7 +365,7 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 			return err
 		}
 		return nil
-	case <-time.After(timeout):
+	case <-timer.C:
 		conn.clearPendingAck(sub.PacketID)
 		c.subscribedTopicsMu.Lock()
 		for _, topic := range topics {
@@ -403,12 +410,15 @@ func (c *Client) Unsubscribe(topics ...string) error {
 	if c.options != nil && c.options.PublishTimeout > 0 {
 		timeout = c.options.PublishTimeout
 	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case err := <-ackCh:
 		if err != nil {
 			return err
 		}
-	case <-time.After(timeout):
+	case <-timer.C:
 		conn.clearPendingAck(unsub.PacketID)
 		return ErrPublishTimeout
 	case <-conn.ctx.Done():

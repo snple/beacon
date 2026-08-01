@@ -1,115 +1,38 @@
 package core
 
 import (
-	"fmt"
-	"sync"
-	"sync/atomic"
-
 	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/internal/mq"
 )
 
-// sendQueue 客户端发送队列（用于流量控制）
-// 使用 channel + 计数器实现，提供容量监控能力
-// 通过 PacketID 去重，防止同一消息被重复加入队列
+// sendQueue 发送队列（用于流量控制 + PacketID 去重）
+// 封装共享的 mq.SendQueue，并注入 core.Message 的 PacketID 提取器（coreMessagePacketID）。
+// 通过薄门面保持原有小写 API，避免改动大量调用点。
 type sendQueue struct {
-	capacity int           // 队列容量（等于客户端的 ReceiveWindow）
-	queue    chan *Message // 消息队列
-	used     atomic.Int32  // 当前使用量
-
-	inQueue map[nson.Id]bool // 已在队列中的消息 PacketID（QoS 1）
-	mu      sync.Mutex       // 保护 inQueue map
+	*mq.SendQueue[*Message]
 }
 
 // newSendQueue 创建发送队列
 func newSendQueue(capacity int) *sendQueue {
-	if capacity <= 0 {
-		capacity = 100 // 默认值
-	}
-
-	return &sendQueue{
-		capacity: capacity,
-		queue:    make(chan *Message, capacity),
-		inQueue:  make(map[nson.Id]bool),
-	}
+	return &sendQueue{mq.NewSendQueue(capacity, coreMessagePacketID)}
 }
 
-var (
-	// ErrSendQueueFull 发送队列已满
-	ErrSendQueueFull = fmt.Errorf("send queue is full")
-	// ErrMessageAlreadyInQueue 消息已在队列中
-	ErrMessageAlreadyInQueue = fmt.Errorf("message already in send queue")
-)
-
-// tryEnqueue 尝试将消息放入队列
-// 返回 nil 表示成功，非 nil 表示队列已满或消息已在队列中
-// 对于 QoS 1 消息，通过 PacketID 去重，防止同一消息被重复加入队列
 func (q *sendQueue) tryEnqueue(msg *Message) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	// QoS 1 消息需要检查是否已在队列中
-	if !msg.PacketID.IsZero() {
-		if q.inQueue[msg.PacketID] {
-			return ErrMessageAlreadyInQueue
-		}
-	}
-
-	select {
-	case q.queue <- msg:
-		q.used.Add(1)
-		if !msg.PacketID.IsZero() {
-			q.inQueue[msg.PacketID] = true
-		}
-		return nil
-	default:
-		return ErrSendQueueFull
-	}
+	return q.SendQueue.TryEnqueue(msg)
 }
 
-// TryDequeue 尝试从队列中取出消息（非阻塞）
-// 调用方必须在消息处理完毕后调用 finish() 清理 inQueue 去重映射，
-// 否则该 PacketID 将永远无法再次入队
 func (q *sendQueue) tryDequeue() (*Message, bool) {
-	select {
-	case qm, ok := <-q.queue:
-		if !ok {
-			return nil, false
-		}
-
-		q.used.Add(-1)
-		return qm, true
-	default:
-		return nil, false
-	}
+	return q.SendQueue.TryDequeue()
 }
 
-// finish 标记消息已离开发送队列生命周期（已发送入 pendingAck、发送失败或被丢弃）。
 func (q *sendQueue) finish(packetID nson.Id) {
-	if packetID.IsZero() {
-		return
-	}
-
-	q.mu.Lock()
-	delete(q.inQueue, packetID)
-	q.mu.Unlock()
+	q.SendQueue.Finish(packetID)
 }
 
-// Available 返回队列可用空间
 func (q *sendQueue) available() int {
-	used := int(q.used.Load())
-	available := max(q.capacity-used, 0)
-	return available
+	return q.SendQueue.Available()
 }
 
-// Close 关闭队列
-func (q *sendQueue) close() {
-	close(q.queue)
-}
-
-// UsageRatio 返回队列使用率 (0.0 - 1.0)
-func (q *sendQueue) usageRatio() float64 {
-	if q.capacity == 0 {
-		return 0
-	}
-	return float64(q.used.Load()) / float64(q.capacity)
+func (q *sendQueue) used() int32 {
+	return q.SendQueue.Used()
 }

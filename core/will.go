@@ -37,8 +37,13 @@ func (c *Client) publishWill() {
 	pub := c.session.willPacket
 
 	// !!! 遗嘱消息的超时时间由客户端掉线时确定
-	expiry := time.Now().Add(c.core.options.DefaultMessageExpiry)
-	pub.Properties.ExpiryTime = expiry.Unix()
+	// DefaultMessageExpiry=0 表示永不过期：此时不设置 ExpiryTime，
+	// 否则过期时间会被设为“现在”，消息下一秒即被判为过期而丢弃（M5）。
+	// 语义与 applyPublishExpiry 保持一致（>0 才设置过期）。
+	if c.core.options.DefaultMessageExpiry > 0 {
+		expiry := time.Now().Add(c.core.options.DefaultMessageExpiry)
+		pub.Properties.ExpiryTime = expiry.Unix()
+	}
 
 	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
 

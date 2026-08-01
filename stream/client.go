@@ -258,25 +258,47 @@ func (c *Client) AcceptStream() (*Stream, error) {
 }
 
 // waitForStreamOpen 等待STREAM_OPEN
+// 通过 goroutine 读取 + select c.ctx.Done()，使 Client.Close() 能中断阻塞读
+// （否则关闭后 accept goroutine 最多再阻塞 10 分钟，并反复重建连接）。
 func (c *Client) waitForStreamOpen(conn net.Conn) (*Stream, error) {
-	// 读取STREAM_OPEN（设置较长的超时，因为可能需要等待发起方）
-	for {
-		conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
-		pkt, err := packet.ReadPacket(conn)
-		conn.SetReadDeadline(time.Time{})
+	type result struct {
+		stream *Stream
+		err    error
+	}
+	resultCh := make(chan result, 1)
 
-		if err != nil {
-			return nil, err
+	go func() {
+		// 读取STREAM_OPEN（设置较长的超时，因为可能需要等待发起方）
+		for {
+			conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
+			pkt, err := packet.ReadPacket(conn)
+			conn.SetReadDeadline(time.Time{})
+
+			if err != nil {
+				resultCh <- result{nil, err}
+				return
+			}
+
+			switch p := pkt.(type) {
+			case *packet.StreamOpenPacket:
+				// 收到流请求，处理
+				stream, err := c.handleStreamOpen(conn, p)
+				resultCh <- result{stream, err}
+				return
+
+			default:
+				c.logger.Warn("Unexpected packet while waiting", zap.String("type", fmt.Sprintf("%T", pkt)))
+			}
 		}
+	}()
 
-		switch p := pkt.(type) {
-		case *packet.StreamOpenPacket:
-			// 收到流请求，处理
-			return c.handleStreamOpen(conn, p)
-
-		default:
-			c.logger.Warn("Unexpected packet while waiting", zap.String("type", fmt.Sprintf("%T", pkt)))
-		}
+	select {
+	case res := <-resultCh:
+		return res.stream, res.err
+	case <-c.ctx.Done():
+		// 客户端已关闭：关闭连接以中断读取 goroutine，避免其长时间阻塞
+		conn.Close()
+		return nil, c.ctx.Err()
 	}
 }
 

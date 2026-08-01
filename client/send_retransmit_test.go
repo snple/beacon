@@ -117,7 +117,7 @@ func TestRetransmitQueuedMessages_SkipsHeadMessageAwaitingPuback(t *testing.T) {
 	conn := &Conn{
 		client:     client,
 		sendQueue:  newSendQueue(4),
-		pendingAck: map[nson.Id]chan error{msg.Packet.PacketID: make(chan error, 1)},
+		pendingAck: map[nson.Id]pendingMessage{msg.Packet.PacketID: {ch: make(chan error, 1)}},
 		logger:     zap.NewNop(),
 	}
 	conn.processing.Store(true)
