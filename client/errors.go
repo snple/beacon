@@ -49,11 +49,9 @@ var (
 
 // 队列相关错误
 var (
-	// 队列相关错误
-	ErrQueueEmpty = errors.New("queue is empty")
-
-	// ErrCorruptedMessage 队列中的消息无法解码（数据损坏），已从队列中清除
-	ErrCorruptedMessage = errors.New("queued message is corrupted")
+	// 队列相关错误（复用共享 mq 包的定义，保持 API 兼容）
+	ErrQueueEmpty       = mq.ErrQueueEmpty
+	ErrCorruptedMessage = mq.ErrCorruptedMessage
 
 	// ErrMessageTooLarge 消息超过允许的最大大小，应丢弃
 	ErrMessageTooLarge = errors.New("message too large, dropped")

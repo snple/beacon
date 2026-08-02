@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/snple/beacon/internal/mq"
 	istore "github.com/snple/beacon/internal/store"
 	"go.uber.org/zap"
 )
@@ -71,7 +72,7 @@ func (ms *store) setRetain(topic string, msg *Message) error {
 		return ErrInvalidRetainMessage
 	}
 
-	data, err := encodeMessage(msg)
+	data, err := mq.EncodeMessage(msg)
 	if err != nil {
 		return err
 	}
@@ -115,7 +116,7 @@ func (ms *store) getRetain(topic string) (*Message, error) {
 
 		return item.Value(func(val []byte) error {
 			var msgStored Message
-			if err := decodeMessage(&msgStored, val); err != nil {
+			if err := mq.DecodeMessage(&msgStored, val); err != nil {
 				return err
 			}
 			// 检查是否过期
@@ -147,7 +148,7 @@ func (ms *store) iterateRetain(callback func(msg *Message) bool) error {
 			var shouldContinue bool
 			err := item.Value(func(val []byte) error {
 				var msgStored Message
-				err := decodeMessage(&msgStored, val)
+				err := mq.DecodeMessage(&msgStored, val)
 				if err != nil {
 					ms.logger.Warn("Failed to decode message during iteration",
 						zap.String("key", string(item.Key())),

@@ -27,7 +27,8 @@ func TestQueueDequeue_SkipsCorruptedHead(t *testing.T) {
 	}
 
 	// 覆盖头部消息（msg1）的值为损坏数据，模拟持久化数据损坏
-	corruptKey := q.makeKey(msg1.PacketID)
+	// key 格式 = 队列前缀 + PacketID（与 mq.Queue.makeKey 一致）
+	corruptKey := append([]byte("test:"), msg1.PacketID[:]...)
 	if err := db.Update(func(txn *badger.Txn) error {
 		return txn.Set(corruptKey, []byte{0xde, 0xad, 0xbe, 0xef, 0x00, 0x01})
 	}); err != nil {
@@ -68,7 +69,8 @@ func TestQueuePeek_ReportsCorruptedHead(t *testing.T) {
 		t.Fatalf("failed to enqueue: %v", err)
 	}
 
-	corruptKey := q.makeKey(msg.PacketID)
+	// key 格式 = 队列前缀 + PacketID（与 mq.Queue.makeKey 一致）
+	corruptKey := append([]byte("test:"), msg.PacketID[:]...)
 	if err := db.Update(func(txn *badger.Txn) error {
 		return txn.Set(corruptKey, []byte{0xde, 0xad})
 	}); err != nil {
