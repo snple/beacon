@@ -49,12 +49,22 @@ func loadNodes(path string) (map[string]string, error) {
 	return nodes, nil
 }
 
+// wsEnabledText 返回 WebSocket 监听信息（未启用时显示 "disabled"）
+func wsEnabledText(wsAddr, wsPath string) string {
+	if wsAddr == "" {
+		return "disabled"
+	}
+	return wsAddr + wsPath
+}
+
 func main() {
 	// 命令行参数
 	addr := flag.String("addr", ":5208", "Listen address")
 	maxClients := flag.Uint("max-clients", 10000, "Maximum number of clients")
 	authFile := flag.String("auth-file", "", "Path to auth file (TOML with [[nodes]] serial + secret)")
 	storeDir := flag.String("store-dir", "./data", "BadgerDB storage directory")
+	wsAddr := flag.String("ws-addr", "", "WebSocket listen address (empty = disabled, e.g. \":8080\")")
+	wsPath := flag.String("ws-path", "/ws", "WebSocket endpoint path")
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 
@@ -203,12 +213,24 @@ func main() {
 		}
 	}()
 
+	// 可选：在后台启动 WebSocket 服务
+	if *wsAddr != "" {
+		go func() {
+			logger.Info("Starting WebSocket server", zap.String("address", *wsAddr), zap.String("path", *wsPath))
+			if err := core.ServeWS(*wsAddr, *wsPath); err != nil {
+				logger.Error("WebSocket server error", zap.Error(err))
+				os.Exit(1)
+			}
+		}()
+	}
+
 	// 打印启动信息
 	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
 	fmt.Println("║              Beacon core                             ║")
 	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
 	fmt.Printf("║  Version:          %-40s ║\n", version)
 	fmt.Printf("║  Address:          %-40s ║\n", *addr)
+	fmt.Printf("║  WebSocket:        %-40s ║\n", wsEnabledText(*wsAddr, *wsPath))
 	fmt.Printf("║  Max Clients:      %-40d ║\n", *maxClients)
 	fmt.Printf("║  Persistence:      %-40v ║\n", *storeDir != "")
 	fmt.Printf("║  Storage Dir:      %-40s ║\n", *storeDir)

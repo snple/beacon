@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c
 	github.com/danclive/nson-go v0.10.2
 	github.com/dgraph-io/badger/v4 v4.9.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/zap v1.28.0
 )

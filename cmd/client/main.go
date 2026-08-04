@@ -102,10 +102,18 @@ func main() {
 	}
 	defer c.Close()
 
-	// 连接到 core
-	dialer := &client.TCPDialer{
-		Address:     *core,
-		DialTimeout: 10 * time.Second,
+	// 连接到 core（ws:// 或 wss:// 前缀自动走 WebSocket 传输）
+	var dialer client.Dialer
+	if strings.HasPrefix(*core, "ws://") || strings.HasPrefix(*core, "wss://") {
+		dialer = &client.WSDialer{
+			Address:     *core,
+			DialTimeout: 10 * time.Second,
+		}
+	} else {
+		dialer = &client.TCPDialer{
+			Address:     *core,
+			DialTimeout: 10 * time.Second,
+		}
 	}
 	if err := c.ConnectWithDialer(dialer); err != nil {
 		logger.Fatal("Failed to connect", zap.Error(err))

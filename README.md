@@ -45,6 +45,35 @@ import "github.com/snple/beacon/core"
 
 更多使用示例请参考 `examples/` 目录。
 
+## WebSocket 支持
+
+Beacon 同时支持 TCP 与 WebSocket 两种传输方式，二者完全互通（消息、订阅、QoS 语义一致）。
+
+**服务端**：为 core 增加 `--ws-addr` 参数即可同时监听 WebSocket（默认路径 `/ws`）：
+
+```bash
+beacon-core --addr :5208 --ws-addr :8080 --ws-path /ws
+```
+
+**客户端**：地址以 `ws://` 或 `wss://` 开头时自动走 WebSocket 传输：
+
+```bash
+beacon-client --core ws://127.0.0.1:8080/ws --client-id c1 --mode sub --topic "test/#"
+beacon-client --core ws://127.0.0.1:8080/ws --client-id c2 --mode pub --topic test/hello --message "hi"
+```
+
+**Go 代码**：使用 `client.WSDialer` 连接：
+
+```go
+c, _ := client.NewClient(client.NewClientOptions().
+    WithClientID("browser-client").
+    WithLogger(logger))
+dialer := &client.WSDialer{Address: "ws://127.0.0.1:8080/ws", DialTimeout: 10 * time.Second}
+err := c.ConnectWithDialer(dialer)
+```
+
+浏览器/前端应用可直接用原生 WebSocket 或 gorilla/websocket 与 core 的 `/ws` 端点通信。
+
 ## License
 
 MIT
