@@ -204,7 +204,7 @@ func (o *CoreOptions) applyDefaults() {
 func (o *CoreOptions) Validate() error {
 	// 验证连接限制
 	if o.MaxClients <= 0 {
-		return fmt.Errorf("maxClients must be >= 0, got %d", o.MaxClients)
+		return fmt.Errorf("maxClients must be > 0, got %d", o.MaxClients)
 	}
 	if o.MaxPacketSize <= 0 {
 		return fmt.Errorf("maxPacketSize must be > 0, got %d", o.MaxPacketSize)

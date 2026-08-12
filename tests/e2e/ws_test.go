@@ -2,8 +2,8 @@ package e2e
 
 import (
 	"context"
-	"net"
 	"fmt"
+	"net"
 	"testing"
 	"time"
 

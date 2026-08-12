@@ -11,9 +11,11 @@ func (c *Core) recoverMessages() {
 	// 流式遍历保留消息，逐条重建索引，避免一次性加载所有消息到内存
 	count := 0
 	err := c.store.iterateRetain(func(msg *Message) bool {
-		// 只存索引到 retainStore
-		c.retainStore.set(msg.Packet.Topic, msg.Packet.Properties.ExpiryTime)
-		count++
+		// 只存索引到 retainStore（防御存储中残留的异常数据：Packet/Properties 可能为 nil）
+		if msg != nil && msg.Packet != nil && msg.Packet.Properties != nil {
+			c.retainStore.set(msg.Packet.Topic, msg.Packet.Properties.ExpiryTime)
+			count++
+		}
 		return true // 继续遍历
 	})
 

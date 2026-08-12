@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"flag"
 	"fmt"
 	"os"
@@ -183,7 +184,8 @@ func main() {
 				}
 				am := authNodes.Load()
 				secret, ok := am.nodes[ctx.ClientID]
-				if !ok || secret != string(ctx.Packet.Properties.AuthData) {
+				// 使用恒定时间比较，避免时序侧信道泄露 secret
+				if !ok || subtle.ConstantTimeCompare([]byte(secret), ctx.Packet.Properties.AuthData) != 1 {
 					am.logger.Warn("Auth failed", zap.String("client_id", ctx.ClientID))
 					return fmt.Errorf("auth failed: %s", ctx.ClientID)
 				}

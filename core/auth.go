@@ -17,8 +17,15 @@ func (c *Client) handleAuth(p *packet.AuthPacket) error {
 	conn := c.conn
 	c.connMu.RUnlock()
 
+	if conn == nil {
+		// 连接已被接管或清理，无法发送 AUTH 响应，直接丢弃
+		c.core.logger.Debug("AUTH packet ignored: no active connection",
+			zap.String("clientID", c.ID))
+		return nil
+	}
+
 	remoteAddr := ""
-	if conn != nil && conn.conn != nil {
+	if conn.conn != nil {
 		remoteAddr = conn.conn.RemoteAddr().String()
 	}
 

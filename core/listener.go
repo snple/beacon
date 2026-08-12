@@ -67,7 +67,7 @@ func (c *Core) serve(listener net.Listener) error {
 				return nil
 			}
 			// 检查是否是因为 listener 被关闭导致的错误
-			if errors.Is(err, net.ErrClosed) || isClosedNetworkError(err) {
+			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
 			// 记录错误但继续接受连接
@@ -81,15 +81,4 @@ func (c *Core) serve(listener net.Listener) error {
 		}
 	}
 	return nil
-}
-
-// isClosedNetworkError 检查错误是否由于网络连接关闭导致
-func isClosedNetworkError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// 检查常见的关闭连接错误消息
-	errStr := err.Error()
-	return errStr == "use of closed network connection" ||
-		errStr == "accept tcp: use of closed network connection"
 }

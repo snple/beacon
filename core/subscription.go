@@ -133,6 +133,10 @@ func (t *subTree) unsubscribeClient(clientID string) int {
 
 // matchTopic 匹配主题，返回订阅者 map（自动去重，保留最高 QoS 的选项）
 // 返回 map[clientID]SubscribeOptions
+//
+// 通配符语义：
+//   - *  匹配单个层级
+//   - ** 匹配零个或多个层级（可出现在模式任意位置，如 a/**/b 匹配 a/b、a/x/b）
 func (t *subTree) matchTopic(topic string) map[string]packet.SubscribeOptions {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -142,82 +146,62 @@ func (t *subTree) matchTopic(topic string) map[string]packet.SubscribeOptions {
 	return result
 }
 
-func (t *subTree) matchNode(node *topicNode, topic string, startIdx int, result map[string]packet.SubscribeOptions) {
-	// 找下一个分隔符
-	endIdx := strings.IndexByte(topic[startIdx:], '/')
-	var part string
-	var isLast bool
+// collectSubscribers 将 subscribers 合并到 result（自动去重，保留最高 QoS）
+func collectSubscribers(subscribers map[string]packet.SubscribeOptions, result map[string]packet.SubscribeOptions) {
+	for clientID, opts := range subscribers {
+		if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
+			result[clientID] = opts
+		}
+	}
+}
 
-	if endIdx == -1 {
-		part = topic[startIdx:]
-		isLast = true
-	} else {
-		endIdx += startIdx
-		part = topic[startIdx:endIdx]
-		isLast = false
+func (t *subTree) matchNode(node *topicNode, topic string, startIdx int, result map[string]packet.SubscribeOptions) {
+	if node == nil {
+		return
 	}
 
-	if isLast {
-		// 到达主题末尾，收集订阅者
-		// 精确匹配
-		if child := node.children[part]; child != nil {
-			for clientID, opts := range child.subscribers {
-				if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
-					result[clientID] = opts
-				}
-			}
-			// 检查精确匹配后的 ** 通配符
-			if multiNode := child.children[packet.TopicWildcardMulti]; multiNode != nil {
-				for clientID, opts := range multiNode.subscribers {
-					if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
-						result[clientID] = opts
-					}
-				}
-			}
-		}
-		// * 单层通配符匹配
-		if plusNode := node.children[packet.TopicWildcardSingle]; plusNode != nil {
-			for clientID, opts := range plusNode.subscribers {
-				if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
-					result[clientID] = opts
-				}
-			}
-			// 检查 * 后的 ** 通配符
-			if multiNode := plusNode.children[packet.TopicWildcardMulti]; multiNode != nil {
-				for clientID, opts := range multiNode.subscribers {
-					if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
-						result[clientID] = opts
-					}
-				}
-			}
-		}
-		// ** 多层通配符匹配
+	// 主题已耗尽：当前节点的订阅者匹配；** 子节点（** 匹配零层）的订阅者同样匹配
+	if startIdx >= len(topic) {
+		collectSubscribers(node.subscribers, result)
 		if hashNode := node.children[packet.TopicWildcardMulti]; hashNode != nil {
-			for clientID, opts := range hashNode.subscribers {
-				if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
-					result[clientID] = opts
-				}
-			}
+			collectSubscribers(hashNode.subscribers, result)
 		}
 		return
 	}
 
+	// 找下一个分隔符
+	endIdx := strings.IndexByte(topic[startIdx:], '/')
+	var part string
+	var nextIdx int
+
+	if endIdx == -1 {
+		part = topic[startIdx:]
+		nextIdx = len(topic)
+	} else {
+		endIdx += startIdx
+		part = topic[startIdx:endIdx]
+		nextIdx = endIdx + 1
+	}
+
 	// 精确匹配
 	if child := node.children[part]; child != nil {
-		t.matchNode(child, topic, endIdx+1, result)
+		t.matchNode(child, topic, nextIdx, result)
 	}
 
 	// * 单层通配符匹配
 	if plusNode := node.children[packet.TopicWildcardSingle]; plusNode != nil {
-		t.matchNode(plusNode, topic, endIdx+1, result)
+		t.matchNode(plusNode, topic, nextIdx, result)
 	}
 
-	// ** 多层通配符匹配 (匹配剩余所有层级)
+	// ** 多层通配符匹配（匹配零个或多个层级，可出现在模式任意位置）
 	if hashNode := node.children[packet.TopicWildcardMulti]; hashNode != nil {
-		for clientID, opts := range hashNode.subscribers {
-			if existingOpts, exists := result[clientID]; !exists || opts.QoS > existingOpts.QoS {
-				result[clientID] = opts
-			}
+		// ** 匹配当前层及后续所有层级（即模式以 ** 结尾或 ** 已吞掉剩余层级）
+		collectSubscribers(hashNode.subscribers, result)
+		// ** 匹配零层或多层：枚举消耗 k 个层级后，
+		// 让 ** 之后的模式（hashNode 的子树）与剩余主题对齐。
+		// 连续 ** 已在 splitTopic 中折叠，且每次递归层级单调推进，保证终止。
+		for k := 0; startIdx+k <= len(topic); k++ {
+			t.matchNode(hashNode, topic, startIdx+k, result)
 		}
 	}
 }
@@ -339,7 +323,18 @@ func splitTopic(topic string) []string {
 	if topic == "" {
 		return nil
 	}
-	return strings.Split(topic, "/")
+	parts := strings.Split(topic, "/")
+
+	// 折叠连续的 **（a/**/**/b 等价于 a/**/b；a/**/** 等价于 a/**）。
+	// 匹配逻辑依赖该折叠来保证 ** 零层递归可终止。
+	dst := parts[:0]
+	for _, p := range parts {
+		if len(dst) > 0 && dst[len(dst)-1] == packet.TopicWildcardMulti && p == packet.TopicWildcardMulti {
+			continue
+		}
+		dst = append(dst, p)
+	}
+	return dst
 }
 
 // validateTopicFilter 验证主题过滤器

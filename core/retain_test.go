@@ -87,6 +87,12 @@ func TestRetainStoreWildcardMatching(t *testing.T) {
 		{"home/room3/*", 0},           // 无匹配
 		{"*/room1/temperature", 1},    // 单层通配符在开头
 		{"home/room1/*/extra", 0},     // 路径不匹配
+
+		// ** 位于模式中间（匹配零个或多个层级）
+		{"home/**/temperature", 2},       // ** 匹配 room1/room2
+		{"home/room1/**/temperature", 1}, // ** 匹配零层
+		{"*/**/light", 2},                // ** 匹配 desk1/desk2
+		{"home/**/extra", 0},             // 中间 ** 不能吞掉结尾的 extra
 	}
 
 	for _, tt := range tests {
@@ -301,6 +307,19 @@ func TestMatchTopic(t *testing.T) {
 		{"a/**", "a", true},
 		{"**", "a/b/c", true},
 		{"a/b/**", "a/b", true},
+
+		// ** 位于模式中间（匹配零个或多个层级）
+		{"a/**/b", "a/b", true},
+		{"a/**/b", "a/x/b", true},
+		{"a/**/b", "a/x/y/b", true},
+		{"a/**/b", "a/x", false},
+		{"a/**/b", "a/x/y", false},
+		{"a/**/b", "b/x/b", false},
+		{"a/**/b/**", "a/b/c", true},
+		{"a/**/b/**", "a/x/b", true},
+		{"**/b", "a/b", true},
+		{"**/b", "b", true},
+		{"**/b", "a/c", false},
 	}
 
 	for _, tt := range tests {

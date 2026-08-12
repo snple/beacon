@@ -21,3 +21,6 @@ go.sum
 
 *.toml
 *.db
+
+# Reasonix 本地状态
+.reasonix/

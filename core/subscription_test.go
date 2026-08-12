@@ -365,3 +365,71 @@ func TestSubscriptionTree_ComplexHierarchy(t *testing.T) {
 		}
 	}
 }
+
+// TestSubscriptionTree_MultiWildcardInMiddle 测试 ** 位于模式中间时的匹配
+func TestSubscriptionTree_MultiWildcardInMiddle(t *testing.T) {
+	tree := newSubTree()
+
+	tree.subscribe("c1", "a/**/b", packet.SubscribeOptions{QoS: packet.QoS0})
+	tree.subscribe("c2", "a/**", packet.SubscribeOptions{QoS: packet.QoS1})
+	tree.subscribe("c3", "**/b", packet.SubscribeOptions{QoS: packet.QoS0})
+
+	tests := []struct {
+		topic    string
+		expected []string
+	}{
+		{"a/b", []string{"c1", "c2", "c3"}},     // ** 匹配零层
+		{"a/x/b", []string{"c1", "c2", "c3"}},   // ** 匹配一层
+		{"a/x/y/b", []string{"c1", "c2", "c3"}}, // ** 匹配多层
+		{"a/x", []string{"c2"}},                 // a/**/b 不匹配（缺少结尾 /b）
+		{"a/x/y", []string{"c2"}},               // 同上
+		{"x/b", []string{"c3"}},                 // 只有 **/b 匹配
+		{"b", []string{"c3"}},                   // **/b 匹配 b（** 匹配零层）
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.topic, func(t *testing.T) {
+			matches := tree.matchTopic(tt.topic)
+			if len(matches) != len(tt.expected) {
+				t.Errorf("topic %s: got %d matches (want %d): %+v",
+					tt.topic, len(matches), len(tt.expected), matches)
+				return
+			}
+			for _, clientID := range tt.expected {
+				if _, ok := matches[clientID]; !ok {
+					t.Errorf("topic %s: expected client %s to match", tt.topic, clientID)
+				}
+			}
+		})
+	}
+}
+
+// TestSubscriptionTree_ConsecutiveMultiWildcard 测试连续 ** 折叠
+func TestSubscriptionTree_ConsecutiveMultiWildcard(t *testing.T) {
+	tree := newSubTree()
+
+	tree.subscribe("c1", "a/**/**/b", packet.SubscribeOptions{QoS: packet.QoS0})
+
+	matches := tree.matchTopic("a/x/b")
+	if _, ok := matches["c1"]; !ok {
+		t.Errorf("a/**/**/b should match a/x/b (consecutive ** folded)")
+	}
+
+	matches = tree.matchTopic("a/x/y/b")
+	if _, ok := matches["c1"]; !ok {
+		t.Errorf("a/**/**/b should match a/x/y/b")
+	}
+
+	matches = tree.matchTopic("a/x")
+	if _, ok := matches["c1"]; ok {
+		t.Errorf("a/**/**/b should NOT match a/x")
+	}
+
+	// 取消订阅也应正确处理折叠后的路径
+	if !tree.unsubscribe("c1", "a/**/**/b") {
+		t.Errorf("unsubscribe with folded pattern should succeed")
+	}
+	if _, ok := tree.matchTopic("a/x/b")["c1"]; ok {
+		t.Errorf("subscription should be removed after unsubscribe")
+	}
+}

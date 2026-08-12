@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -57,5 +58,5 @@ func (d *WSDialer) Dial() (net.Conn, error) {
 
 // hasWSScheme 检查地址是否带有 ws:// 或 wss:// 前缀
 func hasWSScheme(address string) bool {
-	return len(address) >= 3 && (address[:3] == "ws:" || address[:4] == "wss:")
+	return strings.HasPrefix(address, "ws://") || strings.HasPrefix(address, "wss://")
 }

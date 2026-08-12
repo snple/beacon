@@ -135,10 +135,6 @@ func (c *Core) handleConn(conn net.Conn) {
 }
 
 func (c *Core) canAcceptClientConnection(clientID string) bool {
-	if c.options.MaxClients == 0 {
-		return true
-	}
-
 	if uint32(c.stats.ClientsConnected.Load()) < c.options.MaxClients {
 		return true
 	}

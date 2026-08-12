@@ -139,13 +139,15 @@ func (s *retainStore) getEntry(topic string) *retainEntry {
 
 // matchTopics 匹配主题模式，返回所有匹配的主题列表
 // 同时过滤掉已过期的条目
+//
+// 通配符语义：* 匹配单层；** 匹配零个或多个层级（可出现在任意位置）
 func (s *retainStore) matchTopics(pattern string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	now := time.Now().Unix()
 	var result []string
-	result = s.matchNodeTopics(s.root, pattern, 0, result, now)
+	result = s.matchNodeTopics(s.root, splitTopic(pattern), 0, result, now)
 	return result
 }
 
@@ -179,41 +181,42 @@ func (s *retainStore) remove(topic string) {
 }
 
 // matchNodeTopics 递归匹配节点，返回主题列表
-func (s *retainStore) matchNodeTopics(node *retainNode, pattern string, startIdx int, result []string, now int64) []string {
-	if startIdx >= len(pattern) {
-		// 到达模式末尾，收集当前节点的主题
+// parts 为模式按 '/' 切分的层级数组，idx 为当前处理到的层级下标
+func (s *retainStore) matchNodeTopics(node *retainNode, parts []string, idx int, result []string, now int64) []string {
+	if node == nil {
+		return result
+	}
+
+	// 模式已耗尽：当前节点的主题匹配；** 子节点（** 匹配零层）的主题同样匹配
+	if idx >= len(parts) {
 		if node.entry != nil && !s.isExpired(node.entry, now) {
 			result = append(result, node.entry.topic)
+		}
+		if hashNode := node.children[packet.TopicWildcardMulti]; hashNode != nil {
+			result = s.collectAllTopics(hashNode, result, now)
 		}
 		return result
 	}
 
-	// 找下一个分隔符
-	endIdx := strings.IndexByte(pattern[startIdx:], '/')
-	var part string
-	var nextIdx int
-	if endIdx == -1 {
-		part = pattern[startIdx:]
-		nextIdx = len(pattern)
-	} else {
-		endIdx += startIdx
-		part = pattern[startIdx:endIdx]
-		nextIdx = endIdx + 1
-	}
-
+	part := parts[idx]
 	switch part {
 	case packet.TopicWildcardMulti: // **
-		// ** 匹配当前节点及所有子节点
-		result = s.collectAllTopics(node, result, now)
+		// ** 匹配零层：剩余模式从当前节点继续
+		result = s.matchNodeTopics(node, parts, idx+1, result, now)
+		// ** 匹配一层或多层：进入每个子节点后 ** 仍然保留，可继续消耗。
+		// 每次递归要么模式前进（idx+1）要么节点加深（树深度有限），保证终止。
+		for _, child := range node.children {
+			result = s.matchNodeTopics(child, parts, idx, result, now)
+		}
 	case packet.TopicWildcardSingle: // *
 		// * 匹配当前层级的所有子节点
 		for _, child := range node.children {
-			result = s.matchNodeTopics(child, pattern, nextIdx, result, now)
+			result = s.matchNodeTopics(child, parts, idx+1, result, now)
 		}
 	default:
 		// 精确匹配
 		if child := node.children[part]; child != nil {
-			result = s.matchNodeTopics(child, pattern, nextIdx, result, now)
+			result = s.matchNodeTopics(child, parts, idx+1, result, now)
 		}
 	}
 	return result
@@ -269,58 +272,36 @@ func (s *retainStore) clear() {
 	s.count = 0
 }
 
-// matchTopic 检查主题是否匹配模式 (保留用于其他场景)
-// 支持 * (单层通配符) 和 ** (多层通配符)
+// matchTopic 检查主题是否匹配模式（供测试/工具场景使用）
+// 支持 * (单层通配符) 和 ** (多层通配符，匹配零个或多个层级，可出现在任意位置)
 func matchTopic(pattern, topic string) bool {
-	pi, ti := 0, 0
-	plen, tlen := len(pattern), len(topic)
+	return matchTopicParts(splitTopic(pattern), splitTopic(topic), 0, 0)
+}
 
-	for pi < plen && ti < tlen {
-		// 找 pattern 当前部分
-		pEnd := strings.IndexByte(pattern[pi:], '/')
-		var pPart string
-		if pEnd == -1 {
-			pPart = pattern[pi:]
-			pEnd = plen
-		} else {
-			pEnd += pi
-			pPart = pattern[pi:pEnd]
-		}
+// matchTopicParts 按层级递归匹配主题
+// parts 为模式层级，topic 为主题层级
+func matchTopicParts(parts, topic []string, pi, ti int) bool {
+	if pi == len(parts) {
+		return ti == len(topic)
+	}
 
-		// 找 topic 当前部分
-		tEnd := strings.IndexByte(topic[ti:], '/')
-		var tPart string
-		if tEnd == -1 {
-			tPart = topic[ti:]
-			tEnd = tlen
-		} else {
-			tEnd += ti
-			tPart = topic[ti:tEnd]
-		}
-
-		switch pPart {
-		case packet.TopicWildcardMulti: // **
-			return true
-		case packet.TopicWildcardSingle: // *
-			// 匹配当前层级
-		default:
-			if pPart != tPart {
-				return false
+	part := parts[pi]
+	if part == packet.TopicWildcardMulti {
+		// ** 匹配零层或多层
+		for i := ti; i <= len(topic); i++ {
+			if matchTopicParts(parts, topic, pi+1, i) {
+				return true
 			}
 		}
-
-		pi = pEnd + 1
-		ti = tEnd + 1
+		return false
 	}
 
-	// 检查是否都处理完
-	if pi >= plen && ti >= tlen {
-		return true
+	if ti == len(topic) {
+		return false
 	}
 
-	// 模式以 ** 结尾可以匹配空
-	if pi < plen && pattern[pi:] == packet.TopicWildcardMulti {
-		return true
+	if part == packet.TopicWildcardSingle || part == topic[ti] {
+		return matchTopicParts(parts, topic, pi+1, ti+1)
 	}
 
 	return false
