@@ -16,12 +16,10 @@ var (
 	ErrCoreAlreadyRunning = errors.New("core already running")
 )
 
-// 队列相关错误
+// 队列相关错误（复用共享 mq 包的定义，保持 API 兼容）
 var (
-	ErrQueueEmpty = errors.New("queue is empty")
-
-	// ErrCorruptedMessage 队列中的消息无法解码（数据损坏），已从队列中清除
-	ErrCorruptedMessage = errors.New("queued message is corrupted")
+	ErrQueueEmpty       = mq.ErrQueueEmpty
+	ErrCorruptedMessage = mq.ErrCorruptedMessage
 )
 
 // 发送队列错误（复用共享 mq 包的定义，保持 API 兼容）

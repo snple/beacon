@@ -22,7 +22,8 @@ type Message struct {
 	Retain bool       `nson:"ret"` // 保留标志
 
 	// 发送相关
-	PacketID nson.Id `nson:"pid"` // 分配的包 ID（仅 QoS 1 有效）
+	// 分配的包 ID（QoS 0/1 均分配，用于队列 key 与 FIFO 排序；仅 QoS1 用于 ACK 匹配）
+	PacketID nson.Id `nson:"pid"`
 
 	// 时间相关（非协议字段，仅用于调试/观察）
 	Timestamp int64 `nson:"ts"`

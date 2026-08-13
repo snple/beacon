@@ -18,7 +18,7 @@ type PublishPacket struct {
 	// 主题名
 	Topic string `nson:"topic"`
 
-	// 包标识符 (QoS > 0 时存在)
+	// 包标识符（始终存在，QoS=0 和 QoS=1 都需要）
 	PacketID nson.Id `nson:"pid"`
 
 	// 属性
