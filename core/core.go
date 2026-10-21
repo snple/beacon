@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Core
+// Core 是 Beacon 消息总线的核心：管理连接、会话、订阅与持久化消息队列。
 type Core struct {
 	options *CoreOptions
 	logger  *zap.Logger
@@ -39,6 +39,11 @@ type Core struct {
 
 	// 统计信息
 	stats Stats
+
+	// /metrics 与 /stats 的快照缓存（GetStats 需要遍历所有客户端）
+	statsCacheMu sync.Mutex
+	statsCache   StatsSnapshot
+	statsCacheAt time.Time
 
 	// 连接速率限制
 	connLimiter *tokenBucket
@@ -77,7 +82,8 @@ func (c *Core) spawnTask(fn func()) bool {
 
 // Stats core 统计信息
 type Stats struct {
-	ClientsConnected   atomic.Int64
+	ClientsConnected atomic.Int64
+	// ClientsTotal 累计新建的会话数（单调递增，包含已清理的历史会话）。
 	ClientsTotal       atomic.Int64
 	MessagesReceived   atomic.Int64
 	MessagesSent       atomic.Int64
@@ -187,6 +193,17 @@ func (c *Core) Start() error {
 
 	// 启动后台协程
 	c.startBackgroundWorkers()
+
+	// 上次停机时可能仍有未分发的积压消息（已持久化在全局队列中）。
+	// 必须主动触发一次排空：dispatchLoop 只在发布时被唤醒，
+	// 否则积压要等下一次发布才会被处理，甚至在此期间因过期被丢弃。
+	if c.queue != nil {
+		if depth := c.queue.Count(); depth > 0 {
+			c.logger.Info("Dispatching persisted backlog", zap.Int64("pending", depth))
+			c.triggerDispatch()
+		}
+	}
+
 	c.logStartupInfo()
 	return nil
 }
@@ -242,8 +259,9 @@ func (c *Core) Stop() error {
 
 	// 关闭每个客户端的连接，并在锁外等待其发送协程退出。
 	// 注意：不能持有 clientsMu 等待——发送协程可能通过用户 OnDeliver 钩子回调 core API。
+	// 停机路径不逐个发送 DISCONNECT：避免慢连接让 N 个客户端各等一个写超时。
 	for _, client := range clients {
-		client.Close(packet.ReasonServerShuttingDown)
+		client.closeLocal(packet.ReasonServerShuttingDown)
 		if conn := client.getConn(); conn != nil {
 			conn.wait()
 		}
@@ -253,13 +271,15 @@ func (c *Core) Stop() error {
 	c.wg.Wait()
 
 	// 最后关闭消息存储
-	c.store.close()
+	if err := c.store.close(); err != nil {
+		c.logger.Warn("Failed to close message store", zap.Error(err))
+	}
 
 	c.logger.Info("core stopped")
 	return nil
 }
 
-// CoreMaxPacketSize
+// MaxPacketSize 返回服务端允许的最大包大小。
 func (c *Core) MaxPacketSize() uint32 {
 	return c.options.MaxPacketSize
 }
@@ -354,7 +374,7 @@ func (c *Core) GetStats() StatsSnapshot {
 // StatsSnapshot 统计信息快照 (可安全复制)
 type StatsSnapshot struct {
 	ClientsConnected   int64
-	ClientsTotal       int64
+	ClientsTotal       int64 // 累计新建的会话数（单调递增）
 	MessagesReceived   int64
 	MessagesSent       int64
 	MessagesDropped    int64

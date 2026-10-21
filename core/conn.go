@@ -26,9 +26,10 @@ type conn struct {
 	writeMu sync.Mutex
 
 	// 连接参数
-	keepAlive   uint16
-	traceID     string
-	connectedAt time.Time
+	keepAlive    uint16
+	traceID      string
+	connectedAt  time.Time
+	writeTimeout time.Duration // 单次写超时（0 表示不设置）
 
 	// 断开连接包（正常断开时非 nil）
 	disconnectPacket *packet.DisconnectPacket
@@ -61,12 +62,13 @@ type conn struct {
 func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *conn {
 	ctx, cancel := context.WithCancel(context.Background())
 	conn := &conn{
-		client:      client,
-		conn:        netConn,
-		keepAlive:   connect.KeepAlive,
-		connectedAt: time.Now(),
-		ctx:         ctx,
-		cancel:      cancel,
+		client:       client,
+		conn:         netConn,
+		keepAlive:    connect.KeepAlive,
+		connectedAt:  time.Now(),
+		writeTimeout: client.core.options.WriteTimeout,
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	// 应用 Core 默认的 KeepAlive（如果客户端未指定或指定值过大）
@@ -107,9 +109,9 @@ func (c *conn) serve() {
 	keepAliveTimeout := c.calculateKeepAliveTimeout()
 	for !c.closed.Load() {
 		// 更新读取超时
-		c.conn.SetReadDeadline(time.Now().Add(keepAliveTimeout))
+		_ = c.conn.SetReadDeadline(time.Now().Add(keepAliveTimeout))
 
-		pkt, err := packet.ReadPacket(c.conn, c.client.core.MaxPacketSize())
+		pkt, size, err := packet.ReadPacketWithSize(c.conn, c.client.core.MaxPacketSize())
 		if err != nil {
 			if errors.Is(err, io.EOF) || c.closed.Load() {
 				return
@@ -128,6 +130,8 @@ func (c *conn) serve() {
 			reason = packet.ReasonProtocolError
 			return
 		}
+
+		c.client.core.stats.BytesReceived.Add(int64(size))
 
 		if err := c.handlePacket(pkt); err != nil {
 			c.client.core.logger.Debug("Handle packet error",
@@ -205,14 +209,33 @@ func (c *conn) handleDisconnect(p *packet.DisconnectPacket) error {
 
 // writePacket 发送数据包
 func (c *conn) writePacket(pkt packet.Packet) error {
-	if c.closed.Load() {
+	if c.closed.Load() || c.conn == nil {
 		return ErrClientClosed
 	}
 
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	return packet.WritePacket(c.conn, pkt, c.maxPacketSize)
+	if c.writeTimeout > 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+			return err
+		}
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+	}
+
+	n, err := packet.WritePacketWithSize(c.conn, pkt, c.maxPacketSize)
+	if n > 0 {
+		c.client.core.stats.BytesSent.Add(int64(n))
+	}
+
+	// 编码错误发生在写出任何字节之前，不应影响连接；真正的写错误
+	// （超时、对端不读、连接重置）意味着流中可能已有半包，连接不可继续使用。
+	var writeErr *packet.WriteError
+	if errors.As(err, &writeErr) {
+		_ = c.conn.Close()
+	}
+
+	return err
 }
 
 // coreMessagePacketID 提取 core.Message 的 PacketID（nil 安全，供 mq.SendQueue 去重用）
@@ -235,15 +258,33 @@ func (c *conn) wait() {
 	c.wg.Wait()
 }
 
-// close 关闭连接
+// close 关闭连接（非正常断开时向对端发送 DISCONNECT，受写超时约束）。
 func (c *conn) close(reason packet.ReasonCode) {
+	c.closeWith(reason, true)
+}
+
+// closeLocal 关闭连接但不发送 DISCONNECT。
+// 用于停机、会话接管等不需要（或不应等待）通知对端的场景。
+func (c *conn) closeLocal(reason packet.ReasonCode) {
+	c.closeWith(reason, false)
+}
+
+// detach 仅切换本地状态（无网络 IO、无阻塞），供必须持有全局锁的路径使用。
+// 真正的 socket 关闭由调用方在锁外通过 closeLocal 完成。
+func (c *conn) detach(reason packet.ReasonCode) {
+	c.closeReason.Store(uint32(reason))
+	c.cancel()
+	c.closed.Store(true)
+}
+
+func (c *conn) closeWith(reason packet.ReasonCode, sendDisconnect bool) {
 	c.closeOnce.Do(func() {
 		c.closeReason.Store(uint32(reason))
 
-		// 发送 DISCONNECT (如果不是正常断开)
-		// 注意：必须在设置 closed 标志之前发送，以避免并发写入竞态
-		// 直接写入连接，不使用 writePacket (它会检查 closed 标志)
-		if reason != packet.ReasonNormalDisconnect {
+		// 发送 DISCONNECT (如果不是正常断开)。
+		// 必须在设置 closed 标志之前发送，否则 writePacket 会直接返回；
+		// 该写入受 writeTimeout 约束，不会无限阻塞关闭流程。
+		if sendDisconnect && reason != packet.ReasonNormalDisconnect {
 			disconnect := packet.NewDisconnectPacket(reason)
 			if err := c.writePacket(disconnect); err != nil {
 				c.client.core.logger.Debug("Failed to send DISCONNECT",
@@ -258,7 +299,7 @@ func (c *conn) close(reason packet.ReasonCode) {
 
 		// 关闭连接（检查是否为 nil）
 		if c.conn != nil {
-			c.conn.Close()
+			_ = c.conn.Close()
 		}
 	})
 }

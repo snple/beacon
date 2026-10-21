@@ -22,7 +22,7 @@ func WithClientID(clientID string) ClientOption {
 func WithAuth(method string, data []byte) ClientOption {
 	return func(c *Client) {
 		c.authMethod = method
-		c.authData = data
+		c.authData = cloneBytes(data)
 	}
 }
 

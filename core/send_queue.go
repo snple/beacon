@@ -32,7 +32,3 @@ func (q *sendQueue) finish(packetID nson.Id) {
 func (q *sendQueue) available() int {
 	return q.SendQueue.Available()
 }
-
-func (q *sendQueue) used() int32 {
-	return q.SendQueue.Used()
-}

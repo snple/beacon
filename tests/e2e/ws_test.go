@@ -21,13 +21,12 @@ func startCoreWS(t *testing.T) (*core.Core, string) {
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
 
-	// 拿一个空闲端口，关闭后交给 ServeWS 使用
-	probe, err := net.Listen("tcp", ":0")
+	// 同步创建 listener，避免"先探测端口再重开"导致客户端抢先连接失败。
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	wsAddr := probe.Addr().String()
-	require.NoError(t, probe.Close())
+	wsAddr := ln.Addr().String()
 
-	go c.ServeWS(wsAddr, "/ws")
+	go c.ServeWSListener(ln, "/ws")
 
 	t.Cleanup(func() {
 		_ = c.Stop()
@@ -62,7 +61,6 @@ func TestE2E_WebSocket_PubSubQoS0(t *testing.T) {
 	pub := connectWS(t, wsAddr, "e2e-ws-qos0-pub")
 
 	require.NoError(t, sub.Subscribe("e2e/ws/qos0"))
-	time.Sleep(100 * time.Millisecond) // 等待订阅传播
 
 	require.NoError(t, pub.Publish("e2e/ws/qos0", []byte("hello-ws"),
 		client.NewPublishOptions().WithQoS(packet.QoS0)))
@@ -83,7 +81,6 @@ func TestE2E_WebSocket_PubSubQoS1(t *testing.T) {
 	pub := connectWS(t, wsAddr, "e2e-ws-qos1-pub")
 
 	require.NoError(t, sub.Subscribe("e2e/ws/qos1"))
-	time.Sleep(100 * time.Millisecond)
 
 	require.NoError(t, pub.Publish("e2e/ws/qos1", []byte("hello-ws-qos1"),
 		client.NewPublishOptions().WithQoS(packet.QoS1)))
@@ -115,7 +112,6 @@ func TestE2E_WebSocket_Reconnect(t *testing.T) {
 
 	// 订阅
 	require.NoError(t, c.Subscribe("e2e/ws/reconnect"))
-	time.Sleep(100 * time.Millisecond)
 
 	// 发布一条消息并接收
 	require.NoError(t, c.Publish("e2e/ws/reconnect", []byte("hello-reconnect"),

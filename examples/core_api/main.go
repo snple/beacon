@@ -138,7 +138,7 @@ func main() {
 	// 8. 获取统计信息
 	fmt.Println("8. Core 统计信息:")
 	stats := c.GetStats()
-	fmt.Printf("   连接总数: %d\n", stats.ClientsTotal)
+	fmt.Printf("   累计会话数: %d\n", stats.ClientsTotal)
 	fmt.Printf("   当前连接: %d\n", stats.ClientsConnected)
 	fmt.Printf("   已接收消息: %d\n", stats.MessagesReceived)
 	fmt.Printf("   已发送消息: %d\n", stats.MessagesSent)

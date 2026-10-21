@@ -115,11 +115,12 @@ func (p *PublishPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 属性
-	if p.Properties == nil {
-		p.Properties = NewPublishProperties()
+	// 属性（不修改接收者）
+	props := p.Properties
+	if props == nil {
+		props = NewPublishProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
+	if err := props.Encode(w); err != nil {
 		return err
 	}
 
@@ -220,11 +221,12 @@ func (p *PubackPacket) encode(w io.Writer) error {
 			return err
 		}
 
-		// 属性
-		if p.Properties == nil {
-			p.Properties = NewReasonProperties()
+		// 属性（不修改接收者）
+		props := p.Properties
+		if props == nil {
+			props = NewReasonProperties()
 		}
-		if err := p.Properties.Encode(w); err != nil {
+		if err := props.Encode(w); err != nil {
 			return err
 		}
 	}

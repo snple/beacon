@@ -1,6 +1,7 @@
 package core
 
 import (
+	"sort"
 	"time"
 
 	"go.uber.org/zap"
@@ -173,4 +174,109 @@ func (c *Client) cleanupExpired() int {
 	c.session.pendingAckMu.Unlock()
 
 	return expiredCount
+}
+
+// addOfflineSession 记录离线会话；超过 MaxOfflineSessions 时驱逐最早过期的会话。
+// 调用方应先把会话记录持久化，这样被驱逐时 cleanupClient 能一并删除它。
+func (c *Core) addOfflineSession(clientID string, expiry time.Time) {
+	c.offlineSessionsMu.Lock()
+	c.offlineSessions[clientID] = expiry
+	c.offlineSessionsMu.Unlock()
+
+	c.evictEarliestOfflineSession()
+}
+
+// evictEarliestOfflineSession 在离线会话数超限时驱逐最早过期的会话。
+// 增量路径每次最多超限 1 个，因此单次扫描即可。
+func (c *Core) evictEarliestOfflineSession() {
+	limit := c.options.MaxOfflineSessions
+	if limit <= 0 {
+		return
+	}
+
+	c.offlineSessionsMu.Lock()
+	if len(c.offlineSessions) <= limit {
+		c.offlineSessionsMu.Unlock()
+		return
+	}
+
+	var victim string
+	var victimExpiry time.Time
+	for id, expiry := range c.offlineSessions {
+		if victim == "" || expiry.Before(victimExpiry) {
+			victim = id
+			victimExpiry = expiry
+		}
+	}
+	delete(c.offlineSessions, victim)
+	c.offlineSessionsMu.Unlock()
+
+	c.evictOfflineSession(victim)
+}
+
+// evictOfflineSession 删除离线会话的客户端对象、订阅、待投递队列与会话记录。
+func (c *Core) evictOfflineSession(clientID string) {
+	c.clientsMu.Lock()
+	client, exists := c.clients[clientID]
+	if exists && client.Closed() {
+		delete(c.clients, clientID)
+	} else {
+		exists = false
+	}
+	c.clientsMu.Unlock()
+
+	if !exists {
+		return
+	}
+
+	c.cleanupClient(clientID, client)
+	c.logger.Warn("Offline session evicted (MaxOfflineSessions reached)",
+		zap.String("clientID", clientID),
+		zap.Int("limit", c.options.MaxOfflineSessions))
+}
+
+// trimOfflineSessions 在启动恢复后把离线会话收敛到上限内。
+// 与增量驱逐不同，这里一次性排序，避免大量超限会话导致 O(n²)。
+func (c *Core) trimOfflineSessions() int {
+	limit := c.options.MaxOfflineSessions
+	if limit <= 0 {
+		return 0
+	}
+
+	type sessionExpiry struct {
+		id     string
+		expiry time.Time
+	}
+
+	c.offlineSessionsMu.Lock()
+	if len(c.offlineSessions) <= limit {
+		c.offlineSessionsMu.Unlock()
+		return 0
+	}
+
+	entries := make([]sessionExpiry, 0, len(c.offlineSessions))
+	for id, expiry := range c.offlineSessions {
+		entries = append(entries, sessionExpiry{id: id, expiry: expiry})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].expiry.Before(entries[j].expiry) })
+
+	victims := entries[:len(entries)-limit]
+	for _, v := range victims {
+		delete(c.offlineSessions, v.id)
+	}
+	c.offlineSessionsMu.Unlock()
+
+	for _, v := range victims {
+		c.evictOfflineSession(v.id)
+	}
+
+	return len(victims)
+}
+
+// isOfflineSession 报告 clientID 当前是否仍在离线会话表中。
+func (c *Core) isOfflineSession(clientID string) bool {
+	c.offlineSessionsMu.Lock()
+	_, ok := c.offlineSessions[clientID]
+	c.offlineSessionsMu.Unlock()
+	return ok
 }

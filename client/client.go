@@ -3,6 +3,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -110,7 +111,7 @@ type Client struct {
 	// 自动重连
 	autoReconnect atomic.Bool
 	reconnecting  atomic.Bool
-	connLostCh    chan error
+	connLostCh    chan struct{} // 仅用于唤醒重连循环，不携带错误值
 
 	// 后台 goroutine 跟踪（reconnectLoop / retransmitLoop / 按需重传）
 	wg sync.WaitGroup
@@ -155,6 +156,9 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 		opts = NewClientOptions()
 	}
 	opts.applyDefaults()
+	if err := opts.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid options: %w", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -169,7 +173,7 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 		subscribedTopics: make(map[string]bool),
 		ctx:              ctx,
 		cancel:           cancel,
-		connLostCh:       make(chan error, 1),
+		connLostCh:       make(chan struct{}, 1),
 		logger:           logger,
 		messageQueue:     make(chan *Message, opts.MessageQueueSize),
 	}
@@ -238,9 +242,9 @@ func (c *Client) onConnLost(err error) {
 		Err:      err,
 	})
 
-	// 通知重连循环
+	// 通知重连循环（错误已通过 OnDisconnect 钩子暴露，这里只需要信号）
 	select {
-	case c.connLostCh <- err:
+	case c.connLostCh <- struct{}{}:
 	default:
 	}
 }

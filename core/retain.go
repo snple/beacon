@@ -140,7 +140,7 @@ func (s *retainStore) getEntry(topic string) *retainEntry {
 // matchTopics 匹配主题模式，返回所有匹配的主题列表
 // 同时过滤掉已过期的条目
 //
-// 通配符语义：* 匹配单层；** 匹配零个或多个层级（可出现在任意位置）
+// 通配符语义：* 匹配单层；** 匹配零个或多个剩余层级，且只能作为最后一层
 func (s *retainStore) matchTopics(pattern string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -292,7 +292,7 @@ func (s *retainStore) clear() {
 }
 
 // matchTopic 检查主题是否匹配模式（供测试/工具场景使用）
-// 支持 * (单层通配符) 和 ** (多层通配符，匹配零个或多个层级，可出现在任意位置)
+// 支持 * (单层通配符) 和 ** (多层通配符，匹配零个或多个剩余层级，且只能作为最后一层)
 func matchTopic(pattern, topic string) bool {
 	return matchTopicParts(splitTopic(pattern), splitTopic(topic), 0, 0)
 }

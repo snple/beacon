@@ -13,8 +13,13 @@ func (c *Core) recoverMessages() {
 	err := c.store.iterateRetain(func(msg *Message) bool {
 		// 只存索引到 retainStore（防御存储中残留的异常数据：Packet/Properties 可能为 nil）
 		if msg != nil && msg.Packet != nil && msg.Packet.Properties != nil {
-			c.retainStore.set(msg.Packet.Topic, msg.Packet.Properties.ExpiryTime)
-			count++
+			if err := c.retainStore.set(msg.Packet.Topic, msg.Packet.Properties.ExpiryTime); err != nil {
+				c.logger.Warn("Failed to recover retain index entry",
+					zap.String("topic", msg.Packet.Topic),
+					zap.Error(err))
+			} else {
+				count++
+			}
 		}
 		return true // 继续遍历
 	})

@@ -34,6 +34,8 @@ func (c *Core) ServeMetricsListener(listener net.Listener) error {
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	stopClose := make(chan struct{})
@@ -67,8 +69,26 @@ func (c *Core) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
+// statsCacheTTL 是 /metrics 与 /stats 的共享快照缓存时间。
+// GetStats 需要遍历所有客户端，避免高频抓取造成重复全量扫描。
+const statsCacheTTL = time.Second
+
+// cachedStats 返回最多 statsCacheTTL 之前的统计快照。
+func (c *Core) cachedStats() StatsSnapshot {
+	c.statsCacheMu.Lock()
+	defer c.statsCacheMu.Unlock()
+
+	if !c.statsCacheAt.IsZero() && time.Since(c.statsCacheAt) < statsCacheTTL {
+		return c.statsCache
+	}
+
+	c.statsCache = c.GetStats()
+	c.statsCacheAt = time.Now()
+	return c.statsCache
+}
+
 func (c *Core) handleStatsJSON(w http.ResponseWriter, _ *http.Request) {
-	s := c.GetStats()
+	s := c.cachedStats()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = fmt.Fprintf(w, `{"clients_connected":%d,"clients_total":%d,`+
 		`"messages_received":%d,"messages_sent":%d,"messages_dropped":%d,"messages_rejected":%d,`+
@@ -90,13 +110,13 @@ func boolToInt(b bool) int {
 }
 
 func (c *Core) handleMetrics(w http.ResponseWriter, _ *http.Request) {
-	s := c.GetStats()
+	s := c.cachedStats()
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
 	writeMetric(w, "beacon_up", "gauge", "Core 是否在运行（1=运行中）", float64(boolToInt(c.running.Load())))
 	writeMetric(w, "beacon_clients_connected", "gauge", "当前在线客户端数", float64(s.ClientsConnected))
-	writeMetric(w, "beacon_clients_total", "gauge", "已知客户端（含离线会话）总数", float64(s.ClientsTotal))
+	writeMetric(w, "beacon_clients_total", "counter", "累计新建的会话数（单调递增）", float64(s.ClientsTotal))
 	writeMetric(w, "beacon_messages_received_total", "counter", "累计接收消息数", float64(s.MessagesReceived))
 	writeMetric(w, "beacon_messages_sent_total", "counter", "累计投递消息数", float64(s.MessagesSent))
 	writeMetric(w, "beacon_messages_dropped_total", "counter", "累计丢弃消息数（过期/配额/订阅端拒收）", float64(s.MessagesDropped))

@@ -78,7 +78,7 @@ func (c *Client) connectWithConn(netConn net.Conn) error {
 	// 握手：发送 CONNECT，接收 CONNACK
 	connack, err := c.handshake(netConn)
 	if err != nil {
-		netConn.Close()
+		_ = netConn.Close()
 		return err
 	}
 
@@ -87,7 +87,7 @@ func (c *Client) connectWithConn(netConn net.Conn) error {
 	// 注意：底层 Dial 本身无法被 ctx 中断（Dialer 接口无 context 参数），
 	// 但拨号成功后在此处检查 ctx 可避免泄漏——新连接不会被创建。
 	if c.ctx.Err() != nil {
-		netConn.Close()
+		_ = netConn.Close()
 		return ErrClientClosed
 	}
 
@@ -136,6 +136,11 @@ func (c *Client) connectWithConn(netConn net.Conn) error {
 
 // handshake 执行 CONNECT/CONNACK 握手
 func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
+	// 提前校验，避免把必然被服务端拒绝的 ID 发出去（服务端仍会二次校验）。
+	if c.options.ClientID != "" && !packet.ValidateClientID(c.options.ClientID) {
+		return nil, ErrClientIDInvalid
+	}
+
 	// 构建 CONNECT 包
 	connect := packet.NewConnectPacket()
 	connect.ClientID = c.options.ClientID
@@ -184,12 +189,12 @@ func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 	}
 
 	// 接收 CONNACK
-	conn.SetReadDeadline(time.Now().Add(c.options.ConnectTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(c.options.ConnectTimeout))
 	pkt, err := packet.ReadPacket(conn, c.options.MaxPacketSize) // CONNACK 时不知道限制，传 0
 	if err != nil {
 		return nil, NewConnectionError("read CONNACK", err)
 	}
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	connack, ok := pkt.(*packet.ConnackPacket)
 	if !ok {

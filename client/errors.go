@@ -77,6 +77,7 @@ var (
 	ErrInvalidMessage       = errors.New("invalid message")
 	ErrInvalidRetainMessage = errors.New("invalid retain message")
 	ErrPacketTooLarge       = errors.New("packet size exceeds client maxPacketSize")
+	ErrClientIDInvalid      = errors.New("client ID is invalid")
 )
 
 // PollTimeoutError 轮询超时错误（携带超时时间）

@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Core
+// Core 是流中继服务：完成认证、配对等待连接并双向转发字节流。
 type Core struct {
 	address     string
 	listener    net.Listener
@@ -23,6 +23,16 @@ type Core struct {
 	// 等待连接的客户端 (clientID -> waiting connection)
 	waitingMu    sync.RWMutex
 	waitingConns map[string][]*WaitingConn
+	waitingCount int // 所有 clientID 下等待连接总数（受 maxWaitingConns 限制）
+
+	// 配置
+	maxWaitingConns int
+	writeTimeout    time.Duration
+
+	// 所有已接受且尚未关闭的连接。Stop 时统一关闭，
+	// 保证握手/转发中的阻塞读写都能被唤醒（否则 wg.Wait 会挂住）。
+	connsMu sync.Mutex
+	conns   map[net.Conn]struct{}
 
 	// 活跃的流会话
 	streamsMu sync.RWMutex
@@ -34,6 +44,11 @@ type Core struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	started atomic.Bool
+
+	// 后台任务启动守卫：Stop 后禁止再向 wg 添加任务，
+	// 避免 wg.Add 与 wg.Wait 竞争（会导致 panic 或 goroutine 泄漏）。
+	taskMu      sync.Mutex
+	tasksClosed bool
 }
 
 // WaitingConn 等待中的连接
@@ -43,6 +58,27 @@ type WaitingConn struct {
 	timestamp time.Time
 	takenCh   chan struct{} // 用于通知连接被取走
 	closeCh   chan struct{} // 用于通知连接被清理/过期
+	closeOnce sync.Once
+}
+
+// close 唤醒等待者并关闭连接（幂等，可被 Stop 与过期清理并发调用）。
+func (w *WaitingConn) close() {
+	w.closeOnce.Do(func() {
+		close(w.closeCh)
+		_ = w.conn.Close()
+	})
+}
+
+// writeControl 写入控制包（CONNACK/PONG/STREAM_ACK 等），带写超时。
+// 数据转发路径不使用它：那里的写阻塞是期望的背压。
+func (b *Core) writeControl(conn net.Conn, pkt packet.Packet) error {
+	if b.writeTimeout > 0 {
+		if err := conn.SetWriteDeadline(time.Now().Add(b.writeTimeout)); err != nil {
+			return err
+		}
+		defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+	}
+	return packet.WritePacket(conn, pkt)
 }
 
 // AuthHandler 认证处理器
@@ -57,13 +93,16 @@ func NewCore(opts ...CoreOption) (*Core, error) {
 	// 创建默认的 zap logger
 	logger, _ := zap.NewDevelopment()
 	b := &Core{
-		address:      "",
-		authHandler:  func(clientID, authMethod string, authData []byte) error { return nil },
-		logger:       logger,
-		waitingConns: make(map[string][]*WaitingConn),
-		streams:      make(map[uint32]*StreamSession),
-		ctx:          ctx,
-		cancel:       cancel,
+		address:         "",
+		authHandler:     func(clientID, authMethod string, authData []byte) error { return nil },
+		logger:          logger,
+		waitingConns:    make(map[string][]*WaitingConn),
+		streams:         make(map[uint32]*StreamSession),
+		maxWaitingConns: 10000,
+		writeTimeout:    10 * time.Second,
+		conns:           make(map[net.Conn]struct{}),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 
 	for _, opt := range opts {
@@ -80,6 +119,14 @@ func NewCore(opts ...CoreOption) (*Core, error) {
 		cancel()
 		return nil, fmt.Errorf("address is required")
 	}
+	if b.maxWaitingConns < 0 {
+		cancel()
+		return nil, fmt.Errorf("maxWaitingConns must be >= 0, got %d", b.maxWaitingConns)
+	}
+	if b.writeTimeout < 0 {
+		cancel()
+		return nil, fmt.Errorf("writeTimeout must be >= 0, got %v", b.writeTimeout)
+	}
 	if b.authHandler == nil {
 		b.authHandler = func(clientID, authMethod string, authData []byte) error { return nil }
 	}
@@ -89,6 +136,9 @@ func NewCore(opts ...CoreOption) (*Core, error) {
 
 // Start 启动Core
 func (b *Core) Start() error {
+	if b.ctx.Err() != nil {
+		return fmt.Errorf("core already stopped")
+	}
 	if b.started.Swap(true) {
 		return fmt.Errorf("core already started")
 	}
@@ -103,6 +153,10 @@ func (b *Core) Start() error {
 	b.address = listener.Addr().String()
 	b.logger.Info("Core started", zap.String("address", b.address))
 
+	b.taskMu.Lock()
+	b.tasksClosed = false
+	b.taskMu.Unlock()
+
 	b.wg.Add(2)
 	go b.acceptLoop()
 	go b.cleanupLoop()
@@ -110,20 +164,110 @@ func (b *Core) Start() error {
 	return nil
 }
 
-// Stop 停止Core
+// Stop 停止 Core。
+//
+// 必须同时关闭等待中的连接与活跃流：forwardData 阻塞在 Read 上，
+// 只关闭 listener 无法唤醒它们，wg.Wait 会永久阻塞。
 func (b *Core) Stop() error {
-	if !b.started.Load() {
+	if !b.started.CompareAndSwap(true, false) {
 		return nil
 	}
 
 	b.cancel()
 	if b.listener != nil {
-		b.listener.Close()
+		_ = b.listener.Close()
 	}
+
+	// 先禁止新的后台任务，再关闭现有连接，最后等待所有 goroutine 退出。
+	b.taskMu.Lock()
+	b.tasksClosed = true
+	b.taskMu.Unlock()
+
+	b.closeWaitingConns()
+	b.closeTrackedConns()
 
 	b.wg.Wait()
 	b.logger.Info("Core stopped")
 	return nil
+}
+
+// spawnTask 启动受 wg 跟踪的后台任务；Core 已停止时返回 false。
+func (b *Core) spawnTask(fn func()) bool {
+	b.taskMu.Lock()
+	defer b.taskMu.Unlock()
+	if b.tasksClosed {
+		return false
+	}
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		fn()
+	}()
+	return true
+}
+
+// closeWaitingConns 唤醒并关闭所有等待中的连接。
+func (b *Core) closeWaitingConns() {
+	b.waitingMu.Lock()
+	var all []*WaitingConn
+	for _, list := range b.waitingConns {
+		all = append(all, list...)
+	}
+	b.waitingConns = make(map[string][]*WaitingConn)
+	b.waitingCount = 0
+	b.waitingMu.Unlock()
+
+	for _, waiting := range all {
+		waiting.close()
+	}
+}
+
+// trackConn 记录一个已接受的连接；Core 已停止时直接关闭连接并返回 false。
+// 与 closeTrackedConns 在同一把 taskMu 下完成"检查 + 登记/快照"，
+// 避免 Stop 快照之后仍有新连接逃逸、拖住 wg.Wait。
+func (b *Core) trackConn(conn net.Conn) bool {
+	b.taskMu.Lock()
+	defer b.taskMu.Unlock()
+
+	if b.tasksClosed {
+		_ = conn.Close()
+		return false
+	}
+
+	b.connsMu.Lock()
+	b.conns[conn] = struct{}{}
+	b.connsMu.Unlock()
+	return true
+}
+
+// untrackConn 移除连接记录（不关闭连接）。
+func (b *Core) untrackConn(conn net.Conn) {
+	b.connsMu.Lock()
+	delete(b.conns, conn)
+	b.connsMu.Unlock()
+}
+
+// dropConn 关闭并移除连接。
+func (b *Core) dropConn(conn net.Conn) {
+	b.untrackConn(conn)
+	_ = conn.Close()
+}
+
+// closeTrackedConns 关闭所有跟踪中的连接，唤醒阻塞中的读写。
+func (b *Core) closeTrackedConns() {
+	b.taskMu.Lock()
+	b.connsMu.Lock()
+	conns := make([]net.Conn, 0, len(b.conns))
+	for conn := range b.conns {
+		conns = append(conns, conn)
+	}
+	b.conns = make(map[net.Conn]struct{})
+	b.connsMu.Unlock()
+	b.taskMu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
 }
 
 // GetAddress 获取监听地址
@@ -143,30 +287,40 @@ func (b *Core) acceptLoop() {
 				return
 			default:
 				b.logger.Warn("Failed to accept connection", zap.Error(err))
+				// 避免 EMFILE 等持续性错误导致忙循环刷日志。
+				select {
+				case <-b.ctx.Done():
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
 				continue
 			}
 		}
 
-		b.wg.Add(1)
-		go b.handleConnection(conn)
+		if !b.spawnTask(func() { b.handleConnection(conn) }) {
+			_ = conn.Close()
+			return
+		}
 	}
 }
 
-// handleConnection 处理单个连接
+// handleConnection 处理单个连接（wg 计数由 spawnTask 维护）
 func (b *Core) handleConnection(conn net.Conn) {
-	defer b.wg.Done()
+	if !b.trackConn(conn) {
+		return
+	}
 
 	var connTaken bool // 连接是否被取走用于流
 	defer func() {
 		if !connTaken {
-			conn.Close()
+			b.dropConn(conn)
 		}
 	}()
 
 	// 读取CONNECT包
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	pkt, err := packet.ReadPacket(conn)
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	if err != nil {
 		b.logger.Warn("Failed to read connect packet", zap.Error(err))
@@ -186,7 +340,9 @@ func (b *Core) handleConnection(conn net.Conn) {
 			Message:    err.Error(),
 			Properties: make(map[string]string),
 		}
-		packet.WritePacket(conn, ack)
+		if writeErr := b.writeControl(conn, ack); writeErr != nil {
+			b.logger.Debug("Failed to send auth rejection", zap.Error(writeErr))
+		}
 		return
 	}
 
@@ -196,7 +352,7 @@ func (b *Core) handleConnection(conn net.Conn) {
 		ServerID:   "core-1",
 		Properties: make(map[string]string),
 	}
-	if err := packet.WritePacket(conn, ack); err != nil {
+	if err := b.writeControl(conn, ack); err != nil {
 		b.logger.Warn("Failed to send connack", zap.Error(err))
 		return
 	}
@@ -217,9 +373,9 @@ func (b *Core) handleConnection(conn net.Conn) {
 	b.logger.Info("Client connected", zap.String("clientID", connectPkt.ClientID))
 
 	// 读取下一个包 - 可能是STREAM_OPEN（发起方）或进入等待（接收方）
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	pkt, err = packet.ReadPacket(conn)
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		b.logger.Debug("Connection closed", zap.String("clientID", connectPkt.ClientID), zap.Error(err))
 		return
@@ -245,12 +401,15 @@ func (b *Core) handleConnection(conn net.Conn) {
 func (b *Core) handleAcceptStreamWithPing(conn net.Conn, clientID string) bool {
 	// 回复PONG
 	pong := &packet.PongPacket{}
-	packet.WritePacket(conn, pong)
+	if err := b.writeControl(conn, pong); err != nil {
+		b.logger.Debug("Failed to send pong", zap.Error(err))
+		return false
+	}
 
 	// 读取真正的等待信号（StreamReadyPacket）
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	pkt, err := packet.ReadPacket(conn)
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	if err != nil {
 		b.logger.Warn("Failed to read after ping", zap.String("clientID", clientID), zap.Error(err))
@@ -279,9 +438,17 @@ func (b *Core) handleAcceptStream(conn net.Conn, clientID string) bool {
 		closeCh:   closeCh,
 	}
 
-	// 注册等待连接
+	// 注册等待连接（限制总量，避免客户端堆积大量半开连接）
 	b.waitingMu.Lock()
+	if b.maxWaitingConns > 0 && b.waitingCount >= b.maxWaitingConns {
+		b.waitingMu.Unlock()
+		b.logger.Warn("Too many waiting stream connections, rejecting",
+			zap.String("clientID", clientID),
+			zap.Int("limit", b.maxWaitingConns))
+		return false
+	}
 	b.waitingConns[clientID] = append(b.waitingConns[clientID], waiting)
+	b.waitingCount++
 	b.waitingMu.Unlock()
 
 	b.logger.Info("Client waiting for stream", zap.String("clientID", clientID))
@@ -309,6 +476,7 @@ func (b *Core) handleAcceptStream(conn net.Conn, clientID string) bool {
 		for i := 0; i < len(list); i++ {
 			if list[i] == waiting {
 				list = append(list[:i], list[i+1:]...)
+				b.waitingCount--
 				break
 			}
 		}
@@ -342,6 +510,7 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 	if list, ok := b.waitingConns[targetClientID]; ok && len(list) > 0 {
 		waiting = list[0]
 		list = list[1:]
+		b.waitingCount--
 		if len(list) == 0 {
 			delete(b.waitingConns, targetClientID)
 		} else {
@@ -358,7 +527,7 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 			Message:    "target client not waiting",
 			Properties: make(map[string]string),
 		}
-		packet.WritePacket(sourceConn, ack)
+		_ = b.writeControl(sourceConn, ack)
 		return false
 	}
 
@@ -368,7 +537,7 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 	targetConn := waiting.conn
 
 	// 转发STREAM_OPEN到目标客户端
-	if err := packet.WritePacket(targetConn, openPkt); err != nil {
+	if err := b.writeControl(targetConn, openPkt); err != nil {
 		b.logger.Warn("Failed to forward stream open", zap.Error(err))
 		ack := &packet.StreamAckPacket{
 			StreamID:   streamID,
@@ -376,15 +545,15 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 			Message:    "failed to forward stream open",
 			Properties: make(map[string]string),
 		}
-		packet.WritePacket(sourceConn, ack)
-		targetConn.Close()
+		_ = b.writeControl(sourceConn, ack)
+		b.dropConn(targetConn)
 		return false
 	}
 
 	// 读取目标客户端的ACK
-	targetConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = targetConn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	pkt, err := packet.ReadPacket(targetConn)
-	targetConn.SetReadDeadline(time.Time{})
+	_ = targetConn.SetReadDeadline(time.Time{})
 
 	if err != nil {
 		b.logger.Warn("Failed to read target ack", zap.Error(err))
@@ -394,8 +563,8 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 			Message:    "failed to read target ack",
 			Properties: make(map[string]string),
 		}
-		packet.WritePacket(sourceConn, ack)
-		targetConn.Close()
+		_ = b.writeControl(sourceConn, ack)
+		b.dropConn(targetConn)
 		return false
 	}
 
@@ -408,15 +577,15 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 			Message:    "invalid response from target",
 			Properties: make(map[string]string),
 		}
-		packet.WritePacket(sourceConn, ack)
-		targetConn.Close()
+		_ = b.writeControl(sourceConn, ack)
+		b.dropConn(targetConn)
 		return false
 	}
 
 	// 转发ACK到源客户端
-	if err := packet.WritePacket(sourceConn, ackPkt); err != nil {
+	if err := b.writeControl(sourceConn, ackPkt); err != nil {
 		b.logger.Warn("Failed to forward ack", zap.Error(err))
-		targetConn.Close()
+		b.dropConn(targetConn)
 		return false
 	}
 
@@ -438,20 +607,26 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 		b.logger.Info("Stream established", zap.Uint32("streamID", streamID),
 			zap.String("source", sourceClientID), zap.String("target", targetClientID))
 
-		// 开始双向转发
-		b.wg.Add(1)
-		go b.forwardStream(session)
+		// 开始双向转发。若 Core 正在停止，spawnTask 会失败：
+		// 此时回滚 streams 记录并关闭两端连接。
+		if !b.spawnTask(func() { b.forwardStream(session) }) {
+			b.streamsMu.Lock()
+			delete(b.streams, streamID)
+			b.streamsMu.Unlock()
+			b.dropConn(sourceConn)
+			b.dropConn(targetConn)
+			return false
+		}
 		return true
 	}
 
 	// 目标拒绝：关闭被动方连接，发起方连接由外层 defer 关闭
-	targetConn.Close()
+	b.dropConn(targetConn)
 	return false
 }
 
-// forwardStream 双向转发流数据
+// forwardStream 双向转发流数据（wg 计数由 spawnTask 维护）
 func (b *Core) forwardStream(session *StreamSession) {
-	defer b.wg.Done()
 	defer func() {
 		session.closed.Store(true)
 
@@ -459,8 +634,8 @@ func (b *Core) forwardStream(session *StreamSession) {
 		delete(b.streams, session.streamID)
 		b.streamsMu.Unlock()
 
-		session.sourceConn.conn.Close()
-		session.targetConn.conn.Close()
+		b.dropConn(session.sourceConn.conn)
+		b.dropConn(session.targetConn.conn)
 
 		b.logger.Info("Stream closed", zap.Uint32("streamID", session.streamID),
 			zap.Uint64("sent", session.bytesSent.Load()), zap.Uint64("received", session.bytesRecv.Load()))
@@ -473,8 +648,8 @@ func (b *Core) forwardStream(session *StreamSession) {
 		closeOnce.Do(func() {
 			close(done)
 			// 关闭连接会让另一个方向的 Read/Write 返回错误
-			session.sourceConn.conn.Close()
-			session.targetConn.conn.Close()
+			_ = session.sourceConn.conn.Close()
+			_ = session.targetConn.conn.Close()
 		})
 	}
 
@@ -544,14 +719,8 @@ func (b *Core) cleanup() {
 		for _, waiting := range list {
 			if now.Sub(waiting.timestamp) > 10*time.Minute {
 				expired++
-				// 唤醒等待者并关闭连接
-				select {
-				case <-waiting.closeCh:
-					// already closed
-				default:
-					close(waiting.closeCh)
-				}
-				waiting.conn.Close()
+				b.waitingCount--
+				waiting.close()
 				continue
 			}
 			kept = append(kept, waiting)

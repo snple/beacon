@@ -136,7 +136,8 @@ func (t *subTree) unsubscribeClient(clientID string) int {
 //
 // 通配符语义：
 //   - *  匹配单个层级
-//   - ** 匹配零个或多个层级（可出现在模式任意位置，如 a/**/b 匹配 a/b、a/x/b）
+//   - ** 匹配零个或多个剩余层级，且只能作为最后一层
+//     （ValidateTopicFilter 拒绝 a/**/b 这类中缀写法）
 func (t *subTree) matchTopic(topic string) map[string]packet.SubscribeOptions {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -343,8 +344,8 @@ func splitTopic(topic string) []string {
 	}
 	parts := strings.Split(topic, "/")
 
-	// 折叠连续的 **（a/**/**/b 等价于 a/**/b；a/**/** 等价于 a/**）。
-	// 匹配逻辑依赖该折叠来保证 ** 零层递归可终止。
+	// 折叠连续的 **（防御性处理；合法过滤器中 ** 只能出现在末层，
+	// 因此连续 ** 主要出现在直接调用内部工具函数时）。
 	dst := parts[:0]
 	for _, p := range parts {
 		if len(dst) > 0 && dst[len(dst)-1] == packet.TopicWildcardMulti && p == packet.TopicWildcardMulti {

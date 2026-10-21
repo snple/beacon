@@ -18,23 +18,23 @@ func newSendQueue(capacity int) *sendQueue {
 }
 
 func (q *sendQueue) tryEnqueue(msg *Message) error {
-	return q.SendQueue.TryEnqueue(msg)
+	return q.TryEnqueue(msg)
 }
 
 func (q *sendQueue) tryDequeue() (*Message, bool) {
-	return q.SendQueue.TryDequeue()
+	return q.TryDequeue()
 }
 
 func (q *sendQueue) finish(packetID nson.Id) {
-	q.SendQueue.Finish(packetID)
+	q.Finish(packetID)
 }
 
 func (q *sendQueue) available() int {
-	return q.SendQueue.Available()
+	return q.Available()
 }
 
 func (q *sendQueue) used() int32 {
-	return q.SendQueue.Used()
+	return q.Used()
 }
 
 // clientMessagePacketID 提取 client.Message 的 PacketID（nil 安全，供 mq.SendQueue 去重用）

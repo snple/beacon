@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -12,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Client
+// Client 是流中继协议的客户端，用于主动 OpenStream 或被动 AcceptStream。
 type Client struct {
 	coreAddr   string
 	clientID   string
@@ -23,6 +24,21 @@ type Client struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// ErrAuthRejected 表示 core 明确拒绝了认证：重试没有意义，应立即返回。
+var ErrAuthRejected = errors.New("stream: authentication rejected")
+
+// controlWriteTimeout 限制握手/控制包的写入时间，避免对端不读数据时永久阻塞。
+const controlWriteTimeout = 10 * time.Second
+
+func writeControl(conn net.Conn, pkt packet.Packet) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout)); err != nil {
+		return err
+	}
+	defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+
+	return packet.WritePacket(conn, pkt)
 }
 
 func cloneBytes(b []byte) []byte {
@@ -106,30 +122,30 @@ func (c *Client) connectToCore() (net.Conn, error) {
 		Properties: make(map[string]string),
 	}
 
-	if err := packet.WritePacket(conn, connectPkt); err != nil {
-		conn.Close()
+	if err := writeControl(conn, connectPkt); err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to send connect: %w", err)
 	}
 
 	// 读取CONNACK
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	pkt, err := packet.ReadPacket(conn)
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to read connack: %w", err)
 	}
 
 	ackPkt, ok := pkt.(*packet.ConnackPacket)
 	if !ok {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("expected CONNACK, got %T", pkt)
 	}
 
 	if ackPkt.ReasonCode != packet.Success {
-		conn.Close()
-		return nil, fmt.Errorf("connection rejected: %s", ackPkt.Message)
+		_ = conn.Close()
+		return nil, fmt.Errorf("%w: %s", ErrAuthRejected, ackPkt.Message)
 	}
 
 	// 开启 TCP KeepAlive
@@ -166,29 +182,29 @@ func (c *Client) OpenStream(targetClientID, topic string, metadata []byte, prope
 		Properties:     properties,
 	}
 
-	if err := packet.WritePacket(conn, openPkt); err != nil {
-		conn.Close()
+	if err := writeControl(conn, openPkt); err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to send stream open: %w", err)
 	}
 
 	// 等待STREAM_ACK
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	pkt, err := packet.ReadPacket(conn)
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to read stream ack: %w", err)
 	}
 
 	ackPkt, ok := pkt.(*packet.StreamAckPacket)
 	if !ok {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("expected STREAM_ACK, got %T", pkt)
 	}
 
 	if ackPkt.ReasonCode != packet.Success {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("stream rejected: %s", ackPkt.Message)
 	}
 
@@ -225,6 +241,10 @@ func (c *Client) AcceptStream() (*Stream, error) {
 		// 连接core
 		conn, err := c.connectToCore()
 		if err != nil {
+			// 认证被拒绝是确定性的，重试只会无限刷日志。
+			if errors.Is(err, ErrAuthRejected) {
+				return nil, err
+			}
 			c.logger.Warn("Failed to connect for accept", zap.Error(err))
 			time.Sleep(5 * time.Second)
 			continue
@@ -235,9 +255,9 @@ func (c *Client) AcceptStream() (*Stream, error) {
 			Properties: make(map[string]string),
 		}
 
-		if err := packet.WritePacket(conn, readyPkt); err != nil {
+		if err := writeControl(conn, readyPkt); err != nil {
 			c.logger.Warn("Failed to send ready signal", zap.Error(err))
-			conn.Close()
+			_ = conn.Close()
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -248,7 +268,13 @@ func (c *Client) AcceptStream() (*Stream, error) {
 		stream, err := c.waitForStreamOpen(conn)
 		if err != nil {
 			c.logger.Debug("Wait interrupted", zap.Error(err))
-			conn.Close()
+			_ = conn.Close()
+			// 避免 core 立即断开时形成紧凑重连循环。
+			select {
+			case <-c.ctx.Done():
+				return nil, c.ctx.Err()
+			case <-time.After(time.Second):
+			}
 			continue
 		}
 
@@ -270,9 +296,9 @@ func (c *Client) waitForStreamOpen(conn net.Conn) (*Stream, error) {
 	go func() {
 		// 读取STREAM_OPEN（设置较长的超时，因为可能需要等待发起方）
 		for {
-			conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
+			_ = conn.SetReadDeadline(time.Now().Add(10 * time.Minute))
 			pkt, err := packet.ReadPacket(conn)
-			conn.SetReadDeadline(time.Time{})
+			_ = conn.SetReadDeadline(time.Time{})
 
 			if err != nil {
 				resultCh <- result{nil, err}
@@ -297,7 +323,7 @@ func (c *Client) waitForStreamOpen(conn net.Conn) (*Stream, error) {
 		return res.stream, res.err
 	case <-c.ctx.Done():
 		// 客户端已关闭：关闭连接以中断读取 goroutine，避免其长时间阻塞
-		conn.Close()
+		_ = conn.Close()
 		return nil, c.ctx.Err()
 	}
 }
@@ -331,7 +357,7 @@ func (c *Client) handleStreamOpen(conn net.Conn, openPkt *packet.StreamOpenPacke
 		Properties: make(map[string]string),
 	}
 
-	if err := packet.WritePacket(conn, ackPkt); err != nil {
+	if err := writeControl(conn, ackPkt); err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to send ack: %w", err)
 	}

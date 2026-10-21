@@ -37,6 +37,10 @@ func New(ws *websocket.Conn) *Conn {
 // Read 从 WebSocket 消息流中读取字节。
 // 实现 io.Reader 语义：尽量填满 b，但允许返回少于 len(b) 的字节。
 func (c *Conn) Read(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+
 	for len(c.readBuf) == 0 {
 		msgType, data, err := c.ws.ReadMessage()
 		if err != nil {
@@ -65,11 +69,19 @@ func (c *Conn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// Close 关闭 WebSocket 连接（发送关闭帧并关闭底层连接）
+// Close 关闭 WebSocket 连接（发送关闭帧并关闭底层连接）。
+//
+// 这里不获取 writeMu：关闭必须能打断正在阻塞的写操作，
+// 否则写超时/停机时会被卡在进行中的写里。gorilla/websocket 的
+// Conn.Close 可以安全地与其它方法并发调用。
 func (c *Conn) Close() error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	return c.ws.Close()
+}
+
+// SetReadLimit 限制单个 WebSocket 消息的最大字节数。
+// limit <= 0 表示不限制。
+func (c *Conn) SetReadLimit(limit int64) {
+	c.ws.SetReadLimit(limit)
 }
 
 // LocalAddr 返回本地地址

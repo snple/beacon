@@ -499,4 +499,31 @@ func TestWildcardSemantics_ConsistentAcrossImplementations(t *testing.T) {
 			}
 		}
 	}
+
+	// 中缀 ** 是非法过滤器：三套实现都必须不匹配任何主题。
+	invalidFilters := []string{"a/**/b", "**/b", "a/**/b/**"}
+	for _, filter := range invalidFilters {
+		if packet.ValidateTopicFilter(filter) {
+			t.Fatalf("test filter %q must be invalid", filter)
+		}
+		for _, topic := range topics {
+			if packet.MatchTopic(filter, topic) {
+				t.Errorf("packet.MatchTopic(%q, %q) = true, want false", filter, topic)
+			}
+
+			tree := newSubTree()
+			tree.subscribe("c1", filter, packet.SubscribeOptions{QoS: packet.QoS0})
+			if _, inTree := tree.matchTopic(topic)["c1"]; inTree {
+				t.Errorf("subTree(%q, %q) matched, want no match", filter, topic)
+			}
+
+			store := newRetainStore()
+			if err := store.set(topic, 0); err != nil {
+				t.Fatalf("retain set failed: %v", err)
+			}
+			if len(store.matchTopics(filter)) != 0 {
+				t.Errorf("retainStore(%q) matched %q, want no match", filter, topic)
+			}
+		}
+	}
 }

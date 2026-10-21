@@ -9,16 +9,10 @@ import (
 	"github.com/danclive/nson-go"
 )
 
-// SubscribeOptions 订阅选项
-
-// - RetainAsPublished 选项:
-//   - `true`: 保持原始 Retain 标志
-//   - `false`: 发送时清除 Retain 标志
+// SubscribeOptions 订阅选项。
 //
-// - RetainHandling 模式:
-//   - `0`: 总是发送保留消息（默认）
-//   - `1`: 仅在新订阅时发送
-//   - `2`: 不发送保留消息
+//   - RetainAsPublished：true 保持原始 Retain 标志，false 发送时清除；
+//   - RetainHandling：0 总是发送保留消息（默认），1 仅在新订阅时发送，2 不发送。
 type SubscribeOptions struct {
 	QoS               QoS
 	NoLocal           bool  // 不接收自己发布的消息
@@ -121,9 +115,10 @@ func MatchTopic(filter, topic string) bool {
 	topicParts := strings.Split(topic, "/")
 
 	for i, fp := range filterParts {
-		// "**" 匹配剩余所有层级
+		// "**" 匹配零个或多个剩余层级，但只允许作为最后一层
+		// （与 ValidateTopicFilter 保持一致；中缀 "**" 是非法过滤器）。
 		if fp == TopicWildcardMulti {
-			return true
+			return i == len(filterParts)-1
 		}
 
 		// 如果 topic 已经结束，但 filter 还有剩余部分
@@ -181,11 +176,12 @@ func (p *SubscribePacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 属性
-	if p.Properties == nil {
-		p.Properties = NewReasonProperties()
+	// 属性（不修改接收者）
+	props := p.Properties
+	if props == nil {
+		props = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
+	if err := props.Encode(w); err != nil {
 		return err
 	}
 
@@ -234,9 +230,9 @@ func (p *SubscribePacket) decode(r io.Reader, header FixedHeader) error {
 				return fmt.Errorf("failed to decode subscription topic: %w", err)
 			}
 
-			if !ValidateTopicFilter(topic) {
-				return fmt.Errorf("invalid topic filter: %s", topic)
-			}
+			// 不在这里校验过滤器：非法过滤器应通过 SUBACK 的逐条原因码
+			// （ReasonTopicFilterInvalid）反馈，而不是让整包解码失败、
+			// 直接断开连接（那样 core 的逐条处理逻辑永远不可达）。
 
 			var options [1]byte
 			if _, err := io.ReadFull(br, options[:]); err != nil {
@@ -284,11 +280,12 @@ func (p *SubackPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 属性
-	if p.Properties == nil {
-		p.Properties = NewReasonProperties()
+	// 属性（不修改接收者）
+	props := p.Properties
+	if props == nil {
+		props = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
+	if err := props.Encode(w); err != nil {
 		return err
 	}
 
@@ -355,11 +352,12 @@ func (p *UnsubscribePacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 属性
-	if p.Properties == nil {
-		p.Properties = NewReasonProperties()
+	// 属性（不修改接收者）
+	props := p.Properties
+	if props == nil {
+		props = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
+	if err := props.Encode(w); err != nil {
 		return err
 	}
 
@@ -427,11 +425,12 @@ func (p *UnsubackPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 属性
-	if p.Properties == nil {
-		p.Properties = NewReasonProperties()
+	// 属性（不修改接收者）
+	props := p.Properties
+	if props == nil {
+		props = NewReasonProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
+	if err := props.Encode(w); err != nil {
 		return err
 	}
 

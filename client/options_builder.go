@@ -2,6 +2,7 @@ package client
 
 import (
 	"crypto/tls"
+	"fmt"
 	"time"
 
 	"github.com/snple/beacon/internal/mq"
@@ -43,6 +44,9 @@ type ClientOptions struct {
 	// 重传配置
 	RetransmitInterval time.Duration // QoS 1 消息重传间隔（默认 5 秒）
 
+	// 网络写超时（默认 10 秒，0 表示不设置写截止时间）
+	WriteTimeout time.Duration
+
 	// 轮询配置
 	MessageQueueSize int // 消息队列缓冲大小（默认 100）
 
@@ -71,6 +75,7 @@ func NewClientOptions() *ClientOptions {
 		ReceiveWindow:      defaultReceiveWindow,
 		RetransmitInterval: defaultRetransmitInterval,
 		MessageQueueSize:   100,
+		WriteTimeout:       10 * time.Second,
 		MaxQueueSize:       10000,
 		AutoAck:            true, // 默认自动确认 QoS1 消息
 		StoreOptions:       DefaultStoreOptions(),
@@ -250,6 +255,13 @@ func (o *ClientOptions) WithRetransmitInterval(d time.Duration) *ClientOptions {
 	return o
 }
 
+// WithWriteTimeout 设置单次网络写超时。超时或写失败会关闭连接并触发重连，
+// 未确认的消息仍保留在本地出站队列中。0 表示不设置写截止时间。
+func (o *ClientOptions) WithWriteTimeout(d time.Duration) *ClientOptions {
+	o.WriteTimeout = d
+	return o
+}
+
 // WithMessageQueueSize 设置消息队列缓冲大小
 func (o *ClientOptions) WithMessageQueueSize(size int) *ClientOptions {
 	o.MessageQueueSize = size
@@ -292,6 +304,40 @@ func (o *ClientOptions) applyDefaults() {
 	if o.MessageQueueSize == 0 {
 		o.MessageQueueSize = 100
 	}
+	if o.MaxPacketSize == 0 {
+		o.MaxPacketSize = defaultMaxPacketSize
+	}
+}
+
+// Validate 校验客户端配置。
+//
+// 重点拦截会导致 panic 或立即超时的取值：
+//   - MessageQueueSize <= 0 会让 make(chan) panic；
+//   - RetransmitInterval <= 0 会让 time.NewTicker panic；
+//   - ConnectTimeout/PublishTimeout <= 0 会让握手/等待立即超时。
+func (o *ClientOptions) Validate() error {
+	if o.ConnectTimeout <= 0 {
+		return fmt.Errorf("connectTimeout must be > 0, got %v", o.ConnectTimeout)
+	}
+	if o.PublishTimeout <= 0 {
+		return fmt.Errorf("publishTimeout must be > 0, got %v", o.PublishTimeout)
+	}
+	if o.RetransmitInterval <= 0 {
+		return fmt.Errorf("retransmitInterval must be > 0, got %v", o.RetransmitInterval)
+	}
+	if o.MessageQueueSize <= 0 {
+		return fmt.Errorf("messageQueueSize must be > 0, got %d", o.MessageQueueSize)
+	}
+	if o.MaxQueueSize < 0 {
+		return fmt.Errorf("maxQueueSize must be >= 0, got %d", o.MaxQueueSize)
+	}
+	if o.MaxPacketSize == 0 || o.MaxPacketSize > packet.MaxPacketSize {
+		return fmt.Errorf("maxPacketSize must be in (0, %d], got %d", packet.MaxPacketSize, o.MaxPacketSize)
+	}
+	if o.WriteTimeout < 0 {
+		return fmt.Errorf("writeTimeout must be >= 0, got %v", o.WriteTimeout)
+	}
+	return nil
 }
 
 // PublishOptions 发布选项（Builder 模式）

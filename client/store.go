@@ -46,5 +46,5 @@ func (ms *store) Close() error {
 
 // db 返回底层数据库（兼容现有代码）
 func (ms *store) db() *badger.DB {
-	return ms.Store.DB()
+	return ms.DB()
 }

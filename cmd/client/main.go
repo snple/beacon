@@ -59,7 +59,7 @@ func main() {
 		fmt.Printf("Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	// 打印启动信息
 	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
@@ -100,7 +100,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("Failed to create client", zap.Error(err))
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	// 连接到 core（ws:// 或 wss:// 前缀自动走 WebSocket 传输）
 	var dialer client.Dialer

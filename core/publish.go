@@ -434,6 +434,11 @@ func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 
 		// 应用 QoS 降级：取订阅 QoS 和消息 QoS 的较小值
 		msg.QoS = min(subQoS, msg.QoS)
-		c.deliver(msg)
+		if err := c.deliver(msg); err != nil {
+			c.core.logger.Debug("Failed to deliver retained message",
+				zap.String("clientID", c.ID),
+				zap.String("topic", msg.Packet.Topic),
+				zap.Error(err))
+		}
 	}
 }

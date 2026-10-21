@@ -12,13 +12,14 @@ import (
 // CoreOptions Core 配置选项（Builder 模式）
 type CoreOptions struct {
 	// 连接限制
-	MaxClients     uint32 // 最大客户端数
-	MaxPacketSize  uint32 // 最大包大小
-	ConnectTimeout uint32 // 连接超时 (秒)
-	KeepAlive      uint16 // 服务器心跳间隔 (秒)，0 表示使用客户端的值
+	MaxClients     uint32        // 最大客户端数
+	MaxPacketSize  uint32        // 最大包大小
+	ConnectTimeout uint32        // 连接超时 (秒)
+	KeepAlive      uint16        // 服务器心跳间隔 (秒)，0 表示使用客户端的值
+	WriteTimeout   time.Duration // 单次写超时（默认 10 秒，0 表示不设置写截止时间）
 
 	// 会话管理
-	MaxSessionTimeout uint32 // 最大会话保留时间（秒），0 表示断开即清理
+	MaxSessionTimeout uint32 // 会话保留时间的上限（秒），0 表示不限制（使用客户端请求值）
 
 	// 流量控制
 	ReceiveWindow uint16 // core 可接收的消息窗口大小 (双向 FLOW 用)
@@ -47,6 +48,7 @@ type CoreOptions struct {
 	MaxPublishRate            float64             // 每客户端每秒最大发布消息数，0 表示不限制
 	MaxPublishBurst           int                 // 每客户端发布速率突发容量（默认取 rate）
 	MaxStoreBytes             int64               // 存储占用水位（字节），0 表示不限制
+	MaxOfflineSessions        int                 // 保留中的离线会话上限（个），0 表示不限制
 
 	// 持久化存储
 	StoreOptions StoreOptions // 消息持久化配置
@@ -81,6 +83,7 @@ func NewCoreOptions() *CoreOptions {
 		MaxPacketSize:        1048576, // 1MB
 		ConnectTimeout:       10,
 		KeepAlive:            60,
+		WriteTimeout:         10 * time.Second,
 		MaxSessionTimeout:    3600,
 		ReceiveWindow:        1000,
 		DefaultMessageExpiry: 24 * time.Hour,
@@ -93,6 +96,7 @@ func NewCoreOptions() *CoreOptions {
 		MaxClientQueueSize:        10000,
 		ClientQueueOverflowPolicy: QueueOverflowDropNewest,
 		MaxPendingMessages:        100000,
+		MaxOfflineSessions:        10000,
 	}
 }
 
@@ -117,6 +121,13 @@ func (o *CoreOptions) WithConnectTimeout(seconds uint32) *CoreOptions {
 // WithKeepAlive 设置服务器心跳间隔 (秒)
 func (o *CoreOptions) WithKeepAlive(seconds uint16) *CoreOptions {
 	o.KeepAlive = seconds
+	return o
+}
+
+// WithWriteTimeout 设置单次网络写超时。超时或写失败会关闭该连接，
+// 未确认的消息仍保留在持久化队列中等待重连补发。0 表示不设置写截止时间。
+func (o *CoreOptions) WithWriteTimeout(d time.Duration) *CoreOptions {
+	o.WriteTimeout = d
 	return o
 }
 
@@ -214,6 +225,13 @@ func (o *CoreOptions) WithMaxPendingMessages(n int) *CoreOptions {
 	return o
 }
 
+// WithMaxOfflineSessions 设置保留中的离线会话上限，0 表示不限制。
+// 超限时驱逐最早过期的离线会话（会话记录、订阅与待投递队列一并清理）。
+func (o *CoreOptions) WithMaxOfflineSessions(n int) *CoreOptions {
+	o.MaxOfflineSessions = n
+	return o
+}
+
 // WithMaxPublishRate 设置每个客户端每秒最大发布消息数，0 表示不限制。
 // 超限时 QoS1 消息返回 MessageRateTooHigh，QoS0 消息被丢弃。
 func (o *CoreOptions) WithMaxPublishRate(rate float64, burst int) *CoreOptions {
@@ -280,6 +298,11 @@ func (o *CoreOptions) Validate() error {
 		return fmt.Errorf("receiveWindow must be > 0, got %d", o.ReceiveWindow)
 	}
 
+	// 验证写超时
+	if o.WriteTimeout < 0 {
+		return fmt.Errorf("writeTimeout must be >= 0, got %v", o.WriteTimeout)
+	}
+
 	// 验证消息过期设置
 	if o.ExpiredCheckInterval < 0 {
 		return fmt.Errorf("expiredCheckInterval must be >= 0, got %v", o.ExpiredCheckInterval)
@@ -316,6 +339,9 @@ func (o *CoreOptions) Validate() error {
 	}
 	if o.MaxStoreBytes < 0 {
 		return fmt.Errorf("maxStoreBytes must be >= 0, got %d", o.MaxStoreBytes)
+	}
+	if o.MaxOfflineSessions < 0 {
+		return fmt.Errorf("maxOfflineSessions must be >= 0, got %d", o.MaxOfflineSessions)
 	}
 	switch o.ClientQueueOverflowPolicy {
 	case QueueOverflowDropNewest, QueueOverflowDropOldest:

@@ -54,6 +54,37 @@ func writePropertyBlob(w io.Writer, buf *bytes.Buffer) error {
 	return err
 }
 
+// decodePropertyBlob 读取「长度前缀 + 属性字节」，并在分配缓冲区之前
+// 校验长度不超过输入中实际剩余的字节数。
+//
+// propLen 来自报文中的 uint32，只受包级硬上限（MaxPacketSize）约束；
+// 若不与实际剩余字节比较，一个几十字节的畸形包就能触发数百 MB 的内存分配。
+func decodePropertyBlob(r io.Reader) ([]byte, error) {
+	propLen, err := DecodeUint32(r)
+	if err != nil {
+		return nil, err
+	}
+
+	if propLen == 0 {
+		return nil, nil
+	}
+
+	if propLen > MaxPacketSize {
+		return nil, ErrMalformedPacket
+	}
+
+	if br, ok := r.(*bytes.Reader); ok && uint64(propLen) > uint64(br.Len()) {
+		return nil, ErrMalformedPacket
+	}
+
+	data := make([]byte, propLen)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
 // ConnectProperties CONNECT 专用属性（客户端发送）
 // 使用位掩码优化编码，减少字节开销
 type ConnectProperties struct {
@@ -153,22 +184,12 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 
 // Decode 解码连接属性（使用位掩码优化）
 func (p *ConnectProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeUint32(r)
+	data, err := decodePropertyBlob(r)
 	if err != nil {
 		return err
 	}
-
-	if propLen == 0 {
+	if data == nil {
 		return nil
-	}
-
-	if propLen > MaxPacketSize {
-		return ErrMalformedPacket
-	}
-
-	data := make([]byte, propLen)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return err
 	}
 
 	buf := bytes.NewReader(data)
@@ -349,22 +370,12 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 
 // Decode 解码连接响应属性（使用位掩码优化）
 func (p *ConnackProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeUint32(r)
+	data, err := decodePropertyBlob(r)
 	if err != nil {
 		return err
 	}
-
-	if propLen == 0 {
+	if data == nil {
 		return nil
-	}
-
-	if propLen > MaxPacketSize {
-		return ErrMalformedPacket
-	}
-
-	data := make([]byte, propLen)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return err
 	}
 
 	buf := bytes.NewReader(data)
@@ -532,6 +543,12 @@ func (p *AuthProperties) Decode(r io.Reader) error {
 		count, err := DecodeUint16(r)
 		if err != nil {
 			return err
+		}
+
+		// 每个条目至少 4 字节（两个空字符串的长度前缀）。先按剩余字节校验，
+		// 避免畸形包用极小的报文触发数 MB 的 map 预分配。
+		if br, ok := r.(*bytes.Reader); ok && uint64(count)*4 > uint64(br.Len()) {
+			return ErrMalformedPacket
 		}
 
 		p.UserProperties = make(map[string]string, count)
@@ -702,22 +719,12 @@ func (p *PublishProperties) Encode(w io.Writer) error {
 
 // Decode 解码发布属性（使用位掩码优化）
 func (p *PublishProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeUint32(r)
+	data, err := decodePropertyBlob(r)
 	if err != nil {
 		return err
 	}
-
-	if propLen == 0 {
+	if data == nil {
 		return nil
-	}
-
-	if propLen > MaxPacketSize {
-		return ErrMalformedPacket
-	}
-
-	data := make([]byte, propLen)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return err
 	}
 
 	buf := bytes.NewReader(data)
@@ -852,22 +859,12 @@ func (p *ReasonProperties) Encode(w io.Writer) error {
 
 // Decode 解码响应属性（使用位掩码优化）
 func (p *ReasonProperties) Decode(r io.Reader) error {
-	propLen, err := DecodeUint32(r)
+	data, err := decodePropertyBlob(r)
 	if err != nil {
 		return err
 	}
-
-	if propLen == 0 {
+	if data == nil {
 		return nil
-	}
-
-	if propLen > MaxPacketSize {
-		return ErrMalformedPacket
-	}
-
-	data := make([]byte, propLen)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return err
 	}
 
 	buf := bytes.NewReader(data)

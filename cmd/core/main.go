@@ -89,6 +89,7 @@ func main() {
 		fmt.Printf("Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
+	defer func() { _ = logger.Sync() }()
 
 	// 构建 core 选项
 	opts := core.NewCoreOptions().
@@ -195,73 +196,79 @@ func main() {
 		})
 	}
 
-	// 创建并启动 core
-	core, err := core.NewWithOptions(opts)
+	// 创建并启动 broker（变量名避免遮蔽 core 包）
+	broker, err := core.NewWithOptions(opts)
 	if err != nil {
 		logger.Error("Failed to create core", zap.Error(err))
 		os.Exit(1)
 	}
 
-	if err := core.Start(); err != nil {
+	if err := broker.Start(); err != nil {
 		logger.Error("Failed to start core", zap.Error(err))
 		os.Exit(1)
 	}
 
-	// 在后台启动TCP服务
+	// 监听器错误统一送入 errCh，由主协程优雅停机，避免 goroutine 内 os.Exit 跳过清理。
+	errCh := make(chan error, 3)
+
 	go func() {
 		logger.Info("Starting TCP server", zap.String("address", *addr))
-		if err := core.ServeTCP(*addr); err != nil {
-			logger.Error("TCP server error", zap.Error(err))
-			os.Exit(1)
-		}
+		errCh <- broker.ServeTCP(*addr)
 	}()
 
-	// 可选：在后台启动 WebSocket 服务
 	if *wsAddr != "" {
 		go func() {
 			logger.Info("Starting WebSocket server", zap.String("address", *wsAddr), zap.String("path", *wsPath))
-			if err := core.ServeWS(*wsAddr, *wsPath); err != nil {
-				logger.Error("WebSocket server error", zap.Error(err))
-				os.Exit(1)
-			}
+			errCh <- broker.ServeWS(*wsAddr, *wsPath)
 		}()
 	}
 
-	// 可选：在后台启动 metrics / 健康检查 HTTP 服务
 	if *metricsAddr != "" {
 		go func() {
 			logger.Info("Starting metrics server", zap.String("address", *metricsAddr))
-			if err := core.ServeMetrics(*metricsAddr); err != nil {
-				logger.Error("Metrics server error", zap.Error(err))
-				os.Exit(1)
-			}
+			errCh <- broker.ServeMetrics(*metricsAddr)
 		}()
 	}
 
-	// 打印启动信息
+	printBanner(version, *addr, wsEnabledText(*wsAddr, *wsPath),
+		wsEnabledText(*metricsAddr, "/metrics"), wsEnabledText(*metricsAddr, "/healthz"),
+		*maxClients, *storeDir, *authFile, *debug)
+
+	// 等待中断信号或监听器退出
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-sigCh:
+		fmt.Println("\nShutting down...")
+	case err := <-errCh:
+		logger.Error("Server stopped, shutting down", zap.Error(err))
+	}
+
+	_ = broker.Stop()
+	fmt.Println("core stopped.")
+}
+
+// printBanner 输出对齐的启动信息（内部宽度 64）。
+func printBanner(version, addr, ws, metrics, health string, maxClients uint, storeDir, authFile string, debug bool) {
+	row := func(label, value string) {
+		fmt.Printf("║  %-22s%-40s║\n", label, value)
+	}
+
 	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║              Beacon core                             ║")
+	row("Beacon core", "")
 	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║  Version:          %-40s ║\n", version)
-	fmt.Printf("║  Address:          %-40s ║\n", *addr)
-	fmt.Printf("║  WebSocket:        %-40s ║\n", wsEnabledText(*wsAddr, *wsPath))
-	fmt.Printf("║  Metrics:          %-40s ║\n", wsEnabledText(*metricsAddr, "/metrics"))
-	fmt.Printf("║  Health:           %-40s ║\n", wsEnabledText(*metricsAddr, "/healthz"))
-	fmt.Printf("║  Max Clients:      %-40d ║\n", *maxClients)
-	fmt.Printf("║  Persistence:      %-40v ║\n", *storeDir != "")
-	fmt.Printf("║  Storage Dir:      %-40s ║\n", *storeDir)
-	fmt.Printf("║  Auth File:       %-40s ║\n", *authFile)
-	fmt.Printf("║  Debug:           %-40v ║\n", *debug)
+	row("Version:", version)
+	row("Address:", addr)
+	row("WebSocket:", ws)
+	row("Metrics:", metrics)
+	row("Health:", health)
+	row("Max Clients:", fmt.Sprintf("%d", maxClients))
+	row("Persistence:", fmt.Sprintf("%v", storeDir != ""))
+	row("Storage Dir:", storeDir)
+	row("Auth File:", authFile)
+	row("Debug:", fmt.Sprintf("%v", debug))
 	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 	fmt.Println("Press Ctrl+C to stop the core...")
-
-	// 等待中断信号
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-
-	fmt.Println("\nShutting down...")
-	core.Stop()
-	fmt.Println("core stopped.")
 }

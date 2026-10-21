@@ -122,6 +122,10 @@ func (s *Stream) Write(p []byte) (int, error) {
 // Read 实现 io.Reader 接口，从数据包中读取数据
 // 注意：如果 p 太小无法装下整个数据包，会分多次读取
 func (s *Stream) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
 	// 如果缓冲区为空，读取下一个数据包
 	if len(s.readBuf) == 0 || s.readOffset >= len(s.readBuf) {
 		pkt, err := s.ReadPacket()

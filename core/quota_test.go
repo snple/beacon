@@ -22,7 +22,7 @@ func newQuotaTestClient(t *testing.T, c *Core, clientID string) *Client {
 		core:    c,
 		session: newSession(clientID, connect, c),
 	}
-	require.NoError(t, client.initQueue())
+	client.initQueue()
 	return client
 }
 

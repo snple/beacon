@@ -15,7 +15,7 @@ import (
 // 支持 TCP、TLS、WebSocket、QUIC 等任何实现了 net.Conn 接口的连接
 func (c *Core) HandleConn(conn net.Conn) error {
 	if !c.running.Load() {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("core is not running")
 	}
 
@@ -24,12 +24,12 @@ func (c *Core) HandleConn(conn net.Conn) error {
 		c.logger.Warn("Connection rate exceeded, rejecting connection",
 			zap.String("remote", conn.RemoteAddr().String()))
 		c.sendConnack(conn, false, packet.ReasonConnectionRateExceeded, nil)
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("connection rate exceeded")
 	}
 
 	if !c.spawnTask(func() { c.handleConn(conn) }) {
-		conn.Close()
+		_ = conn.Close()
 		return ErrCoreNotRunning
 	}
 	return nil
@@ -49,6 +49,18 @@ func (c *Core) handleConn(conn net.Conn) {
 		if clientID == "" {
 			clientID = c.generateClientID()
 		}
+
+		// Core 用 "client:<clientID>:" 作为持久化队列前缀；允许 ':' 会让
+		// 一个客户端的队列前缀包含另一个客户端的队列（跨会话消息泄露）。
+		if !packet.ValidateClientID(clientID) {
+			c.logger.Warn("Invalid client ID, rejecting connection",
+				zap.String("clientID", clientID),
+				zap.String("remote", conn.RemoteAddr().String()))
+			c.sendConnack(conn, false, packet.ReasonClientIDNotValid, nil)
+			_ = conn.Close()
+			return
+		}
+
 		connect.ClientID = clientID
 	}
 
@@ -57,7 +69,7 @@ func (c *Core) handleConn(conn net.Conn) {
 			zap.String("clientID", connect.ClientID),
 			zap.String("remote", conn.RemoteAddr().String()))
 		c.sendConnack(conn, false, packet.ReasonServerBusy, nil)
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
@@ -69,7 +81,18 @@ func (c *Core) handleConn(conn net.Conn) {
 	}
 
 	// 注册客户端并发送 CONNACK
-	client, sessionPresent, replacedOnline := c.registerClient(conn, connect)
+	client, sessionPresent, replacedOnline, oldConns := c.registerClient(conn, connect)
+
+	// Core 在注册过程中停止（与 Stop 的客户端快照互斥）：拒绝本次连接。
+	// 否则该连接会在 Stop 快照之后注册，永远不会被关闭，拖住优雅停机。
+	if client == nil {
+		c.sendConnack(conn, false, packet.ReasonServerBusy, nil)
+		_ = conn.Close()
+		return
+	}
+
+	// 会话元数据在锁外持久化：badger 写入不应发生在全局 clientsMu 临界区内。
+	c.saveSession(client, 0)
 
 	// 通过 client.getConn() 读取连接状态。
 	// 注意：不能直接访问 client.conn，否则会绕过 connMu 的保护，
@@ -99,6 +122,12 @@ func (c *Core) handleConn(conn net.Conn) {
 	}
 
 	c.sendConnack(conn, sessionPresent, packet.ReasonSuccess, connackProp)
+
+	// 旧连接已在锁内被 detach（停止处理），这里在锁外真正关闭 socket。
+	// 关闭动作不再发送 DISCONNECT：避免慢连接让接管路径等一个写超时。
+	for _, oldConn := range oldConns {
+		oldConn.closeLocal(packet.ReasonSessionTakenOver)
+	}
 
 	// 更新统计信息
 	if !replacedOnline {
@@ -151,22 +180,24 @@ func (c *Core) canAcceptClientConnection(clientID string) bool {
 func (c *Core) readConnectPacket(conn net.Conn) (*packet.ConnectPacket, error) {
 	// 设置连接超时
 	if c.options.ConnectTimeout > 0 {
-		conn.SetDeadline(time.Now().Add(time.Duration(c.options.ConnectTimeout) * time.Second))
+		_ = conn.SetDeadline(time.Now().Add(time.Duration(c.options.ConnectTimeout) * time.Second))
 	}
-	defer conn.SetDeadline(time.Time{}) // 清除超时
+	defer func() { _ = conn.SetDeadline(time.Time{}) }() // 清除超时
 
 	// 读取 CONNECT 包
-	pkt, err := packet.ReadPacket(conn, c.MaxPacketSize())
+	pkt, size, err := packet.ReadPacketWithSize(conn, c.MaxPacketSize())
 	if err != nil {
 		c.logger.Debug("Failed to read CONNECT packet", zap.Error(err), zap.String("remote", conn.RemoteAddr().String()))
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
+
+	c.stats.BytesReceived.Add(int64(size))
 
 	connect, ok := pkt.(*packet.ConnectPacket)
 	if !ok {
 		c.logger.Debug("First packet is not CONNECT", zap.Uint8("type", uint8(pkt.Type())))
-		conn.Close()
+		_ = conn.Close()
 		return nil, ErrInvalidConnectPacket
 	}
 
@@ -176,7 +207,7 @@ func (c *Core) readConnectPacket(conn net.Conn) (*packet.ConnectPacket, error) {
 			zap.String("name", connect.ProtocolName),
 			zap.String("expected", packet.ProtocolName))
 		c.sendConnack(conn, false, packet.ReasonUnsupportedProtocol, nil)
-		conn.Close()
+		_ = conn.Close()
 
 		return nil, ErrUnsupportedProtocol
 	}
@@ -187,7 +218,7 @@ func (c *Core) readConnectPacket(conn net.Conn) (*packet.ConnectPacket, error) {
 			zap.Uint8("version", connect.ProtocolVersion),
 			zap.Uint8("expected", packet.ProtocolVersion))
 		c.sendConnack(conn, false, packet.ReasonUnsupportedProtocol, nil)
-		conn.Close()
+		_ = conn.Close()
 
 		return nil, ErrUnsupportedProtocol
 	}
@@ -216,7 +247,7 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 	if err := c.options.Hooks.callAuthOnConnect(authCtx); err != nil {
 		c.logger.Debug("Authentication failed", zap.String("clientID", connect.ClientID), zap.Error(err))
 		c.sendConnack(conn, false, packet.ReasonNotAuthorized, nil)
-		conn.Close()
+		_ = conn.Close()
 		return nil, false
 	}
 	return authCtx, true
@@ -231,9 +262,15 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 // 1. 无旧客户端：创建新 Client
 // 2. 有旧客户端 + KeepSession=true：复用旧 Client，替换其 Conn
 // 3. 有旧客户端 + KeepSession=false：清理旧 Client，创建新 Client
-func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool, bool) {
+func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool, bool, []*conn) {
 	c.clientsMu.Lock()
-	defer c.clientsMu.Unlock()
+
+	// 停机后不再接受注册：与 Stop 的客户端快照共用同一把锁，
+	// 避免出现"快照之后才注册、永远不会被关闭"的连接。
+	if !c.running.Load() {
+		c.clientsMu.Unlock()
+		return nil, false, false, nil
+	}
 
 	clientID := connect.ClientID
 
@@ -244,10 +281,19 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 		wasOnline = !existingClient.Closed()
 	}
 
+	// oldConns 收集需要在锁外关闭的旧连接。
+	// 锁内只调用 detach（原子状态切换，无网络 IO），真正的 socket 关闭
+	// 由调用方在释放 clientsMu 之后完成——关闭连接会写 DISCONNECT，
+	// 在全局锁内等待慢客户端会阻塞所有新连接注册。
+	var oldConns []*conn
+
 	// CleanStart：客户端要求全新会话，先丢弃旧会话（订阅 + 待投递消息 + 持久化元数据）
 	if exists && connect.CleanStart {
 		if wasOnline {
-			existingClient.Close(packet.ReasonSessionTakenOver)
+			if oc := existingClient.getConn(); oc != nil {
+				oc.detach(packet.ReasonSessionTakenOver)
+				oldConns = append(oldConns, oc)
+			}
 		}
 		delete(c.clients, clientID)
 		c.cleanupClientWithoutLock(clientID, existingClient)
@@ -259,8 +305,8 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 	if !exists {
 		client := newClient(netConn, connect, c)
 		c.clients[clientID] = client
-		c.saveSession(client, 0)
-		return client, false, wasOnline
+		c.clientsMu.Unlock()
+		return client, false, wasOnline, oldConns
 	}
 
 	// 从离线会话列表中移除
@@ -282,24 +328,26 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 
 		// 只关闭旧连接，避免误伤刚替换进去的新连接。
 		if wasOnline && oldConn != nil {
-			oldConn.close(packet.ReasonSessionTakenOver)
+			oldConn.detach(packet.ReasonSessionTakenOver)
+			oldConns = append(oldConns, oldConn)
 		}
-
-		// 会话在线：清除过期时间
-		c.saveSession(existingClient, 0)
 
 		c.logger.Info("Session restored (reusing client, replacing conn)",
 			zap.String("clientID", clientID),
 			zap.Bool("wasOnline", wasOnline))
 
-		return existingClient, true, wasOnline
+		c.clientsMu.Unlock()
+		return existingClient, true, wasOnline, oldConns
 	}
 
 	// 情况3: SessionTimeout=0 或旧会话不可恢复，清理旧 Client，创建新 Client
 
 	// 踢掉旧连接，因为我们会手动清理旧会话
 	if wasOnline {
-		existingClient.Close(packet.ReasonSessionTakenOver)
+		if oc := existingClient.getConn(); oc != nil {
+			oc.detach(packet.ReasonSessionTakenOver)
+			oldConns = append(oldConns, oc)
+		}
 	}
 
 	// 清理旧资源（在持有锁的情况下调用不需要锁的版本）
@@ -309,13 +357,19 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 	// 创建新 Client
 	client := newClient(netConn, connect, c)
 	c.clients[clientID] = client
-	c.saveSession(client, 0)
 
-	return client, false, wasOnline
+	c.clientsMu.Unlock()
+	return client, false, wasOnline, oldConns
 }
 
 // sendConnack 发送 CONNACK 包
 func (c *Core) sendConnack(conn net.Conn, sessionPresent bool, code packet.ReasonCode, connackProp *packet.ConnackProperties) {
+	// CONNACK 也必须受写超时约束：客户端可能连上后就不再读取。
+	if c.options.WriteTimeout > 0 {
+		_ = conn.SetWriteDeadline(time.Now().Add(c.options.WriteTimeout))
+		defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+	}
+
 	connack := packet.NewConnackPacket(code)
 	connack.SessionPresent = sessionPresent
 
@@ -329,7 +383,10 @@ func (c *Core) sendConnack(conn net.Conn, sessionPresent bool, code packet.Reaso
 		connack.Properties.KeepAlive = uint16(packet.DefaultKeepAlive)
 	}
 
-	packet.WritePacket(conn, connack, c.options.MaxPacketSize)
+	n, _ := packet.WritePacketWithSize(conn, connack, c.options.MaxPacketSize)
+	if n > 0 {
+		c.stats.BytesSent.Add(int64(n))
+	}
 }
 
 // handleClientDisconnect 处理客户端断开连接
@@ -396,20 +453,20 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	// 保留会话，记录过期时间
 	expiryTime := time.Now().Add(time.Duration(client.session.timeout.Load()) * time.Second)
 
-	c.offlineSessionsMu.Lock()
-	c.offlineSessions[client.ID] = expiryTime
-	c.offlineSessionsMu.Unlock()
-
-	// 持久化会话（订阅 + 过期时间），使进程重启后仍能恢复
+	// 先持久化会话（订阅 + 过期时间），再纳入离线会话表：
+	// 若达到 MaxOfflineSessions 上限，addOfflineSession 会驱逐最早过期的
+	// 会话（包括可能刚加入的这一个），并一并删除其记录与队列。
 	c.saveSessionExpiring(client, expiryTime)
+	c.addOfflineSession(client.ID, expiryTime)
 
 	// 需要时发布遗嘱消息（publishWill 内部会清除遗嘱，防止重复发送）
 	if publishWill {
 		client.publishWill()
 	}
 
-	c.logger.Info("Client disconnected, session preserved",
+	c.logger.Info("Client disconnected",
 		zap.String("clientID", client.ID),
 		zap.Uint32("sessionTimeout", client.session.timeout.Load()),
-		zap.String("expiresAt", expiryTime.Format(time.RFC3339)))
+		zap.String("expiresAt", expiryTime.Format(time.RFC3339)),
+		zap.Bool("sessionPreserved", c.isOfflineSession(client.ID)))
 }

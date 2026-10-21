@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 )
@@ -33,12 +34,12 @@ type Packet interface {
 	decode(r io.Reader, header FixedHeader) error
 }
 
-// ReadPacket 从 Reader 读取并解析数据包
-// maxPacketSize: 最大允许的包大小（0 表示无限制）
-func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
+// ReadPacketWithSize 从 Reader 读取并解析数据包，并返回读取的完整线格式字节数
+// （固定头 + 包体）。maxPacketSize: 最大允许的包大小（0 表示无限制）
+func ReadPacketWithSize(r io.Reader, maxPacketSize uint32) (Packet, uint32, error) {
 	var header FixedHeader
 	if err := header.Decode(r); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// 注意：header.Remaining 直接来自对端（4 字节无符号，无上限校验），
@@ -50,7 +51,7 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 
 	// 检查包大小是否超过限制（maxPacketSize=0 表示无限制）
 	if maxPacketSize > 0 && (maxPacketSize < 5 || header.Remaining > maxPacketSize-5) {
-		return nil, NewPacketTooLargeError(
+		return nil, 0, NewPacketTooLargeError(
 			header.Remaining+5,
 			maxPacketSize,
 		)
@@ -58,7 +59,7 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 
 	// 即使 maxPacketSize=0（无限制），也不允许超过协议硬上限
 	if header.Remaining > MaxPacketSize-5 {
-		return nil, NewPacketTooLargeError(
+		return nil, 0, NewPacketTooLargeError(
 			header.Remaining+5,
 			MaxPacketSize,
 		)
@@ -66,7 +67,7 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 
 	// 检查最小 Remaining Length（防止明显畸形的包分配内存）
 	if minLen, ok := minRemainingLength[header.Type]; ok && header.Remaining < minLen {
-		return nil, fmt.Errorf("%w: %v requires at least %d bytes, got %d",
+		return nil, 0, fmt.Errorf("%w: %v requires at least %d bytes, got %d",
 			ErrMalformedPacket, header.Type, minLen, header.Remaining)
 	}
 
@@ -74,7 +75,7 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 	data := make([]byte, header.Remaining)
 	if header.Remaining > 0 {
 		if _, err := io.ReadFull(r, data); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
@@ -108,50 +109,84 @@ func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
 	case TRACE:
 		pkt = &TracePacket{}
 	default:
-		return nil, ErrInvalidPacketType
+		return nil, 0, ErrInvalidPacketType
 	}
 
 	// 解码包体
 	buf := bytes.NewReader(data)
 	if err := pkt.decode(buf, header); err != nil {
-		return nil, fmt.Errorf("failed to decode %v packet: %w", header.Type, err)
+		return nil, 0, fmt.Errorf("failed to decode %v packet: %w", header.Type, err)
 	}
 	if buf.Len() > 0 {
-		return nil, fmt.Errorf("failed to decode %v packet: %w", header.Type, ErrMalformedPacket)
+		return nil, 0, fmt.Errorf("failed to decode %v packet: %w", header.Type, ErrMalformedPacket)
 	}
 
-	return pkt, nil
+	return pkt, header.Remaining + 5, nil
 }
 
-// WritePacket 将数据包写入 Writer
-func WritePacket(w io.Writer, pkt Packet, maxPacketSize uint32) error {
-	// 先编码包体到缓冲区
-	var buf bytes.Buffer
-	if err := pkt.encode(&buf); err != nil {
-		return fmt.Errorf("failed to encode %v packet: %w", pkt.Type(), err)
+// ReadPacket 从 Reader 读取并解析数据包。
+// maxPacketSize: 最大允许的包大小（0 表示无限制）
+func ReadPacket(r io.Reader, maxPacketSize uint32) (Packet, error) {
+	pkt, _, err := ReadPacketWithSize(r, maxPacketSize)
+	return pkt, err
+}
+
+// WriteError 表示数据包写入底层 Writer 时发生的错误（区别于编码错误）。
+// 出现该错误时流中可能已经写入了部分字节，调用方应把连接视为不可用。
+type WriteError struct {
+	Err error
+}
+
+func (e *WriteError) Error() string { return fmt.Sprintf("write packet: %v", e.Err) }
+
+func (e *WriteError) Unwrap() error { return e.Err }
+
+// EncodePacket 将数据包编码为完整的线格式（固定头 + 包体）。
+// 编码失败发生在任何字节写出之前，调用方可以据此区分
+// “消息无法编码（不应断开连接）”与“写入失败（连接不可信）”。
+func EncodePacket(pkt Packet, maxPacketSize uint32) ([]byte, error) {
+	var body bytes.Buffer
+	if err := pkt.encode(&body); err != nil {
+		return nil, fmt.Errorf("failed to encode %v packet: %w", pkt.Type(), err)
 	}
 
-	// 检查包大小是否超过限制
-	totalSize := uint32(buf.Len() + 5) // 包体大小 + 固定头部大小
+	totalSize := uint32(body.Len() + 5) // 包体大小 + 固定头部大小
 	if maxPacketSize > 0 && totalSize > maxPacketSize {
-		return NewPacketTooLargeError(
+		return nil, NewPacketTooLargeError(
 			totalSize,
 			maxPacketSize,
 		)
 	}
 
-	// 构造固定头部
-	header := FixedHeader{
-		Type:      pkt.Type(),
-		Remaining: uint32(buf.Len()),
+	frame := make([]byte, 5+body.Len())
+	frame[0] = byte(pkt.Type())
+	binary.BigEndian.PutUint32(frame[1:5], uint32(body.Len()))
+	copy(frame[5:], body.Bytes())
+
+	return frame, nil
+}
+
+// WritePacketWithSize 将数据包写入 Writer，并返回实际写入的字节数。
+// 固定头与包体一次性写出，避免头/体之间出现部分写入的中间状态。
+func WritePacketWithSize(w io.Writer, pkt Packet, maxPacketSize uint32) (int, error) {
+	frame, err := EncodePacket(pkt, maxPacketSize)
+	if err != nil {
+		return 0, err
 	}
 
-	// 先写入固定头部
-	if err := header.Encode(w); err != nil {
-		return err
+	n, err := w.Write(frame)
+	if err != nil {
+		return n, &WriteError{Err: err}
+	}
+	if n != len(frame) {
+		return n, &WriteError{Err: io.ErrShortWrite}
 	}
 
-	// 再写入包体
-	_, err := w.Write(buf.Bytes())
+	return n, nil
+}
+
+// WritePacket 将数据包写入 Writer。
+func WritePacket(w io.Writer, pkt Packet, maxPacketSize uint32) error {
+	_, err := WritePacketWithSize(w, pkt, maxPacketSize)
 	return err
 }

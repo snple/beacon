@@ -28,13 +28,17 @@ var upgrader = websocket.Upgrader{
 // HandleConn 处理，与 TCP/TLS 连接走完全相同的协议流程。
 // 此方法会阻塞，直到 HTTP 服务关闭或 Core 停止。
 func (c *Core) ServeWS(address, path string) error {
-	if path == "" {
-		path = "/ws"
-	}
-
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
+	}
+	return c.ServeWSListener(listener, path)
+}
+
+// ServeWSListener 在已有 listener 上提供 WebSocket 接入（阻塞，直到 Core 停止或服务关闭）。
+func (c *Core) ServeWSListener(listener net.Listener, path string) error {
+	if path == "" {
+		path = "/ws"
 	}
 
 	mux := http.NewServeMux()
@@ -45,18 +49,18 @@ func (c *Core) ServeWS(address, path string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Core 停止时关闭 HTTP 服务，让 ServeWS 返回
+	// Core 停止时关闭 HTTP 服务，让 ServeWSListener 返回
 	go func() {
 		<-c.ctx.Done()
 		_ = srv.Close()
 	}()
 
 	c.logger.Info("Started WebSocket listener",
-		zap.String("address", address),
+		zap.String("address", listener.Addr().String()),
 		zap.String("path", path))
 
-	err = srv.Serve(listener)
-	if errors.Is(err, http.ErrServerClosed) {
+	err := srv.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 		return nil
 	}
 	return err
@@ -70,6 +74,13 @@ func (c *Core) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			zap.String("remote", r.RemoteAddr),
 			zap.Error(err))
 		return
+	}
+
+	// 在升级之前限制单个 WebSocket 消息的大小。
+	// gorilla 默认不限制帧大小，而 wsconn 会先把整条消息读入内存，
+	// 之后才轮到 beacon 的 MaxPacketSize 校验——不设限等于绕过包大小限制。
+	if limit := c.MaxPacketSize(); limit > 0 {
+		ws.SetReadLimit(int64(limit))
 	}
 
 	// 复用 core 的限流与连接处理（HandleConn 内部自动检查

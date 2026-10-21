@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"sort"
@@ -133,11 +134,12 @@ func (p *DisconnectPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	if p.Properties == nil {
-		p.Properties = NewReasonProperties()
+	props := p.Properties
+	if props == nil {
+		props = NewReasonProperties()
 	}
 
-	return p.Properties.Encode(w)
+	return props.Encode(w)
 }
 
 func (p *DisconnectPacket) decode(r io.Reader, header FixedHeader) error {
@@ -185,11 +187,12 @@ func (p *AuthPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	if p.Properties == nil {
-		p.Properties = NewAuthProperties()
+	props := p.Properties
+	if props == nil {
+		props = NewAuthProperties()
 	}
 
-	return p.Properties.Encode(w)
+	return props.Encode(w)
 }
 
 func (p *AuthPacket) decode(r io.Reader, header FixedHeader) error {
@@ -280,11 +283,12 @@ func (p *TracePacket) encode(w io.Writer) error {
 	}
 
 	// 编码属性
-	if p.Properties == nil {
-		p.Properties = NewReasonProperties()
+	props := p.Properties
+	if props == nil {
+		props = NewReasonProperties()
 	}
 
-	return p.Properties.Encode(w)
+	return props.Encode(w)
 }
 
 func (p *TracePacket) decode(r io.Reader, header FixedHeader) error {
@@ -319,6 +323,12 @@ func (p *TracePacket) decode(r io.Reader, header FixedHeader) error {
 	detailsCount, err := DecodeUint16(r)
 	if err != nil {
 		return err
+	}
+
+	// 每个条目至少 4 字节（两个空字符串的长度前缀）。先按剩余字节校验，
+	// 避免畸形包用极小的报文触发数 MB 的 map 预分配。
+	if br, ok := r.(*bytes.Reader); ok && uint64(detailsCount)*4 > uint64(br.Len()) {
+		return ErrMalformedPacket
 	}
 
 	p.Details = make(map[string]string, detailsCount)

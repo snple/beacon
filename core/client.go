@@ -73,12 +73,11 @@ func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Cli
 	return c
 }
 
-// initQueue 初始化消息队列
-func (c *Client) initQueue() error {
+// initQueue 初始化消息队列（NewQueue 不会失败）。
+func (c *Client) initQueue() {
 	c.queue = NewQueue(c.core.store.db(), fmt.Sprintf("client:%s:", c.ID))
 
 	c.core.logger.Info("Message queue initialized")
-	return nil
 }
 
 // attachConn 附加新的网络连接到客户端
@@ -130,7 +129,16 @@ func (c *Client) Close(reason packet.ReasonCode) {
 	}
 }
 
-// IsClosed 检查客户端是否已关闭
+// closeLocal 关闭客户端连接但不发送 DISCONNECT（用于服务端停机）。
+func (c *Client) closeLocal(reason packet.ReasonCode) {
+	conn := c.getConn()
+
+	if conn != nil {
+		conn.closeLocal(reason)
+	}
+}
+
+// Closed 检查客户端连接是否已关闭。
 func (c *Client) Closed() bool {
 	conn := c.getConn()
 

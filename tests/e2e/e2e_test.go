@@ -58,7 +58,6 @@ func TestE2E_PubSubQoS0(t *testing.T) {
 	pub := connect(t, addr, "e2e-qos0-pub")
 
 	require.NoError(t, sub.Subscribe("e2e/qos0"))
-	time.Sleep(100 * time.Millisecond) // 等待订阅传播
 
 	require.NoError(t, pub.Publish("e2e/qos0", []byte("hello"),
 		client.NewPublishOptions().WithQoS(packet.QoS0)))
@@ -79,7 +78,6 @@ func TestE2E_PubSubQoS1(t *testing.T) {
 	pub := connect(t, addr, "e2e-qos1-pub")
 
 	require.NoError(t, sub.Subscribe("e2e/qos1"))
-	time.Sleep(100 * time.Millisecond)
 
 	require.NoError(t, pub.Publish("e2e/qos1", []byte("qos1 msg"),
 		client.NewPublishOptions().WithQoS(packet.QoS1)))
@@ -115,10 +113,9 @@ func TestE2E_Retain(t *testing.T) {
 
 	pub := connect(t, addr, "e2e-retain-pub")
 
+	// Publish 在收到 PUBACK 后返回，此时保留消息已写入存储。
 	require.NoError(t, pub.Publish("e2e/retain", []byte("last value"),
 		client.NewPublishOptions().WithQoS(packet.QoS1).WithRetain(true)))
-
-	time.Sleep(100 * time.Millisecond)
 
 	// 新订阅者订阅保留主题，应立即收到保留消息
 	sub := connect(t, addr, "e2e-retain-sub")
@@ -138,7 +135,6 @@ func TestE2E_OfflinePublishDeliveredAfterReconnect(t *testing.T) {
 
 	sub := connect(t, addr, "e2e-offline-sub")
 	require.NoError(t, sub.Subscribe("e2e/offline"))
-	time.Sleep(100 * time.Millisecond)
 
 	pub, err := client.NewWithOptions(client.NewClientOptions().
 		WithCore(addr).

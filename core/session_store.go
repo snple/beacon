@@ -30,13 +30,12 @@ type sessionSubscription struct {
 // sessionRecord 会话元数据。
 // ExpiresAt: 0 表示会话当前在线（不设过期）；>0 表示离线后的过期时间（Unix 秒）。
 // 遗嘱消息不持久化：它属于单次连接，重连时由新的 CONNECT 提供。
+// 认证数据（AuthMethod/AuthData）也不持久化：认证只在建立连接时进行。
 type sessionRecord struct {
 	ClientID      string                `nson:"id"`
 	Timeout       uint32                `nson:"timeout"`
 	ExpiresAt     int64                 `nson:"expires"`
 	Subscriptions []sessionSubscription `nson:"subs"`
-	AuthMethod    string                `nson:"am"`
-	AuthData      []byte                `nson:"ad"`
 }
 
 func sessionKey(clientID string) []byte {
@@ -45,11 +44,9 @@ func sessionKey(clientID string) []byte {
 
 func newSessionRecord(client *Client, expiresAt int64) *sessionRecord {
 	rec := &sessionRecord{
-		ClientID:   client.ID,
-		Timeout:    client.session.timeout.Load(),
-		ExpiresAt:  expiresAt,
-		AuthMethod: client.session.authMethod,
-		AuthData:   append([]byte(nil), client.session.authData...),
+		ClientID:  client.ID,
+		Timeout:   client.session.timeout.Load(),
+		ExpiresAt: expiresAt,
 	}
 
 	client.session.subsMu.RLock()
@@ -162,6 +159,15 @@ func (c *Core) recoverSessions() {
 
 	restored := 0
 	for _, rec := range records {
+		// 旧版本可能持久化了含 ':'/控制字符的 ID；这类 ID 会让队列 key 前缀
+		// 互相包含。直接丢弃会话记录，其队列随后由孤儿清理删除。
+		if !packet.ValidateClientID(rec.ClientID) {
+			c.logger.Warn("Dropping persisted session with invalid client ID",
+				zap.String("clientID", rec.ClientID))
+			c.deleteSession(rec.ClientID)
+			continue
+		}
+
 		expiresAt := rec.ExpiresAt
 
 		// ExpiresAt=0 说明上次进程退出时连接仍在线：按"现在断开"重新计算过期时间。
@@ -186,8 +192,6 @@ func (c *Core) recoverSessions() {
 			core: c,
 			session: &session{
 				id:            rec.ClientID,
-				authMethod:    rec.AuthMethod,
-				authData:      rec.AuthData,
 				subscriptions: make(map[string]packet.SubscribeOptions, len(rec.Subscriptions)),
 				pendingAck:    make(map[nson.Id]pendingMessage),
 				core:          c,
@@ -195,12 +199,7 @@ func (c *Core) recoverSessions() {
 		}
 		client.session.timeout.Store(rec.Timeout)
 
-		if err := client.initQueue(); err != nil {
-			c.logger.Warn("Failed to init queue for restored session",
-				zap.String("clientID", rec.ClientID),
-				zap.Error(err))
-			continue
-		}
+		client.initQueue()
 
 		for _, sub := range rec.Subscriptions {
 			opts := packet.SubscribeOptions{
@@ -226,6 +225,13 @@ func (c *Core) recoverSessions() {
 
 	// 没有对应会话的客户端队列（崩溃残留、CleanStart、旧版本遗留）一并清理
 	c.cleanupOrphanClientQueues()
+
+	// 会话数超过 MaxOfflineSessions 时收敛到上限内
+	if evicted := c.trimOfflineSessions(); evicted > 0 {
+		c.logger.Warn("Trimmed restored offline sessions to MaxOfflineSessions",
+			zap.Int("evicted", evicted),
+			zap.Int("limit", c.options.MaxOfflineSessions))
+	}
 
 	if restored > 0 {
 		c.logger.Info("Recovered sessions", zap.Int("count", restored))

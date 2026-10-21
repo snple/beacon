@@ -16,11 +16,12 @@
 
 .DS_Store
 .env
-# go.mod
-go.sum
 
 *.toml
 *.db
+
+# beacon-core 默认存储目录
+data/
 
 # Reasonix 本地状态
 .reasonix/

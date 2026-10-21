@@ -221,7 +221,7 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1, 0)
+	_, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +447,7 @@ func TestSessionExpiry(t *testing.T) {
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1, 0)
+	_, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +514,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 	}
 
 	// 读取 CONNACK
-	pkt, err := packet.ReadPacket(conn1, 0)
+	_, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1, 0)
+	_, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +590,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 	}
 
 	// 读取 CONNACK
-	pkt, err = packet.ReadPacket(conn2, 0)
+	pkt, err := packet.ReadPacket(conn2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +673,7 @@ func TestWillMessage(t *testing.T) {
 	}
 
 	// 读取 CONNACK
-	pkt, err := packet.ReadPacket(conn1, 0)
+	_, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,7 +688,7 @@ func TestWillMessage(t *testing.T) {
 	}
 
 	// 读取 SUBACK
-	pkt, err = packet.ReadPacket(conn1, 0)
+	_, err = packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +712,7 @@ func TestWillMessage(t *testing.T) {
 	}
 
 	// 读取 CONNACK
-	pkt, err = packet.ReadPacket(conn2, 0)
+	_, err = packet.ReadPacket(conn2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -722,7 +722,7 @@ func TestWillMessage(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// 订阅者应该收到遗嘱消息
-	pkt, err = packet.ReadPacket(conn1, 0)
+	pkt, err := packet.ReadPacket(conn1, 0)
 	if err != nil {
 		t.Fatal("Should receive will message:", err)
 	}

@@ -40,7 +40,7 @@ func TestProcessSendQueue_PersistsDupAfterSendFailure(t *testing.T) {
 		core:    core,
 		session: newSession(connect.ClientID, connect, core),
 	}
-	require.NoError(t, client.initQueue())
+	client.initQueue()
 
 	conn := &conn{
 		client:    client,
@@ -82,7 +82,7 @@ func TestProcessSendQueue_DropsDeliveryRejectedMessages(t *testing.T) {
 		core:    core,
 		session: newSession(connect.ClientID, connect, core),
 	}
-	require.NoError(t, client.initQueue())
+	client.initQueue()
 
 	conn := &conn{
 		client:    client,

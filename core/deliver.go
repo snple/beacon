@@ -48,15 +48,19 @@ func (c *Core) publish(msg Message) bool {
 	}
 
 	// 成功入队，触发分发协程
-	select {
-	case c.queueTrigger <- struct{}{}:
-	default:
-		// 已有触发信号，无需重复发送
-	}
+	c.triggerDispatch()
 
 	// 统计消息接收数
 	c.stats.MessagesReceived.Add(1)
 	return true
+}
+
+// triggerDispatch 非阻塞地唤醒分发协程。已有触发信号时无需重复发送。
+func (c *Core) triggerDispatch() {
+	select {
+	case c.queueTrigger <- struct{}{}:
+	default:
+	}
 }
 
 func (c *Core) handleRetainedMessage(msg *Message) {
@@ -69,7 +73,11 @@ func (c *Core) handleRetainedMessage(msg *Message) {
 	if msg.Retain && c.options.RetainEnabled && (msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID == "") {
 		if len(msg.Packet.Payload) == 0 {
 			c.retainStore.remove(msg.Packet.Topic)
-			c.store.deleteRetain(msg.Packet.Topic)
+			if err := c.store.deleteRetain(msg.Packet.Topic); err != nil {
+				c.logger.Warn("Failed to delete retained message",
+					zap.String("topic", msg.Packet.Topic),
+					zap.Error(err))
+			}
 			return
 		}
 
@@ -652,7 +660,10 @@ func (c *conn) sendMessage(msg *Message) error {
 }
 
 // PublishToClient 向指定客户端发送消息
-// 如果客户端在线但未订阅该主题，仍然会将消息投递给该客户端
+//
+// 如果客户端在线但未订阅该主题，仍然会将消息投递给该客户端；
+// 如果客户端离线但会话仍保留，消息进入其待投递队列，重连后补发
+// （与客户端侧通过 TargetClientID 发起的定向投递语义一致）。
 func (c *Core) PublishToClient(clientID string, topic string, payload []byte, options PublishOptions) error {
 	pub := c.newServerPublishPacket(topic, payload, clientID, options)
 	msg := c.newPublishMessage(pub)
@@ -662,16 +673,16 @@ func (c *Core) PublishToClient(clientID string, topic string, payload []byte, op
 	c.clientsMu.RUnlock()
 
 	if exists {
-		if client.Closed() {
-			return NewClientClosedError(clientID)
-		}
 		return client.deliver(&msg)
 	}
 
 	return NewClientNotFoundError(clientID)
 }
 
-// Broadcast 向所有在线客户端广播消息
+// Broadcast 向所有在线客户端广播消息。
+//
+// 注意：这是即时的、仅在线客户的扇出，不进入订阅树，也不为离线会话入队。
+// 需要持久化/按订阅关系投递时请使用主题发布（Publish）。
 func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) int {
 	c.clientsMu.RLock()
 	clients := make([]*Client, 0, len(c.clients))

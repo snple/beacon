@@ -17,12 +17,12 @@ func TestBroadcast_CopiesMessagePerClient(t *testing.T) {
 	connect.Properties.ReceiveWindow = 10
 
 	client1 := &Client{ID: "broadcast-client-1", core: core, session: newSession("broadcast-client-1", connect, core)}
-	require.NoError(t, client1.initQueue())
+	client1.initQueue()
 	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
 	client1.conn.processing.Store(true)
 
 	client2 := &Client{ID: "broadcast-client-2", core: core, session: newSession("broadcast-client-2", connect, core)}
-	require.NoError(t, client2.initQueue())
+	client2.initQueue()
 	client2.conn = &conn{client: client2, sendQueue: newSendQueue(10)}
 	client2.conn.processing.Store(true)
 
@@ -52,7 +52,7 @@ func TestBroadcast_UsesDefaultMessageExpiry(t *testing.T) {
 	connect.Properties.ReceiveWindow = 10
 
 	client1 := &Client{ID: "broadcast-expiry-client", core: core, session: newSession("broadcast-expiry-client", connect, core)}
-	require.NoError(t, client1.initQueue())
+	client1.initQueue()
 	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
 	client1.conn.processing.Store(true)
 
@@ -79,7 +79,7 @@ func TestBroadcast_PreservesUserProperties(t *testing.T) {
 	connect.Properties.ReceiveWindow = 10
 
 	client1 := &Client{ID: "broadcast-userprops-client", core: core, session: newSession("broadcast-userprops-client", connect, core)}
-	require.NoError(t, client1.initQueue())
+	client1.initQueue()
 	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
 	client1.conn.processing.Store(true)
 
@@ -104,7 +104,7 @@ func TestBroadcast_ClonesPayloadInput(t *testing.T) {
 	connect.Properties.ReceiveWindow = 10
 
 	client1 := &Client{ID: "broadcast-payload-client", core: core, session: newSession("broadcast-payload-client", connect, core)}
-	require.NoError(t, client1.initQueue())
+	client1.initQueue()
 	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
 	client1.conn.processing.Store(true)
 
@@ -131,7 +131,7 @@ func TestPublishToClient_ClonesPayloadInput(t *testing.T) {
 	connect.Properties.ReceiveWindow = 10
 
 	client1 := &Client{ID: "publish-payload-client", core: core, session: newSession("publish-payload-client", connect, core)}
-	require.NoError(t, client1.initQueue())
+	client1.initQueue()
 	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
 	client1.conn.processing.Store(true)
 

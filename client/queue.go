@@ -26,7 +26,7 @@ func NewQueue(db *badger.DB, prefix string) *Queue {
 	q := &Queue{Queue: mq.NewQueue(db, prefix, clientMessagePacketIDValue)}
 
 	// 初始化计数（用于配额判断）。队列通常很小，键扫描的代价可接受。
-	if n, err := q.Queue.Size(); err == nil {
+	if n, err := q.Size(); err == nil {
 		q.count.Store(int64(n))
 	}
 
@@ -53,7 +53,7 @@ func (q *Queue) Enqueue(msg *Message) error {
 		return fmt.Errorf("invalid message or PacketID")
 	}
 
-	created, err := q.Queue.Put(*msg)
+	created, err := q.Put(*msg)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func (q *Queue) Get(packetID nson.Id) (*Message, error) {
 
 // Delete 根据 PacketID 删除消息（条目不存在时不会影响计数）
 func (q *Queue) Delete(packetID nson.Id) error {
-	existed, err := q.Queue.DeleteIfExists(packetID)
+	existed, err := q.DeleteIfExists(packetID)
 	if err != nil {
 		return err
 	}

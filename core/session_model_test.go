@@ -16,7 +16,7 @@ func TestClientIDFromQueueKey(t *testing.T) {
 
 	clientID, ok := clientIDFromQueueKey(key)
 	require.True(t, ok)
-	require.Equal(t, "a:b:c", clientID, "client IDs may contain ':'")
+	require.Equal(t, "a:b:c", clientID, "legacy queue keys may encode IDs containing ':'")
 
 	_, ok = clientIDFromQueueKey([]byte("client:short"))
 	require.False(t, ok)

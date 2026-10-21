@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -93,6 +94,10 @@ func DecodeString(r io.Reader) (string, error) {
 	if length == 0 {
 		return "", nil
 	}
+	// 先按实际剩余字节校验，避免小报文声明超长字符串触发大分配。
+	if br, ok := r.(*bytes.Reader); ok && int(length) > br.Len() {
+		return "", fmt.Errorf("string length %d exceeds remaining %d", length, br.Len())
+	}
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return "", err
@@ -127,6 +132,10 @@ func DecodeBinary(r io.Reader) ([]byte, error) {
 	if length > MaxPacketSize {
 		return nil, fmt.Errorf("binary too long: %d", length)
 	}
+	// 先按实际剩余字节校验，避免小报文声明超大 binary 触发大分配。
+	if br, ok := r.(*bytes.Reader); ok && uint64(length) > uint64(br.Len()) {
+		return nil, fmt.Errorf("binary length %d exceeds remaining %d", length, br.Len())
+	}
 	buf := make([]byte, int(length))
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, err
@@ -158,6 +167,10 @@ func DecodeProperties(r io.Reader) (map[string]string, error) {
 	}
 	if count > 1024 {
 		return nil, fmt.Errorf("too many properties: %d", count)
+	}
+	// 每个条目至少 4 字节（两个空字符串的长度前缀）。
+	if br, ok := r.(*bytes.Reader); ok && int(count)*4 > br.Len() {
+		return nil, fmt.Errorf("properties count %d exceeds remaining %d", count, br.Len())
 	}
 	props := make(map[string]string, count)
 	for i := 0; i < int(count); i++ {

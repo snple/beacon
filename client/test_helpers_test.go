@@ -64,28 +64,3 @@ func eventually(t *testing.T, timeout, pollInterval time.Duration, desc string, 
 	t.Logf("eventually timeout: %s", desc)
 	return false
 }
-
-// testSetupClient 创建测试用的 Client
-func testSetupClient(t *testing.T, coreAddr string, clientID string) *Client {
-	t.Helper()
-
-	opts := NewClientOptions().
-		WithCore(coreAddr).
-		WithClientID(clientID).
-		WithLogger(testLogger())
-
-	c, err := NewWithOptions(opts)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
-
-	dialer := &TCPDialer{
-		Address:     coreAddr,
-		DialTimeout: 10 * time.Second,
-	}
-	if err := c.ConnectWithDialer(dialer); err != nil {
-		t.Fatalf("Failed to connect client: %v", err)
-	}
-
-	return c
-}

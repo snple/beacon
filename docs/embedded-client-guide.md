@@ -38,7 +38,9 @@ Beacon 是一个**精简的二进制协议**（协议名 `MX`，版本 2），�
 ```
 包类型：`CONNECT=1, CONNACK=2, PUBLISH=3, PUBACK=4, SUBSCRIBE=5, SUBACK=6, UNSUBSCRIBE=7, UNSUBACK=8, PING=9, PONG=10, DISCONNECT=11, AUTH=12, TRACE=13`（以 `packet/constants.go` 为准）。
 
-**字符串**：`[Len(2B 大端)][UTF-8 字节]`；**Id**：12 字节（见 §5.2）；**属性**：`[Bitmask(2B)]` + 按位序的属性值，无属性时仅写 2 字节 `0x0000`。
+**字符串**：`[Len(2B 大端)][UTF-8 字节]`；**Id**：12 字节（见 §5.2）；
+**属性**：`[Len(4B 大端)][Bitmask(2B)][按位序的属性值]`。即使没有任何属性，也要写 `Len=2` 和 `Bitmask=0`，共 6 字节（`00 00 00 02 00 00`）。
+> 例外：AUTH 包的属性没有长度前缀，直接是 `[Bitmask(1B)][按位序的值]`（AUTH 包体只有 ReasonCode 和属性）。
 
 ### 2.2 各包最小 Remaining（可据此快速拒绝畸形包）
 | 包 | 最小 Remaining | 说明 |
@@ -68,13 +70,17 @@ Type=CONNECT, Remaining=...
   KeepAlive: uint16（秒，0 或过大时服务端会用默认值并回写）
   SessionTimeout: uint32（秒；0 = 断开即清理会话）
   SessionFlags: 1B（bit0=CleanStart，其余保留）
-  Properties: bitmask(2B) + 可选值（MaxPacketSize/ReceiveWindow/AuthMethod/AuthData/TraceID/UserProperties）
+  Properties: [Len(4B)+Bitmask(2B)] + 可选值（MaxPacketSize/ReceiveWindow/AuthMethod/AuthData/TraceID/UserProperties）
   WillFlags(1B): bit0=QoS, bit1=Retain, bit2=Dup, bit3=Will
   [Will]: WillTopic(string) + WillProperties + WillPayload（仅 bit3=1 时存在）
 ```
 
 > `CleanStart=1` 表示要求服务端丢弃已有会话（订阅 + 待投递消息）并新建会话；为 0 时，
 > 服务端在 `SessionTimeout>0` 且存在未过期会话的情况下恢复会话（CONNACK 的 `SessionPresent=1`）。
+
+> **ClientID 约束**：非空、不超过 256 字节、合法 UTF-8，且不能包含 `:` 或控制字符。
+> 服务端以 `CONNACK(ReasonClientIDNotValid, 0x85)` 拒绝非法 ID；ClientID 留空时由服务端分配
+> （在 CONNACK 的 `ClientID` 属性中返回）。
 
 **CONNACK**（服务端 → 客户端）
 ```
@@ -88,17 +94,20 @@ Type=CONNECT, Remaining=...
   Flags(1B)：bit0=QoS(0/1)，bit1=Retain，bit2=Dup(重发标志)
   Topic: string
   PacketID: 12B（QoS0/QoS1 都携带）
-  Properties: bitmask(2B) + 可选值（ExpiryTime/ContentType/TraceID/TargetClientID/ResponseTopic/CorrelationData/UserProperties）
+  Properties: [Len(4B)+Bitmask(2B)] + 可选值（ExpiryTime/ContentType/TraceID/TargetClientID/ResponseTopic/CorrelationData/UserProperties）
   Payload: 剩余全部字节
 ```
 
 **SUBSCRIBE / UNSUBSCRIBE**
 ```
-  PacketID(12B) + Properties(2B) + 主题表
+  PacketID(12B) + Properties(6B 起) + 主题表
   SUBSCRIBE 每条：Topic(string) + Options(1B)
   Options(1B)：bit0=QoS，bit1=NoLocal，bit2=RetainAsPublished，bit3-4=RetainHandling
-  SUBACK 返回：ReasonCode×N（0x03=授予QoS0，0x04=授予QoS1）
+  SUBACK 返回：ReasonCode×N（0x03=授予QoS0，0x04=授予QoS1，0x8F=过滤器非法）
 ```
+
+> 非法过滤器（含 `#`/`+`、或 `**` 不在最后一层）只会让该条订阅失败并在 SUBACK 中返回
+> `ReasonTopicFilterInvalid (0x8F)`，不会断开连接。
 
 **PING / PONG**（心跳）
 ```
@@ -264,7 +273,7 @@ IDLE ──发送QoS1──► WAIT_ACK ──收到PUBACK──► IDLE
 - 层级1 设备的 `ReceiveWindow` 设为 1 即可（一次只处理一条，天然流控）。
 
 ### 8.5 属性（Properties）编码
-- 所有属性集合都是 `[Bitmask(2B)]` + 按位序的值。**不认识/不需要的属性直接按类型长度跳过**（字符串=2B长度+内容、uint32=4B、uint16=2B、binary=2B长度+内容），不必完整实现。
+- 属性集合都是 `[Len(4B)][Bitmask(2B)]` + 按位序的值（AUTH 包例外，只有 1B Bitmask、无长度前缀）。**不认识/不需要的属性直接按类型长度跳过**（字符串=2B长度+内容、uint32=4B、uint16=2B、binary=2B长度+内容），不必完整实现。
 - 嵌入式最值得解析的属性：PUBLISH 的 `TargetClientID`（判断是否本机定向消息）、`ExpiryTime`（过期丢弃）、CONNACK 的 `KeepAlive`/`MaxPacketSize`/`ReceiveWindow`。
 
 ### 8.6 主题与通配符

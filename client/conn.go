@@ -47,6 +47,9 @@ type Conn struct {
 	processing  atomic.Bool
 	pendingSend atomic.Bool // true: 处理期间又有新工作，发送协程退出前需再处理一轮
 
+	// 单次写超时（0 表示不设置）
+	writeTimeout time.Duration
+
 	// enqueueMu 串行化"发布入队（持久化 + 发送队列）"与"持久化补货"，
 	// 避免补货在两次入队之间把消息发走、发布路径又把同一消息入队 → 重复发送。
 	enqueueMu sync.Mutex
@@ -114,9 +117,16 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 		sendWindow:     sendWindow,
 		sendQueue:      newSendQueue(int(sendWindow)),
 		pendingAck:     make(map[nson.Id]pendingMessage),
+		writeTimeout:   c.options.WriteTimeout,
 		ctx:            ctx,
 		cancel:         cancel,
 		logger:         c.logger,
+	}
+
+	// WebSocket 底层按消息读取；限制单条消息大小，避免在对包做
+	// MaxPacketSize 校验之前就把超大帧读进内存。
+	if limiter, ok := netConn.(interface{ SetReadLimit(int64) }); ok && c.options.MaxPacketSize > 0 {
+		limiter.SetReadLimit(int64(c.options.MaxPacketSize))
 	}
 
 	// 注意：这里不清空持久化队列。队列是客户端自己的出站 spool
@@ -127,17 +137,17 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 }
 
 // start 启动连接的所有协程
-func (conn *Conn) start() {
+func (c *Conn) start() {
 	// 启动接收协程
-	conn.wg.Add(1)
-	go conn.receiveLoop()
+	c.wg.Add(1)
+	go c.receiveLoop()
 
 	// 启动心跳协程
-	conn.wg.Add(1)
-	go conn.keepAliveLoop()
+	c.wg.Add(1)
+	go c.keepAliveLoop()
 
 	// 触发消息发送（从 sendQueue 发送消息）
-	conn.triggerSend()
+	c.triggerSend()
 }
 
 // receiveLoop 接收消息循环
@@ -147,11 +157,14 @@ func (c *Conn) receiveLoop() {
 	for !c.closed.Load() {
 		// 设置读取超时
 		timeout := time.Duration(c.keepAlive) * time.Second * 2
-		c.conn.SetReadDeadline(time.Now().Add(timeout))
+		_ = c.conn.SetReadDeadline(time.Now().Add(timeout))
 
 		pkt, err := packet.ReadPacket(c.conn, c.client.MaxPacketSize())
 		if err != nil {
-			if errors.Is(err, io.EOF) || c.closed.Load() {
+			// 对端直接关闭 TCP（没有 DISCONNECT）也属于连接丢失：
+			// 必须走 close/onConnLost，否则 autoReconnect 永远不会触发，
+			// IsConnected 会一直停留在 true。
+			if c.closed.Load() {
 				return
 			}
 
@@ -225,7 +238,7 @@ func (c *Conn) handlePacket(pkt packet.Packet) error {
 	case *packet.DisconnectPacket:
 		c.close(NewServerDisconnectError(p.ReasonCode.String()))
 	case *packet.AuthPacket:
-		c.client.handleAuth(p)
+		return c.client.handleAuth(p)
 	case *packet.TracePacket:
 		c.client.handleTrace(p)
 	default:
@@ -474,14 +487,30 @@ func (c *Conn) sendMessage(msg *Message) error {
 }
 
 func (c *Conn) writePacket(pkt packet.Packet) error {
-	if c.closed.Load() {
+	if c.closed.Load() || c.conn == nil {
 		return errors.New("connection closed")
 	}
 
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	return packet.WritePacket(c.conn, pkt, c.maxPacketSize)
+	if c.writeTimeout > 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+			return err
+		}
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+	}
+
+	err := packet.WritePacket(c.conn, pkt, c.maxPacketSize)
+
+	// 编码错误不会写出任何字节；真正的写错误意味着连接已不可用，
+	// 关闭 socket 让读协程退出并触发重连。
+	var writeErr *packet.WriteError
+	if errors.As(err, &writeErr) {
+		_ = c.conn.Close()
+	}
+
+	return err
 }
 
 // close 关闭连接
@@ -494,7 +523,7 @@ func (c *Conn) close(err error) {
 
 		// 关闭网络连接
 		if c.conn != nil {
-			c.conn.Close()
+			_ = c.conn.Close()
 		}
 
 		// 清理等待中的确认

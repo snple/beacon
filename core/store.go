@@ -48,12 +48,12 @@ func newStore(options StoreOptions) (*store, error) {
 
 // close 关闭存储
 func (ms *store) close() error {
-	return ms.Store.Close()
+	return ms.Close()
 }
 
 // db 返回底层数据库（兼容现有代码）
 func (ms *store) db() *badger.DB {
-	return ms.Store.DB()
+	return ms.DB()
 }
 
 // retainKey 生成保留消息存储 key

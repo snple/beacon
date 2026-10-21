@@ -1,0 +1,36 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+  settings:
+    staticcheck:
+      checks:
+        - all
+        # 纯风格类检查：包注释/命名/错误文本大小写。
+        - -ST1000
+        - -ST1003
+        - -ST1005
+        # QF1008 会把"包装器显式调用嵌入字段同名方法"误判为冗余，
+        # 例如 client.Queue.Dequeue 内部必须调用 q.Queue.Dequeue 以避免递归。
+        - -QF1008
+
+  exclusions:
+    rules:
+      # 测试与示例中关闭失败不影响断言；生产代码仍要求检查错误。
+      - path: _test\.go
+        linters:
+          - errcheck
+      - path: ^examples/
+        linters:
+          - errcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

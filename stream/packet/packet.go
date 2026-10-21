@@ -2,11 +2,12 @@ package packet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 )
 
-// 安全上限：防止恶意 length 导致 OOM。
+// MaxPacketSize 是单个包的安全上限，防止恶意 length 导致 OOM。
 // 如需更大负载，建议做分片/应用层流式传输。
 const MaxPacketSize uint32 = 16 * 1024 * 1024 // 16MiB
 
@@ -53,6 +54,11 @@ func ReadPacket(r io.Reader) (Packet, error) {
 	}
 	if header.Length > MaxPacketSize {
 		return nil, &StreamProtocolError{Code: MalformedPacket, Message: fmt.Sprintf("packet too large: %d", header.Length)}
+	}
+
+	// PING/PONG 没有包体：先拒绝，避免为畸形包分配最多 16MiB。
+	if (header.Type == PING || header.Type == PONG) && header.Length != 0 {
+		return nil, &StreamProtocolError{Code: MalformedPacket, Message: "ping/pong must have empty body"}
 	}
 
 	bodyLen := int(header.Length)
@@ -102,32 +108,24 @@ func ReadPacket(r io.Reader) (Packet, error) {
 	return pkt, nil
 }
 
-// WritePacket 写入数据包到连接
+// WritePacket 写入数据包到连接。
+// 固定头与包体一次性写出，避免头/体之间出现部分写入的中间状态。
 func WritePacket(w io.Writer, pkt Packet) error {
-	// 先编码包体到缓冲区
-	var buf bytes.Buffer
-	if err := pkt.encode(&buf); err != nil {
+	var body bytes.Buffer
+	if err := pkt.encode(&body); err != nil {
 		return fmt.Errorf("failed to encode %v packet: %w", pkt.Type(), err)
 	}
 
-	// 检查包大小是否超过限制
-	if buf.Len() > int(MaxPacketSize) {
-		return &StreamProtocolError{Code: MalformedPacket, Message: fmt.Sprintf("packet too large: %d", buf.Len())}
+	if body.Len() > int(MaxPacketSize) {
+		return &StreamProtocolError{Code: MalformedPacket, Message: fmt.Sprintf("packet too large: %d", body.Len())}
 	}
 
-	// 构造固定头部
-	header := FixedHeader{
-		Type:   pkt.Type(),
-		Length: uint32(buf.Len()),
-	}
+	frame := make([]byte, 5+body.Len())
+	frame[0] = byte(pkt.Type())
+	binary.BigEndian.PutUint32(frame[1:5], uint32(body.Len()))
+	copy(frame[5:], body.Bytes())
 
-	// 先写入固定头部
-	if err := header.Encode(w); err != nil {
-		return err
-	}
-
-	// 再写入包体
-	_, err := w.Write(buf.Bytes())
+	_, err := w.Write(frame)
 	return err
 }
 

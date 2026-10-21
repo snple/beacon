@@ -19,8 +19,8 @@ type session struct {
 	// 使用原子读写：会话恢复时会在新连接的协程中更新，而其它协程可能同时读取。
 	timeout atomic.Uint32
 
-	authMethod string // 认证方法
-	authData   []byte // 认证数据
+	// 注意：CONNECT 中的认证数据不随会话保存。
+	// 认证只在建立连接时进行；把设备密钥持久化到磁盘只会扩大泄露面。
 
 	// 遗嘱消息（公开 API SetWillPacket/WillPacket 与断开清理可能并发访问）
 	willPacket *packet.PublishPacket
@@ -49,12 +49,6 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 		core:          core,
 	}
 
-	// 提取认证信息
-	if connect.Properties != nil {
-		s.authMethod = connect.Properties.AuthMethod
-		s.authData = connect.Properties.AuthData
-	}
-
 	s.timeout.Store(sessionTimeoutFromConnect(connect, core))
 
 	return s
@@ -79,9 +73,4 @@ func sessionTimeoutFromConnect(connect *packet.ConnectPacket, core *Core) uint32
 // applyConnect 用最新的 CONNECT 更新会话参数（会话恢复时调用）。
 func (s *session) applyConnect(connect *packet.ConnectPacket, core *Core) {
 	s.timeout.Store(sessionTimeoutFromConnect(connect, core))
-
-	if connect.Properties != nil {
-		s.authMethod = connect.Properties.AuthMethod
-		s.authData = connect.Properties.AuthData
-	}
 }

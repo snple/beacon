@@ -79,11 +79,12 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 属性
-	if p.Properties == nil {
-		p.Properties = NewConnectProperties()
+	// 属性（不修改接收者：nil 时使用局部默认值）
+	props := p.Properties
+	if props == nil {
+		props = NewConnectProperties()
 	}
-	if err := p.Properties.Encode(w); err != nil {
+	if err := props.Encode(w); err != nil {
 		return err
 	}
 
@@ -114,11 +115,12 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 			return err
 		}
 
-		// 遗嘱属性
-		if p.WillPacket.Properties == nil {
-			p.WillPacket.Properties = NewPublishProperties()
+		// 遗嘱属性（不修改接收者）
+		willProps := p.WillPacket.Properties
+		if willProps == nil {
+			willProps = NewPublishProperties()
 		}
-		if err := p.WillPacket.Properties.Encode(w); err != nil {
+		if err := willProps.Encode(w); err != nil {
 			return err
 		}
 
@@ -227,7 +229,9 @@ func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 		// 遗嘱载荷 (读取剩余所有数据，与 PublishPacket 一致)
 		if br, ok := r.(*bytes.Reader); ok {
 			p.WillPacket.Payload = make([]byte, br.Len())
-			_, err = io.ReadFull(r, p.WillPacket.Payload)
+			if _, err := io.ReadFull(r, p.WillPacket.Payload); err != nil {
+				return err
+			}
 		} else {
 			buf := new(bytes.Buffer)
 			_, err = io.Copy(buf, r)
@@ -280,11 +284,12 @@ func (p *ConnackPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 属性
-	if p.Properties == nil {
-		p.Properties = NewConnackProperties()
+	// 属性（不修改接收者）
+	props := p.Properties
+	if props == nil {
+		props = NewConnackProperties()
 	}
-	return p.Properties.Encode(w)
+	return props.Encode(w)
 }
 
 func (p *ConnackPacket) decode(r io.Reader, header FixedHeader) error {

@@ -36,6 +36,8 @@ msg.Ack() // 处理完才确认；未确认的消息会被服务端重传
 
 注意：手动确认模式下 QoS1 为 at-least-once——若应用在处理中崩溃/断电未确认，服务端会重传该消息并再次投递；应用如需不重复处理，请按 `msg.Packet.PacketID` 自行去重。
 
+`PollMessage(ctx, timeout)` 的 `timeout=0` 表示一直等待；断线后仍可继续取走已缓冲的消息（队列为空时才返回 `ErrNotConnected`）。
+
 ## 可靠性边界
 
 以下行为是 QoS 语义的一部分，部署时需要了解：
@@ -47,8 +49,13 @@ msg.Ack() // 处理完才确认；未确认的消息会被服务端重传
 - **客户端离线时发布**：消息写入本地出站队列，`Publish` 返回 `nil` 表示"已入队"，连接建立后自动补发。
 - **钩子拒绝**：`OnPublish` 钩子拒绝 QoS1 消息时，服务端/客户端会返回 `NotAuthorized`，发布方立即收到失败，不会无限重传。
 - **保留消息标志**：因订阅而重放的保留消息始终带 `Retain=true`；`RetainAsPublished` 只控制实时转发是否保留发布时的 `Retain` 标志。
+- **定向投递语义**：`TargetClientID` / `Core.PublishToClient` 与主题发布一致——目标客户端离线但会话保留时消息入队，重连后补发；
+  `Core.Broadcast` 则是即时的、仅在线客户端的扇出，不为离线会话入队。
 - **持久化默认关闭**：库默认使用内存存储（`StoreOptions.DataDir` 为空）。需要重启后仍保留消息，必须配置 `DataDir`，
   并建议同时设置 `SyncWrites=true`，否则进程/机器掉电时已确认的消息仍可能丢失。
+- **写超时**：`core.WithWriteTimeout(d)` / `client.WithWriteTimeout(d)` 控制单次网络写超时（默认 10 秒，`0` 表示不设置）。
+  写入超时或失败会关闭该连接，未确认的消息仍保留在持久化队列中，重连后补发；编码失败（如属性超长）不会断开连接。
+  这保证了慢速/不读数据的对端不会永久占用发送协程，也不会拖住停机。
 
 ## 配额与背压
 
@@ -60,6 +67,7 @@ Beacon 的队列默认有上限，避免单个慢消费者或异常客户端把�
 | `WithMaxPendingMessages(n)` | 100000 条 | 全局待分发队列达到上限后，新的发布被拒绝；QoS1 发布端收到 `PUBACK(QuotaExceeded)` |
 | `WithMaxPublishRate(rate, burst)` | 不限制 | 单客户端发布速率超限；QoS1 收到 `PUBACK(MessageRateTooHigh)`，QoS0 被丢弃 |
 | `WithMaxStoreBytes(bytes)` | 不限制 | 存储占用超过水位后拒绝新发布（`QuotaExceeded`）。基于 badger 上报的磁盘占用，有数秒滞后 |
+| `WithMaxOfflineSessions(n)` | 10000 个 | 保留中的离线会话超过上限时，驱逐**最早过期**的会话（会话记录、订阅与待投递队列一并清理） |
 | `client.WithMaxQueueSize(n)` | 10000 条 | 客户端本地出站队列满时，`Publish` 返回 `ErrQueueFull` |
 
 所有限制都可以用 `0` 关闭。拒绝/丢弃数量可通过 `core.GetStats()` 的 `MessagesRejected`（接收侧拒绝）
@@ -77,8 +85,12 @@ Beacon 的队列默认有上限，避免单个慢消费者或异常客户端把�
 - `SessionTimeout`：会话保留时间（秒），0 表示断开即清理；服务端可用 `MaxSessionTimeout` 限制上限。
 - `client.WithCleanStart(true)`：要求服务端丢弃已有会话（订阅 + 待投递消息）并新建会话；
   CONNACK 的 `SessionPresent` 指示本次连接是否恢复了旧会话。
-- 会话元数据（订阅、超时、认证信息）与待投递消息都会持久化：core 重启后未过期的会话会被恢复，
+- **ClientID 约束**：非空、不超过 256 字节、合法 UTF-8，且不能包含 `:` 或控制字符
+  （`:` 是服务端持久化队列的 key 分隔符）。服务端用 `CONNACK(ReasonClientIDNotValid)` 拒绝非法 ID；
+  留空则由服务端自动生成。
+- 会话元数据（订阅、会话超时）与待投递消息都会持久化：core 重启后未过期的会话会被恢复，
   客户端重连即可拿到 `SessionPresent=true`，无需重新订阅并能继续收到积压消息。
+  **认证数据不随会话持久化**，每次建立连接都必须重新认证。
 - 停机期间过期的会话，以及没有会话记录的孤儿队列，会在启动时自动清理。
 - 遗嘱消息不随会话持久化：它属于单次连接，重连时由新的 CONNECT 提供。
 
@@ -139,6 +151,9 @@ beacon-core --addr :5208 --metrics-addr :9101
 curl -s localhost:9101/metrics | grep pending
 ```
 
+`/metrics` 与 `/stats` 共用 1 秒快照缓存，避免高频抓取时重复全量遍历客户端；
+需要实时数值时直接调用 `core.GetStats()`。运维端点默认不鉴权，生产环境请绑定 loopback 或置于内网。
+
 ## 使用方法
 
 导入包：
@@ -154,6 +169,16 @@ import "github.com/snple/beacon/core"
 - [`examples/flexible_listeners`](./examples/flexible_listeners/main.go)：自定义监听器（TCP/TLS/Unix Socket）
 - [`examples/secure_core`](./examples/secure_core/main.go)：认证 + TLS + 配额 + metrics 端点
 - [`docs/embedded-client-guide.md`](./docs/embedded-client-guide.md)：CONNECT 报文布局与嵌入式客户端实现要点
+
+## 流中继（独立的 stream 协议）
+
+`stream/` 是**另一套协议**：点对点字节流中继，与 Beacon 消息总线的线格式和语义互不兼容，也不共享 `packet` 包。
+
+- `stream.Core`：监听并中继；`stream.Client.OpenStream`（主动方）/ `AcceptStream`（被动方）建立双向流；
+- `stream.Stream` 实现 `net.Conn`，可直接作为普通字节流使用；
+- 等待中的接收连接总数受 `stream.WithMaxWaitingConns`（默认 10000）限制；
+- 控制包（CONNACK/PONG/STREAM_ACK）写超时默认 10s（`stream.WithWriteTimeout`）；数据转发不受限，保留背压；
+- `Core.Stop()` 会关闭等待连接与活跃流，不会因转发协程阻塞而挂起；认证被拒时 `AcceptStream` 立即返回 `ErrAuthRejected`。
 
 ## WebSocket 支持
 
@@ -172,6 +197,10 @@ beacon-client --core ws://127.0.0.1:8080/ws --client-id c1 --mode sub --topic "t
 beacon-client --core ws://127.0.0.1:8080/ws --client-id c2 --mode pub --topic test/hello --message "hi"
 ```
 
+需要 `wss://` 时，给 `core.ServeWSListener` 传入 `tls.NewListener(...)`，或把明文 WS 端点放在反向代理之后
+（`beacon-core --ws-addr` 本身只提供明文 HTTP）。WS 升级默认接受任意 `Origin`（协议在 CONNECT 中认证）；
+浏览器侧的来源限制请在反向代理或网关层配置。
+
 **Go 代码**：使用 `client.WSDialer` 连接：
 
 ```go
@@ -183,6 +212,26 @@ err := c.ConnectWithDialer(dialer)
 ```
 
 浏览器/前端应用可直接用原生 WebSocket 或 gorilla/websocket 与 core 的 `/ws` 端点通信。
+
+## 开发与验证
+
+```bash
+make fmt        # 检查格式（不修改文件）
+make fmt-fix    # 格式化
+make vet
+make lint       # golangci-lint，配置见 .golangci.yml
+make test
+make test-race
+make check      # fmt + vet + lint + test-race
+```
+
+`make lint` 需要本地安装 golangci-lint v2：
+
+```bash
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+```
+
+CI（`.github/workflows/ci.yml`）会执行同样的检查。
 
 ## License
 
