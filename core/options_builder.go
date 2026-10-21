@@ -18,6 +18,11 @@ type CoreOptions struct {
 	KeepAlive      uint16        // 服务器心跳间隔 (秒)，0 表示使用客户端的值
 	WriteTimeout   time.Duration // 单次写超时（默认 10 秒，0 表示不设置写截止时间）
 
+	// MaxHandshakeConnections 认证前的并发连接上限（0 表示不限制）。
+	// CONNECT 读取完成前连接不计入 MaxClients，必须单独限流，否则未认证连接
+	// 可以无上限地占用 goroutine 与包缓冲直到 ConnectTimeout。
+	MaxHandshakeConnections uint32
+
 	// 会话管理
 	MaxSessionTimeout uint32 // 会话保留时间的上限（秒），0 表示不限制（使用客户端请求值）
 
@@ -79,18 +84,19 @@ func (p QueueOverflowPolicy) String() string {
 // NewCoreOptions 创建新的 Core 配置选项
 func NewCoreOptions() *CoreOptions {
 	return &CoreOptions{
-		MaxClients:           10000,
-		MaxPacketSize:        1048576, // 1MB
-		ConnectTimeout:       10,
-		KeepAlive:            60,
-		WriteTimeout:         10 * time.Second,
-		MaxSessionTimeout:    3600,
-		ReceiveWindow:        1000,
-		DefaultMessageExpiry: 24 * time.Hour,
-		ExpiredCheckInterval: 180 * time.Second,
-		RetransmitInterval:   30 * time.Second,
-		RetainEnabled:        true,
-		StoreOptions:         DefaultStoreOptions(),
+		MaxClients:              10000,
+		MaxPacketSize:           1048576, // 1MB
+		ConnectTimeout:          10,
+		MaxHandshakeConnections: 512,
+		KeepAlive:               60,
+		WriteTimeout:            10 * time.Second,
+		MaxSessionTimeout:       3600,
+		ReceiveWindow:           1000,
+		DefaultMessageExpiry:    24 * time.Hour,
+		ExpiredCheckInterval:    180 * time.Second,
+		RetransmitInterval:      30 * time.Second,
+		RetainEnabled:           true,
+		StoreOptions:            DefaultStoreOptions(),
 
 		// 配额与背压默认值
 		MaxClientQueueSize:        10000,
@@ -103,6 +109,12 @@ func NewCoreOptions() *CoreOptions {
 // WithMaxClients 设置最大客户端数
 func (o *CoreOptions) WithMaxClients(n uint32) *CoreOptions {
 	o.MaxClients = n
+	return o
+}
+
+// WithMaxHandshakeConnections 设置认证前的并发连接上限（0 表示不限制）
+func (o *CoreOptions) WithMaxHandshakeConnections(n uint32) *CoreOptions {
+	o.MaxHandshakeConnections = n
 	return o
 }
 

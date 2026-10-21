@@ -67,6 +67,7 @@ Beacon 的队列默认有上限，避免单个慢消费者或异常客户端把�
 | `WithMaxPendingMessages(n)` | 100000 条 | 全局待分发队列达到上限后，新的发布被拒绝；QoS1 发布端收到 `PUBACK(QuotaExceeded)` |
 | `WithMaxPublishRate(rate, burst)` | 不限制 | 单客户端发布速率超限；QoS1 收到 `PUBACK(MessageRateTooHigh)`，QoS0 被丢弃 |
 | `WithMaxStoreBytes(bytes)` | 不限制 | 存储占用超过水位后拒绝新发布（`QuotaExceeded`）。基于 badger 上报的磁盘占用，有数秒滞后 |
+| `WithMaxHandshakeConnections(n)` | 512 | 认证前（CONNECT 尚未解析）的并发连接上限。超限直接 `CONNACK(ServerBusy)` 并关闭，避免未认证连接无上限占用 goroutine 与包缓冲 |
 | `WithMaxOfflineSessions(n)` | 10000 个 | 保留中的离线会话超过上限时，驱逐**最早过期**的会话（会话记录、订阅与待投递队列一并清理） |
 | `client.WithMaxQueueSize(n)` | 10000 条 | 客户端本地出站队列满时，`Publish` 返回 `ErrQueueFull` |
 
@@ -91,8 +92,13 @@ Beacon 的队列默认有上限，避免单个慢消费者或异常客户端把�
 - 会话元数据（订阅、会话超时）与待投递消息都会持久化：core 重启后未过期的会话会被恢复，
   客户端重连即可拿到 `SessionPresent=true`，无需重新订阅并能继续收到积压消息。
   **认证数据不随会话持久化**，每次建立连接都必须重新认证。
+- **订阅重放**：客户端记录每个订阅的完整选项（QoS/NoLocal/RetainAsPublished/RetainHandling）。
+  连接建立后若 `SessionPresent=false`（CleanStart、会话过期或换了服务端），客户端会按原选项自动重放，
+  手动 `Disconnect()` 后重新 `Connect()` 与自动重连行为一致；`SessionPresent=true` 时不会重复订阅。
 - 停机期间过期的会话，以及没有会话记录的孤儿队列，会在启动时自动清理。
 - 遗嘱消息不随会话持久化：它属于单次连接，重连时由新的 CONNECT 提供。
+- **会话接管不发布遗嘱**：同一 ClientID 的新连接替换旧连接（旧连接收到 `DISCONNECT(SessionTakenOver)`）
+  视为客户端主动行为，旧连接的遗嘱既不会发布也不会残留；新会话的遗嘱以新 CONNECT 为准。
 
 ## 安全（认证与 TLS）
 
@@ -177,7 +183,8 @@ import "github.com/snple/beacon/core"
 - `stream.Core`：监听并中继；`stream.Client.OpenStream`（主动方）/ `AcceptStream`（被动方）建立双向流；
 - `stream.Stream` 实现 `net.Conn`，可直接作为普通字节流使用；
 - 等待中的接收连接总数受 `stream.WithMaxWaitingConns`（默认 10000）限制；
-- 控制包（CONNACK/PONG/STREAM_ACK）写超时默认 10s（`stream.WithWriteTimeout`）；数据转发不受限，保留背压；
+- 控制包（CONNACK/PONG/STREAM_ACK）与数据转发都受 `stream.WithWriteTimeout`（默认 10s）约束：
+  对端长期不读数据时写超时会结束该流，而不是让转发协程永久阻塞；
 - `Core.Stop()` 会关闭等待连接与活跃流，不会因转发协程阻塞而挂起；认证被拒时 `AcceptStream` 立即返回 `ErrAuthRejected`。
 
 ## WebSocket 支持

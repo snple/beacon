@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/snple/beacon/internal/mq"
+	"github.com/snple/beacon/packet"
 )
 
 // 连接相关错误
@@ -150,10 +151,20 @@ func NewUnexpectedPacketError(expected, got string) error {
 type SubscriptionError struct {
 	Index  int
 	Reason string
+
+	// Codes 是 SUBACK 返回的逐条原因码，与 SUBSCRIBE 请求里的订阅顺序一一对应。
+	// 调用方可以据此判断哪些订阅被授予、哪些被拒绝（Codes 为空表示服务端未返回详情）。
+	Codes []packet.ReasonCode
 }
 
 func (e *SubscriptionError) Error() string {
 	return fmt.Sprintf("subscription %d failed: %s", e.Index, e.Reason)
+}
+
+// Granted 报告第 i 个订阅是否被服务端授予。超出 Codes 范围时按授予处理
+// （服务端未报告即视为没有拒绝）。
+func (e *SubscriptionError) Granted(i int) bool {
+	return i >= len(e.Codes) || e.Codes[i].IsSubackSuccess()
 }
 
 // NewSubscriptionError 创建订阅错误

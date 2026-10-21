@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,14 @@ type Core struct {
 	// 连接速率限制
 	connLimiter *tokenBucket
 
+	// 握手阶段的并发上限：认证前的连接还没有进入 MaxClients 统计，
+	// 必须单独设限，否则未认证连接可以无上限地占用 goroutine 与包缓冲。
+	handshakeSlots chan struct{}
+
+	// 握手阶段的连接：Stop 时主动关闭，避免优雅停机等待 ConnectTimeout。
+	handshakeConns   map[net.Conn]struct{}
+	handshakeConnsMu sync.Mutex
+
 	// 存储占用水位缓存（避免每条消息都统计 badger 大小）
 	storeSizeMu sync.Mutex
 	storeSize   int64
@@ -58,6 +67,7 @@ type Core struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	running atomic.Bool
+	stopped atomic.Bool
 
 	// 临时任务（如按需重传）的启动守卫：Stop 之后禁止再向 wg 添加任务，
 	// 否则会与 wg.Wait 竞争，且任务可能在 store 关闭后访问它。
@@ -125,8 +135,13 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		subTree:         newSubTree(),
 		queueTrigger:    make(chan struct{}, 1),
 		retainStore:     newRetainStore(),
+		handshakeConns:  make(map[net.Conn]struct{}),
 		ctx:             ctx,
 		cancel:          cancel,
+	}
+
+	if opts.MaxHandshakeConnections > 0 {
+		b.handshakeSlots = make(chan struct{}, opts.MaxHandshakeConnections)
 	}
 
 	// 初始化连接速率限制器
@@ -177,11 +192,19 @@ func (c *Core) initQueue() error {
 
 // Start 启动 core
 func (c *Core) Start() error {
-	if c.running.Load() {
+	// Stop 之后不可重启：ctx 已取消、存储已关闭，重启只会得到一个"看起来在运行
+	// 但无法收发消息"的实例。需要重启请重新 NewWithOptions。
+	if c.stopped.Load() {
+		return ErrCoreStopped
+	}
+	if !c.running.CompareAndSwap(false, true) {
 		return ErrCoreAlreadyRunning
 	}
-
-	c.running.Store(true)
+	// 与并发的 Stop 竞争：Stop 可能刚把 stopped 置位，这里复查并回滚。
+	if c.stopped.Load() {
+		c.running.Store(false)
+		return ErrCoreStopped
+	}
 
 	c.taskMu.Lock()
 	c.tasksClosed = false
@@ -235,47 +258,57 @@ func (c *Core) logStartupInfo() {
 
 // Stop 停止 core
 func (c *Core) Stop() error {
-	if !c.running.Load() {
+	// 幂等：重复 Stop 直接返回；同时标记 stopped，禁止同一实例再次 Start。
+	if c.stopped.Swap(true) {
 		return nil
 	}
 
-	c.logger.Info("Stopping core...")
-	c.running.Store(false)
+	wasRunning := c.running.Swap(false)
+	if wasRunning {
+		c.logger.Info("Stopping core...")
 
-	// 先禁止新的临时任务，再 cancel：保证 Stop 期间的 wg.Wait 不会与 wg.Add 竞争
-	c.taskMu.Lock()
-	c.tasksClosed = true
-	c.taskMu.Unlock()
+		// 先禁止新的临时任务，再 cancel：保证 Stop 期间的 wg.Wait 不会与 wg.Add 竞争
+		c.taskMu.Lock()
+		c.tasksClosed = true
+		c.taskMu.Unlock()
 
-	c.cancel()
+		c.cancel()
 
-	// 断开所有普通客户端
-	c.clientsMu.Lock()
-	clients := make([]*Client, 0, len(c.clients))
-	for _, client := range c.clients {
-		clients = append(clients, client)
+		// 关闭仍在握手的连接：它们还没注册进 clients，wg.Wait 会被 ConnectTimeout 拖住。
+		c.closeHandshakeConns()
+
+		// 断开所有普通客户端
+		c.clientsMu.Lock()
+		clients := make([]*Client, 0, len(c.clients))
+		for _, client := range c.clients {
+			clients = append(clients, client)
+		}
+		c.clientsMu.Unlock()
+
+		// 关闭每个客户端的连接，并在锁外等待其发送协程退出。
+		// 注意：不能持有 clientsMu 等待——发送协程可能通过用户 OnDeliver 钩子回调 core API。
+		// 停机路径不逐个发送 DISCONNECT：避免慢连接让 N 个客户端各等一个写超时。
+		for _, client := range clients {
+			client.closeLocal(packet.ReasonServerShuttingDown)
+			if conn := client.getConn(); conn != nil {
+				conn.wait()
+			}
+		}
+
+		// 等待所有协程退出
+		c.wg.Wait()
 	}
-	c.clientsMu.Unlock()
 
-	// 关闭每个客户端的连接，并在锁外等待其发送协程退出。
-	// 注意：不能持有 clientsMu 等待——发送协程可能通过用户 OnDeliver 钩子回调 core API。
-	// 停机路径不逐个发送 DISCONNECT：避免慢连接让 N 个客户端各等一个写超时。
-	for _, client := range clients {
-		client.closeLocal(packet.ReasonServerShuttingDown)
-		if conn := client.getConn(); conn != nil {
-			conn.wait()
+	// 最后关闭消息存储。未 Start 就 Stop 时同样要关：否则 badger 句柄与文件锁会泄漏。
+	if c.store != nil {
+		if err := c.store.close(); err != nil {
+			c.logger.Warn("Failed to close message store", zap.Error(err))
 		}
 	}
 
-	// 等待所有协程退出
-	c.wg.Wait()
-
-	// 最后关闭消息存储
-	if err := c.store.close(); err != nil {
-		c.logger.Warn("Failed to close message store", zap.Error(err))
+	if wasRunning {
+		c.logger.Info("core stopped")
 	}
-
-	c.logger.Info("core stopped")
 	return nil
 }
 
@@ -284,28 +317,96 @@ func (c *Core) MaxPacketSize() uint32 {
 	return c.options.MaxPacketSize
 }
 
-// Subscribe 订阅主题
+// Subscribe 订阅主题（编程接口）。
+//
+// 若 clientID 已存在会话（在线或离线），订阅会同时写入会话状态并持久化，
+// 与客户端自己发送 SUBSCRIBE 的效果一致；没有会话时只影响全局订阅树。
 func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 	// 统一通配符规则：** 只能作为最后一层。非法过滤器直接忽略，
 	// 避免通过编程接口绕过 SUBSCRIBE 校验后与匹配语义不一致。
+	if !c.addSubscription(clientID, sub) {
+		return
+	}
+
+	c.clientsMu.RLock()
+	client := c.clients[clientID]
+	c.clientsMu.RUnlock()
+	if client == nil || client.session == nil {
+		return
+	}
+
+	client.session.subsMu.Lock()
+	client.session.subscriptions[sub.Topic] = sub.Options
+	client.session.subsMu.Unlock()
+
+	c.saveSessionPreservingExpiry(client)
+}
+
+// Unsubscribe 取消订阅（编程接口）。
+//
+// 与 Subscribe 对称：存在会话时同步移除会话状态并持久化。
+func (c *Core) Unsubscribe(clientID, topic string) {
+	c.removeSubscription(clientID, topic)
+
+	c.clientsMu.RLock()
+	client := c.clients[clientID]
+	c.clientsMu.RUnlock()
+	if client == nil || client.session == nil {
+		return
+	}
+
+	client.session.subsMu.Lock()
+	delete(client.session.subscriptions, topic)
+	client.session.subsMu.Unlock()
+
+	c.saveSessionPreservingExpiry(client)
+}
+
+// removeSubscription 只更新全局订阅树与统计。
+func (c *Core) removeSubscription(clientID, topic string) {
+	if removed := c.subTree.unsubscribe(clientID, topic); removed {
+		c.stats.SubscriptionsCount.Add(-1)
+	}
+}
+
+// addSubscription 只更新全局订阅树与统计，返回订阅是否被接受。
+//
+// SUBSCRIBE 处理路径与启动恢复使用它：会话状态的维护与持久化由调用方
+// 负责（订阅路径是批量写一次，恢复路径不需要写），避免每主题一次 store 写入。
+func (c *Core) addSubscription(clientID string, sub packet.Subscription) bool {
 	if !packet.ValidateTopicFilter(sub.Topic) {
 		c.logger.Warn("Ignoring subscription with invalid topic filter",
 			zap.String("clientID", clientID),
 			zap.String("topic", sub.Topic))
-		return
+		return false
+	}
+	if !sub.Options.ValidRetainHandling() {
+		c.logger.Warn("Ignoring subscription with invalid retain handling",
+			zap.String("clientID", clientID),
+			zap.String("topic", sub.Topic),
+			zap.Uint8("retainHandling", sub.Options.RetainHandling))
+		return false
 	}
 
-	isNew := c.subTree.subscribe(clientID, sub.Topic, sub.Options)
-	if isNew {
+	if isNew := c.subTree.subscribe(clientID, sub.Topic, sub.Options); isNew {
 		c.stats.SubscriptionsCount.Add(1)
 	}
+	return true
 }
 
-// Unsubscribe 取消订阅
-func (c *Core) Unsubscribe(clientID, topic string) {
-	if removed := c.subTree.unsubscribe(clientID, topic); removed {
-		c.stats.SubscriptionsCount.Add(-1)
+// saveSessionPreservingExpiry 持久化会话元数据；离线会话保留原有过期时间，
+// 避免编程接口写回时把离线会话误标为在线（expiresAt=0）。
+func (c *Core) saveSessionPreservingExpiry(client *Client) {
+	expiresAt := int64(0)
+	if client.Closed() {
+		c.offlineSessionsMu.Lock()
+		expiry, ok := c.offlineSessions[client.ID]
+		c.offlineSessionsMu.Unlock()
+		if ok {
+			expiresAt = expiry.Unix()
+		}
 	}
+	c.saveSession(client, expiresAt)
 }
 
 // GetRetainedMessages 获取与主题模式匹配的保留消息

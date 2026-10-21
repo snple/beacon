@@ -43,14 +43,6 @@ func (c *Client) reconnectLoop() {
 				continue
 			}
 
-			// Snapshot session-related local state for restoration.
-			c.subscribedTopicsMu.RLock()
-			savedTopics := make([]string, 0, len(c.subscribedTopics))
-			for topic := range c.subscribedTopics {
-				savedTopics = append(savedTopics, topic)
-			}
-			c.subscribedTopicsMu.RUnlock()
-
 			// 获取当前队列数量
 			var queuedMessages int
 			conn := c.getConn()
@@ -126,14 +118,8 @@ func (c *Client) reconnectLoop() {
 					zap.Bool("sessionPresent", sessionPresent),
 					zap.Int("queuedMessages", queuedMessages))
 
-				// If the server did not restore the session, re-subscribe.
-				if !sessionPresent {
-					if len(savedTopics) > 0 {
-						if err := c.Subscribe(savedTopics...); err != nil {
-							c.logger.Warn("Failed to restore subscriptions", zap.Error(err))
-						}
-					}
-				}
+				// 会话未恢复时的订阅重放由 connectWithConn 统一完成
+				// （手动 Connect 与自动重连走同一条路径，且保留原始订阅选项）。
 
 				break
 			}

@@ -227,7 +227,9 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 
 	// 验证并处理每个订阅
 	validSubs := make([]packet.Subscription, 0, len(p.Subscriptions))
-	isNewSubs := make([]bool, 0, len(p.Subscriptions)) // 记录每个订阅是否是新订阅
+	isNewSubs := make([]bool, 0, len(p.Subscriptions))            // 记录每个订阅是否是新订阅
+	replayRetained := make([]bool, 0, len(p.Subscriptions))       // 是否重放保留消息（同包内重复过滤器只在首次出现时重放）
+	seenTopics := make(map[string]struct{}, len(p.Subscriptions)) // 同一 SUBSCRIBE 包内的去重
 
 	for _, sub := range p.Subscriptions {
 		// 验证主题过滤器
@@ -248,6 +250,17 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 			continue
 		}
 
+		// RetainHandling 只有 0/1/2 三个合法值，线格式是 2 位，对端可以传 3。
+		// 不能把未知值当作 0 处理，否则会静默发送本不该发送的保留消息。
+		if !sub.Options.ValidRetainHandling() {
+			suback.ReasonCodes = append(suback.ReasonCodes, packet.ReasonProtocolError)
+			c.core.logger.Warn("Invalid retain handling",
+				zap.String("clientID", c.ID),
+				zap.String("topic", sub.Topic),
+				zap.Uint8("retainHandling", sub.Options.RetainHandling))
+			continue
+		}
+
 		// 调用 OnSubscribe 钩子
 		subCtx := &SubscribeContext{
 			ClientID:     c.ID,
@@ -263,14 +276,23 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 			continue
 		}
 
-		// 检查是否是新订阅（在添加之前检查）
-		c.session.subsMu.RLock()
-		_, exists := c.session.subscriptions[sub.Topic]
-		c.session.subsMu.RUnlock()
-		isNew := !exists
+		// 同一包内重复的过滤器：仍按请求顺序回一个原因码，但只处理一次，
+		// 避免重复计数与重复重放保留消息（以最后一次出现的选项为准）。
+		_, duplicate := seenTopics[sub.Topic]
+		seenTopics[sub.Topic] = struct{}{}
+
+		isNew := false
+		if !duplicate {
+			// 检查是否是新订阅（在添加之前检查）
+			c.session.subsMu.RLock()
+			_, exists := c.session.subscriptions[sub.Topic]
+			c.session.subsMu.RUnlock()
+			isNew = !exists
+		}
 
 		validSubs = append(validSubs, sub)
 		isNewSubs = append(isNewSubs, isNew)
+		replayRetained = append(replayRetained, !duplicate)
 		switch sub.Options.QoS {
 		case packet.QoS0:
 			suback.ReasonCodes = append(suback.ReasonCodes, packet.ReasonGrantedQoS0)
@@ -291,7 +313,7 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 
 		// 在锁外处理 core 订阅和日志
 		for _, sub := range validSubs {
-			c.core.Subscribe(c.ID, sub)
+			c.core.addSubscription(c.ID, sub)
 			c.core.logger.Debug("Client subscribed",
 				zap.String("clientID", c.ID),
 				zap.String("topic", sub.Topic),
@@ -314,6 +336,9 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 	// 在 SUBACK 之后发送保留消息
 	// 这样客户端收到 SUBACK 后才会注册 handler，然后才能处理保留消息
 	for i, sub := range validSubs {
+		if !replayRetained[i] {
+			continue
+		}
 		// 逐条发送保留消息，避免一次性加载所有消息到内存
 		c.sendRetainedMessages(
 			sub.Topic,
@@ -364,7 +389,7 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 
 		// 在锁外处理 core 操作和日志
 		for _, topic := range validTopics {
-			c.core.Unsubscribe(c.ID, topic)
+			c.core.removeSubscription(c.ID, topic)
 			c.core.logger.Debug("Client unsubscribed", zap.String("clientID", c.ID), zap.String("topic", topic))
 		}
 
@@ -387,13 +412,13 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 // 避免一次性加载所有消息到内存
 func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 	noLocal bool, retainHandling uint8, subQoS packet.QoS) {
-	// retainHandling == 2: 不发送保留消息
-	if retainHandling == 2 {
+	// 不发送保留消息
+	if retainHandling == packet.RetainHandlingNever {
 		return
 	}
 
-	// retainHandling == 1: 仅新订阅时发送
-	if retainHandling == 1 && !isNewSubscription {
+	// 仅新订阅时发送
+	if retainHandling == packet.RetainHandlingNewOnly && !isNewSubscription {
 		return
 	}
 

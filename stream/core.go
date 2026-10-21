@@ -674,6 +674,10 @@ func (b *Core) forwardStream(session *StreamSession) {
 }
 
 // forwardData 单向数据转发
+// forwardData 在两个连接之间转发原始字节流。
+//
+// 写操作同样受 writeTimeout 约束：不读数据的对端会让 Write 永久阻塞，
+// 从而把转发协程和缓冲区一起挂住（Stop 虽然能关闭连接兜底，但不应只在停机时释放）。
 func (b *Core) forwardData(src, dst net.Conn, counter *atomic.Uint64) {
 	buf := make([]byte, 32*1024)
 	for {
@@ -682,6 +686,9 @@ func (b *Core) forwardData(src, dst net.Conn, counter *atomic.Uint64) {
 			return
 		}
 		if n > 0 {
+			if b.writeTimeout > 0 {
+				_ = dst.SetWriteDeadline(time.Now().Add(b.writeTimeout))
+			}
 			if _, err := dst.Write(buf[:n]); err != nil {
 				return
 			}

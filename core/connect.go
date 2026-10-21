@@ -28,15 +28,81 @@ func (c *Core) HandleConn(conn net.Conn) error {
 		return fmt.Errorf("connection rate exceeded")
 	}
 
+	// 认证前的并发上限：CONNECT 还没读，MaxClients 还统计不到这些连接。
+	// 未限流时每个连接可占用最多 MaxPacketSize 的包缓冲直到 ConnectTimeout，
+	// 无限并发等于给出一个未认证的内存/协程耗尽入口。
+	if c.handshakeSlots != nil {
+		select {
+		case c.handshakeSlots <- struct{}{}:
+		default:
+			c.logger.Warn("Too many concurrent handshakes, rejecting connection",
+				zap.String("remote", conn.RemoteAddr().String()))
+			c.sendConnack(conn, false, packet.ReasonServerBusy, nil)
+			_ = conn.Close()
+			return fmt.Errorf("too many concurrent handshakes")
+		}
+	}
+
+	c.trackHandshakeConn(conn)
+
 	if !c.spawnTask(func() { c.handleConn(conn) }) {
+		c.untrackHandshakeConn(conn)
+		c.releaseHandshakeSlot()
 		_ = conn.Close()
 		return ErrCoreNotRunning
 	}
 	return nil
 }
 
+// trackHandshakeConn 记录尚未完成握手的连接，供 Stop 主动关闭。
+func (c *Core) trackHandshakeConn(conn net.Conn) {
+	c.handshakeConnsMu.Lock()
+	if c.handshakeConns == nil {
+		c.handshakeConns = make(map[net.Conn]struct{})
+	}
+	c.handshakeConns[conn] = struct{}{}
+	c.handshakeConnsMu.Unlock()
+}
+
+// untrackHandshakeConn 连接已完成握手（或被拒绝），不再需要 Stop 兜底关闭。
+func (c *Core) untrackHandshakeConn(conn net.Conn) {
+	c.handshakeConnsMu.Lock()
+	delete(c.handshakeConns, conn)
+	c.handshakeConnsMu.Unlock()
+}
+
+// releaseHandshakeSlot 释放认证前的并发名额。
+func (c *Core) releaseHandshakeSlot() {
+	if c.handshakeSlots == nil {
+		return
+	}
+	select {
+	case <-c.handshakeSlots:
+	default:
+	}
+}
+
+// closeHandshakeConns 关闭所有仍在握手的连接，避免优雅停机被 ConnectTimeout 拖住。
+func (c *Core) closeHandshakeConns() {
+	c.handshakeConnsMu.Lock()
+	conns := make([]net.Conn, 0, len(c.handshakeConns))
+	for conn := range c.handshakeConns {
+		conns = append(conns, conn)
+	}
+	c.handshakeConnsMu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
 // 注意：协程的 wg 跟踪由 spawnTask 统一负责，这里不能重复 Done。
 func (c *Core) handleConn(conn net.Conn) {
+	defer func() {
+		c.untrackHandshakeConn(conn)
+		c.releaseHandshakeSlot()
+	}()
+
 	// 读取并验证 CONNECT 包
 	connect, err := c.readConnectPacket(conn)
 	if err != nil {
@@ -297,6 +363,10 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 		}
 		delete(c.clients, clientID)
 		c.cleanupClientWithoutLock(clientID, existingClient)
+		// 旧会话记录已被丢弃：同步移除离线会话表，避免留下过期时间戳。
+		c.offlineSessionsMu.Lock()
+		delete(c.offlineSessions, clientID)
+		c.offlineSessionsMu.Unlock()
 		existingClient = nil
 		exists = false
 	}
@@ -309,12 +379,20 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 		return client, false, wasOnline, oldConns
 	}
 
-	// 从离线会话列表中移除
+	// 从离线会话列表中移除，同时判断会话是否已过期。
+	// 清理协程是周期性运行的，会话过期后到被清理之间仍可能收到重连；
+	// 此时必须按"会话不存在"处理（SessionPresent=false），
+	// 否则客户端会拿到一个本应已失效的会话。
+	sessionExpired := false
 	c.offlineSessionsMu.Lock()
+	// 只对离线会话判过期：在线会话（接管场景）不应因为表里的残留时间戳被误判。
+	if expiry, ok := c.offlineSessions[clientID]; ok && existingClient.Closed() && time.Now().After(expiry) {
+		sessionExpired = true
+	}
 	delete(c.offlineSessions, clientID)
 	c.offlineSessionsMu.Unlock()
 
-	canResumeSession := existingClient.session.timeout.Load() > 0
+	canResumeSession := !sessionExpired && existingClient.session.timeout.Load() > 0
 
 	// 情况2: 复用旧 Client，只替换 Conn
 	if connect.SessionTimeout > 0 && canResumeSession {
@@ -403,6 +481,8 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	currentClient, exists := c.clients[client.ID]
 	c.clientsMu.RUnlock()
 	if exists && currentClient != client {
+		// 会话接管（同一 ClientID 的新连接替换旧连接）视为客户端主动行为：
+		// 不发布旧连接的遗嘱，也不修改新会话的任何状态。
 		return
 	}
 

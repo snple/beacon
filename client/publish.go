@@ -2,6 +2,7 @@ package client
 
 import (
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -22,6 +23,9 @@ import (
 //	        WithTraceID("trace-123"),
 //	)
 func (c *Client) Publish(topic string, payload []byte, opts *PublishOptions) error {
+	if c.closed.Load() {
+		return ErrClientClosed
+	}
 	if opts == nil {
 		opts = NewPublishOptions()
 	}
@@ -88,6 +92,10 @@ func (c *Client) PublishToClient(targetClientID, topic string, payload []byte, o
 //
 // 4. QoS=1: 等待 ACK（仅首次发布）
 func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
+	if c.closed.Load() {
+		return ErrClientClosed
+	}
+
 	// 1. 分配 PacketID（无论 QoS 0 还是 QoS 1）
 	msg.Packet.PacketID = c.allocatePacketID()
 
@@ -130,6 +138,10 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 			if msg.Packet.QoS == packet.QoS1 {
 				conn.clearPendingAck(msg.Packet.PacketID)
 			}
+		}
+		if c.closed.Load() {
+			// Close() 与本次发布并发：存储已关闭，返回明确的关闭错误。
+			return ErrClientClosed
 		}
 		c.logger.Error("Failed to enqueue message to persistent queue",
 			zap.String("topic", msg.Packet.Topic),
@@ -363,6 +375,9 @@ func (c *Client) Subscribe(topics ...string) error {
 
 // SubscribeWithOptions 订阅主题（带选项）
 func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) error {
+	if c.closed.Load() {
+		return ErrClientClosed
+	}
 	if !c.connected.Load() {
 		return ErrNotConnected
 	}
@@ -393,10 +408,11 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 		})
 	}
 
-	// 先记录订阅
+	// 先记录订阅及其选项：重连恢复时必须原样重放，否则 QoS/NoLocal 会被降级。
+	// 记录的是"期望订阅集合"，因此发送失败/超时后不撤销——重连时会重新发送。
 	c.subscribedTopicsMu.Lock()
 	for _, topic := range topics {
-		c.subscribedTopics[topic] = true
+		c.subscribedTopics[topic] = *opts
 	}
 	c.subscribedTopicsMu.Unlock()
 
@@ -404,13 +420,8 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 	ackCh := conn.registerPendingAck(sub.PacketID)
 
 	if err := conn.writePacket(sub); err != nil {
-		// 发送失败，清理
+		// 发送失败：SUBSCRIBE 可能已在途，保留订阅记录，重连后会重新发送。
 		conn.clearPendingAck(sub.PacketID)
-		c.subscribedTopicsMu.Lock()
-		for _, topic := range topics {
-			delete(c.subscribedTopics, topic)
-		}
-		c.subscribedTopicsMu.Unlock()
 		return err
 	}
 
@@ -425,35 +436,84 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 	select {
 	case err := <-ackCh:
 		if err != nil {
-			c.subscribedTopicsMu.Lock()
-			for _, topic := range topics {
-				delete(c.subscribedTopics, topic)
-			}
-			c.subscribedTopicsMu.Unlock()
+			// 部分失败：只忘记被拒绝的订阅，服务端已授予的必须保留，
+			// 否则重连时不会重新订阅它们。
+			c.pruneRejectedSubscriptions(topics, err)
 			return err
 		}
 		return nil
 	case <-timer.C:
+		// 没有拿到 SUBACK：保留记录，重连后会重新发送（重复订阅是幂等的）。
 		conn.clearPendingAck(sub.PacketID)
-		c.subscribedTopicsMu.Lock()
-		for _, topic := range topics {
-			delete(c.subscribedTopics, topic)
-		}
-		c.subscribedTopicsMu.Unlock()
 		return ErrPublishTimeout
 	case <-conn.ctx.Done():
 		conn.clearPendingAck(sub.PacketID)
-		c.subscribedTopicsMu.Lock()
-		for _, topic := range topics {
-			delete(c.subscribedTopics, topic)
-		}
-		c.subscribedTopicsMu.Unlock()
 		return ErrNotConnected
 	}
 }
 
+// restoreSubscriptions 在服务端没有恢复会话（SessionPresent=false）时重放本地订阅。
+//
+// 按订阅选项分组，避免每个主题单独一次往返；选项必须原样恢复，否则
+// QoS1/NoLocal/RetainAsPublished/RetainHandling 会被静默降级为默认值。
+func (c *Client) restoreSubscriptions() {
+	c.subscribedTopicsMu.RLock()
+	groups := make(map[SubscribeOptions][]string)
+	for topic, opts := range c.subscribedTopics {
+		groups[opts] = append(groups[opts], topic)
+	}
+	c.subscribedTopicsMu.RUnlock()
+
+	if len(groups) == 0 {
+		return
+	}
+
+	// 固定顺序，便于日志排查与测试断言（map 遍历本身是随机的）。
+	type group struct {
+		opts   SubscribeOptions
+		topics []string
+	}
+	ordered := make([]group, 0, len(groups))
+	for opts, topics := range groups {
+		sort.Strings(topics)
+		ordered = append(ordered, group{opts: opts, topics: topics})
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].topics[0] < ordered[j].topics[0] })
+
+	for _, g := range ordered {
+		opts := g.opts
+		if err := c.SubscribeWithOptions(g.topics, &opts); err != nil {
+			c.logger.Warn("Failed to restore subscriptions",
+				zap.Int("topics", len(g.topics)),
+				zap.Uint8("qos", uint8(opts.QoS)),
+				zap.Bool("noLocal", opts.NoLocal),
+				zap.Error(err))
+		}
+	}
+}
+
+// pruneRejectedSubscriptions 从本地订阅记录中移除被服务端明确拒绝的主题。
+// err 不是 SubscriptionError（例如连接层错误）时不做任何删除：此时无法判断结果。
+func (c *Client) pruneRejectedSubscriptions(topics []string, err error) {
+	var subErr *SubscriptionError
+	if !errors.As(err, &subErr) || len(subErr.Codes) == 0 {
+		return
+	}
+
+	c.subscribedTopicsMu.Lock()
+	for i, topic := range topics {
+		if !subErr.Granted(i) {
+			delete(c.subscribedTopics, topic)
+		}
+	}
+	c.subscribedTopicsMu.Unlock()
+}
+
 // Unsubscribe 取消订阅
 func (c *Client) Unsubscribe(topics ...string) error {
+	if c.closed.Load() {
+		return ErrClientClosed
+	}
 	if !c.connected.Load() {
 		return ErrNotConnected
 	}

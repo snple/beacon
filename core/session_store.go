@@ -209,7 +209,7 @@ func (c *Core) recoverSessions() {
 				RetainHandling:    sub.RetainHandling,
 			}
 			client.session.subscriptions[sub.Topic] = opts
-			c.Subscribe(client.ID, packet.Subscription{Topic: sub.Topic, Options: opts})
+			c.addSubscription(client.ID, packet.Subscription{Topic: sub.Topic, Options: opts})
 		}
 
 		c.clientsMu.Lock()

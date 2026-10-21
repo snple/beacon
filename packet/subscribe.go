@@ -20,6 +20,19 @@ type SubscribeOptions struct {
 	RetainHandling    uint8 // 保留消息处理方式 (0, 1, 2)
 }
 
+// RetainHandling 取值（对应 SubscribeOptions.RetainHandling）。
+const (
+	RetainHandlingAlways  uint8 = 0 // 总是发送保留消息
+	RetainHandlingNewOnly uint8 = 1 // 仅新订阅时发送
+	RetainHandlingNever   uint8 = 2 // 不发送保留消息
+)
+
+// ValidRetainHandling 报告 RetainHandling 是否为协议定义的值（0/1/2）。
+// 线格式只占 2 位，因此对端可以传 3，服务端必须显式拒绝而不是当作 0 处理。
+func (o SubscribeOptions) ValidRetainHandling() bool {
+	return o.RetainHandling <= RetainHandlingNever
+}
+
 // SubscribeOptions 位掩码常量
 // 位分配:
 //   - bit 0: QoS (1 bit, 值为 0 或 1)

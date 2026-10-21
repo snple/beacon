@@ -91,7 +91,10 @@ type Client struct {
 	options *ClientOptions
 
 	// 订阅主题列表
-	subscribedTopics   map[string]bool
+	// subscribedTopics 记录"期望订阅集合"及其选项。
+	// 不能只存 topic 名：重连恢复时必须用原始选项重放，否则 QoS1/NoLocal
+	// 等会被静默降级为默认值（QoS0），造成消息静默丢失。
+	subscribedTopics   map[string]SubscribeOptions
 	subscribedTopicsMu sync.RWMutex
 
 	// 当前活跃的连接（可能为 nil）
@@ -104,6 +107,9 @@ type Client struct {
 
 	// 连接状态
 	connected atomic.Bool
+
+	// closed 表示 Close() 已被调用，存储不再可用
+	closed atomic.Bool
 
 	// 轮询模式队列
 	messageQueue chan *Message
@@ -170,7 +176,7 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 
 	c := &Client{
 		options:          opts,
-		subscribedTopics: make(map[string]bool),
+		subscribedTopics: make(map[string]SubscribeOptions),
 		ctx:              ctx,
 		cancel:           cancel,
 		connLostCh:       make(chan struct{}, 1),
@@ -272,6 +278,9 @@ func (c *Client) close(err error) error {
 func (c *Client) Close() error {
 	// 禁用自动重连
 	c.autoReconnect.Store(false)
+	// 置位后所有对外 API 直接返回 ErrClientClosed，而不是让调用方看到
+	// 底层存储关闭后的 badger 错误。
+	c.closed.Store(true)
 
 	err := c.Disconnect()
 	// 关闭整个客户端生命周期，唤醒所有等待 ctx.Done() 的 goroutine
@@ -408,5 +417,6 @@ func (c *Client) HasSubscription(topic string) bool {
 	c.subscribedTopicsMu.RLock()
 	defer c.subscribedTopicsMu.RUnlock()
 
-	return c.subscribedTopics[topic]
+	_, ok := c.subscribedTopics[topic]
+	return ok
 }

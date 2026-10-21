@@ -108,6 +108,13 @@ func (c *Client) connectWithConn(netConn net.Conn) error {
 	// 启动连接的所有协程
 	conn.start()
 
+	// 服务端没有恢复会话时重放本地订阅。手动 Connect 与自动重连共用这一处，
+	// 避免“只有 reconnectLoop 会恢复订阅”的不一致。
+	// 必须在 conn.start() 之后：SUBACK 由接收协程分发。
+	if !conn.sessionPresent {
+		c.restoreSubscriptions()
+	}
+
 	// 启动重传协程（仅第一次连接时启动）
 	// 使用独立的 retransmitLoopStarted 标志，避免与 TriggerRetransmit 的
 	// retransmitting 一次性守卫冲突（M6：冲突会导致 retransmitLoop 永不启动）
@@ -190,7 +197,8 @@ func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 
 	// 接收 CONNACK
 	_ = conn.SetReadDeadline(time.Now().Add(c.options.ConnectTimeout))
-	pkt, err := packet.ReadPacket(conn, c.options.MaxPacketSize) // CONNACK 时不知道限制，传 0
+	// 用客户端自己声明的接收上限校验 CONNACK：超过该上限的 CONNACK 属于服务端错误。
+	pkt, err := packet.ReadPacket(conn, c.options.MaxPacketSize)
 	if err != nil {
 		return nil, NewConnectionError("read CONNACK", err)
 	}

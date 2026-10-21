@@ -14,6 +14,9 @@ var (
 
 	// ErrCoreAlreadyRunning core 已在运行
 	ErrCoreAlreadyRunning = errors.New("core already running")
+
+	// ErrCoreStopped core 已停止（同一实例不可重启：context 已取消、存储已关闭）
+	ErrCoreStopped = errors.New("core already stopped")
 )
 
 // 队列相关错误（复用共享 mq 包的定义，保持 API 兼容）

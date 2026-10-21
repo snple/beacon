@@ -800,7 +800,7 @@ func TestClientSessionExpiry(t *testing.T) {
 		t.Fatal("Session should not be present after expiry")
 	}
 
-	// 订阅应该不存在（检查服务端）
+	// 服务端没有保留订阅，但客户端会按原始选项重放本地订阅
 	server.clientsMu.RLock()
 	svClient, exists := server.clients["test-client"]
 	server.clientsMu.RUnlock()
@@ -810,10 +810,14 @@ func TestClientSessionExpiry(t *testing.T) {
 	}
 
 	svClient.session.subsMu.RLock()
-	_, hasSubscription := svClient.session.subscriptions["test/topic"]
+	opts, hasSubscription := svClient.session.subscriptions["test/topic"]
 	svClient.session.subsMu.RUnlock()
 
-	if hasSubscription {
-		t.Fatal("Subscription should not be preserved after session expiry")
+	if !hasSubscription {
+		t.Fatal("Client should replay its subscriptions when session is not present")
+	}
+	// 重放必须保留原始选项，而不是退回默认 QoS0
+	if opts.QoS != packet.QoS1 {
+		t.Fatalf("expected replayed QoS1, got %v", opts.QoS)
 	}
 }

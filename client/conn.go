@@ -364,7 +364,12 @@ func (c *Conn) handleSuback(p *packet.SubackPacket) {
 	var err error
 	for i, code := range p.ReasonCodes {
 		if !code.IsSubackSuccess() {
-			err = NewSubscriptionError(i, code.String())
+			// 逐条原因码一并带回：部分失败时调用方仍能知道哪些主题被授予。
+			err = &SubscriptionError{
+				Index:  i,
+				Reason: code.String(),
+				Codes:  p.ReasonCodes,
+			}
 			break
 		}
 	}
