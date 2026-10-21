@@ -39,13 +39,18 @@ func (c *Client) publishWill() {
 	// !!! 遗嘱消息没比要复制
 	pub := c.session.willPacket
 
-	// !!! 遗嘱消息的超时时间由客户端掉线时确定
-	// DefaultMessageExpiry=0 表示永不过期：此时不设置 ExpiryTime，
-	// 否则过期时间会被设为“现在”，消息下一秒即被判为过期而丢弃（M5）。
-	// 语义与 applyPublishExpiry 保持一致（>0 才设置过期）。
-	if c.core.options.DefaultMessageExpiry > 0 {
-		expiry := time.Now().Add(c.core.options.DefaultMessageExpiry)
-		pub.Properties.ExpiryTime = expiry.Unix()
+	// 遗嘱包中的 ExpiryTime 表示**相对 TTL（秒）**，在遗嘱实际发布时才开始计算：
+	// CONNECT 时携带的绝对时间在长时间连接后已经失效，不能直接沿用。
+	switch {
+	case pub.Properties != nil && pub.Properties.ExpiryTime > 0:
+		pub.Properties.ExpiryTime = time.Now().Add(time.Duration(pub.Properties.ExpiryTime) * time.Second).Unix()
+	case c.core.options.DefaultMessageExpiry > 0:
+		pub.Properties.ExpiryTime = time.Now().Add(c.core.options.DefaultMessageExpiry).Unix()
+	default:
+		// DefaultMessageExpiry=0 表示永不过期
+		if pub.Properties != nil {
+			pub.Properties.ExpiryTime = 0
+		}
 	}
 
 	// QoS/Retain 必须带到 Message 层：投递链路取的是 Message.QoS / Message.Retain，

@@ -88,11 +88,11 @@ func TestRetainStoreWildcardMatching(t *testing.T) {
 		{"*/room1/temperature", 1},    // 单层通配符在开头
 		{"home/room1/*/extra", 0},     // 路径不匹配
 
-		// ** 位于模式中间（匹配零个或多个层级）
-		{"home/**/temperature", 2},       // ** 匹配 room1/room2
-		{"home/room1/**/temperature", 1}, // ** 匹配零层
-		{"*/**/light", 2},                // ** 匹配 desk1/desk2
-		{"home/**/extra", 0},             // 中间 ** 不能吞掉结尾的 extra
+		// ** 只能作为最后一层：位于中间的过滤器非法，不匹配任何主题
+		{"home/**/temperature", 0},
+		{"home/room1/**/temperature", 0},
+		{"*/**/light", 0},
+		{"home/**/extra", 0},
 	}
 
 	for _, tt := range tests {
@@ -308,18 +308,12 @@ func TestMatchTopic(t *testing.T) {
 		{"**", "a/b/c", true},
 		{"a/b/**", "a/b", true},
 
-		// ** 位于模式中间（匹配零个或多个层级）
-		{"a/**/b", "a/b", true},
-		{"a/**/b", "a/x/b", true},
-		{"a/**/b", "a/x/y/b", true},
-		{"a/**/b", "a/x", false},
-		{"a/**/b", "a/x/y", false},
-		{"a/**/b", "b/x/b", false},
-		{"a/**/b/**", "a/b/c", true},
-		{"a/**/b/**", "a/x/b", true},
-		{"**/b", "a/b", true},
-		{"**/b", "b", true},
-		{"**/b", "a/c", false},
+		// ** 只能作为最后一层：位于中间的过滤器非法，不匹配任何主题
+		{"a/**/b", "a/b", false},
+		{"a/**/b", "a/x/b", false},
+		{"a/**/b", "a/x/y/b", false},
+		{"a/**/b/**", "a/b/c", false},
+		{"**/b", "a/b", false},
 	}
 
 	for _, tt := range tests {
@@ -429,4 +423,39 @@ func TestRetainStoreScalability(t *testing.T) {
 	}
 
 	t.Logf("Matched %d topics in %v", len(topics), elapsed)
+}
+
+// TestRetainStore_PrunesEmptyNodes 验证删除保留消息后会剪掉空节点。
+func TestRetainStore_PrunesEmptyNodes(t *testing.T) {
+	store := newRetainStore()
+	if err := store.set("a/b/c", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(store.root.children); got != 1 {
+		t.Fatalf("expected 1 root child, got %d", got)
+	}
+
+	store.remove("a/b/c")
+	if got := len(store.root.children); got != 0 {
+		t.Fatalf("expected empty tree after remove, got %d root children", got)
+	}
+	if store.count != 0 {
+		t.Fatalf("expected count 0, got %d", store.count)
+	}
+}
+
+// TestRetainStore_ExpiredCleanupPrunesNodes 验证过期清理同样会剪枝。
+func TestRetainStore_ExpiredCleanupPrunesNodes(t *testing.T) {
+	store := newRetainStore()
+	if err := store.set("a/b/c", time.Now().Unix()-1); err != nil {
+		t.Fatal(err)
+	}
+
+	count, topics := store.cleanupExpired()
+	if count != 1 || len(topics) != 1 {
+		t.Fatalf("expected 1 expired entry, got count=%d topics=%v", count, topics)
+	}
+	if got := len(store.root.children); got != 0 {
+		t.Fatalf("expected empty tree after expiry cleanup, got %d root children", got)
+	}
 }

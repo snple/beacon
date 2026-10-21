@@ -156,6 +156,9 @@ func (s *retainStore) remove(topic string) {
 	defer s.mu.Unlock()
 
 	node := s.root
+	path := []*retainNode{node}
+	var parts []string
+
 	startIdx := 0
 	for startIdx < len(topic) {
 		endIdx := strings.IndexByte(topic[startIdx:], '/')
@@ -173,10 +176,23 @@ func (s *retainStore) remove(topic string) {
 		if node == nil {
 			return
 		}
+		path = append(path, node)
+		parts = append(parts, part)
 	}
-	if node.entry != nil {
-		node.entry = nil
-		s.count--
+
+	if node.entry == nil {
+		return
+	}
+	node.entry = nil
+	s.count--
+
+	// 自底向上剪枝：保留消息删除后不应留下空节点
+	for i := len(path) - 1; i > 0; i-- {
+		n := path[i]
+		if n.entry != nil || len(n.children) > 0 {
+			return
+		}
+		delete(path[i-1].children, parts[i-1])
 	}
 }
 
@@ -201,13 +217,12 @@ func (s *retainStore) matchNodeTopics(node *retainNode, parts []string, idx int,
 	part := parts[idx]
 	switch part {
 	case packet.TopicWildcardMulti: // **
-		// ** 匹配零层：剩余模式从当前节点继续
-		result = s.matchNodeTopics(node, parts, idx+1, result, now)
-		// ** 匹配一层或多层：进入每个子节点后 ** 仍然保留，可继续消耗。
-		// 每次递归要么模式前进（idx+1）要么节点加深（树深度有限），保证终止。
-		for _, child := range node.children {
-			result = s.matchNodeTopics(child, parts, idx, result, now)
+		// ** 只能作为最后一层；出现中缀的过滤器非法，不匹配任何主题
+		if idx != len(parts)-1 {
+			return result
 		}
+		// 匹配当前节点及所有后代（等价于零个或多个层级）
+		result = s.collectAllTopics(node, result, now)
 	case packet.TopicWildcardSingle: // *
 		// * 匹配当前层级的所有子节点
 		for _, child := range node.children {
@@ -259,8 +274,12 @@ func (s *retainStore) cleanupExpiredNode(node *retainNode, now int64, expiredTop
 		*expiredTopics = append(*expiredTopics, node.entry.topic)
 		node.entry = nil
 	}
-	for _, child := range node.children {
+	for part, child := range node.children {
 		s.cleanupExpiredNode(child, now, expiredTopics)
+		// 自底向上剪枝：过期条目清理后删除空节点
+		if child.entry == nil && len(child.children) == 0 {
+			delete(node.children, part)
+		}
 	}
 }
 
@@ -287,13 +306,8 @@ func matchTopicParts(parts, topic []string, pi, ti int) bool {
 
 	part := parts[pi]
 	if part == packet.TopicWildcardMulti {
-		// ** 匹配零层或多层
-		for i := ti; i <= len(topic); i++ {
-			if matchTopicParts(parts, topic, pi+1, i) {
-				return true
-			}
-		}
-		return false
+		// ** 只能作为最后一层：匹配剩余全部层级（含零层）；非末层视为非法模式
+		return pi == len(parts)-1
 	}
 
 	if ti == len(topic) {

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/snple/beacon/packet"
@@ -368,8 +369,8 @@ func TestSubscriptionTree_ComplexHierarchy(t *testing.T) {
 
 // TestSubscriptionTree_MultiWildcardInMiddle 测试 ** 位于模式中间时的匹配
 func TestSubscriptionTree_MultiWildcardInMiddle(t *testing.T) {
+	// ** 只能作为最后一层；中缀过滤器即使通过内部接口写入，也不应匹配任何主题
 	tree := newSubTree()
-
 	tree.subscribe("c1", "a/**/b", packet.SubscribeOptions{QoS: packet.QoS0})
 	tree.subscribe("c2", "a/**", packet.SubscribeOptions{QoS: packet.QoS1})
 	tree.subscribe("c3", "**/b", packet.SubscribeOptions{QoS: packet.QoS0})
@@ -378,13 +379,13 @@ func TestSubscriptionTree_MultiWildcardInMiddle(t *testing.T) {
 		topic    string
 		expected []string
 	}{
-		{"a/b", []string{"c1", "c2", "c3"}},     // ** 匹配零层
-		{"a/x/b", []string{"c1", "c2", "c3"}},   // ** 匹配一层
-		{"a/x/y/b", []string{"c1", "c2", "c3"}}, // ** 匹配多层
-		{"a/x", []string{"c2"}},                 // a/**/b 不匹配（缺少结尾 /b）
-		{"a/x/y", []string{"c2"}},               // 同上
-		{"x/b", []string{"c3"}},                 // 只有 **/b 匹配
-		{"b", []string{"c3"}},                   // **/b 匹配 b（** 匹配零层）
+		{"a/b", []string{"c2"}},
+		{"a/x/b", []string{"c2"}},
+		{"a/x/y/b", []string{"c2"}},
+		{"a/x", []string{"c2"}},
+		{"a/x/y", []string{"c2"}},
+		{"x/b", nil},
+		{"b", nil},
 	}
 
 	for _, tt := range tests {
@@ -406,30 +407,96 @@ func TestSubscriptionTree_MultiWildcardInMiddle(t *testing.T) {
 
 // TestSubscriptionTree_ConsecutiveMultiWildcard 测试连续 ** 折叠
 func TestSubscriptionTree_ConsecutiveMultiWildcard(t *testing.T) {
+	// a/**/**/b 含非末层 **，属于非法过滤器：可被写入/删除，但永远不匹配
 	tree := newSubTree()
-
 	tree.subscribe("c1", "a/**/**/b", packet.SubscribeOptions{QoS: packet.QoS0})
 
-	matches := tree.matchTopic("a/x/b")
-	if _, ok := matches["c1"]; !ok {
-		t.Errorf("a/**/**/b should match a/x/b (consecutive ** folded)")
+	for _, topic := range []string{"a/x/b", "a/x/y/b", "a/x"} {
+		if _, ok := tree.matchTopic(topic)["c1"]; ok {
+			t.Errorf("a/**/**/b is invalid and should not match %s", topic)
+		}
 	}
 
-	matches = tree.matchTopic("a/x/y/b")
-	if _, ok := matches["c1"]; !ok {
-		t.Errorf("a/**/**/b should match a/x/y/b")
-	}
-
-	matches = tree.matchTopic("a/x")
-	if _, ok := matches["c1"]; ok {
-		t.Errorf("a/**/**/b should NOT match a/x")
-	}
-
-	// 取消订阅也应正确处理折叠后的路径
 	if !tree.unsubscribe("c1", "a/**/**/b") {
 		t.Errorf("unsubscribe with folded pattern should succeed")
 	}
 	if _, ok := tree.matchTopic("a/x/b")["c1"]; ok {
 		t.Errorf("subscription should be removed after unsubscribe")
+	}
+}
+
+// TestSubscriptionTree_PrunesEmptyNodes 验证取消订阅后会剪掉空节点，避免主题 churn 造成内存泄漏。
+func TestSubscriptionTree_PrunesEmptyNodes(t *testing.T) {
+	tree := newSubTree()
+	opts := packet.SubscribeOptions{QoS: packet.QoS0}
+
+	for i := 0; i < 100; i++ {
+		tree.subscribe("c1", fmt.Sprintf("device/%d/telemetry", i), opts)
+	}
+	if got := len(tree.root.children); got != 1 {
+		t.Fatalf("expected only the shared 'device' node, got %d root children", got)
+	}
+
+	if removed := tree.unsubscribeClient("c1"); removed != 100 {
+		t.Fatalf("expected 100 removed subscriptions, got %d", removed)
+	}
+	if got := len(tree.root.children); got != 0 {
+		t.Fatalf("expected tree to be pruned, got %d root children", got)
+	}
+}
+
+// TestSubscriptionTree_PruneKeepsSharedNodes 验证剪枝不会删除仍被其它订阅使用的节点。
+func TestSubscriptionTree_PruneKeepsSharedNodes(t *testing.T) {
+	tree := newSubTree()
+	opts := packet.SubscribeOptions{QoS: packet.QoS0}
+
+	tree.subscribe("c1", "a/b/c", opts)
+	tree.subscribe("c2", "a/b/d", opts)
+
+	if ok := tree.unsubscribe("c1", "a/b/c"); !ok {
+		t.Fatal("expected unsubscribe to succeed")
+	}
+	if _, ok := tree.matchTopic("a/b/d")["c2"]; !ok {
+		t.Fatal("shared prefix must keep the other subscription alive")
+	}
+
+	if ok := tree.unsubscribe("c2", "a/b/d"); !ok {
+		t.Fatal("expected unsubscribe to succeed")
+	}
+	if got := len(tree.root.children); got != 0 {
+		t.Fatalf("expected tree to be pruned after last unsubscribe, got %d root children", got)
+	}
+}
+
+// TestWildcardSemantics_ConsistentAcrossImplementations 验证 packet.MatchTopic、
+// 订阅树和保留消息索引使用同一套通配符语义（** 仅允许作为最后一层）。
+func TestWildcardSemantics_ConsistentAcrossImplementations(t *testing.T) {
+	filters := []string{"a", "a/b", "a/*", "a/**", "*", "**", "*/b", "a/*/c", "a/b/**"}
+	topics := []string{"a", "a/b", "a/b/c", "a/b/c/d", "a/x", "b", "x/b", "a//b"}
+
+	for _, filter := range filters {
+		if !packet.ValidateTopicFilter(filter) {
+			t.Fatalf("test filter %q should be valid", filter)
+		}
+		for _, topic := range topics {
+			want := packet.MatchTopic(filter, topic)
+
+			tree := newSubTree()
+			tree.subscribe("c1", filter, packet.SubscribeOptions{QoS: packet.QoS0})
+			_, inTree := tree.matchTopic(topic)["c1"]
+
+			store := newRetainStore()
+			if err := store.set(topic, 0); err != nil {
+				t.Fatalf("retain set failed: %v", err)
+			}
+			inRetain := len(store.matchTopics(filter)) == 1
+
+			if inTree != want {
+				t.Errorf("subTree(%q, %q) = %v, packet.MatchTopic = %v", filter, topic, inTree, want)
+			}
+			if inRetain != want {
+				t.Errorf("retainStore(%q, %q) = %v, packet.MatchTopic = %v", filter, topic, inRetain, want)
+			}
+		}
 	}
 }

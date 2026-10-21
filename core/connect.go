@@ -359,19 +359,27 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	}
 	c.options.Hooks.callOnDisconnect(disconnectCtx)
 
-	// 检查是否为正常断开
+	// 决定是否发布遗嘱：
+	//  1. 收到 DISCONNECT 且原因码为 DisconnectWithWill → 客户端显式要求发布
+	//  2. 收到其它 DISCONNECT → 正常断开，清除遗嘱
+	//  3. 没收到 DISCONNECT：服务端主动关闭（如停机）不发布；其它异常断开发布
 	isNormalDisconnect := client.DisconnectPacket() != nil
+	disconnectWithWill := isNormalDisconnect &&
+		client.DisconnectPacket().ReasonCode == packet.ReasonDisconnectWithWill
+	serverShutdown := false
+	if conn := client.getConn(); conn != nil {
+		serverShutdown = conn.closeReasonCode() == packet.ReasonServerShuttingDown
+	}
 
-	// 正常断开：清除遗嘱消息
-	if isNormalDisconnect {
+	publishWill := disconnectWithWill || (!isNormalDisconnect && !serverShutdown)
+	if !publishWill {
 		client.clearWill()
 	}
 
 	// 检查是否需要保留会话
 	if client.session.timeout.Load() == 0 {
 		// 立即清理
-		// 异常断开时发布遗嘱消息
-		if !isNormalDisconnect {
+		if publishWill {
 			client.publishWill()
 		}
 
@@ -394,8 +402,8 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	// 持久化会话（订阅 + 过期时间），使进程重启后仍能恢复
 	c.saveSessionExpiring(client, expiryTime)
 
-	// 异常断开时发布遗嘱消息
-	if !isNormalDisconnect {
+	// 需要时发布遗嘱消息（publishWill 内部会清除遗嘱，防止重复发送）
+	if publishWill {
 		client.publishWill()
 	}
 

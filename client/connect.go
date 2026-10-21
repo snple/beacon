@@ -155,6 +155,12 @@ func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 		if willPkt.Topic == "" {
 			return nil, ErrWillTopicRequired
 		}
+		if !packet.ValidateTopicName(willPkt.Topic) {
+			return nil, ErrWillTopicInvalid
+		}
+		if !willPkt.QoS.IsValid() {
+			return nil, ErrWillQoSInvalid
+		}
 		connect.Will = true
 
 		if willPkt.Properties == nil {
@@ -162,7 +168,8 @@ func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 		}
 
 		if c.options.Will.Expiry > 0 {
-			willPkt.Properties.ExpiryTime = time.Now().Unix() + int64(c.options.Will.Expiry.Seconds())
+			// 遗嘱包中的 ExpiryTime 表示相对 TTL（秒），由服务端在遗嘱实际发布时开始计算
+			willPkt.Properties.ExpiryTime = int64(c.options.Will.Expiry / time.Second)
 		}
 
 		connect.WillPacket = willPkt

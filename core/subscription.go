@@ -193,16 +193,10 @@ func (t *subTree) matchNode(node *topicNode, topic string, startIdx int, result 
 		t.matchNode(plusNode, topic, nextIdx, result)
 	}
 
-	// ** 多层通配符匹配（匹配零个或多个层级，可出现在模式任意位置）
+	// ** 多层通配符：只能作为最后一层（由 ValidateTopicFilter 保证），
+	// 因此它匹配当前层及其后的所有层级（含零层），无需再枚举后续层级。
 	if hashNode := node.children[packet.TopicWildcardMulti]; hashNode != nil {
-		// ** 匹配当前层及后续所有层级（即模式以 ** 结尾或 ** 已吞掉剩余层级）
 		collectSubscribers(hashNode.subscribers, result)
-		// ** 匹配零层或多层：枚举消耗 k 个层级后，
-		// 让 ** 之后的模式（hashNode 的子树）与剩余主题对齐。
-		// 连续 ** 已在 splitTopic 中折叠，且每次递归层级单调推进，保证终止。
-		for k := 0; startIdx+k <= len(topic); k++ {
-			t.matchNode(hashNode, topic, startIdx+k, result)
-		}
 	}
 }
 
@@ -254,20 +248,40 @@ func (t *subTree) addSubscription(clientID, topic string, opts packet.SubscribeO
 // 返回 true 表示成功移除
 func (t *subTree) removeSubscription(clientID, topic string) bool {
 	parts := splitTopic(topic)
+	path := make([]*topicNode, 0, len(parts)+1)
+
 	node := t.root
+	path = append(path, node)
 
 	for _, part := range parts {
-		if node.children[part] == nil {
+		child := node.children[part]
+		if child == nil {
 			return false
 		}
-		node = node.children[part]
+		node = child
+		path = append(path, node)
 	}
 
 	_, exists := node.subscribers[clientID]
-	if exists {
-		delete(node.subscribers, clientID)
+	if !exists {
+		return false
 	}
-	return exists
+	delete(node.subscribers, clientID)
+
+	t.pruneEmptyPath(path, parts)
+	return true
+}
+
+// pruneEmptyPath 自底向上删除不再包含订阅者或子节点的空节点，避免主题 churn 造成内存泄漏。
+// path[0] 为根节点，parts[i] 是 path[i+1] 对应的层级名。
+func (t *subTree) pruneEmptyPath(path []*topicNode, parts []string) {
+	for i := len(path) - 1; i > 0; i-- {
+		node := path[i]
+		if len(node.subscribers) > 0 || len(node.children) > 0 {
+			return
+		}
+		delete(path[i-1].children, parts[i-1])
+	}
 }
 
 // removeClientFromNode 递归移除客户端的所有订阅
@@ -278,8 +292,12 @@ func (t *subTree) removeClientFromNode(node *topicNode, clientID string) int {
 		delete(node.subscribers, clientID)
 		count++
 	}
-	for _, child := range node.children {
+	for part, child := range node.children {
 		count += t.removeClientFromNode(child, clientID)
+		// 自底向上剪枝：删除不再使用的空节点
+		if len(child.subscribers) == 0 && len(child.children) == 0 {
+			delete(node.children, part)
+		}
 	}
 	return count
 }

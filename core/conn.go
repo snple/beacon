@@ -50,10 +50,11 @@ type conn struct {
 	wg sync.WaitGroup
 
 	// 生命周期
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closed    atomic.Bool
-	closeOnce sync.Once
+	ctx         context.Context
+	cancel      context.CancelFunc
+	closed      atomic.Bool
+	closeReason atomic.Uint32 // packet.ReasonCode，记录连接关闭原因供 hooks/遗嘱判断
+	closeOnce   sync.Once
 }
 
 // newConn 创建新的连接对象
@@ -222,6 +223,11 @@ func coreMessagePacketID(m *Message) nson.Id {
 	return m.PacketID
 }
 
+// closeReasonCode 返回连接关闭原因。
+func (c *conn) closeReasonCode() packet.ReasonCode {
+	return packet.ReasonCode(c.closeReason.Load())
+}
+
 // wait 等待连接的所有发送协程退出
 // 用于在关闭消息存储前同步，确保不再有对持久化队列的访问。
 // 注意：不要在持有 clientsMu 时调用（发送协程可能通过用户钩子回调 core API）。
@@ -232,6 +238,8 @@ func (c *conn) wait() {
 // close 关闭连接
 func (c *conn) close(reason packet.ReasonCode) {
 	c.closeOnce.Do(func() {
+		c.closeReason.Store(uint32(reason))
+
 		// 发送 DISCONNECT (如果不是正常断开)
 		// 注意：必须在设置 closed 标志之前发送，以避免并发写入竞态
 		// 直接写入连接，不使用 writePacket (它会检查 closed 标志)

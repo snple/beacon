@@ -236,6 +236,15 @@ func (c *Core) MaxPacketSize() uint32 {
 
 // Subscribe 订阅主题
 func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
+	// 统一通配符规则：** 只能作为最后一层。非法过滤器直接忽略，
+	// 避免通过编程接口绕过 SUBSCRIBE 校验后与匹配语义不一致。
+	if !packet.ValidateTopicFilter(sub.Topic) {
+		c.logger.Warn("Ignoring subscription with invalid topic filter",
+			zap.String("clientID", clientID),
+			zap.String("topic", sub.Topic))
+		return
+	}
+
 	isNew := c.subTree.subscribe(clientID, sub.Topic, sub.Options)
 	if isNew {
 		c.stats.SubscriptionsCount.Add(1)

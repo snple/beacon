@@ -49,7 +49,8 @@ func TestHandshake_WithWillSimpleAndExpiry_DoesNotMutateCallerConfig(t *testing.
 	require.True(t, connect.Will)
 	require.NotNil(t, connect.WillPacket)
 	require.NotNil(t, connect.WillPacket.Properties)
-	require.Greater(t, connect.WillPacket.Properties.ExpiryTime, time.Now().Unix())
+	require.Equal(t, int64(2), connect.WillPacket.Properties.ExpiryTime,
+		"will ExpiryTime must be a relative TTL in seconds")
 
 	if opts.Will.Packet.Properties != nil {
 		require.Zero(t, opts.Will.Packet.Properties.ExpiryTime, "handshake should not mutate caller-owned will packet properties")
@@ -145,4 +146,49 @@ func TestHandshake_ClonesConnectMutableInputs(t *testing.T) {
 	require.Equal(t, []byte("secret-token"), connect.Properties.AuthData, "handshake should not retain caller-owned auth data slice")
 	require.Equal(t, "client", connect.Properties.UserProperties["x-origin"], "handshake should not retain caller-owned user properties map")
 	require.NoError(t, <-errCh)
+}
+
+// TestHandshake_RejectsInvalidWillTopic 验证客户端在握手前拒绝带通配符的遗嘱主题。
+func TestHandshake_RejectsInvalidWillTopic(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	opts := NewClientOptions().
+		WithClientID("bad-will-topic").
+		WithWillSimple("will/+/topic", []byte("x"), packet.QoS0, false)
+
+	c := &Client{options: opts}
+	_, err := c.handshake(clientConn)
+	require.ErrorIs(t, err, ErrWillTopicInvalid)
+}
+
+// TestHandshake_RejectsInvalidWillQoS 验证客户端在握手前拒绝非法遗嘱 QoS。
+func TestHandshake_RejectsInvalidWillQoS(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	opts := NewClientOptions().
+		WithClientID("bad-will-qos").
+		WithWillSimple("will/topic", []byte("x"), packet.QoS(2), false)
+
+	c := &Client{options: opts}
+	_, err := c.handshake(clientConn)
+	require.ErrorIs(t, err, ErrWillQoSInvalid)
+}
+
+// TestHandshake_RequiresWillTopic 验证空遗嘱主题仍返回 ErrWillTopicRequired。
+func TestHandshake_RequiresWillTopic(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	opts := NewClientOptions().
+		WithClientID("empty-will-topic").
+		WithWillSimple("", []byte("x"), packet.QoS0, false)
+
+	c := &Client{options: opts}
+	_, err := c.handshake(clientConn)
+	require.ErrorIs(t, err, ErrWillTopicRequired)
 }

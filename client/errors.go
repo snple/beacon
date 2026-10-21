@@ -27,6 +27,12 @@ var (
 
 	// ErrWillTopicRequired 遗嘱主题是必需的
 	ErrWillTopicRequired = errors.New("will topic is required")
+
+	// ErrWillTopicInvalid 遗嘱主题非法（不允许通配符或空字符）
+	ErrWillTopicInvalid = errors.New("will topic is invalid")
+
+	// ErrWillQoSInvalid 遗嘱 QoS 非法（仅支持 QoS0/QoS1）
+	ErrWillQoSInvalid = errors.New("will QoS is invalid")
 )
 
 // 超时相关错误
