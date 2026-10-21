@@ -1,8 +1,10 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -157,6 +159,11 @@ func (c *Core) handleConn(conn net.Conn) {
 		return
 	}
 
+	// 认证身份只保存在内存中（与"认证数据不持久化"的决定一致）。
+	if authCtx != nil && authCtx.Identity != nil {
+		client.session.setIdentity(authCtx.Identity)
+	}
+
 	// 会话元数据在锁外持久化：badger 写入不应发生在全局 clientsMu 临界区内。
 	c.saveSession(client, 0)
 
@@ -197,6 +204,7 @@ func (c *Core) handleConn(conn net.Conn) {
 
 	// 更新统计信息
 	if !replacedOnline {
+		client.counted.Store(true)
 		c.stats.ClientsConnected.Add(1)
 	}
 	if !sessionPresent {
@@ -208,6 +216,16 @@ func (c *Core) handleConn(conn net.Conn) {
 		zap.Uint16("keepAlive", keepAlive),
 		zap.Uint32("sessionTimeout", client.session.timeout.Load()),
 		zap.Bool("sessionPresent", sessionPresent))
+
+	c.emit(Event{
+		Type:     EventClientConnected,
+		ClientID: client.ID,
+		Reason:   "connected",
+		Extra: map[string]string{
+			"session_present": boolString(sessionPresent),
+			"remote":          conn.RemoteAddr().String(),
+		},
+	})
 
 	// 调用 OnConnect 钩子
 	connectCtx := &ConnectContext{
@@ -312,7 +330,16 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 
 	if err := c.options.Hooks.callAuthOnConnect(authCtx); err != nil {
 		c.logger.Debug("Authentication failed", zap.String("clientID", connect.ClientID), zap.Error(err))
-		c.sendConnack(conn, false, packet.ReasonNotAuthorized, nil)
+
+		// 认证器可以用 *AuthError 指定返回给客户端的原因码（如 ReasonBanned）；
+		// 其它错误保持 ReasonNotAuthorized 的历史行为。
+		reason := packet.ReasonNotAuthorized
+		var authErr *AuthError
+		if errors.As(err, &authErr) && authErr.Reason != packet.ReasonSuccess {
+			reason = authErr.Reason
+		}
+
+		c.sendConnack(conn, false, reason, nil)
 		_ = conn.Close()
 		return nil, false
 	}
@@ -483,10 +510,26 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	if exists && currentClient != client {
 		// 会话接管（同一 ClientID 的新连接替换旧连接）视为客户端主动行为：
 		// 不发布旧连接的遗嘱，也不修改新会话的任何状态。
+		client.touch()
 		return
 	}
 
-	c.stats.ClientsConnected.Add(-1)
+	c.uncountClient(client)
+	client.touch()
+
+	// 无条件复查：会话可能在上面读取 map 之后才被管理面删除。
+	if client.adminDeleted.Load() {
+		// 会话已被管理面删除（DeleteSession）：只收敛计数，不再复活会话或发布遗嘱。
+		return
+	}
+
+	// 连接层原因与底层错误：管理面据此区分"心跳超时/被踢/接管/关机"。
+	closeReason := packet.ReasonNormalDisconnect
+	var closeErr error
+	if conn := client.getConn(); conn != nil {
+		closeReason = conn.closeReasonCode()
+		closeErr = conn.err()
+	}
 
 	// 调用 OnDisconnect 钩子
 	// Packet 可能为 nil（连接异常断开时）
@@ -494,8 +537,20 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		ClientID: client.ID,
 		Packet:   client.DisconnectPacket(), // 可能为 nil
 		Duration: time.Now().Unix() - client.ConnectedAt().Unix(),
+		Reason:   closeReason,
+		Err:      closeErr,
 	}
 	c.options.Hooks.callOnDisconnect(disconnectCtx)
+
+	c.emit(Event{
+		Type:     EventClientDisconnected,
+		ClientID: client.ID,
+		Reason:   closeReason.String(),
+		Extra: map[string]string{
+			"duration":          strconv.FormatInt(disconnectCtx.Duration, 10),
+			"session_preserved": boolString(client.session.timeout.Load() > 0),
+		},
+	})
 
 	// 决定是否发布遗嘱：
 	//  1. 收到 DISCONNECT 且原因码为 DisconnectWithWill → 客户端显式要求发布
@@ -549,4 +604,11 @@ func (c *Core) handleClientDisconnect(client *Client) {
 		zap.Uint32("sessionTimeout", client.session.timeout.Load()),
 		zap.String("expiresAt", expiryTime.Format(time.RFC3339)),
 		zap.Bool("sessionPreserved", c.isOfflineSession(client.ID)))
+}
+
+// uncountClient 把客户端从在线计数中移除（恰好一次）。
+func (c *Core) uncountClient(client *Client) {
+	if client != nil && client.counted.CompareAndSwap(true, false) {
+		c.stats.ClientsConnected.Add(-1)
+	}
 }

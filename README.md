@@ -160,6 +160,30 @@ curl -s localhost:9101/metrics | grep pending
 `/metrics` 与 `/stats` 共用 1 秒快照缓存，避免高频抓取时重复全量遍历客户端；
 需要实时数值时直接调用 `core.GetStats()`。运维端点默认不鉴权，生产环境请绑定 loopback 或置于内网。
 
+## 管理 API（进程内）
+
+面向外部管理程序（另一个仓库）嵌入使用：broker 只暴露 Go 方法，HTTP/鉴权/前端由管理程序自行实现。
+
+| 能力 | API |
+|---|---|
+| 服务器信息 | `Info()`（版本/uptime/监听器/上限/存储）、`Listeners()`、`Ready()`、`SetBuildInfo()` |
+| 客户端 | `ListClientsPage(PageOptions)`（分页/前缀/在线过滤、页内一致快照）、`GetClientInfo()` |
+| 会话 | `ListSessions()`、`DeleteSession()`、`DisconnectClientAndWait(ctx, ...)` |
+| 发布 | `Publish(topic, payload, opts)` 返回 `PublishResult`（命中订阅者数；**仅表示已入队**） |
+| 订阅/主题 | `ListSubscriptions()`、`ListTopics()`、`GetTopicSubscribers()` |
+| 保留消息 | `ListRetainedPage()`（只读元数据）、`DeleteRetained()`、`GetRetainedMessages()` |
+| 积压排障 | `ListPendingAck()`（在途 QoS1）、`PurgeClientQueue()`，`ClientInfo` 含 `QueueSize/QueueBytes/OldestQueuedAge` |
+| 事件流 | `SubscribeEvents(ctx, EventFilter)`：连接/断开/订阅/发布/丢弃/拒绝/会话过期/管理操作 |
+| 认证身份 | `AuthConnectContext.Identity`（仅内存），透出到 `ClientInfo.Identity` 与事件 |
+| 错误语义 | 认证器返回 `*AuthError{Reason}` 可指定 CONNACK 原因码（如 `ReasonBanned`）；`DisconnectContext` 含 `Reason`/`Err` |
+
+事件流是**尽力而为**的：订阅者消费过慢时事件被丢弃并计入 `StatsSnapshot.EventsDropped`，
+可结合 `Event.Seq` 跳号判断是否丢过；需要精确状态时以 `List*` API 为准做对账。
+
+封禁、ACL、审计留存、日志 tail、消息历史等属于业务策略，由管理程序用 `AuthHandler` /
+`OnSubscribe` / `OnPublish` / zap sink 自行组合，broker 不内建（设计取舍见
+[`docs/admin-api-design.md`](./docs/admin-api-design.md)）。
+
 ## 使用方法
 
 导入包：
@@ -171,10 +195,11 @@ import "github.com/snple/beacon/core"
 
 更多示例：
 
-- [`examples/core_api`](./examples/core_api/main.go)：Core 管理 API（会话/客户端信息/统计）
+- [`examples/core_api`](./examples/core_api/main.go)：Core 管理 API（分页/会话/保留消息/事件流/发布）
 - [`examples/flexible_listeners`](./examples/flexible_listeners/main.go)：自定义监听器（TCP/TLS/Unix Socket）
 - [`examples/secure_core`](./examples/secure_core/main.go)：认证 + TLS + 配额 + metrics 端点
 - [`docs/embedded-client-guide.md`](./docs/embedded-client-guide.md)：CONNECT 报文布局与嵌入式客户端实现要点
+- [`docs/admin-api-design.md`](./docs/admin-api-design.md)：进程内管理 API 设计（供外部 Web 管理程序嵌入调用；broker 不提供 HTTP 管理面）
 
 ## 流中继（独立的 stream 协议）
 

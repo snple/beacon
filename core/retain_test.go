@@ -12,7 +12,7 @@ func TestRetainStoreBasicOperations(t *testing.T) {
 	store := newRetainStore()
 
 	// 测试 set 和 exists
-	if err := store.set("sensor/temperature", 0); err != nil {
+	if err := store.set("sensor/temperature", 0, retainMeta{}); err != nil {
 		t.Fatalf("Failed to set retain message index: %v", err)
 	}
 
@@ -30,7 +30,7 @@ func TestRetainStoreBasicOperations(t *testing.T) {
 	}
 
 	// 测试覆盖
-	if err := store.set("sensor/temperature", 12345); err != nil {
+	if err := store.set("sensor/temperature", 12345, retainMeta{}); err != nil {
 		t.Fatalf("Failed to update retain message index: %v", err)
 	}
 
@@ -51,7 +51,7 @@ func TestRetainStoreInvalidTopics(t *testing.T) {
 	store := newRetainStore()
 
 	// 空主题
-	if err := store.set("", 0); err != ErrInvalidRetainMessage {
+	if err := store.set("", 0, retainMeta{}); err != ErrInvalidRetainMessage {
 		t.Errorf("Expected ErrInvalidRetainMessage for empty topic, got %v", err)
 	}
 }
@@ -71,7 +71,7 @@ func TestRetainStoreWildcardMatching(t *testing.T) {
 	}
 
 	for _, topic := range topics {
-		store.set(topic, 0)
+		store.set(topic, 0, retainMeta{})
 	}
 
 	tests := []struct {
@@ -112,13 +112,13 @@ func TestRetainStoreExpiry(t *testing.T) {
 	now := time.Now().Unix()
 
 	// 设置一个已过期的索引
-	store.set("expired/topic", now-100)
+	store.set("expired/topic", now-100, retainMeta{})
 
 	// 设置一个未过期的索引
-	store.set("valid/topic", now+100)
+	store.set("valid/topic", now+100, retainMeta{})
 
 	// 设置一个永不过期的索引
-	store.set("permanent/topic", 0)
+	store.set("permanent/topic", 0, retainMeta{})
 
 	// 验证过期检查
 	entry := store.getEntry("expired/topic")
@@ -165,7 +165,7 @@ func TestRetainStoreRemoval(t *testing.T) {
 	store := newRetainStore()
 
 	// 设置保留消息索引
-	store.set("test/topic", 0)
+	store.set("test/topic", 0, retainMeta{})
 
 	if store.count != 1 {
 		t.Errorf("Count should be 1, got %d", store.count)
@@ -190,7 +190,7 @@ func TestRetainStoreClear(t *testing.T) {
 	// 添加多个索引
 	for i := 0; i < 10; i++ {
 		topic := "test/" + string(rune('a'+i))
-		store.set(topic, 0)
+		store.set(topic, 0, retainMeta{})
 	}
 
 	if store.count != 10 {
@@ -223,7 +223,7 @@ func TestRetainStoreNestedTopics(t *testing.T) {
 	}
 
 	for _, topic := range topics {
-		store.set(topic, 0)
+		store.set(topic, 0, retainMeta{})
 	}
 
 	// 测试精确匹配
@@ -253,7 +253,7 @@ func TestRetainStoreConcurrency(t *testing.T) {
 		go func(id int) {
 			for j := 0; j < 100; j++ {
 				topic := "concurrent/test/" + string(rune('a'+id))
-				store.set(topic, 0)
+				store.set(topic, 0, retainMeta{})
 			}
 			done <- true
 		}(i)
@@ -349,7 +349,7 @@ func TestRetainStoreWithMessageStore(t *testing.T) {
 	msg := &Message{Packet: pub, Retain: true, QoS: packet.QoS1, Timestamp: time.Now().Unix()}
 
 	// 存储索引到 retainStore
-	if err := store.set(topic, 0); err != nil {
+	if err := store.set(topic, 0, retainMeta{}); err != nil {
 		t.Fatalf("Failed to set retain index: %v", err)
 	}
 
@@ -401,7 +401,7 @@ func TestRetainStoreScalability(t *testing.T) {
 	for i := 0; i < count; i++ {
 		// 使用唯一的主题格式
 		topic := "device/" + string(rune('a'+i%26)) + "/" + string(rune('a'+(i/26)%26)) + "/" + string(rune('a'+(i/676)%26)) + "/status/" + string(rune('0'+i%10))
-		store.set(topic, 0)
+		store.set(topic, 0, retainMeta{})
 	}
 
 	if store.count != count {
@@ -428,7 +428,7 @@ func TestRetainStoreScalability(t *testing.T) {
 // TestRetainStore_PrunesEmptyNodes 验证删除保留消息后会剪掉空节点。
 func TestRetainStore_PrunesEmptyNodes(t *testing.T) {
 	store := newRetainStore()
-	if err := store.set("a/b/c", 0); err != nil {
+	if err := store.set("a/b/c", 0, retainMeta{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(store.root.children); got != 1 {
@@ -447,7 +447,7 @@ func TestRetainStore_PrunesEmptyNodes(t *testing.T) {
 // TestRetainStore_ExpiredCleanupPrunesNodes 验证过期清理同样会剪枝。
 func TestRetainStore_ExpiredCleanupPrunesNodes(t *testing.T) {
 	store := newRetainStore()
-	if err := store.set("a/b/c", time.Now().Unix()-1); err != nil {
+	if err := store.set("a/b/c", time.Now().Unix()-1, retainMeta{}); err != nil {
 		t.Fatal(err)
 	}
 

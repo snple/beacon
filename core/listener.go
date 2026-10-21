@@ -18,6 +18,9 @@ func (c *Core) ServeTCP(address string) error {
 	}
 	defer func() { _ = listener.Close() }()
 
+	id := c.registerListener(listener.Addr().String(), "tcp")
+	defer c.unregisterListener(id)
+
 	c.logger.Info("Started TCP listener",
 		zap.String("address", listener.Addr().String()))
 
@@ -33,6 +36,9 @@ func (c *Core) ServeTLS(address string, tlsConfig *tls.Config) error {
 	}
 	defer func() { _ = listener.Close() }()
 
+	id := c.registerListener(listener.Addr().String(), "tls")
+	defer c.unregisterListener(id)
+
 	c.logger.Info("Started TLS listener",
 		zap.String("address", listener.Addr().String()))
 
@@ -43,6 +49,9 @@ func (c *Core) ServeTLS(address string, tlsConfig *tls.Config) error {
 // 用户可以创建任何类型的 listener（TCP、Unix Socket、WebSocket、QUIC 等）
 // 此方法会阻塞，直到 listener 关闭或 Core 停止
 func (c *Core) Serve(listener net.Listener) error {
+	id := c.registerListener(listener.Addr().String(), "custom")
+	defer c.unregisterListener(id)
+
 	c.logger.Info("Started custom listener",
 		zap.String("address", listener.Addr().String()))
 	return c.serve(listener)

@@ -49,6 +49,9 @@ func (c *Core) ServeMetricsListener(listener net.Listener) error {
 		}
 	}()
 
+	id := c.registerListener(listener.Addr().String(), "metrics")
+	defer c.unregisterListener(id)
+
 	c.logger.Info("Started metrics listener",
 		zap.String("address", listener.Addr().String()))
 
@@ -94,12 +97,12 @@ func (c *Core) handleStatsJSON(w http.ResponseWriter, _ *http.Request) {
 		`"messages_received":%d,"messages_sent":%d,"messages_dropped":%d,"messages_rejected":%d,`+
 		`"bytes_received":%d,"bytes_sent":%d,"subscriptions":%d,`+
 		`"pending_queue_depth":%d,"client_queue_depth":%d,"pending_ack":%d,`+
-		`"offline_sessions":%d,"store_bytes":%d,"up":%d}`+"\n",
+		`"offline_sessions":%d,"store_bytes":%d,"events_dropped":%d,"up":%d}`+"\n",
 		s.ClientsConnected, s.ClientsTotal,
 		s.MessagesReceived, s.MessagesSent, s.MessagesDropped, s.MessagesRejected,
 		s.BytesReceived, s.BytesSent, s.SubscriptionsCount,
 		s.PendingQueueDepth, s.ClientQueueDepth, s.PendingAckTotal,
-		s.OfflineSessions, s.StoreBytes, boolToInt(c.running.Load()))
+		s.OfflineSessions, s.StoreBytes, s.EventsDropped, boolToInt(c.running.Load()))
 }
 
 func boolToInt(b bool) int {
@@ -129,6 +132,7 @@ func (c *Core) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeMetric(w, "beacon_pending_ack", "gauge", "所有客户端未确认的 QoS1 消息数", float64(s.PendingAckTotal))
 	writeMetric(w, "beacon_offline_sessions", "gauge", "保留中的离线会话数", float64(s.OfflineSessions))
 	writeMetric(w, "beacon_store_bytes", "gauge", "存储占用（字节）", float64(s.StoreBytes))
+	writeMetric(w, "beacon_events_dropped_total", "counter", "事件流因订阅者消费过慢而丢弃的事件数", float64(s.EventsDropped))
 }
 
 // writeMetric 输出单条 Prometheus 文本格式指标。

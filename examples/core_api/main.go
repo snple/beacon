@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -147,15 +148,79 @@ func main() {
 	fmt.Printf("   发送字节数: %d\n", stats.BytesSent)
 	fmt.Printf("   订阅数: %d\n", stats.SubscriptionsCount)
 
-	// 9. 断开指定客户端（可选）
-	fmt.Println("9. 断开客户端连接 (演示):")
+	// 9. 管理面新增 API 演示
+	fmt.Println("9. 服务器信息:")
+	info := c.Info()
+	fmt.Printf("   版本: %s（协议 %s）\n", info.Version, info.Protocol)
+	fmt.Printf("   运行时长: %s\n", info.Uptime)
+	fmt.Printf("   监听器: %v\n", info.Listeners)
+	fmt.Printf("   存储: path=%q ready=%v bytes=%d\n", info.Store.Path, info.Store.Ready, info.Store.Bytes)
+
+	fmt.Println("10. 分页列出客户端（每页 2 条）:")
+	infos, page, err := c.ListClientsPage(core.PageOptions{Limit: 2})
+	if err != nil {
+		fmt.Printf("   错误: %v\n", err)
+	} else {
+		for _, cInfo := range infos {
+			fmt.Printf("   - %s online=%v queue=%d bytes=%d lastSeen=%s\n",
+				cInfo.ClientID, cInfo.Connected, cInfo.QueueSize, cInfo.QueueBytes,
+				cInfo.LastSeenAt.Format(time.RFC3339))
+		}
+		if page.NextCursor != "" {
+			fmt.Printf("   下一页游标: %s\n", page.NextCursor)
+		}
+	}
+
+	fmt.Println("11. 列出会话 / 订阅 / 主题:")
+	sessions, _, _ := c.ListSessions(core.PageOptions{Limit: 10})
+	fmt.Printf("   会话数: %d\n", len(sessions))
+	subs, _, _ := c.ListSubscriptions(core.PageOptions{Limit: 10})
+	fmt.Printf("   订阅数: %d\n", len(subs))
+	topics, _, _ := c.ListTopics(core.PageOptions{Limit: 10})
+	fmt.Printf("   主题数: %d\n", len(topics))
+
+	fmt.Println("12. 以 broker 身份发布（按订阅树投递）:")
+	res, err := c.Publish("sensors/temperature", []byte(`{"value":25.6}`), core.PublishOptions{
+		QoS:     packet.QoS0,
+		TraceID: "admin-publish-001",
+		Expiry:  60,
+	})
+	if err != nil {
+		fmt.Printf("   错误: %v\n", err)
+	} else {
+		fmt.Printf("   命中订阅者=%d 已入队=%v 已保留=%v\n",
+			res.MatchedSubscribers, res.Enqueued, res.Retained)
+	}
+
+	fmt.Println("13. 保留消息元数据:")
+	retained, _, _ := c.ListRetainedPage(core.PageOptions{Limit: 10})
+	for _, r := range retained {
+		fmt.Printf("   - %s size=%d qos=%d updated=%s\n",
+			r.Topic, r.PayloadSize, r.QoS, r.UpdatedAt.Format(time.RFC3339))
+	}
+
+	fmt.Println("14. 订阅事件流（3 秒）:")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	events, err := c.SubscribeEvents(ctx, core.EventFilter{Buffer: 256})
+	if err != nil {
+		fmt.Printf("   错误: %v\n", err)
+	} else {
+		for ev := range events {
+			fmt.Printf("   #%d %s client=%s topic=%s reason=%s\n",
+				ev.Seq, ev.Type, ev.ClientID, ev.Topic, ev.Reason)
+		}
+	}
+
+	// 15. 断开指定客户端（可选）
+	fmt.Println("15. 断开客户端连接 (演示):")
 	if len(clients) > 0 {
 		clientID := clients[0].ClientID
 		fmt.Printf("   可以使用以下代码断开客户端 '%s':\n", clientID)
-		fmt.Printf("   core.DisconnectClient(\"%s\", protocol.ReasonAdministrativeAction)\n", clientID)
+		fmt.Printf("   core.DisconnectClientAndWait(ctx, \"%s\", packet.ReasonBanned)\n", clientID)
 
 		// 取消注释以实际断开连接
-		// err := core.DisconnectClient(clientID, protocol.ReasonAdministrativeAction)
+		// err := c.DisconnectClientAndWait(context.Background(), clientID, packet.ReasonBanned)
 		// if err != nil {
 		//     fmt.Printf("   断开失败: %v\n", err)
 		// } else {

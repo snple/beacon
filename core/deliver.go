@@ -16,6 +16,14 @@ func (c *Core) publish(msg Message) bool {
 	// 全局配额：待分发队列与存储水位。超限时拒绝新消息，
 	// 让发布端（QoS1）收到 QuotaExceeded，而不是把磁盘写满。
 	if limit := c.options.MaxPendingMessages; limit > 0 && c.queue.Count() >= int64(limit) {
+		c.emit(Event{
+			Type:   EventMessageRejected,
+			Topic:  msg.Packet.Topic,
+			Bytes:  len(msg.Packet.Payload),
+			QoS:    msg.QoS,
+			Reason: packet.ReasonQuotaExceeded.String(),
+			Extra:  map[string]string{"quota": "pending_messages"},
+		})
 		c.logger.Warn("Message rejected, pending queue quota exceeded",
 			zap.String("topic", msg.Packet.Topic),
 			zap.Int("pending", int(c.queue.Count())),
@@ -24,6 +32,14 @@ func (c *Core) publish(msg Message) bool {
 		return false
 	}
 	if limit := c.options.MaxStoreBytes; limit > 0 && c.storeBytes() >= limit {
+		c.emit(Event{
+			Type:   EventMessageRejected,
+			Topic:  msg.Packet.Topic,
+			Bytes:  len(msg.Packet.Payload),
+			QoS:    msg.QoS,
+			Reason: packet.ReasonQuotaExceeded.String(),
+			Extra:  map[string]string{"quota": "store_bytes"},
+		})
 		c.logger.Warn("Message rejected, store quota exceeded",
 			zap.String("topic", msg.Packet.Topic),
 			zap.Int64("storeBytes", c.storeBytes()),
@@ -52,6 +68,20 @@ func (c *Core) publish(msg Message) bool {
 
 	// 统计消息接收数
 	c.stats.MessagesReceived.Add(1)
+
+	sourceID := ""
+	if msg.Packet.Properties != nil {
+		sourceID = msg.Packet.Properties.SourceClientID
+	}
+	c.emit(Event{
+		Type:     EventMessagePublished,
+		ClientID: sourceID,
+		Topic:    msg.Packet.Topic,
+		Bytes:    len(msg.Packet.Payload),
+		QoS:      msg.QoS,
+		Extra:    map[string]string{"retained": boolString(msg.Retain)},
+	})
+
 	return true
 }
 
@@ -86,7 +116,12 @@ func (c *Core) handleRetainedMessage(msg *Message) {
 			expiryTime = msg.Packet.Properties.ExpiryTime
 		}
 
-		if err := c.retainStore.set(msg.Packet.Topic, expiryTime); err != nil {
+		updatedAt := msg.Timestamp
+		if updatedAt <= 0 {
+			updatedAt = time.Now().Unix()
+		}
+		meta := retainMeta{PayloadSize: len(msg.Packet.Payload), UpdatedAt: updatedAt, QoS: msg.QoS}
+		if err := c.retainStore.set(msg.Packet.Topic, expiryTime, meta); err != nil {
 			c.logger.Error("Failed to set retain message index",
 				zap.String("topic", msg.Packet.Topic),
 				zap.Error(err))
@@ -134,6 +169,10 @@ type PublishOptions struct {
 	// 请求-响应模式属性
 	ResponseTopic   string // 响应主题
 	CorrelationData []byte // 关联数据
+
+	// PublisherID 是 broker 侧发布时使用的身份（影响 NoLocal 判断与审计）。
+	// 为空表示系统发布。
+	PublisherID string
 }
 
 func (c *Core) applyPublishProperties(pub *packet.PublishPacket, targetClientID string, options PublishOptions) {
@@ -350,6 +389,15 @@ func (c *Client) deliver(msg *Message) error {
 			zap.String("topic", msg.Packet.Topic),
 			zap.Error(err))
 		c.core.stats.MessagesDropped.Add(1)
+		c.messagesDropped.Add(1)
+		c.core.emit(Event{
+			Type:     EventMessageDropped,
+			ClientID: c.ID,
+			Topic:    msg.Packet.Topic,
+			Bytes:    len(msg.Packet.Payload),
+			QoS:      msg.QoS,
+			Reason:   "queue_enqueue_failed",
+		})
 		return err
 	}
 
@@ -410,6 +458,7 @@ func (c *Client) enforceQueueQuota() bool {
 
 	if c.core.options.ClientQueueOverflowPolicy != QueueOverflowDropOldest {
 		c.core.stats.MessagesDropped.Add(1)
+		c.messagesDropped.Add(1)
 		c.core.logger.Debug("Message dropped, client queue quota exceeded",
 			zap.String("clientID", c.ID),
 			zap.Int("limit", limit),
@@ -600,6 +649,7 @@ func (c *conn) requeueAfterSendFailure(msg *Message) error {
 type pendingMessage struct {
 	msg        *Message // 最终的 PUBLISH 包（只读）
 	lastSentAt int64    // 最后发送时间（Unix 时间戳）
+	retries    int      // 已重发次数
 }
 
 // sendMessage 发送消息到客户端
@@ -621,6 +671,7 @@ func (c *conn) sendMessage(msg *Message) error {
 	deliverCtx := &DeliverContext{
 		ClientID: c.client.ID,
 		Packet:   &pub,
+		Identity: c.client.session.getIdentity(),
 	}
 	if !c.client.core.options.Hooks.callOnDeliver(deliverCtx) {
 		return ErrDeliveryRejected // 钩子拒绝投递
@@ -641,6 +692,8 @@ func (c *conn) sendMessage(msg *Message) error {
 		// 其他写入错误
 		return err
 	}
+
+	c.client.messagesSent.Add(1)
 
 	// 发送成功后的处理
 	if pub.QoS == packet.QoS1 {
@@ -665,6 +718,11 @@ func (c *conn) sendMessage(msg *Message) error {
 // 如果客户端离线但会话仍保留，消息进入其待投递队列，重连后补发
 // （与客户端侧通过 TargetClientID 发起的定向投递语义一致）。
 func (c *Core) PublishToClient(clientID string, topic string, payload []byte, options PublishOptions) error {
+	// 与客户端发布保持一致：非法主题无法被任何订阅匹配，必须拒绝。
+	if !packet.ValidateTopicName(topic) {
+		return ErrInvalidTopic
+	}
+
 	pub := c.newServerPublishPacket(topic, payload, clientID, options)
 	msg := c.newPublishMessage(pub)
 
@@ -684,6 +742,11 @@ func (c *Core) PublishToClient(clientID string, topic string, payload []byte, op
 // 注意：这是即时的、仅在线客户的扇出，不进入订阅树，也不为离线会话入队。
 // 需要持久化/按订阅关系投递时请使用主题发布（Publish）。
 func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) int {
+	if !packet.ValidateTopicName(topic) {
+		c.logger.Warn("Broadcast rejected, invalid topic name", zap.String("topic", topic))
+		return 0
+	}
+
 	c.clientsMu.RLock()
 	clients := make([]*Client, 0, len(c.clients))
 	for _, client := range c.clients {

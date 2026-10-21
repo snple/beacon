@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snple/beacon/packet"
@@ -38,6 +39,22 @@ type Client struct {
 	conn   *conn
 	connMu sync.RWMutex
 
+	// 管理面计数器（按客户端聚合）
+	messagesSent     atomic.Int64
+	messagesDropped  atomic.Int64
+	messagesRejected atomic.Int64
+	bytesSent        atomic.Int64
+	bytesReceived    atomic.Int64
+
+	// lastSeen 最后可见时间（unix 纳秒）：连接建立、收到包、断开时更新
+	lastSeen atomic.Int64
+
+	// counted 表示该客户端已计入 ClientsConnected，保证减计数恰好一次
+	counted atomic.Bool
+
+	// adminDeleted 表示会话已被管理面删除，断开处理不应再复活会话或发布遗嘱
+	adminDeleted atomic.Bool
+
 	// Core 引用
 	core *Core
 }
@@ -69,6 +86,8 @@ func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Cli
 
 	// 提取遗嘱消息
 	c.extractWillMessage(connect)
+
+	c.touch()
 
 	return c
 }
@@ -210,4 +229,29 @@ func (c *Client) DisconnectPacket() *packet.DisconnectPacket {
 		return conn.disconnectPacket
 	}
 	return nil
+}
+
+// touch 记录最后一次可见时间。
+func (c *Client) touch() {
+	c.lastSeen.Store(time.Now().UnixNano())
+}
+
+// lastSeenAt 返回最后一次可见时间（从未可见时返回零值）。
+func (c *Client) lastSeenAt() time.Time {
+	ns := c.lastSeen.Load()
+	if ns <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
+// willTopic 返回当前遗嘱的主题（无遗嘱时为空）。
+func (c *Client) willTopic() string {
+	c.session.willMu.Lock()
+	defer c.session.willMu.Unlock()
+
+	if c.session.willPacket == nil {
+		return ""
+	}
+	return c.session.willPacket.Topic
 }

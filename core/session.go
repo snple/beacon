@@ -37,6 +37,9 @@ type session struct {
 	// 重传标志
 	retransmitting atomic.Bool // true: 正在重传消息
 
+	// identity 认证器给出的身份（仅内存，不持久化）
+	identity atomic.Pointer[Identity]
+
 	core *Core
 }
 
@@ -68,6 +71,16 @@ func sessionTimeoutFromConnect(connect *packet.ConnectPacket, core *Core) uint32
 		return min(connect.SessionTimeout, core.options.MaxSessionTimeout)
 	}
 	return connect.SessionTimeout
+}
+
+// setIdentity 设置认证身份（nil 表示清空）。
+func (s *session) setIdentity(id *Identity) {
+	s.identity.Store(id.Clone())
+}
+
+// getIdentity 返回认证身份（可能为 nil）。
+func (s *session) getIdentity() *Identity {
+	return s.identity.Load()
 }
 
 // applyConnect 用最新的 CONNECT 更新会话参数（会话恢复时调用）。

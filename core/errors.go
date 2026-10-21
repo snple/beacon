@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/snple/beacon/internal/mq"
+	"github.com/snple/beacon/packet"
 )
 
 // 通用错误
@@ -62,6 +63,9 @@ var (
 	ErrDeliveryRejected     = errors.New("delivery rejected by OnDeliver hook")
 	ErrMessageTooLarge      = errors.New("message too large, dropped")
 	ErrClientQueueFull      = errors.New("client queue quota exceeded")
+	ErrInvalidTopic         = errors.New("invalid topic name")
+	ErrQuotaExceeded        = errors.New("quota exceeded")
+	ErrInvalidQoS           = errors.New("invalid qos")
 )
 
 // ClientNotFoundError 客户端未找到错误（携带 clientID）
@@ -120,3 +124,22 @@ func (e *ClientNotAvailableError) Is(target error) bool {
 func NewClientNotAvailableError(clientID string) error {
 	return &ClientNotAvailableError{ClientID: clientID}
 }
+
+// AuthError 允许认证器指定返回给客户端的 CONNACK 原因码。
+//
+// 默认情况下任何认证失败都会返回 ReasonNotAuthorized，无法区分
+// "凭证错误"与"被封禁""服务器忙"等语义。认证器可以返回 *AuthError
+// 来指定原因码，例如 packet.ReasonBanned。
+type AuthError struct {
+	Reason packet.ReasonCode // 返回给客户端的 CONNACK 原因码
+	Err    error             // 可选，仅用于服务端日志，不下发
+}
+
+func (e *AuthError) Error() string {
+	if e.Err != nil {
+		return "authentication failed: " + e.Err.Error()
+	}
+	return "authentication failed: " + e.Reason.String()
+}
+
+func (e *AuthError) Unwrap() error { return e.Err }

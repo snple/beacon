@@ -46,6 +46,21 @@ type Core struct {
 	statsCache   StatsSnapshot
 	statsCacheAt time.Time
 
+	// 事件总线（管理面 SubscribeEvents）
+	events *eventBus
+
+	// 监听器注册表（管理面 Info）
+	listenersMu sync.Mutex
+	listeners   map[uint64]listenerEntry
+	listenerSeq uint64
+
+	// 构建信息与启动时间（管理面 Info）
+	buildMu   sync.RWMutex
+	buildVer  string
+	buildCom  string
+	buildTime string
+	startedAt time.Time
+
 	// 连接速率限制
 	connLimiter *tokenBucket
 
@@ -136,6 +151,9 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		queueTrigger:    make(chan struct{}, 1),
 		retainStore:     newRetainStore(),
 		handshakeConns:  make(map[net.Conn]struct{}),
+		events:          newEventBus(),
+		listeners:       make(map[uint64]listenerEntry),
+		buildVer:        "devel",
 		ctx:             ctx,
 		cancel:          cancel,
 	}
@@ -205,6 +223,10 @@ func (c *Core) Start() error {
 		c.running.Store(false)
 		return ErrCoreStopped
 	}
+
+	c.buildMu.Lock()
+	c.startedAt = time.Now()
+	c.buildMu.Unlock()
 
 	c.taskMu.Lock()
 	c.tasksClosed = false
@@ -340,6 +362,14 @@ func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 	client.session.subsMu.Unlock()
 
 	c.saveSessionPreservingExpiry(client)
+
+	c.emit(Event{
+		Type:     EventSubscribed,
+		ClientID: clientID,
+		Topic:    sub.Topic,
+		QoS:      sub.Options.QoS,
+		Extra:    map[string]string{"source": "api"},
+	})
 }
 
 // Unsubscribe 取消订阅（编程接口）。
@@ -360,6 +390,13 @@ func (c *Core) Unsubscribe(clientID, topic string) {
 	client.session.subsMu.Unlock()
 
 	c.saveSessionPreservingExpiry(client)
+
+	c.emit(Event{
+		Type:     EventUnsubscribed,
+		ClientID: clientID,
+		Topic:    topic,
+		Extra:    map[string]string{"source": "api"},
+	})
 }
 
 // removeSubscription 只更新全局订阅树与统计。
@@ -436,7 +473,14 @@ func (c *Core) GetRetainedMessages(topic string) []*Message {
 
 // GetStats 获取统计信息快照
 func (c *Core) GetStats() StatsSnapshot {
+	c.buildMu.RLock()
+	startedAt := c.startedAt
+	c.buildMu.RUnlock()
+
 	snapshot := StatsSnapshot{
+		StartedAt:          startedAt,
+		Limits:             c.limits(),
+		EventsDropped:      c.events.dropped.Load(),
 		ClientsConnected:   c.stats.ClientsConnected.Load(),
 		ClientsTotal:       c.stats.ClientsTotal.Load(),
 		MessagesReceived:   c.stats.MessagesReceived.Load(),
@@ -474,6 +518,11 @@ func (c *Core) GetStats() StatsSnapshot {
 
 // StatsSnapshot 统计信息快照 (可安全复制)
 type StatsSnapshot struct {
+	StartedAt time.Time // 进程启动时间
+	Limits    Limits    // 配置上限，用于计算使用率
+	// EventsDropped 是因订阅者消费过慢而被丢弃的事件数
+	EventsDropped int64
+
 	ClientsConnected   int64
 	ClientsTotal       int64 // 累计新建的会话数（单调递增）
 	MessagesReceived   int64
@@ -516,7 +565,7 @@ func (c *Core) storeBytes() int64 {
 // 管理 API
 // ============================================================================
 
-// ClientInfo 客户端信息
+// ClientInfo 客户端信息。
 type ClientInfo struct {
 	ClientID       string
 	RemoteAddr     string
@@ -527,82 +576,33 @@ type ClientInfo struct {
 	Subscriptions  []ClientSubscriptionInfo
 	PendingAck     int
 	ReceiveWindow  uint16
-	QueueSize      int64 // 待发送队列中的消息条数
+
+	// 会话与连接
+	ExpiresAt       time.Time // 离线会话过期时间（在线时为零值）
+	LastSeenAt      time.Time // 最后一次可见/活动时间
+	Transport       string    // "tcp" / "tls" / "ws"
+	ProtocolVersion string    // 例如 "MX/2"
+	Identity        *Identity // 认证器给出的身份（可能为 nil）
+	WillTopic       string    // 遗嘱主题（无遗嘱时为空）
+
+	// 积压
+	QueueSize           int64         // 待发送队列消息条数
+	QueueBytes          int64         // 待发送队列编码后字节数（近似）
+	OldestQueuedAge     time.Duration // 队列中最老消息的存在时长
+	OldestPendingAckAge time.Duration // 最老的未确认 QoS1 消息存在时长
+
+	// 每客户端计数器
+	MessagesSent     int64
+	MessagesDropped  int64
+	MessagesRejected int64
+	BytesSent        int64
+	BytesReceived    int64
 }
 
 // ClientSubscriptionInfo 客户端订阅信息（不含 ClientID）
 type ClientSubscriptionInfo struct {
 	Topic string
 	packet.SubscribeOptions
-}
-
-// GetClientInfo 获取客户端详细信息
-func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
-	c.clientsMu.RLock()
-	client, exists := c.clients[clientID]
-	c.clientsMu.RUnlock()
-
-	if !exists {
-		return nil, NewClientNotFoundError(clientID)
-	}
-
-	// 获取订阅信息
-	client.session.subsMu.RLock()
-	subs := make([]ClientSubscriptionInfo, 0, len(client.session.subscriptions))
-	for topic, opts := range client.session.subscriptions {
-		subs = append(subs, ClientSubscriptionInfo{
-			Topic:            topic,
-			SubscribeOptions: opts,
-		})
-	}
-	client.session.subsMu.RUnlock()
-
-	// 获取 ACK 信息
-	client.session.pendingAckMu.Lock()
-	pendingAck := len(client.session.pendingAck)
-	client.session.pendingAckMu.Unlock()
-
-	conn := client.getConn()
-
-	info := &ClientInfo{
-		ClientID:       client.ID,
-		Connected:      !client.Closed(),
-		ConnectedAt:    client.ConnectedAt(),
-		KeepAlive:      client.KeepAlive(),
-		SessionTimeout: client.SessionTimeout(),
-		Subscriptions:  subs,
-		PendingAck:     pendingAck,
-	}
-	if client.queue != nil {
-		info.QueueSize = client.queue.Count()
-	}
-
-	// conn 可能为 nil（例如离线但会话保留的客户端），需要防御性处理，避免 nil 解引用
-	if conn != nil && conn.conn != nil {
-		info.RemoteAddr = conn.conn.RemoteAddr().String()
-		info.ReceiveWindow = conn.sendWindow
-	}
-
-	return info, nil
-}
-
-// ListClients 列出所有客户端
-func (c *Core) ListClients() []*ClientInfo {
-	c.clientsMu.RLock()
-	clientIDs := make([]string, 0, len(c.clients))
-	for id := range c.clients {
-		clientIDs = append(clientIDs, id)
-	}
-	c.clientsMu.RUnlock()
-
-	infos := make([]*ClientInfo, 0, len(clientIDs))
-	for _, id := range clientIDs {
-		if info, err := c.GetClientInfo(id); err == nil {
-			infos = append(infos, info)
-		}
-	}
-
-	return infos
 }
 
 // IsClientOnline 检查客户端是否在线
@@ -631,35 +631,6 @@ func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode) error
 	client.Close(reason)
 	c.logger.Info("Client disconnected by admin", zap.String("clientID", clientID), zap.Uint8("reason", uint8(reason)))
 	return nil
-}
-
-// GetClientSubscriptions 获取客户端的订阅列表
-func (c *Core) GetClientSubscriptions(clientID string) ([]ClientSubscriptionInfo, error) {
-	c.clientsMu.RLock()
-	client, exists := c.clients[clientID]
-	c.clientsMu.RUnlock()
-
-	if !exists {
-		return nil, NewClientNotFoundError(clientID)
-	}
-
-	client.session.subsMu.RLock()
-	defer client.session.subsMu.RUnlock()
-
-	subs := make([]ClientSubscriptionInfo, 0, len(client.session.subscriptions))
-	for topic, opts := range client.session.subscriptions {
-		subs = append(subs, ClientSubscriptionInfo{
-			Topic:            topic,
-			SubscribeOptions: opts,
-		})
-	}
-
-	return subs, nil
-}
-
-// GetTopicSubscribers 获取订阅指定主题的所有客户端
-func (c *Core) GetTopicSubscribers(topic string) map[string]packet.SubscribeOptions {
-	return c.subTree.matchTopic(topic)
 }
 
 // GetOnlineClientsCount 获取在线客户端数量

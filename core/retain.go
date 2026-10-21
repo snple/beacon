@@ -1,6 +1,7 @@
 package core
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -10,8 +11,18 @@ import (
 
 // retainEntry 保留消息索引条目（仅存储索引信息，不存储消息本身）
 type retainEntry struct {
-	topic      string // 消息主题
-	expiryTime int64  // 过期时间 (Unix 时间戳，0 表示永不过期)
+	topic       string // 消息主题
+	expiryTime  int64  // 过期时间 (Unix 时间戳，0 表示永不过期)
+	payloadSize int    // 负载字节数（管理面列表用，避免为列元数据读取负载）
+	updatedAt   int64  // 发布时刻 (Unix 时间戳)
+	qos         packet.QoS
+}
+
+// retainMeta 是保留消息的展示元数据（不影响匹配语义）。
+type retainMeta struct {
+	PayloadSize int
+	UpdatedAt   int64
+	QoS         packet.QoS
 }
 
 // retainNode 保留消息树节点
@@ -41,9 +52,10 @@ func newRetainStore() *retainStore {
 	}
 }
 
-// set 设置保留消息索引
-// 参数 expiryTime: 过期时间 (Unix 时间戳，0 表示永不过期)
-func (s *retainStore) set(topic string, expiryTime int64) error {
+// set 设置保留消息索引。
+// expiryTime: 过期时间 (Unix 时间戳，0 表示永不过期)；
+// meta: 供管理面列表展示的元数据。
+func (s *retainStore) set(topic string, expiryTime int64, meta retainMeta) error {
 	if topic == "" {
 		return ErrInvalidRetainMessage
 	}
@@ -76,8 +88,11 @@ func (s *retainStore) set(topic string, expiryTime int64) error {
 	}
 
 	node.entry = &retainEntry{
-		topic:      topic,
-		expiryTime: expiryTime,
+		topic:       topic,
+		expiryTime:  expiryTime,
+		payloadSize: meta.PayloadSize,
+		updatedAt:   meta.UpdatedAt,
+		qos:         meta.QoS,
 	}
 
 	return nil
@@ -319,4 +334,31 @@ func matchTopicParts(parts, topic []string, pi, ti int) bool {
 	}
 
 	return false
+}
+
+// snapshot 返回所有未过期的保留消息索引（按 topic 字典序）。
+// 只复制索引，不读取负载，供管理面列表使用。
+func (s *retainStore) snapshot() []retainEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now().Unix()
+	out := make([]retainEntry, 0, s.count)
+	out = s.appendEntries(s.root, out, now)
+
+	sort.Slice(out, func(i, j int) bool { return out[i].topic < out[j].topic })
+	return out
+}
+
+func (s *retainStore) appendEntries(node *retainNode, out []retainEntry, now int64) []retainEntry {
+	if node == nil {
+		return out
+	}
+	if node.entry != nil && !s.isExpired(node.entry, now) {
+		out = append(out, *node.entry)
+	}
+	for _, child := range node.children {
+		out = s.appendEntries(child, out, now)
+	}
+	return out
 }

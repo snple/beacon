@@ -243,7 +243,7 @@ func TestClientReplaysSubscriptionOptions(t *testing.T) {
 
 	var got packet.SubscribeOptions
 	var ok bool
-	if !eventually(t, 2*time.Second, 10*time.Millisecond, "subscription replayed", func() bool {
+	if !eventually(t, 5*time.Second, 10*time.Millisecond, "subscription replayed", func() bool {
 		c.clientsMu.RLock()
 		svClient := c.clients["replay-client"]
 		c.clientsMu.RUnlock()

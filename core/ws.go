@@ -55,6 +55,9 @@ func (c *Core) ServeWSListener(listener net.Listener, path string) error {
 		_ = srv.Close()
 	}()
 
+	id := c.registerListener(listener.Addr().String(), "ws")
+	defer c.unregisterListener(id)
+
 	c.logger.Info("Started WebSocket listener",
 		zap.String("address", listener.Addr().String()),
 		zap.String("path", path))

@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/internal/wsconn"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
@@ -30,6 +33,17 @@ type conn struct {
 	traceID      string
 	connectedAt  time.Time
 	writeTimeout time.Duration // 单次写超时（0 表示不设置）
+
+	// 接入方式与协议版本（管理面展示）
+	transport string // "tcp" / "tls" / "ws"
+	protocol  string // 例如 "MX/2"
+
+	// lastActivity 最后一次收到数据包的时间（unix 纳秒）
+	lastActivity atomic.Int64
+
+	// closeErr 记录导致连接关闭的底层错误（管理面展示用）
+	errMu    sync.Mutex
+	closeErr error
 
 	// 断开连接包（正常断开时非 nil）
 	disconnectPacket *packet.DisconnectPacket
@@ -67,9 +81,12 @@ func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *c
 		keepAlive:    connect.KeepAlive,
 		connectedAt:  time.Now(),
 		writeTimeout: client.core.options.WriteTimeout,
+		transport:    transportOf(netConn),
+		protocol:     fmt.Sprintf("%s/%d", connect.ProtocolName, connect.ProtocolVersion),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
+	conn.lastActivity.Store(conn.connectedAt.UnixNano())
 
 	// 应用 Core 默认的 KeepAlive（如果客户端未指定或指定值过大）
 	if client.core.options.KeepAlive > 0 && (conn.keepAlive == 0 || client.core.options.KeepAlive < conn.keepAlive) {
@@ -127,10 +144,13 @@ func (c *conn) serve() {
 				zap.String("clientID", c.client.ID),
 				zap.Error(err))
 
+			c.setCloseErr(err)
 			reason = packet.ReasonProtocolError
 			return
 		}
 
+		c.lastActivity.Store(time.Now().UnixNano())
+		c.client.bytesReceived.Add(int64(size))
 		c.client.core.stats.BytesReceived.Add(int64(size))
 
 		if err := c.handlePacket(pkt); err != nil {
@@ -225,6 +245,7 @@ func (c *conn) writePacket(pkt packet.Packet) error {
 
 	n, err := packet.WritePacketWithSize(c.conn, pkt, c.maxPacketSize)
 	if n > 0 {
+		c.client.bytesSent.Add(int64(n))
 		c.client.core.stats.BytesSent.Add(int64(n))
 	}
 
@@ -302,4 +323,44 @@ func (c *conn) closeWith(reason packet.ReasonCode, sendDisconnect bool) {
 			_ = c.conn.Close()
 		}
 	})
+}
+
+// setCloseErr 记录导致连接关闭的底层错误。
+func (c *conn) setCloseErr(err error) {
+	if err == nil {
+		return
+	}
+	c.errMu.Lock()
+	if c.closeErr == nil {
+		c.closeErr = err
+	}
+	c.errMu.Unlock()
+}
+
+// err 返回导致连接关闭的底层错误（可能为 nil）。
+func (c *conn) err() error {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	return c.closeErr
+}
+
+// lastActiveAt 返回最后一次收到数据包的时间。
+func (c *conn) lastActiveAt() time.Time {
+	ns := c.lastActivity.Load()
+	if ns <= 0 {
+		return c.connectedAt
+	}
+	return time.Unix(0, ns)
+}
+
+// transportOf 根据底层连接类型推断接入方式。
+func transportOf(netConn net.Conn) string {
+	switch netConn.(type) {
+	case *wsconn.Conn:
+		return "ws"
+	case *tls.Conn:
+		return "tls"
+	default:
+		return "tcp"
+	}
 }

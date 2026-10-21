@@ -45,6 +45,15 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 	// 放在钩子/入队之前，避免超限客户端消耗后续处理资源。
 	if c.publishLimiter != nil && !c.publishLimiter.Allow() {
 		c.core.stats.MessagesRejected.Add(1)
+		c.messagesRejected.Add(1)
+		c.core.emit(Event{
+			Type:     EventMessageRejected,
+			ClientID: c.ID,
+			Topic:    pub.Topic,
+			Bytes:    len(pub.Payload),
+			QoS:      pub.QoS,
+			Reason:   packet.ReasonMessageRateTooHigh.String(),
+		})
 		c.core.logger.Warn("Publish rate exceeded",
 			zap.String("clientID", c.ID),
 			zap.String("topic", pub.Topic),
@@ -67,6 +76,7 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 	pubCtx := &PublishContext{
 		ClientID: c.ID,
 		Packet:   pub,
+		Identity: c.session.getIdentity(),
 	}
 
 	if err := c.core.options.Hooks.callOnPublish(pubCtx); err != nil {
@@ -77,6 +87,15 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 
 		// 明确拒绝：必须回 PUBACK，否则发布端会一直把它当作未确认消息重传。
 		c.core.stats.MessagesRejected.Add(1)
+		c.messagesRejected.Add(1)
+		c.core.emit(Event{
+			Type:     EventMessageRejected,
+			ClientID: c.ID,
+			Topic:    pub.Topic,
+			Bytes:    len(pub.Payload),
+			QoS:      pub.QoS,
+			Reason:   packet.ReasonNotAuthorized.String(),
+		})
 		if pub.QoS == packet.QoS1 {
 			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonNotAuthorized)
 			if err := c.writePacket(puback); err != nil {
@@ -266,6 +285,7 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 			ClientID:     c.ID,
 			Packet:       p,
 			Subscription: &sub,
+			Identity:     c.session.getIdentity(),
 		}
 		if err := c.core.options.Hooks.callOnSubscribe(subCtx); err != nil {
 			suback.ReasonCodes = append(suback.ReasonCodes, packet.ReasonNotAuthorized)
@@ -322,6 +342,19 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 
 		// 订阅属于会话状态：持久化，进程重启后仍能恢复
 		c.core.saveSession(c, 0)
+
+		for _, sub := range validSubs {
+			c.core.emit(Event{
+				Type:     EventSubscribed,
+				ClientID: c.ID,
+				Topic:    sub.Topic,
+				QoS:      sub.Options.QoS,
+				Extra: map[string]string{
+					"no_local":            boolString(sub.Options.NoLocal),
+					"retain_as_published": boolString(sub.Options.RetainAsPublished),
+				},
+			})
+		}
 	}
 
 	// 先发送 SUBACK，确保客户端收到确认后再发送保留消息
@@ -395,6 +428,14 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 
 		// 订阅属于会话状态：持久化
 		c.core.saveSession(c, 0)
+
+		for _, topic := range validTopics {
+			c.core.emit(Event{
+				Type:     EventUnsubscribed,
+				ClientID: c.ID,
+				Topic:    topic,
+			})
+		}
 	}
 
 	if err := c.writePacket(unsuback); err != nil {

@@ -6,6 +6,31 @@ import (
 	"github.com/snple/beacon/packet"
 )
 
+// Identity 是认证器给出的客户端身份（仅内存，不随会话持久化）。
+type Identity struct {
+	Subject    string            // 主体（设备序列号 / 用户名）
+	Roles      []string          // 角色，供 ACL 与前端展示
+	Attributes map[string]string // 自定义属性（租户、型号等）
+}
+
+// Clone 返回深拷贝，避免调用方修改内部状态。
+func (id *Identity) Clone() *Identity {
+	if id == nil {
+		return nil
+	}
+	out := &Identity{Subject: id.Subject}
+	if len(id.Roles) > 0 {
+		out.Roles = append([]string(nil), id.Roles...)
+	}
+	if len(id.Attributes) > 0 {
+		out.Attributes = make(map[string]string, len(id.Attributes))
+		for k, v := range id.Attributes {
+			out.Attributes[k] = v
+		}
+	}
+	return out
+}
+
 // ============================================================================
 // 消息处理钩子 (MessageHandler)
 // ============================================================================
@@ -31,6 +56,7 @@ type MessageHandler interface {
 type PublishContext struct {
 	ClientID string                // 发布者客户端 ID
 	Packet   *packet.PublishPacket // 原始 PUBLISH 包（引用，不要修改）
+	Identity *Identity             // 发布者身份（未认证或未设置时为 nil）
 }
 
 // DeliverContext 消息投递上下文
@@ -38,6 +64,7 @@ type PublishContext struct {
 type DeliverContext struct {
 	ClientID string                // 订阅者客户端 ID
 	Packet   *packet.PublishPacket // 原始 PUBLISH 包（引用，不要修改）
+	Identity *Identity             // 订阅者身份（可能为 nil）
 }
 
 // MessageHandlerFunc 函数类型适配器，用于简化只需实现部分方法的场景
@@ -93,6 +120,12 @@ type DisconnectContext struct {
 	ClientID string                   // 客户端 ID
 	Packet   *packet.DisconnectPacket // 原始 DISCONNECT 包（可能为 nil，如连接异常断开）
 	Duration int64                    // 连接持续时间（秒）
+
+	// Reason 是连接关闭原因：NormalDisconnect / KeepAliveTimeout / ProtocolError
+	// / SessionTakenOver / ServerShuttingDown，或管理员踢人时指定的原因码。
+	Reason packet.ReasonCode
+	// Err 是异常断开时的底层错误（读错误等），可能为 nil。
+	Err error
 }
 
 // ConnectionHandlerFunc 函数类型适配器
@@ -138,6 +171,7 @@ type SubscribeContext struct {
 	ClientID     string                  // 客户端 ID
 	Packet       *packet.SubscribePacket // 原始 SUBSCRIBE 包（引用，不要修改）
 	Subscription *packet.Subscription    // 当前正在处理的订阅项
+	Identity     *Identity               // 客户端身份（供按身份的 ACL 使用，可能为 nil）
 }
 
 // UnsubscribeContext 取消订阅上下文
@@ -199,6 +233,10 @@ type AuthConnectContext struct {
 
 	// 认证器可以设置以下字段，用于返回给客户端
 	ResponseProperties map[string]string // 返回给客户端的用户属性
+
+	// Identity 由认证器写入，成功认证后可通过 ClientInfo/SessionInfo/事件读取。
+	// 仅保存在内存中，不随会话持久化。
+	Identity *Identity
 }
 
 // AuthContext 高级认证上下文（用于 OnAuth）
@@ -210,6 +248,9 @@ type AuthContext struct {
 
 	// 认证器可以设置以下字段，用于返回给客户端
 	ResponseProperties map[string]string // 返回给客户端的用户属性
+
+	// Identity 由认证器写入，成功认证后可通过 ClientInfo/SessionInfo/事件读取。
+	Identity *Identity
 }
 
 // AuthHandlerFunc 函数类型适配器（简化版，只需实现部分方法）

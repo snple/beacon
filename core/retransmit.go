@@ -145,6 +145,14 @@ func (c *Client) retransmitUnackedMessages() int {
 			break
 		}
 
+		// 记录重发次数（供管理面排障）
+		c.session.pendingAckMu.Lock()
+		if pending, still := c.session.pendingAck[msg.PacketID]; still {
+			pending.retries++
+			c.session.pendingAck[msg.PacketID] = pending
+		}
+		c.session.pendingAckMu.Unlock()
+
 		// 触发发送协程
 		conn.triggerSend()
 

@@ -53,6 +53,11 @@ func (c *Core) cleanupExpiredSessions() {
 			// 清理客户端相关资源
 			c.cleanupClient(clientID, client)
 
+			c.emit(Event{
+				Type:     EventSessionExpired,
+				ClientID: clientID,
+				Reason:   "expired",
+			})
 			c.logger.Info("Expired session removed", zap.String("clientID", clientID))
 		} else {
 			c.clientsMu.Unlock()
