@@ -8,7 +8,7 @@
 
 ## 1. 总体思路
 
-Beacon 是一个**精简的二进制协议**（协议名 `MX`，版本 1），固定头仅 5 字节，属性采用位掩码紧凑编码，比文本协议更适合资源受限场景。
+Beacon 是一个**精简的二进制协议**（协议名 `MX`，版本 2），固定头仅 5 字节，属性采用位掩码紧凑编码，比文本协议更适合资源受限场景。
 
 但标准客户端（参考 `client/` 包）为满足**更强的**可靠投递，引入了：
 - **持久化存储**（BadgerDB，内存占用大）
@@ -43,7 +43,7 @@ Beacon 是一个**精简的二进制协议**（协议名 `MX`，版本 1），�
 ### 2.2 各包最小 Remaining（可据此快速拒绝畸形包）
 | 包 | 最小 Remaining | 说明 |
 |---|---|---|
-| CONNECT | 16 | 协议名(2+2)+版本(1)+ClientID(2)+KeepAlive(2)+SessionTimeout(4)+属性(2) |
+| CONNECT | 17 | 协议名(2+2)+版本(1)+ClientID(2)+KeepAlive(2)+SessionTimeout(4)+SessionFlags(1)+属性(2) |
 | CONNACK | 6 | SessionPresent(1)+ReasonCode(1)+属性(2)+固定 |
 | PUBLISH | 19 | Flags(1)+Topic(2)+PacketID(12)+属性(2)+固定 |
 | PUBACK | 12 | PacketID(12) |
@@ -63,12 +63,13 @@ Beacon 是一个**精简的二进制协议**（协议名 `MX`，版本 1），�
 ```
 Type=CONNECT, Remaining=...
   ProtocolName: string("MX")
-  ProtocolVersion: 1 (1B)
+  ProtocolVersion: 2 (1B)
   ClientID: string
   KeepAlive: uint16（秒，0 或过大时服务端会用默认值并回写）
   SessionTimeout: uint32（秒；0 = 断开即清理会话）
+  SessionFlags: 1B（bit0=CleanStart，其余保留）
   Properties: bitmask(2B) + 可选值（MaxPacketSize/ReceiveWindow/AuthMethod/AuthData/TraceID/UserProperties）
-  Flags(1B): bit0=QoS, bit1=Retain, bit2=Dup, bit3=Will, bit4=CleanStart
+  WillFlags(1B): bit0=QoS, bit1=Retain, bit2=Dup, bit3=Will
   [Will]: WillTopic(string) + WillProperties + WillPayload（仅 bit3=1 时存在）
 ```
 

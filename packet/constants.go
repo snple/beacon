@@ -1,7 +1,9 @@
 package packet
 
-// ProtocolVersion 协议版本
-const ProtocolVersion uint8 = 1
+// ProtocolVersion 协议版本。
+//
+// v2 在 CONNECT 的 SessionTimeout 之后包含 1 字节会话标志（bit0=CleanStart）。
+const ProtocolVersion uint8 = 2
 
 // ProtocolName 协议名称
 const ProtocolName = "MX"

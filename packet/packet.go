@@ -9,7 +9,7 @@ import (
 // minRemainingLength 各包类型所需的最小 Remaining Length
 // 只列出有明确最小值的类型，未列出的类型（如 DISCONNECT, AUTH）允许 Remaining = 0
 var minRemainingLength = map[PacketType]uint32{
-	CONNECT:     16, // ProtocolName(2+0) + Version(1) + ClientID(2+0) + KeepAlive(2) + SessionTimeout(4) + Properties(4+0) + WillFlags(1)
+	CONNECT:     17, // ProtocolName(2+0) + Version(1) + ClientID(2+0) + KeepAlive(2) + SessionTimeout(4) + SessionFlags(1) + Properties(4+0) + WillFlags(1)
 	CONNACK:     6,  // SessionPresent(1) + ReasonCode(1) + Properties(4+0)
 	PUBLISH:     19, // Flags(1) + Topic(2+0) + PacketID(12) + Properties(4+0)
 	PUBACK:      12, // PacketID(12)

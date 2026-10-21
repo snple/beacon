@@ -70,6 +70,15 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 		return err
 	}
 
+	// 会话标志字节
+	var sessionFlags uint8
+	if p.CleanStart {
+		sessionFlags |= 0x01 // Bit 0: CleanStart
+	}
+	if err := WriteByte(w, sessionFlags); err != nil {
+		return err
+	}
+
 	// 属性
 	if p.Properties == nil {
 		p.Properties = NewConnectProperties()
@@ -78,19 +87,14 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 遗嘱 / 会话 Flags 字节 (与 PublishPacket 布局一致，复用同一字节)
-	// Bit 0: QoS
-	// Bit 1: Retain
-	// Bit 2: Dup
-	// Bit 3: Will
-	// Bit 4: CleanStart（复用空闲位，保持线格式向后兼容）
-	var willFlags uint8
-	if p.CleanStart {
-		willFlags |= 0x10
-	}
-
 	// 遗嘱消息
 	if p.Will && p.WillPacket != nil {
+		// 遗嘱 Flags 字节 (紧凑布局) - 与 PublishPacket 一致
+		// Bit 0: QoS (0 或 1)
+		// Bit 1: Retain
+		// Bit 2: Dup
+		// Bit 3: Will
+		var willFlags uint8
 		willFlags |= uint8(p.WillPacket.QoS) & 0x01 // Bit 0: QoS
 		if p.WillPacket.Retain {
 			willFlags |= 0x02 // Bit 1: Retain
@@ -122,9 +126,11 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 		if _, err := w.Write(p.WillPacket.Payload); err != nil {
 			return err
 		}
-	} else if err := WriteByte(w, willFlags); err != nil {
-		// 没有遗嘱消息时仅写入 CleanStart 标志
-		return err
+	} else {
+		// 如果没有遗嘱消息,写入一个空的遗嘱标志字节
+		if err := WriteByte(w, 0x00); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -163,6 +169,13 @@ func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 		return err
 	}
 
+	// 会话标志字节
+	var sessionFlags [1]byte
+	if _, err := io.ReadFull(r, sessionFlags[:]); err != nil {
+		return err
+	}
+	p.CleanStart = sessionFlags[0]&0x01 != 0
+
 	// 属性
 	p.Properties = NewConnectProperties()
 	if err := p.Properties.Decode(r); err != nil {
@@ -174,8 +187,7 @@ func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
 	if _, err := io.ReadFull(r, willFlags[:]); err != nil {
 		return err
 	}
-	p.Will = willFlags[0]&0x08 != 0       // Bit 3: Will
-	p.CleanStart = willFlags[0]&0x10 != 0 // Bit 4: CleanStart
+	p.Will = willFlags[0]&0x08 != 0 // Bit 3: Will
 
 	// 遗嘱消息
 	if p.Will {
