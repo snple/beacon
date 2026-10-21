@@ -112,8 +112,13 @@ type Client struct {
 	reconnecting  atomic.Bool
 	connLostCh    chan error
 
-	// 后台 goroutine 跟踪（reconnectLoop / retransmitLoop）
+	// 后台 goroutine 跟踪（reconnectLoop / retransmitLoop / 按需重传）
 	wg sync.WaitGroup
+
+	// 临时任务的启动守卫：Close 之后禁止再向 wg 添加任务，
+	// 否则会与 Close 中的 wg.Wait 竞争（Wait 期间 Add 会 panic）。
+	taskMu      sync.Mutex
+	tasksClosed bool
 
 	// 消息持久化存储
 	store *store
@@ -194,6 +199,21 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	return c, nil
 }
 
+// spawnTask 启动受 wg 跟踪的后台任务。客户端已关闭时返回 false。
+func (c *Client) spawnTask(fn func()) bool {
+	c.taskMu.Lock()
+	defer c.taskMu.Unlock()
+	if c.tasksClosed {
+		return false
+	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		fn()
+	}()
+	return true
+}
+
 // New 创建新的客户端（使用默认配置）
 func New() (*Client, error) {
 	return NewWithOptions(NewClientOptions())
@@ -253,7 +273,12 @@ func (c *Client) Close() error {
 	// 关闭整个客户端生命周期，唤醒所有等待 ctx.Done() 的 goroutine
 	c.cancel()
 
-	// 等待后台 goroutine（reconnectLoop、retransmitLoop）退出后再清理资源
+	// 先禁止新的临时任务，避免与下面的 wg.Wait 竞争（Wait 期间 Add 会 panic）
+	c.taskMu.Lock()
+	c.tasksClosed = true
+	c.taskMu.Unlock()
+
+	// 等待后台 goroutine（reconnectLoop、retransmitLoop、按需重传）退出后再清理资源
 	c.wg.Wait()
 
 	// 若重连协程在关闭期间恰好创建了新连接，等待其完全退出，

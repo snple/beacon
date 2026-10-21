@@ -28,14 +28,15 @@ func (c *Core) HandleConn(conn net.Conn) error {
 		return fmt.Errorf("connection rate exceeded")
 	}
 
-	c.wg.Add(1)
-	go c.handleConn(conn)
+	if !c.spawnTask(func() { c.handleConn(conn) }) {
+		conn.Close()
+		return ErrCoreNotRunning
+	}
 	return nil
 }
 
+// 注意：协程的 wg 跟踪由 spawnTask 统一负责，这里不能重复 Done。
 func (c *Core) handleConn(conn net.Conn) {
-	defer c.wg.Done()
-
 	// 读取并验证 CONNECT 包
 	connect, err := c.readConnectPacket(conn)
 	if err != nil {

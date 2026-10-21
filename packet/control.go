@@ -1,7 +1,9 @@
 package packet
 
 import (
+	"fmt"
 	"io"
+	"sort"
 )
 
 // PingPacket PING 数据包（增强版，携带时间戳用于 RTT 计算）
@@ -121,12 +123,10 @@ func (p *DisconnectPacket) Type() PacketType {
 }
 
 func (p *DisconnectPacket) encode(w io.Writer) error {
+	// 正常断开且无属性时使用空包体（Remaining = 0）。
+	// 注意：这里只能返回 nil，不能再写一次固定头，否则包体会嵌套一个头部。
 	if p.ReasonCode == ReasonNormalDisconnect && p.Properties == nil {
-		header := FixedHeader{
-			Type:      DISCONNECT,
-			Remaining: 0,
-		}
-		return header.Encode(w)
+		return nil
 	}
 
 	if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
@@ -258,15 +258,23 @@ func (p *TracePacket) encode(w io.Writer) error {
 		return err
 	}
 
-	// 编码 Details（使用 map 编码）
+	// 编码 Details（按 key 排序，保证编码结果确定）
+	if len(p.Details) > maxUserProperties {
+		return fmt.Errorf("too many trace details: %d (max %d)", len(p.Details), maxUserProperties)
+	}
 	if err := EncodeUint16(w, uint16(len(p.Details))); err != nil {
 		return err
 	}
-	for k, v := range p.Details {
+	detailKeys := make([]string, 0, len(p.Details))
+	for k := range p.Details {
+		detailKeys = append(detailKeys, k)
+	}
+	sort.Strings(detailKeys)
+	for _, k := range detailKeys {
 		if err := EncodeString(w, k); err != nil {
 			return err
 		}
-		if err := EncodeString(w, v); err != nil {
+		if err := EncodeString(w, p.Details[k]); err != nil {
 			return err
 		}
 	}

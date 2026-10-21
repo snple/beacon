@@ -113,8 +113,11 @@ func (c *Client) connectWithConn(netConn net.Conn) error {
 	// retransmitting 一次性守卫冲突（M6：冲突会导致 retransmitLoop 永不启动）
 	if c.queue != nil {
 		if c.retransmitLoopStarted.CompareAndSwap(false, true) {
-			c.wg.Add(1)
-			go c.retransmitLoop()
+			// 通过 spawnTask 纳入 wg：Close 会在 wg.Wait 之后才关闭存储
+			if !c.spawnTask(c.retransmitLoop) {
+				// 客户端正在关闭：允许下次连接重试启动
+				c.retransmitLoopStarted.Store(false)
+			}
 		} else {
 			// 循环已在运行，手动触发一次重传
 			c.TriggerRetransmit()

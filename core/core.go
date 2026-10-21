@@ -53,6 +53,26 @@ type Core struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	running atomic.Bool
+
+	// 临时任务（如按需重传）的启动守卫：Stop 之后禁止再向 wg 添加任务，
+	// 否则会与 wg.Wait 竞争，且任务可能在 store 关闭后访问它。
+	taskMu      sync.Mutex
+	tasksClosed bool
+}
+
+// spawnTask 启动受 wg 跟踪的后台任务。core 已停止时返回 false。
+func (c *Core) spawnTask(fn func()) bool {
+	c.taskMu.Lock()
+	defer c.taskMu.Unlock()
+	if c.tasksClosed {
+		return false
+	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		fn()
+	}()
+	return true
 }
 
 // Stats core 统计信息
@@ -157,6 +177,10 @@ func (c *Core) Start() error {
 
 	c.running.Store(true)
 
+	c.taskMu.Lock()
+	c.tasksClosed = false
+	c.taskMu.Unlock()
+
 	// 恢复持久化的消息与会话（订阅/过期时间），并清理孤儿队列
 	c.recoverMessages()
 	c.recoverSessions()
@@ -200,6 +224,12 @@ func (c *Core) Stop() error {
 
 	c.logger.Info("Stopping core...")
 	c.running.Store(false)
+
+	// 先禁止新的临时任务，再 cancel：保证 Stop 期间的 wg.Wait 不会与 wg.Add 竞争
+	c.taskMu.Lock()
+	c.tasksClosed = true
+	c.taskMu.Unlock()
+
 	c.cancel()
 
 	// 断开所有普通客户端
@@ -285,7 +315,7 @@ func (c *Core) GetRetainedMessages(topic string) []*Message {
 
 // GetStats 获取统计信息快照
 func (c *Core) GetStats() StatsSnapshot {
-	return StatsSnapshot{
+	snapshot := StatsSnapshot{
 		ClientsConnected:   c.stats.ClientsConnected.Load(),
 		ClientsTotal:       c.stats.ClientsTotal.Load(),
 		MessagesReceived:   c.stats.MessagesReceived.Load(),
@@ -295,7 +325,30 @@ func (c *Core) GetStats() StatsSnapshot {
 		BytesReceived:      c.stats.BytesReceived.Load(),
 		BytesSent:          c.stats.BytesSent.Load(),
 		SubscriptionsCount: c.stats.SubscriptionsCount.Load(),
+		StoreBytes:         c.storeBytes(),
 	}
+
+	// 队列深度只在有队列时统计（NewWithOptions 之前/测试场景可能为 nil）
+	if c.queue != nil {
+		snapshot.PendingQueueDepth = c.queue.Count()
+	}
+
+	c.offlineSessionsMu.Lock()
+	snapshot.OfflineSessions = int64(len(c.offlineSessions))
+	c.offlineSessionsMu.Unlock()
+
+	c.clientsMu.RLock()
+	for _, client := range c.clients {
+		if client.queue != nil {
+			snapshot.ClientQueueDepth += client.queue.Count()
+		}
+		client.session.pendingAckMu.Lock()
+		snapshot.PendingAckTotal += int64(len(client.session.pendingAck))
+		client.session.pendingAckMu.Unlock()
+	}
+	c.clientsMu.RUnlock()
+
+	return snapshot
 }
 
 // StatsSnapshot 统计信息快照 (可安全复制)
@@ -309,6 +362,13 @@ type StatsSnapshot struct {
 	BytesReceived      int64
 	BytesSent          int64
 	SubscriptionsCount int64
+
+	// 队列与存储水位（用于容量规划与告警）
+	PendingQueueDepth int64 // 全局待分发队列深度
+	ClientQueueDepth  int64 // 所有客户端待发送队列深度之和
+	PendingAckTotal   int64 // 所有客户端未确认（QoS1）消息总数
+	OfflineSessions   int64 // 保留中（在线时间之外）的离线会话数
+	StoreBytes        int64 // 存储占用（字节）
 }
 
 // storeBytes 返回存储当前占用的近似字节数。

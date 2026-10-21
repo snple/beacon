@@ -38,9 +38,12 @@ func (c *Core) triggerRetransmit() {
 	c.clientsMu.RUnlock()
 
 	for _, client := range clients {
-		// 调用 processRetransmit 触发重传和加载逻辑
+		// 调用 processRetransmit 触发重传和加载逻辑。
+		// 必须纳入 wg：否则 Stop 可能在它访问队列/存储前就关掉 store。
 		if client.session.retransmitting.CompareAndSwap(false, true) {
-			go client.processRetransmit()
+			if !c.spawnTask(client.processRetransmit) {
+				client.session.retransmitting.Store(false)
+			}
 		}
 	}
 }

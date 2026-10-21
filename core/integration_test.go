@@ -32,8 +32,7 @@ func testSetupCore(t *testing.T, opts *CoreOptions) *Core {
 		opts = NewCoreOptions()
 	}
 	opts.WithLogger(testIntegrationLogger()).
-		WithConnectTimeout(5).
-		WithMessageQueueSize(100)
+		WithConnectTimeout(5)
 
 	core, err := NewWithOptions(opts)
 	if err != nil {

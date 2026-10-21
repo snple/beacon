@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,4 +147,59 @@ func TestWill_ZeroExpiryStaysUnlimited(t *testing.T) {
 	msg, err := core.queue.Peek()
 	require.NoError(t, err)
 	require.Zero(t, msg.Packet.Properties.ExpiryTime)
+}
+
+// TestWill_ConcurrentAccessNoRace 验证公开 API 与遗嘱处理的并发访问无数据竞争。
+//
+// 回归：WillPacket/SetWillPacket 直接读写 session.willPacket，与
+// publishWill/clearWill 并发时是 data race（公开 API 可触发）。
+func TestWill_ConcurrentAccessNoRace(t *testing.T) {
+	core := testSetupCore(t, NewCoreOptions())
+	defer core.Stop()
+
+	c := &Client{ID: "will-race", core: core, session: &session{core: core}}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(4)
+		go func(n int) {
+			defer wg.Done()
+			c.SetWillPacket(packet.NewPublishPacket("will/race", []byte("x")))
+		}(i)
+		go func() {
+			defer wg.Done()
+			_ = c.WillPacket()
+		}()
+		go func() {
+			defer wg.Done()
+			c.clearWill()
+		}()
+		go func() {
+			defer wg.Done()
+			c.extractWillMessage(packet.NewConnectPacket())
+		}()
+	}
+	wg.Wait()
+}
+
+// TestWill_PublishAtMostOnce 验证并发调用 publishWill 时遗嘱最多发布一次。
+func TestWill_PublishAtMostOnce(t *testing.T) {
+	core := testSetupCore(t, NewCoreOptions())
+	defer core.Stop()
+
+	c := &Client{ID: "will-once", core: core, session: &session{core: core}}
+	c.SetWillPacket(packet.NewPublishPacket("will/once", []byte("bye")))
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.publishWill()
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, int64(1), core.queue.Count(), "遗嘱只应发布一次")
+	require.Nil(t, c.WillPacket(), "发布后应清除遗嘱")
 }

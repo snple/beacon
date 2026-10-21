@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -24,8 +25,8 @@ type TCPDialer struct {
 func (d *TCPDialer) Dial() (net.Conn, error) {
 	address := d.Address
 	useTLS := false
-	if len(address) > 6 && address[:6] == "tls://" {
-		address = address[6:]
+	if rest, ok := strings.CutPrefix(address, "tls://"); ok {
+		address = rest
 		useTLS = true
 	}
 
@@ -41,10 +42,7 @@ func (d *TCPDialer) Dial() (net.Conn, error) {
 	var err error
 
 	if useTLS || d.TLSConfig != nil {
-		tlsConfig := d.TLSConfig
-		if tlsConfig == nil {
-			tlsConfig = &tls.Config{}
-		}
+		tlsConfig := newTLSConfig(d.TLSConfig, address)
 		conn, err = (&tls.Dialer{Config: tlsConfig}).DialContext(ctx, "tcp", address)
 	} else {
 		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
@@ -55,4 +53,37 @@ func (d *TCPDialer) Dial() (net.Conn, error) {
 	}
 
 	return conn, nil
+}
+
+// newTLSConfig 返回用于本次连接的 TLS 配置。
+//
+// base 为 nil 时使用安全默认值（最小 TLS 1.2），并在未显式配置 ServerName 时
+// 从地址推导，避免因证书校验失败而被迫关闭校验。base 非 nil 时先克隆，
+// 保证不会修改调用方共享的配置对象。
+func newTLSConfig(base *tls.Config, address string) *tls.Config {
+	var cfg *tls.Config
+	if base == nil {
+		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
+	} else {
+		cfg = base.Clone()
+	}
+
+	if cfg.ServerName == "" && !cfg.InsecureSkipVerify {
+		cfg.ServerName = serverNameFromAddress(address)
+	}
+	return cfg
+}
+
+// serverNameFromAddress 从 "host:port" 中提取用于 SNI/证书校验的主机名。
+// IP 字面量（含 IPv6）与无法解析的地址返回空串，交由证书 IP SAN 校验。
+func serverNameFromAddress(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || net.ParseIP(host) != nil {
+		return ""
+	}
+	return host
 }

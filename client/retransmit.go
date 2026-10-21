@@ -11,9 +11,8 @@ import (
 // retransmitLoop 重传协程，定期检查并从持久化队列加载消息
 // 注意：这个协程跨连接运行，不绑定到单个 Connection
 // 不再持有 retransmitting 标志（该标志仅用于 TriggerRetransmit 的一次性守卫，M6）
+// 注意：协程的 wg 跟踪由 spawnTask 统一负责，这里不能重复 Done。
 func (c *Client) retransmitLoop() {
-	defer c.wg.Done()
-
 	// 首次尝试重传
 	c.processRetransmit()
 
@@ -249,11 +248,15 @@ func (c *Client) loadOneQueuedMessage(conn *Conn, sentInPass map[nson.Id]struct{
 
 // TriggerRetransmit 手动触发重传（可由外部调用）
 func (c *Client) TriggerRetransmit() {
-	if c.retransmitting.CompareAndSwap(false, true) {
-		go func() {
-			defer c.retransmitting.Store(false)
-			c.processRetransmit()
-		}()
+	if !c.retransmitting.CompareAndSwap(false, true) {
+		return
+	}
+	// 纳入 wg：否则 Close 可能在它访问队列/存储前就关闭它们
+	if !c.spawnTask(func() {
+		defer c.retransmitting.Store(false)
+		c.processRetransmit()
+	}) {
+		c.retransmitting.Store(false)
 	}
 }
 

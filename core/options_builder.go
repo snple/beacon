@@ -34,8 +34,7 @@ type CoreOptions struct {
 	Hooks Hooks // 钩子集合（包含认证处理器）
 
 	// 功能开关
-	RetainEnabled    bool   // 启用保留消息
-	MessageQueueSize uint16 // MESSAGE 轮询队列缓冲大小（默认 100）
+	RetainEnabled bool // 启用保留消息
 
 	// 连接速率限制
 	ConnectionRateLimit float64 // 每秒最大新连接数（0 表示不限制）
@@ -88,7 +87,6 @@ func NewCoreOptions() *CoreOptions {
 		ExpiredCheckInterval: 180 * time.Second,
 		RetransmitInterval:   30 * time.Second,
 		RetainEnabled:        true,
-		MessageQueueSize:     100,
 		StoreOptions:         DefaultStoreOptions(),
 
 		// 配额与背压默认值
@@ -191,12 +189,6 @@ func (o *CoreOptions) WithTraceHandler(handler TraceHandler) *CoreOptions {
 // WithRetainEnabled 设置是否启用保留消息
 func (o *CoreOptions) WithRetainEnabled(enabled bool) *CoreOptions {
 	o.RetainEnabled = enabled
-	return o
-}
-
-// WithMessageQueueSize 设置 MESSAGE 轮询队列的缓冲大小
-func (o *CoreOptions) WithMessageQueueSize(size uint16) *CoreOptions {
-	o.MessageQueueSize = size
 	return o
 }
 

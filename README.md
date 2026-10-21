@@ -13,7 +13,9 @@ Beacon 是一个轻量级消息总线协议，专为物联网和实时通信场�
 Beacon 的 QoS 机制强调“消息被处理”而非仅“协议层收到”：
 
 - **QoS0**：尽力保证到达性（best-effort delivery）。消息会被持久化，在客户端离线或队列满时由重传机制补发，但**不需要 ACK**，不保证绝对不丢。
-- **QoS1**：保证消息被处理（at-least-once processing）。接收方**处理完消息后才发送 ACK**；若接收方在处理过程中发生意外（断电、崩溃）未能发送 ACK，发送方会重传该消息，直到收到 ACK。
+- **QoS1**：保证消息被处理（at-least-once processing）。接收方在**消息落入应用可见队列之后**才发送 ACK；
+  未收到 ACK（处理中崩溃、断电、接收队列满被拒收）时，服务端会按 `RetransmitInterval` 重传，
+  直到收到 ACK。需要“应用处理完才算确认”时，用 `WithAutoAck(false)` + `Message.Ack()` 手动确认（见下节）。
 
 ## QoS1 确认方式
 
@@ -40,8 +42,8 @@ msg.Ack() // 处理完才确认；未确认的消息会被服务端重传
 
 - **积压补货**：发送队列排空或收到 ACK 时会立即从持久化队列补货，`RetransmitInterval` 仅作为连接异常时的兜底重试间隔，
   不再决定正常投递的吞吐。
-- **订阅端接收队列满**（`WithMessageQueueSize`）：QoS1 消息不会被确认，而是由服务端按 `RetransmitInterval` 再次投递，
-  形成端到端背压；QoS0 消息直接丢弃。
+- **订阅端接收队列满**（`client.WithMessageQueueSize`）：QoS1 消息不会被确认，而是由服务端按 `RetransmitInterval`
+  再次投递，形成端到端背压；QoS0 消息直接丢弃。
 - **客户端离线时发布**：消息写入本地出站队列，`Publish` 返回 `nil` 表示"已入队"，连接建立后自动补发。
 - **钩子拒绝**：`OnPublish` 钩子拒绝 QoS1 消息时，服务端/客户端会返回 `NotAuthorized`，发布方立即收到失败，不会无限重传。
 - **保留消息标志**：因订阅而重放的保留消息始终带 `Retain=true`；`RetainAsPublished` 只控制实时转发是否保留发布时的 `Retain` 标志。
@@ -80,6 +82,63 @@ Beacon 的队列默认有上限，避免单个慢消费者或异常客户端把�
 - 停机期间过期的会话，以及没有会话记录的孤儿队列，会在启动时自动清理。
 - 遗嘱消息不随会话持久化：它属于单次连接，重连时由新的 CONNECT 提供。
 
+## 安全（认证与 TLS）
+
+**认证**：在 `AuthHandler` 中校验 CONNECT 携带的 `AuthData`（建议用恒定时间比较）。`beacon-core` 已内置
+`--auth-file`（TOML，支持 SIGHUP 热重载）：
+
+```toml
+[[nodes]]
+serial = "device-1"
+secret = "s3cr3t"
+```
+
+```bash
+beacon-core --addr :5208 --auth-file nodes.toml
+```
+
+客户端在 CONNECT 时提供认证数据：
+
+```go
+opts := client.NewClientOptions().
+    WithCore("127.0.0.1:5208").
+    WithClientID("device-1").
+    WithAuth("token", []byte("s3cr3t")) // AuthMethod + AuthData
+```
+
+**TLS**：服务端用 `core.ServeTLS(addr, tlsConfig)`（或自行传入 `tls.Listener`）；客户端地址使用 `tls://` 前缀即可：
+
+```go
+dialer := &client.TCPDialer{
+    Address:   "tls://broker.example.com:8883",
+    TLSConfig: &tls.Config{RootCAs: pool}, // 可选
+}
+```
+
+未显式设置 `ServerName` 且未关闭校验时，客户端会从地址推导 SNI 名称（IP 字面量则依赖证书 IP SAN），
+不会因为缺少 `ServerName` 而被迫使用 `InsecureSkipVerify`。
+
+完整的加固配置示例见 [`examples/secure_core`](./examples/secure_core/main.go)（认证 + TLS + 配额 + 运维端点）。
+
+## 可观测性
+
+`GetStats()` 返回 `StatsSnapshot`，包含计数器（消息收发/丢弃/拒绝、字节数、订阅数）与运行时水位
+（`PendingQueueDepth` 全局待分发队列、`ClientQueueDepth` 所有客户端待发送队列之和、`PendingAckTotal`、
+`OfflineSessions`、`StoreBytes`）。
+
+需要 HTTP 端点时启动 `ServeMetrics`（`beacon-core` 对应 `--metrics-addr`）：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /healthz` | 存活探针：运行中返回 `200 ok`，已停止返回 `503` |
+| `GET /metrics` | Prometheus 文本格式指标（`beacon_*`；`beacon_pending_queue_depth`、`beacon_pending_ack`、`beacon_store_bytes` 等用于容量告警） |
+| `GET /stats` | JSON 格式统计快照，便于人工排查 |
+
+```bash
+beacon-core --addr :5208 --metrics-addr :9101
+curl -s localhost:9101/metrics | grep pending
+```
+
 ## 使用方法
 
 导入包：
@@ -89,7 +148,12 @@ import "github.com/snple/beacon/client"
 import "github.com/snple/beacon/core"
 ```
 
-更多使用示例请参考 `examples/` 目录。
+更多示例：
+
+- [`examples/core_api`](./examples/core_api/main.go)：Core 管理 API（会话/客户端信息/统计）
+- [`examples/flexible_listeners`](./examples/flexible_listeners/main.go)：自定义监听器（TCP/TLS/Unix Socket）
+- [`examples/secure_core`](./examples/secure_core/main.go)：认证 + TLS + 配额 + metrics 端点
+- [`docs/embedded-client-guide.md`](./docs/embedded-client-guide.md)：CONNECT 报文布局与嵌入式客户端实现要点
 
 ## WebSocket 支持
 

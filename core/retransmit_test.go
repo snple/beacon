@@ -100,3 +100,28 @@ func TestProcessSendQueue_DropsDeliveryRejectedMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, isEmpty, "delivery rejected by hook should be dropped instead of retried forever")
 }
+
+// TestTriggerRetransmit_TrackedByStop 验证按需重传任务被 wg 跟踪：
+// Stop 与 triggerRetransmit 并发时不会 panic（WaitGroup 在 Wait 期间 Add），
+// 也不会在 store 关闭后继续访问它。
+func TestTriggerRetransmit_TrackedByStop(t *testing.T) {
+	for range 3 {
+		core := testSetupCore(t, NewCoreOptions())
+		addr := testServe(t, core)
+
+		cl := testSetupClient(t, addr, "retransmit-stop", nil)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for range 200 {
+				core.triggerRetransmit()
+			}
+		}()
+
+		time.Sleep(5 * time.Millisecond)
+		cl.Close()
+		require.NoError(t, core.Stop())
+		<-done
+	}
+}

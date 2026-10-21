@@ -147,6 +147,8 @@ func (c *Client) SessionTimeout() uint32 {
 
 // WillPacket 返回遗嘱消息
 func (c *Client) WillPacket() *packet.PublishPacket {
+	c.session.willMu.Lock()
+	defer c.session.willMu.Unlock()
 	return c.session.willPacket
 }
 
@@ -159,7 +161,7 @@ func (c *Client) applyConnect(connect *packet.ConnectPacket) {
 
 // SetWillPacket 设置遗嘱消息
 func (c *Client) SetWillPacket(will *packet.PublishPacket) {
-	c.session.willPacket = will
+	c.setWillPacket(will)
 }
 
 // KeepAlive 返回心跳间隔

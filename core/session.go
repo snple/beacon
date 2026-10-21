@@ -22,8 +22,9 @@ type session struct {
 	authMethod string // 认证方法
 	authData   []byte // 认证数据
 
-	// 遗嘱消息
+	// 遗嘱消息（公开 API SetWillPacket/WillPacket 与断开清理可能并发访问）
 	willPacket *packet.PublishPacket
+	willMu     sync.Mutex
 
 	// 订阅状态（会话级别，跨连接持久化）
 	subscriptions map[string]packet.SubscribeOptions

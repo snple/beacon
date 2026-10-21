@@ -79,3 +79,42 @@ func TestPingPong_RejectsWrongRemainingLength(t *testing.T) {
 		})
 	}
 }
+
+// TestDisconnectEmptyBodyEncode 验证「正常断开且无属性」编码为空包体。
+//
+// 回归：旧实现把整个固定头写进了包体，实际产出 10 字节
+// （外层头 Remaining=5 + 内层头），对端会读到畸形数据；
+// 同时解码→重编码后字节发生变化。
+func TestDisconnectEmptyBodyEncode(t *testing.T) {
+	disc := NewDisconnectPacket(ReasonNormalDisconnect)
+	disc.Properties = nil
+
+	var buf bytes.Buffer
+	if err := WritePacket(&buf, disc, 0); err != nil {
+		t.Fatalf("编码失败: %v", err)
+	}
+	if buf.Len() != 5 {
+		t.Fatalf("期望 5 字节（仅固定头），实际 %d: %x", buf.Len(), buf.Bytes())
+	}
+
+	pkt, err := ReadPacket(bytes.NewReader(buf.Bytes()), 0)
+	if err != nil {
+		t.Fatalf("解码失败: %v", err)
+	}
+	decoded, ok := pkt.(*DisconnectPacket)
+	if !ok {
+		t.Fatalf("类型不符: %T", pkt)
+	}
+	if decoded.ReasonCode != ReasonNormalDisconnect {
+		t.Fatalf("ReasonCode = %d, 期望 %d", decoded.ReasonCode, ReasonNormalDisconnect)
+	}
+
+	// 解码后重新编码必须完全一致
+	var again bytes.Buffer
+	if err := WritePacket(&again, decoded, 0); err != nil {
+		t.Fatalf("二次编码失败: %v", err)
+	}
+	if !bytes.Equal(buf.Bytes(), again.Bytes()) {
+		t.Fatalf("编码不稳定:\n%x\n%x", buf.Bytes(), again.Bytes())
+	}
+}

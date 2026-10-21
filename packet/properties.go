@@ -2,8 +2,57 @@ package packet
 
 import (
 	"bytes"
+	"fmt"
 	"io"
+	"sort"
 )
+
+// maxUserProperties 用户属性条数上限（数量以 uint16 编码）。
+const maxUserProperties = 65535
+
+// encodeUserProperties 按 key 排序后写入用户属性，保证相同内容产生确定的字节序列
+// （map 遍历顺序随机，会影响签名、去重与测试复现）。同时传播编码错误，
+// 避免超长字符串导致静默产出畸形包。
+func encodeUserProperties(buf *bytes.Buffer, props map[string]string) error {
+	if len(props) > maxUserProperties {
+		return fmt.Errorf("too many user properties: %d (max %d)", len(props), maxUserProperties)
+	}
+	if err := EncodeUint16(buf, uint16(len(props))); err != nil {
+		return err
+	}
+
+	keys := make([]string, 0, len(props))
+	for k := range props {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		if err := EncodeString(buf, k); err != nil {
+			return fmt.Errorf("user property key: %w", err)
+		}
+		if err := EncodeString(buf, props[k]); err != nil {
+			return fmt.Errorf("user property value: %w", err)
+		}
+	}
+	return nil
+}
+
+// writePropertyBlob 写入「长度前缀 + 属性字节」。
+func writePropertyBlob(w io.Writer, buf *bytes.Buffer) error {
+	propLen := uint32(buf.Len())
+	if propLen > MaxPacketSize {
+		return ErrMalformedPacket
+	}
+	if err := EncodeUint32(w, propLen); err != nil {
+		return err
+	}
+	if propLen == 0 {
+		return nil
+	}
+	_, err := w.Write(buf.Bytes())
+	return err
+}
 
 // ConnectProperties CONNECT 专用属性（客户端发送）
 // 使用位掩码优化编码，减少字节开销
@@ -64,44 +113,42 @@ func (p *ConnectProperties) Encode(w io.Writer) error {
 		flags |= connPropUserProperties
 	}
 
-	// 写入位掩码 (2 bytes)
-	EncodeUint16(&buf, flags)
+	if err := EncodeUint16(&buf, flags); err != nil {
+		return err
+	}
 
-	// 按顺序写入存在的属性
 	if flags&connPropAuthMethod != 0 {
-		EncodeString(&buf, p.AuthMethod)
+		if err := EncodeString(&buf, p.AuthMethod); err != nil {
+			return err
+		}
 	}
 	if flags&connPropAuthData != 0 {
-		EncodeBinary(&buf, p.AuthData)
+		if err := EncodeBinary(&buf, p.AuthData); err != nil {
+			return err
+		}
 	}
 	if flags&connPropMaxPacketSize != 0 {
-		EncodeUint32(&buf, p.MaxPacketSize)
+		if err := EncodeUint32(&buf, p.MaxPacketSize); err != nil {
+			return err
+		}
 	}
 	if flags&connPropReceiveWindow != 0 {
-		EncodeUint16(&buf, p.ReceiveWindow)
+		if err := EncodeUint16(&buf, p.ReceiveWindow); err != nil {
+			return err
+		}
 	}
 	if flags&connPropTraceID != 0 {
-		EncodeString(&buf, p.TraceID)
+		if err := EncodeString(&buf, p.TraceID); err != nil {
+			return err
+		}
 	}
 	if flags&connPropUserProperties != 0 {
-		// 写入用户属性数量
-		EncodeUint16(&buf, uint16(len(p.UserProperties)))
-		for k, v := range p.UserProperties {
-			EncodeString(&buf, k)
-			EncodeString(&buf, v)
+		if err := encodeUserProperties(&buf, p.UserProperties); err != nil {
+			return err
 		}
 	}
 
-	// 写入属性长度和数据
-	propLen := uint32(buf.Len())
-	if err := EncodeUint32(w, propLen); err != nil {
-		return err
-	}
-	if propLen > 0 {
-		_, err := w.Write(buf.Bytes())
-		return err
-	}
-	return nil
+	return writePropertyBlob(w, &buf)
 }
 
 // Decode 解码连接属性（使用位掩码优化）
@@ -257,51 +304,47 @@ func (p *ConnackProperties) Encode(w io.Writer) error {
 		flags |= connackPropUserProperties
 	}
 
-	// 写入位掩码 (2 bytes)
-	EncodeUint16(&buf, flags)
+	if err := EncodeUint16(&buf, flags); err != nil {
+		return err
+	}
 
-	// 按顺序写入存在的属性
 	if flags&connackPropClientID != 0 {
-		EncodeString(&buf, p.ClientID)
+		if err := EncodeString(&buf, p.ClientID); err != nil {
+			return err
+		}
 	}
 	if flags&connackPropKeepAlive != 0 {
-		EncodeUint16(&buf, p.KeepAlive)
+		if err := EncodeUint16(&buf, p.KeepAlive); err != nil {
+			return err
+		}
 	}
 	if flags&connackPropSessionTimeout != 0 {
-		EncodeUint32(&buf, p.SessionTimeout)
+		if err := EncodeUint32(&buf, p.SessionTimeout); err != nil {
+			return err
+		}
 	}
 	if flags&connackPropMaxPacketSize != 0 {
-		EncodeUint32(&buf, p.MaxPacketSize)
+		if err := EncodeUint32(&buf, p.MaxPacketSize); err != nil {
+			return err
+		}
 	}
 	if flags&connackPropReceiveWindow != 0 {
-		EncodeUint16(&buf, p.ReceiveWindow)
+		if err := EncodeUint16(&buf, p.ReceiveWindow); err != nil {
+			return err
+		}
 	}
 	if flags&connackPropTraceID != 0 {
-		EncodeString(&buf, p.TraceID)
+		if err := EncodeString(&buf, p.TraceID); err != nil {
+			return err
+		}
 	}
 	if flags&connackPropUserProperties != 0 {
-		// 写入用户属性数量
-		EncodeUint16(&buf, uint16(len(p.UserProperties)))
-		for k, v := range p.UserProperties {
-			EncodeString(&buf, k)
-			EncodeString(&buf, v)
+		if err := encodeUserProperties(&buf, p.UserProperties); err != nil {
+			return err
 		}
 	}
 
-	// 写入属性长度和数据
-	propLen := uint32(buf.Len())
-	if propLen > MaxPacketSize {
-		return ErrMalformedPacket
-	}
-
-	if err := EncodeUint32(w, propLen); err != nil {
-		return err
-	}
-	if propLen > 0 {
-		_, err := w.Write(buf.Bytes())
-		return err
-	}
-	return nil
+	return writePropertyBlob(w, &buf)
 }
 
 // Decode 解码连接响应属性（使用位掩码优化）
@@ -436,22 +479,23 @@ func (p *AuthProperties) Encode(w io.Writer) error {
 		flags |= authPropUserProperties
 	}
 
-	// 写入位掩码 (1 byte)
-	buf.WriteByte(flags)
+	if err := WriteByte(&buf, flags); err != nil {
+		return err
+	}
 
-	// 按顺序写入存在的属性
 	if flags&authPropAuthMethod != 0 {
-		EncodeString(&buf, p.AuthMethod)
+		if err := EncodeString(&buf, p.AuthMethod); err != nil {
+			return err
+		}
 	}
 	if flags&authPropAuthData != 0 {
-		EncodeBinary(&buf, p.AuthData)
+		if err := EncodeBinary(&buf, p.AuthData); err != nil {
+			return err
+		}
 	}
 	if flags&authPropUserProperties != 0 {
-		// 写入用户属性数量
-		EncodeUint16(&buf, uint16(len(p.UserProperties)))
-		for k, v := range p.UserProperties {
-			EncodeString(&buf, k)
-			EncodeString(&buf, v)
+		if err := encodeUserProperties(&buf, p.UserProperties); err != nil {
+			return err
 		}
 	}
 
@@ -608,54 +652,52 @@ func (p *PublishProperties) Encode(w io.Writer) error {
 		flags |= pubPropUserProperties
 	}
 
-	// 写入位掩码 (2 bytes)
-	EncodeUint16(&buf, flags)
+	if err := EncodeUint16(&buf, flags); err != nil {
+		return err
+	}
 
-	// 按顺序写入存在的属性
 	if flags&pubPropExpiryTime != 0 {
-		EncodeInt64(&buf, p.ExpiryTime)
+		if err := EncodeInt64(&buf, p.ExpiryTime); err != nil {
+			return err
+		}
 	}
 	if flags&pubPropContentType != 0 {
-		EncodeString(&buf, p.ContentType)
+		if err := EncodeString(&buf, p.ContentType); err != nil {
+			return err
+		}
 	}
 	if flags&pubPropTraceID != 0 {
-		EncodeString(&buf, p.TraceID)
+		if err := EncodeString(&buf, p.TraceID); err != nil {
+			return err
+		}
 	}
 	if flags&pubPropTargetClientID != 0 {
-		EncodeString(&buf, p.TargetClientID)
+		if err := EncodeString(&buf, p.TargetClientID); err != nil {
+			return err
+		}
 	}
 	if flags&pubPropSourceClientID != 0 {
-		EncodeString(&buf, p.SourceClientID)
+		if err := EncodeString(&buf, p.SourceClientID); err != nil {
+			return err
+		}
 	}
 	if flags&pubPropResponseTopic != 0 {
-		EncodeString(&buf, p.ResponseTopic)
+		if err := EncodeString(&buf, p.ResponseTopic); err != nil {
+			return err
+		}
 	}
 	if flags&pubPropCorrelationData != 0 {
-		EncodeBinary(&buf, p.CorrelationData)
+		if err := EncodeBinary(&buf, p.CorrelationData); err != nil {
+			return err
+		}
 	}
 	if flags&pubPropUserProperties != 0 {
-		// 写入用户属性数量
-		EncodeUint16(&buf, uint16(len(p.UserProperties)))
-		for k, v := range p.UserProperties {
-			EncodeString(&buf, k)
-			EncodeString(&buf, v)
+		if err := encodeUserProperties(&buf, p.UserProperties); err != nil {
+			return err
 		}
 	}
 
-	// 写入属性长度和数据
-	propLen := uint32(buf.Len())
-	if propLen > MaxPacketSize {
-		return ErrMalformedPacket
-	}
-
-	if err := EncodeUint32(w, propLen); err != nil {
-		return err
-	}
-	if propLen > 0 {
-		_, err := w.Write(buf.Bytes())
-		return err
-	}
-	return nil
+	return writePropertyBlob(w, &buf)
 }
 
 // Decode 解码发布属性（使用位掩码优化）
@@ -790,36 +832,22 @@ func (p *ReasonProperties) Encode(w io.Writer) error {
 		flags |= reasonPropUserProperties
 	}
 
-	// 写入位掩码 (2 bytes)
-	EncodeUint16(&buf, flags)
+	if err := EncodeUint16(&buf, flags); err != nil {
+		return err
+	}
 
-	// 按顺序写入存在的属性
 	if flags&reasonPropReasonString != 0 {
-		EncodeString(&buf, p.ReasonString)
+		if err := EncodeString(&buf, p.ReasonString); err != nil {
+			return err
+		}
 	}
 	if flags&reasonPropUserProperties != 0 {
-		// 写入用户属性数量
-		EncodeUint16(&buf, uint16(len(p.UserProperties)))
-		for k, v := range p.UserProperties {
-			EncodeString(&buf, k)
-			EncodeString(&buf, v)
+		if err := encodeUserProperties(&buf, p.UserProperties); err != nil {
+			return err
 		}
 	}
 
-	// 写入属性长度和数据
-	propLen := uint32(buf.Len())
-	if propLen > MaxPacketSize {
-		return ErrMalformedPacket
-	}
-
-	if err := EncodeUint32(w, propLen); err != nil {
-		return err
-	}
-	if propLen > 0 {
-		_, err := w.Write(buf.Bytes())
-		return err
-	}
-	return nil
+	return writePropertyBlob(w, &buf)
 }
 
 // Decode 解码响应属性（使用位掩码优化）

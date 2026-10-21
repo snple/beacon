@@ -66,6 +66,7 @@ func main() {
 	storeDir := flag.String("store-dir", "./data", "BadgerDB storage directory")
 	wsAddr := flag.String("ws-addr", "", "WebSocket listen address (empty = disabled, e.g. \":8080\")")
 	wsPath := flag.String("ws-path", "/ws", "WebSocket endpoint path")
+	metricsAddr := flag.String("metrics-addr", "", "Metrics/health HTTP listen address (empty = disabled, e.g. \":9101\")")
 	showVersion := flag.Bool("version", false, "Show version")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 
@@ -226,6 +227,17 @@ func main() {
 		}()
 	}
 
+	// 可选：在后台启动 metrics / 健康检查 HTTP 服务
+	if *metricsAddr != "" {
+		go func() {
+			logger.Info("Starting metrics server", zap.String("address", *metricsAddr))
+			if err := core.ServeMetrics(*metricsAddr); err != nil {
+				logger.Error("Metrics server error", zap.Error(err))
+				os.Exit(1)
+			}
+		}()
+	}
+
 	// 打印启动信息
 	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
 	fmt.Println("║              Beacon core                             ║")
@@ -233,6 +245,8 @@ func main() {
 	fmt.Printf("║  Version:          %-40s ║\n", version)
 	fmt.Printf("║  Address:          %-40s ║\n", *addr)
 	fmt.Printf("║  WebSocket:        %-40s ║\n", wsEnabledText(*wsAddr, *wsPath))
+	fmt.Printf("║  Metrics:          %-40s ║\n", wsEnabledText(*metricsAddr, "/metrics"))
+	fmt.Printf("║  Health:           %-40s ║\n", wsEnabledText(*metricsAddr, "/healthz"))
 	fmt.Printf("║  Max Clients:      %-40d ║\n", *maxClients)
 	fmt.Printf("║  Persistence:      %-40v ║\n", *storeDir != "")
 	fmt.Printf("║  Storage Dir:      %-40s ║\n", *storeDir)
