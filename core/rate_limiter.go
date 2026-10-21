@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// connRateLimiter 连接速率限制器（令牌桶算法）
-type connRateLimiter struct {
+// tokenBucket 通用令牌桶限流器（连接速率 / 发布速率共用）
+type tokenBucket struct {
 	mu        sync.Mutex
 	tokens    float64
 	maxTokens float64
@@ -14,14 +14,14 @@ type connRateLimiter struct {
 	lastCheck time.Time
 }
 
-// newConnRateLimiter 创建连接速率限制器
-// rate: 每秒允许的连接数，burst: 突发容量
-func newConnRateLimiter(rate float64, burst int) *connRateLimiter {
+// newTokenBucket 创建令牌桶限流器
+// rate: 每秒允许的事件数，burst: 突发容量（小于 rate 时取 rate）
+func newTokenBucket(rate float64, burst int) *tokenBucket {
 	maxTokens := float64(burst)
 	if maxTokens < rate {
 		maxTokens = rate
 	}
-	return &connRateLimiter{
+	return &tokenBucket{
 		tokens:    maxTokens,
 		maxTokens: maxTokens,
 		rate:      rate,
@@ -29,8 +29,8 @@ func newConnRateLimiter(rate float64, burst int) *connRateLimiter {
 	}
 }
 
-// Allow 检查是否允许新连接
-func (r *connRateLimiter) Allow() bool {
+// Allow 尝试消耗一个令牌，返回是否允许
+func (r *tokenBucket) Allow() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

@@ -130,3 +130,31 @@ func TestE2E_Retain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("last value"), msg.Packet.Payload)
 }
+
+// TestE2E_OfflinePublishDeliveredAfterReconnect 验证未连接时 Publish 的消息在连接后补发，
+// 而不是在建立连接时被清空。
+func TestE2E_OfflinePublishDeliveredAfterReconnect(t *testing.T) {
+	_, addr := startCore(t)
+
+	sub := connect(t, addr, "e2e-offline-sub")
+	require.NoError(t, sub.Subscribe("e2e/offline"))
+	time.Sleep(100 * time.Millisecond)
+
+	pub, err := client.NewWithOptions(client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("e2e-offline-pub"))
+	require.NoError(t, err)
+	defer pub.Close()
+
+	// 未连接时发布：消息进入本地出站队列，等待连接后补发。
+	require.NoError(t, pub.Publish("e2e/offline", []byte("offline"),
+		client.NewPublishOptions().WithQoS(packet.QoS1)))
+
+	require.NoError(t, pub.ConnectWithDialer(&client.TCPDialer{Address: addr, DialTimeout: 5 * time.Second}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	msg, err := sub.PollMessage(ctx, 12*time.Second)
+	require.NoError(t, err, "message published while offline should be delivered after reconnect")
+	require.Equal(t, []byte("offline"), msg.Packet.Payload)
+}

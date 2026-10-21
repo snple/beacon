@@ -34,6 +34,40 @@ msg.Ack() // 处理完才确认；未确认的消息会被服务端重传
 
 注意：手动确认模式下 QoS1 为 at-least-once——若应用在处理中崩溃/断电未确认，服务端会重传该消息并再次投递；应用如需不重复处理，请按 `msg.Packet.PacketID` 自行去重。
 
+## 可靠性边界
+
+以下行为是 QoS 语义的一部分，部署时需要了解：
+
+- **订阅端接收队列满**（`WithMessageQueueSize`）：QoS1 消息不会被确认，而是由服务端按 `RetransmitInterval` 再次投递，
+  形成端到端背压；QoS0 消息直接丢弃。
+- **客户端离线时发布**：消息写入本地出站队列，`Publish` 返回 `nil` 表示"已入队"，连接建立后自动补发。
+- **钩子拒绝**：`OnPublish` 钩子拒绝 QoS1 消息时，服务端/客户端会返回 `NotAuthorized`，发布方立即收到失败，不会无限重传。
+- **保留消息标志**：因订阅而重放的保留消息始终带 `Retain=true`；`RetainAsPublished` 只控制实时转发是否保留发布时的 `Retain` 标志。
+- **持久化默认关闭**：库默认使用内存存储（`StoreOptions.DataDir` 为空）。需要重启后仍保留消息，必须配置 `DataDir`，
+  并建议同时设置 `SyncWrites=true`，否则进程/机器掉电时已确认的消息仍可能丢失。
+
+## 配额与背压
+
+Beacon 的队列默认有上限，避免单个慢消费者或异常客户端把内存/磁盘写满：
+
+| 配置 | 默认值 | 超限行为 |
+|---|---|---|
+| `WithMaxClientQueueSize(n, policy)` | 10000 条 | 每个客户端的待发送队列达到上限后，按策略丢弃新消息（`QueueOverflowDropNewest`，默认）或最旧消息（`QueueOverflowDropOldest`），计入 `MessagesDropped` |
+| `WithMaxPendingMessages(n)` | 100000 条 | 全局待分发队列达到上限后，新的发布被拒绝；QoS1 发布端收到 `PUBACK(QuotaExceeded)` |
+| `WithMaxPublishRate(rate, burst)` | 不限制 | 单客户端发布速率超限；QoS1 收到 `PUBACK(MessageRateTooHigh)`，QoS0 被丢弃 |
+| `WithMaxStoreBytes(bytes)` | 不限制 | 存储占用超过水位后拒绝新发布（`QuotaExceeded`）。基于 badger 上报的磁盘占用，有数秒滞后 |
+| `client.WithMaxQueueSize(n)` | 10000 条 | 客户端本地出站队列满时，`Publish` 返回 `ErrQueueFull` |
+
+所有限制都可以用 `0` 关闭。拒绝/丢弃数量可通过 `core.GetStats()` 的 `MessagesRejected`（接收侧拒绝）
+与 `MessagesDropped`（投递侧丢弃）观察；`Core.GetClientInfo(id).QueueSize` 可查看单个客户端的积压量。
+
+注意：
+
+- 客户端队列配额按**消息条数**统计。单条消息的大小由 `MaxPacketSize` 限制，生产环境建议同时设置 `MaxStoreBytes`
+  作为磁盘水位的兜底。
+- 发布速率限制按客户端会话统计：使用全新会话（`SessionTimeout=0`）重连会获得新的令牌桶。
+  如需防止重连绕过，请配合 `WithConnectionRateLimit` 与认证使用。
+
 ## 使用方法
 
 导入包：

@@ -98,6 +98,16 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		zap.String("traceID", msg.Packet.Properties.TraceID))
 
 	// 2. 放入持久化队列（QoS0/QoS1 都持久化：QoS0 尽力保证到达，QoS1 保证处理）
+	// 出站队列配额：超限时明确拒绝，避免离线/断连期间无限增长。
+	if c.options != nil {
+		if limit := c.options.MaxQueueSize; limit > 0 && c.queue.Count() >= int64(limit) {
+			c.logger.Warn("Outbound queue full, message rejected",
+				zap.String("topic", msg.Packet.Topic),
+				zap.String("packetID", msg.Packet.PacketID.Hex()),
+				zap.Int("limit", limit))
+			return ErrQueueFull
+		}
+	}
 	if err := c.queue.Enqueue(&msg); err != nil {
 		c.logger.Error("Failed to enqueue message to persistent queue",
 			zap.String("topic", msg.Packet.Topic),
@@ -263,9 +273,10 @@ func (c *Conn) processSendQueue() {
 				zap.String("topic", msg.Packet.Topic),
 				zap.String("packetID", msg.Packet.PacketID.Hex()))
 
-			msg.Dup = true
+			dupMsg := *msg
+			dupMsg.Dup = true
 			if c.client.queue != nil {
-				if err := c.client.queue.Enqueue(msg); err != nil {
+				if err := c.client.queue.Enqueue(&dupMsg); err != nil {
 					c.logger.Warn("Failed to persist Dup flag after send failure",
 						zap.String("topic", msg.Packet.Topic),
 						zap.String("packetID", msg.Packet.PacketID.Hex()),

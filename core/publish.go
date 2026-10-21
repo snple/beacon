@@ -41,6 +41,28 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 		return nil // 忽略无效 QoS 的消息
 	}
 
+	// 每客户端发布速率限制（令牌桶）。
+	// 放在钩子/入队之前，避免超限客户端消耗后续处理资源。
+	if c.publishLimiter != nil && !c.publishLimiter.Allow() {
+		c.core.stats.MessagesRejected.Add(1)
+		c.core.logger.Warn("Publish rate exceeded",
+			zap.String("clientID", c.ID),
+			zap.String("topic", pub.Topic),
+			zap.Float64("maxPublishRate", c.core.options.MaxPublishRate))
+
+		if pub.QoS == packet.QoS1 {
+			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonMessageRateTooHigh)
+			if err := c.writePacket(puback); err != nil {
+				c.core.logger.Error("Failed to send PUBACK after rate limit rejection",
+					zap.String("clientID", c.ID),
+					zap.String("packetID", pub.PacketID.Hex()),
+					zap.Error(err))
+				return err
+			}
+		}
+		return nil
+	}
+
 	// 先调用 OnPublish 钩子（此时可以访问原始 packet）
 	pubCtx := &PublishContext{
 		ClientID: c.ID,
@@ -52,6 +74,19 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 			zap.String("clientID", c.ID),
 			zap.String("topic", pub.Topic),
 			zap.Error(err))
+
+		// 明确拒绝：必须回 PUBACK，否则发布端会一直把它当作未确认消息重传。
+		c.core.stats.MessagesRejected.Add(1)
+		if pub.QoS == packet.QoS1 {
+			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonNotAuthorized)
+			if err := c.writePacket(puback); err != nil {
+				c.core.logger.Error("Failed to send PUBACK after publish rejection",
+					zap.String("clientID", c.ID),
+					zap.String("packetID", pub.PacketID.Hex()),
+					zap.Error(err))
+				return err
+			}
+		}
 
 		return nil
 	}
@@ -148,11 +183,26 @@ func (c *Client) handlePuback(p *packet.PubackPacket) error {
 	c.session.pendingAckMu.Unlock()
 
 	if ok {
-		c.core.logger.Debug("Message acknowledged",
-			zap.String("clientID", c.ID),
-			zap.String("packetID", p.PacketID.Hex()),
-			zap.String("topic", pending.msg.Packet.Topic),
-			zap.Uint8("reasonCode", uint8(p.ReasonCode)))
+		topic := ""
+		if pending.msg != nil && pending.msg.Packet != nil {
+			topic = pending.msg.Packet.Topic
+		}
+
+		if p.ReasonCode.IsError() {
+			// 订阅端明确拒绝/无法处理：消息不会重试，必须留下可见记录。
+			c.core.logger.Warn("Message rejected by subscriber",
+				zap.String("clientID", c.ID),
+				zap.String("packetID", p.PacketID.Hex()),
+				zap.String("topic", topic),
+				zap.String("reason", p.ReasonCode.String()))
+			c.core.stats.MessagesDropped.Add(1)
+		} else {
+			c.core.logger.Debug("Message acknowledged",
+				zap.String("clientID", c.ID),
+				zap.String("packetID", p.PacketID.Hex()),
+				zap.String("topic", topic),
+				zap.Uint8("reasonCode", uint8(p.ReasonCode)))
+		}
 
 		// 收到 PUBACK 即表示消息已送达，从发送队列中删除
 		if err := c.queue.Delete(p.PacketID); err != nil {
@@ -259,7 +309,6 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 			sub.Topic,
 			isNewSubs[i],
 			sub.Options.NoLocal,
-			sub.Options.RetainAsPublished,
 			sub.Options.RetainHandling,
 			sub.Options.QoS,
 		)
@@ -324,7 +373,7 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 // sendRetainedMessages 逐条发送订阅时的保留消息
 // 避免一次性加载所有消息到内存
 func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
-	noLocal bool, retainAsPublished bool, retainHandling uint8, subQoS packet.QoS) {
+	noLocal bool, retainHandling uint8, subQoS packet.QoS) {
 	// retainHandling == 2: 不发送保留消息
 	if retainHandling == 2 {
 		return
@@ -346,8 +395,7 @@ func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 		zap.String("topic", topic),
 		zap.Int("count", len(topics)),
 		zap.Bool("isNewSubscription", isNewSubscription),
-		zap.Uint8("retainHandling", retainHandling),
-		zap.Bool("retainAsPublished", retainAsPublished))
+		zap.Uint8("retainHandling", retainHandling))
 
 	// 逐条从 messageStore 获取消息并发送
 	for _, t := range topics {
@@ -367,10 +415,9 @@ func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 
 		// !!! 这里可以不复制消息，直接修改 Retain 和 QoS 后投递，因为消息是从持久化存储中读取的，不会影响其他地方 !!!
 
-		// 根据 retainAsPublished 设置 Retain 标志
-		if !retainAsPublished {
-			msg.Retain = false
-		}
+		// 因订阅而重放的保留消息必须带 Retain=true，接收方才能区分历史消息与实时消息。
+		// RetainAsPublished 只影响实时转发（见 Core.deliver）。
+		msg.Retain = true
 
 		// 应用 QoS 降级：取订阅 QoS 和消息 QoS 的较小值
 		msg.QoS = min(subQoS, msg.QoS)

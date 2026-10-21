@@ -90,7 +90,9 @@ func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *c
 // Serve 开始处理客户端消息
 func (c *conn) serve() {
 	reason := packet.ReasonNormalDisconnect
-	defer c.close(reason)
+	// 必须在 defer 中读取 reason，否则参数会在 defer 语句执行时求值，
+	// 后面设置的心跳超时/协议错误原因码全部失效。
+	defer func() { c.close(reason) }()
 
 	// 发送队列里可能已经有消息，触发发送协程
 	c.triggerSend()

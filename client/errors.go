@@ -55,6 +55,9 @@ var (
 
 	// ErrMessageTooLarge 消息超过允许的最大大小，应丢弃
 	ErrMessageTooLarge = errors.New("message too large, dropped")
+
+	// ErrQueueFull 本地出站队列已达配额上限，消息未被接受
+	ErrQueueFull = errors.New("outbound queue is full")
 )
 
 // 发送队列错误（复用共享 mq 包的定义，保持 API 兼容）

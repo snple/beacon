@@ -41,11 +41,38 @@ type CoreOptions struct {
 	ConnectionRateLimit float64 // 每秒最大新连接数（0 表示不限制）
 	ConnectionRateBurst int     // 连接速率突发容量（默认等于 ConnectionRateLimit）
 
+	// 配额与背压
+	MaxClientQueueSize        int                 // 每个客户端待发送队列上限（条），0 表示不限制
+	ClientQueueOverflowPolicy QueueOverflowPolicy // 客户端队列满时的溢出策略
+	MaxPendingMessages        int                 // 全局分发队列上限（条），0 表示不限制
+	MaxPublishRate            float64             // 每客户端每秒最大发布消息数，0 表示不限制
+	MaxPublishBurst           int                 // 每客户端发布速率突发容量（默认取 rate）
+	MaxStoreBytes             int64               // 存储占用水位（字节），0 表示不限制
+
 	// 持久化存储
 	StoreOptions StoreOptions // 消息持久化配置
 
 	// 日志
 	Logger *zap.Logger
+}
+
+// QueueOverflowPolicy 客户端待发送队列满时的溢出策略
+type QueueOverflowPolicy uint8
+
+const (
+	// QueueOverflowDropNewest 丢弃新到达的消息（默认）
+	QueueOverflowDropNewest QueueOverflowPolicy = iota
+	// QueueOverflowDropOldest 丢弃队列中最旧的消息，保留最新消息
+	QueueOverflowDropOldest
+)
+
+func (p QueueOverflowPolicy) String() string {
+	switch p {
+	case QueueOverflowDropOldest:
+		return "drop-oldest"
+	default:
+		return "drop-newest"
+	}
 }
 
 // NewCoreOptions 创建新的 Core 配置选项
@@ -63,6 +90,11 @@ func NewCoreOptions() *CoreOptions {
 		RetainEnabled:        true,
 		MessageQueueSize:     100,
 		StoreOptions:         DefaultStoreOptions(),
+
+		// 配额与背压默认值
+		MaxClientQueueSize:        10000,
+		ClientQueueOverflowPolicy: QueueOverflowDropNewest,
+		MaxPendingMessages:        100000,
 	}
 }
 
@@ -175,6 +207,37 @@ func (o *CoreOptions) WithConnectionRateLimit(rate float64, burst int) *CoreOpti
 	return o
 }
 
+// WithMaxClientQueueSize 设置每个客户端待发送队列上限（条），并指定溢出策略。
+// size 为 0 表示不限制；默认 10000、丢弃新消息。
+func (o *CoreOptions) WithMaxClientQueueSize(size int, policy QueueOverflowPolicy) *CoreOptions {
+	o.MaxClientQueueSize = size
+	o.ClientQueueOverflowPolicy = policy
+	return o
+}
+
+// WithMaxPendingMessages 设置全局分发队列上限（条），0 表示不限制。
+// 超过上限时新的发布会被拒绝（QoS1 返回 QuotaExceeded）。
+func (o *CoreOptions) WithMaxPendingMessages(n int) *CoreOptions {
+	o.MaxPendingMessages = n
+	return o
+}
+
+// WithMaxPublishRate 设置每个客户端每秒最大发布消息数，0 表示不限制。
+// 超限时 QoS1 消息返回 MessageRateTooHigh，QoS0 消息被丢弃。
+func (o *CoreOptions) WithMaxPublishRate(rate float64, burst int) *CoreOptions {
+	o.MaxPublishRate = rate
+	o.MaxPublishBurst = burst
+	return o
+}
+
+// WithMaxStoreBytes 设置存储占用水位（字节），0 表示不限制。
+// 超过水位后新的发布会被拒绝（QoS1 返回 QuotaExceeded），避免写满磁盘。
+// 水位基于 badger 上报的磁盘占用，存在数秒滞后，属于粗粒度保护而非精确配额。
+func (o *CoreOptions) WithMaxStoreBytes(bytes int64) *CoreOptions {
+	o.MaxStoreBytes = bytes
+	return o
+}
+
 // WithStore 设置持久化存储配置
 func (o *CoreOptions) WithStore(storeOptions StoreOptions) *CoreOptions {
 	o.StoreOptions = storeOptions
@@ -197,6 +260,10 @@ func (o *CoreOptions) WithLogger(logger *zap.Logger) *CoreOptions {
 func (o *CoreOptions) applyDefaults() {
 	if o.Logger == nil {
 		o.Logger, _ = zap.NewDevelopment()
+	}
+
+	if o.MaxPublishRate > 0 && o.MaxPublishBurst <= 0 {
+		o.MaxPublishBurst = max(1, int(o.MaxPublishRate))
 	}
 }
 
@@ -240,6 +307,28 @@ func (o *CoreOptions) Validate() error {
 	// 验证存储配置
 	if err := o.StoreOptions.Validate(); err != nil {
 		return fmt.Errorf("store options validation failed: %w", err)
+	}
+
+	// 验证配额配置
+	if o.MaxClientQueueSize < 0 {
+		return fmt.Errorf("maxClientQueueSize must be >= 0, got %d", o.MaxClientQueueSize)
+	}
+	if o.MaxPendingMessages < 0 {
+		return fmt.Errorf("maxPendingMessages must be >= 0, got %d", o.MaxPendingMessages)
+	}
+	if o.MaxPublishRate < 0 {
+		return fmt.Errorf("maxPublishRate must be >= 0, got %v", o.MaxPublishRate)
+	}
+	if o.MaxPublishBurst < 0 {
+		return fmt.Errorf("maxPublishBurst must be >= 0, got %d", o.MaxPublishBurst)
+	}
+	if o.MaxStoreBytes < 0 {
+		return fmt.Errorf("maxStoreBytes must be >= 0, got %d", o.MaxStoreBytes)
+	}
+	switch o.ClientQueueOverflowPolicy {
+	case QueueOverflowDropNewest, QueueOverflowDropOldest:
+	default:
+		return fmt.Errorf("unknown clientQueueOverflowPolicy: %d", o.ClientQueueOverflowPolicy)
 	}
 
 	return nil

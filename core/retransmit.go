@@ -119,11 +119,11 @@ func (c *Client) retransmitUnackedMessages() int {
 
 	// 尝试将需要重传的消息放入队列
 	for _, item := range toResend {
-		// !!! 这里可以直接修改原消息，既然走到这一步，消息已经在重发状态 !!!
-		msg := item.msg
+		// 复制后再置 Dup：原消息可能仍被发送协程/发送队列引用，直接改写会形成数据竞争。
+		msg := item.msg.Copy()
 		msg.Dup = true // 标记为重发
 
-		if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+		if err := conn.sendQueue.tryEnqueue(&msg); err != nil {
 			if errors.Is(err, ErrMessageAlreadyInQueue) {
 				// 消息已在队列中，跳过
 				continue

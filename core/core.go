@@ -41,7 +41,12 @@ type Core struct {
 	stats Stats
 
 	// 连接速率限制
-	connRateLimiter *connRateLimiter
+	connLimiter *tokenBucket
+
+	// 存储占用水位缓存（避免每条消息都统计 badger 大小）
+	storeSizeMu sync.Mutex
+	storeSize   int64
+	storeSizeAt time.Time
 
 	// 生命周期
 	ctx     context.Context
@@ -56,7 +61,8 @@ type Stats struct {
 	ClientsTotal       atomic.Int64
 	MessagesReceived   atomic.Int64
 	MessagesSent       atomic.Int64
-	MessagesDropped    atomic.Int64
+	MessagesDropped    atomic.Int64 // 投递侧丢弃（过期、客户端队列配额溢出、订阅端拒收等）
+	MessagesRejected   atomic.Int64 // 接收侧拒绝（发布速率超限、全局队列/存储配额超限、钩子拒绝等）
 	BytesReceived      atomic.Int64
 	BytesSent          atomic.Int64
 	SubscriptionsCount atomic.Int64
@@ -99,7 +105,7 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 
 	// 初始化连接速率限制器
 	if opts.ConnectionRateLimit > 0 {
-		b.connRateLimiter = newConnRateLimiter(opts.ConnectionRateLimit, opts.ConnectionRateBurst)
+		b.connLimiter = newTokenBucket(opts.ConnectionRateLimit, opts.ConnectionRateBurst)
 	}
 
 	// 初始化消息持久化存储（必须先于 initQueue）
@@ -275,6 +281,7 @@ func (c *Core) GetStats() StatsSnapshot {
 		MessagesReceived:   c.stats.MessagesReceived.Load(),
 		MessagesSent:       c.stats.MessagesSent.Load(),
 		MessagesDropped:    c.stats.MessagesDropped.Load(),
+		MessagesRejected:   c.stats.MessagesRejected.Load(),
 		BytesReceived:      c.stats.BytesReceived.Load(),
 		BytesSent:          c.stats.BytesSent.Load(),
 		SubscriptionsCount: c.stats.SubscriptionsCount.Load(),
@@ -288,9 +295,30 @@ type StatsSnapshot struct {
 	MessagesReceived   int64
 	MessagesSent       int64
 	MessagesDropped    int64
+	MessagesRejected   int64
 	BytesReceived      int64
 	BytesSent          int64
 	SubscriptionsCount int64
+}
+
+// storeBytes 返回存储当前占用的近似字节数。
+// 结果缓存 1 秒，避免高频发布时每条消息都统计 badger 大小。
+func (c *Core) storeBytes() int64 {
+	if c.store == nil {
+		return 0
+	}
+
+	c.storeSizeMu.Lock()
+	defer c.storeSizeMu.Unlock()
+
+	if !c.storeSizeAt.IsZero() && time.Since(c.storeSizeAt) < time.Second {
+		return c.storeSize
+	}
+
+	lsm, vlog := c.store.db().Size()
+	c.storeSize = lsm + vlog
+	c.storeSizeAt = time.Now()
+	return c.storeSize
 }
 
 // ============================================================================
@@ -308,6 +336,7 @@ type ClientInfo struct {
 	Subscriptions  []ClientSubscriptionInfo
 	PendingAck     int
 	ReceiveWindow  uint16
+	QueueSize      int64 // 待发送队列中的消息条数
 }
 
 // ClientSubscriptionInfo 客户端订阅信息（不含 ClientID）
@@ -352,6 +381,9 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 		SessionTimeout: client.SessionTimeout(),
 		Subscriptions:  subs,
 		PendingAck:     pendingAck,
+	}
+	if client.queue != nil {
+		info.QueueSize = client.queue.Count()
 	}
 
 	// conn 可能为 nil（例如离线但会话保留的客户端），需要防御性处理，避免 nil 解引用

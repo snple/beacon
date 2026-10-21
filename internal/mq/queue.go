@@ -29,7 +29,7 @@ var (
 // Enqueue 会拒绝零值 PacketID 的消息。
 type Queue[T any] struct {
 	db     *badger.DB
-	prefix []byte        // 队列的键前缀，支持多队列
+	prefix []byte          // 队列的键前缀，支持多队列
 	getID  func(T) nson.Id // 提取消息 PacketID
 }
 
@@ -48,12 +48,20 @@ func NewQueue[T any](db *badger.DB, prefix string, getID func(T) nson.Id) *Queue
 // Enqueue 将消息添加到队列
 // 使用消息的 PacketID 作为 key
 func (q *Queue[T]) Enqueue(msg T) error {
+	_, err := q.Put(msg)
+	return err
+}
+
+// Put 将消息写入队列，并报告该 PacketID 是否是新增条目。
+// 相同 PacketID 重复写入会覆盖旧值（此时 created=false），
+// 供上层的队列计数/配额逻辑保持准确。
+func (q *Queue[T]) Put(msg T) (created bool, err error) {
 	id := q.getID(msg)
 	if id.IsZero() {
-		return fmt.Errorf("invalid message or PacketID")
+		return false, fmt.Errorf("invalid message or PacketID")
 	}
 
-	return q.db.Update(func(txn *badger.Txn) error {
+	err = q.db.Update(func(txn *badger.Txn) error {
 		key := q.makeKey(id)
 
 		// 序列化消息
@@ -62,8 +70,23 @@ func (q *Queue[T]) Enqueue(msg T) error {
 			return fmt.Errorf("failed to encode message: %w", err)
 		}
 
+		// 事务可能因冲突重试，因此每次尝试都显式重置结果
+		_, getErr := txn.Get(key)
+		switch {
+		case getErr == nil:
+			created = false // 已存在：覆盖
+		case errors.Is(getErr, badger.ErrKeyNotFound):
+			created = true
+		default:
+			return getErr
+		}
+
 		return txn.Set(key, data)
 	})
+	if err != nil {
+		return false, err
+	}
+	return created, nil
 }
 
 // Dequeue 从队列头部取出消息并删除
@@ -190,14 +213,39 @@ func (q *Queue[T]) Peek() (T, error) {
 
 // Delete 根据 PacketID 删除消息
 func (q *Queue[T]) Delete(packetID nson.Id) error {
+	_, err := q.DeleteIfExists(packetID)
+	return err
+}
+
+// DeleteIfExists 根据 PacketID 删除消息，并报告该条目是否真实存在。
+// 供上层的队列计数/配额逻辑保持准确（重复删除不会误减计数）。
+func (q *Queue[T]) DeleteIfExists(packetID nson.Id) (bool, error) {
 	if packetID.IsZero() {
-		return fmt.Errorf("invalid PacketID")
+		return false, fmt.Errorf("invalid PacketID")
 	}
 
-	return q.db.Update(func(txn *badger.Txn) error {
+	existed := false
+	err := q.db.Update(func(txn *badger.Txn) error {
 		key := q.makeKey(packetID)
+
+		// 事务可能因冲突重试，因此每次尝试都显式重置结果
+		existed = false
+		_, getErr := txn.Get(key)
+		switch {
+		case getErr == nil:
+			existed = true
+		case errors.Is(getErr, badger.ErrKeyNotFound):
+			return nil
+		default:
+			return getErr
+		}
+
 		return txn.Delete(key)
 	})
+	if err != nil {
+		return false, err
+	}
+	return existed, nil
 }
 
 // Get 根据 PacketID 获取消息（不删除）

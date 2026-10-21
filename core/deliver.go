@@ -13,6 +13,25 @@ import (
 
 // publish 发布消息 (内部使用)
 func (c *Core) publish(msg Message) bool {
+	// 全局配额：待分发队列与存储水位。超限时拒绝新消息，
+	// 让发布端（QoS1）收到 QuotaExceeded，而不是把磁盘写满。
+	if limit := c.options.MaxPendingMessages; limit > 0 && c.queue.Count() >= int64(limit) {
+		c.logger.Warn("Message rejected, pending queue quota exceeded",
+			zap.String("topic", msg.Packet.Topic),
+			zap.Int("pending", int(c.queue.Count())),
+			zap.Int("limit", limit))
+		c.stats.MessagesRejected.Add(1)
+		return false
+	}
+	if limit := c.options.MaxStoreBytes; limit > 0 && c.storeBytes() >= limit {
+		c.logger.Warn("Message rejected, store quota exceeded",
+			zap.String("topic", msg.Packet.Topic),
+			zap.Int64("storeBytes", c.storeBytes()),
+			zap.Int64("limit", limit))
+		c.stats.MessagesRejected.Add(1)
+		return false
+	}
+
 	// 进入队列前重新分配 PacketID，以确保顺序和唯一性
 	msg.PacketID = nson.NewId()
 	c.handleRetainedMessage(&msg)
@@ -219,6 +238,11 @@ func (c *Core) deliver(msg *Message) {
 		copiedMsg := msg.Copy() // 复制消息
 		// 确定发送 QoS (取订阅 QoS 和消息 QoS 的较小值)
 		copiedMsg.QoS = min(co.opts.QoS, msg.QoS)
+		// RetainAsPublished=false（默认）时实时转发不携带 Retain 标志；
+		// 因订阅而重放的保留消息由 sendRetainedMessages 统一置为 true。
+		if !co.opts.RetainAsPublished {
+			copiedMsg.Retain = false
+		}
 
 		// 直接调用 Deliver，持久化逻辑在其中统一处理
 		// 注意：不要在这里检查 IsClosed()，因为：
@@ -294,6 +318,11 @@ func (c *Client) deliver(msg *Message) error {
 		return nil
 	}
 
+	// 客户端队列配额：防止单个慢消费者无限占用磁盘
+	if !c.enforceQueueQuota() {
+		return ErrClientQueueFull
+	}
+
 	// QoS 0 和 QoS 1 都需要放入发送队列
 	if err := c.queue.Enqueue(msg); err != nil {
 		// 遇到错误，记录日志并丢弃消息
@@ -345,6 +374,44 @@ func (c *Client) deliver(msg *Message) error {
 	conn.triggerSend()
 
 	return nil
+}
+
+// enforceQueueQuota 在入队前应用客户端待发送队列配额。
+// 返回 false 表示应丢弃这条新消息（drop-newest 策略）。
+func (c *Client) enforceQueueQuota() bool {
+	limit := c.core.options.MaxClientQueueSize
+	if limit <= 0 {
+		return true
+	}
+
+	if c.queue.Count() < int64(limit) {
+		return true
+	}
+
+	if c.core.options.ClientQueueOverflowPolicy != QueueOverflowDropOldest {
+		c.core.stats.MessagesDropped.Add(1)
+		c.core.logger.Debug("Message dropped, client queue quota exceeded",
+			zap.String("clientID", c.ID),
+			zap.Int("limit", limit),
+			zap.String("policy", c.core.options.ClientQueueOverflowPolicy.String()))
+		return false
+	}
+
+	dropped := 0
+	for c.queue.Count() >= int64(limit) {
+		if _, err := c.queue.Dequeue(); err != nil {
+			break
+		}
+		dropped++
+	}
+	if dropped > 0 {
+		c.core.stats.MessagesDropped.Add(int64(dropped))
+		c.core.logger.Debug("Client queue quota exceeded, dropped oldest messages",
+			zap.String("clientID", c.ID),
+			zap.Int("dropped", dropped),
+			zap.Int("limit", limit))
+	}
+	return true
 }
 
 // triggerSend 触发发送协程（非阻塞）
@@ -422,8 +489,10 @@ func (c *conn) processSendQueue() {
 
 			// 后续重试应明确标记为重复投递，但在 sendMessage 返回前仍保持 sendQueue 去重，
 			// 以免同一条消息在写入进行中被重复入队。
-			msg.Dup = true
-			if err := c.client.queue.Enqueue(msg); err != nil {
+			// 复制后再置 Dup，避免与仍持有该消息的其它 goroutine 形成数据竞争。
+			dupMsg := msg.Copy()
+			dupMsg.Dup = true
+			if err := c.client.queue.Enqueue(&dupMsg); err != nil {
 				c.client.core.logger.Warn("Failed to persist Dup flag after send failure",
 					zap.String("clientID", c.client.ID),
 					zap.String("topic", msg.Packet.Topic),

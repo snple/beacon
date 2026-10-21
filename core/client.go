@@ -31,6 +31,9 @@ type Client struct {
 	// 会话层（跨连接持久化的状态）
 	session *session
 
+	// 发布速率限制（每客户端，跨连接保留）
+	publishLimiter *tokenBucket
+
 	// 连接层（当前 TCP 连接）
 	conn   *conn
 	connMu sync.RWMutex
@@ -51,6 +54,11 @@ func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Cli
 		ID:      clientID,
 		session: session,
 		core:    core,
+	}
+
+	// 每客户端发布速率限制（令牌桶）；0 表示不限制
+	if rate := core.options.MaxPublishRate; rate > 0 {
+		c.publishLimiter = newTokenBucket(rate, core.options.MaxPublishBurst)
 	}
 
 	// 初始化消息队列

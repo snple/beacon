@@ -20,7 +20,7 @@ func (c *Core) HandleConn(conn net.Conn) error {
 	}
 
 	// 检查连接速率限制
-	if c.connRateLimiter != nil && !c.connRateLimiter.Allow() {
+	if c.connLimiter != nil && !c.connLimiter.Allow() {
 		c.logger.Warn("Connection rate exceeded, rejecting connection",
 			zap.String("remote", conn.RemoteAddr().String()))
 		c.sendConnack(conn, false, packet.ReasonConnectionRateExceeded, nil)

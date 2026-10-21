@@ -46,7 +46,8 @@ func TestRetransmitUnackedMessages_ResendsOverdue(t *testing.T) {
 
 	sent := client.retransmitUnackedMessages()
 	require.Equal(t, 1, sent)
-	require.True(t, msg.Dup, "overdue message must be marked Dup for retransmit")
+	// 共享的原始消息不能被就地修改（发送协程可能同时在读），Dup 只设置在重传副本上。
+	require.False(t, msg.Dup, "original message must not be mutated during retransmit")
 
 	// 消息应被重新放入发送队列
 	got, ok := conn.sendQueue.tryDequeue()

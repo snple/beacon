@@ -45,7 +45,14 @@ func (c *Client) publishWill() {
 		pub.Properties.ExpiryTime = expiry.Unix()
 	}
 
-	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
+	// QoS/Retain 必须带到 Message 层：投递链路取的是 Message.QoS / Message.Retain，
+	// 只设置 Packet 上的标志会被丢弃。
+	msg := Message{
+		Packet:    pub,
+		QoS:       pub.QoS,
+		Retain:    pub.Retain,
+		Timestamp: time.Now().Unix(),
+	}
 
 	c.core.logger.Info("Publishing will message",
 		zap.String("clientID", c.ID),

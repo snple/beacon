@@ -114,12 +114,9 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 		logger:         c.logger,
 	}
 
-	// 清空持久化队列（clean session）
-	if conn.sessionTimeout == 0 {
-		if err := c.queue.Clear(); err != nil {
-			c.logger.Warn("Failed to clear queue for clean session", zap.Error(err))
-		}
-	}
+	// 注意：这里不清空持久化队列。队列是客户端自己的出站 spool
+	// （离线期间 Publish 的消息也在这里等待补发），其生命周期不应由
+	// 服务端会话超时（sessionTimeout）决定，否则离线发布会被静默丢弃。
 
 	return conn
 }
@@ -244,9 +241,10 @@ func (c *Conn) handlePublish(p *packet.PublishPacket) error {
 	}) {
 		c.logger.Debug("Message rejected by hook", zap.String("topic", p.Topic))
 
-		// 这里钩子拒绝消息，但仍需回应 PUBACK（如果 QoS 1）
+		// 钩子拒绝：明确回 PUBACK(NotAuthorized)，让服务端记录并计数，
+		// 而不是伪装成已成功处理。
 		if p.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonSuccess)
+			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonNotAuthorized)
 			if err := c.writePacket(puback); err != nil {
 				c.logger.Warn("Failed to send PUBACK", zap.Error(err))
 				return err
@@ -279,17 +277,13 @@ func (c *Conn) handlePublish(p *packet.PublishPacket) error {
 	case c.client.messageQueue <- msg:
 		c.logger.Debug("Enqueued message for polling", zap.String("topic", p.Topic))
 	default:
-		// 队列满：QoS 1 返回配额超限，告知服务端丢弃并清理 pendingAck；QoS 0 直接丢弃
+		// 队列满：不发送任何 PUBACK。
+		// QoS1 消息保持未确认状态，由服务端按重传间隔再次投递，
+		// 形成端到端背压；若在此回 PUBACK(QuotaExceeded)，服务端会直接删除消息，
+		// 与 QoS1 "消息被处理" 的语义冲突。
 		if p.QoS == packet.QoS1 {
-			c.logger.Warn("Message queue full, ACKing QoS1 message with quota exceeded",
+			c.logger.Warn("Message queue full, leaving QoS1 message unacknowledged for redelivery",
 				zap.String("topic", p.Topic))
-
-			puback := packet.NewPubackPacket(p.PacketID, packet.ReasonQuotaExceeded)
-			if err := c.writePacket(puback); err != nil {
-				c.logger.Warn("Failed to send quota-exceeded PUBACK", zap.Error(err))
-				return err
-			}
-
 			return nil
 		}
 		c.logger.Warn("Message queue full, QoS0 message dropped", zap.String("topic", p.Topic))

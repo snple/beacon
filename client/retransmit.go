@@ -110,10 +110,11 @@ func (c *Client) retransmitUnackedMessages() int {
 
 	sent := 0
 	for _, msg := range toResend {
-		// 重传消息明确标记为 Dup
-		msg.Dup = true
+		// 复制后再置 Dup，避免与发送协程读取同一 Message 形成数据竞争。
+		dupMsg := *msg
+		dupMsg.Dup = true
 
-		if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+		if err := conn.sendQueue.tryEnqueue(&dupMsg); err != nil {
 			if errors.Is(err, ErrMessageAlreadyInQueue) {
 				// 消息已在队列中，跳过
 				continue

@@ -45,6 +45,9 @@ type ClientOptions struct {
 	// 轮询配置
 	MessageQueueSize int // 消息队列缓冲大小（默认 100）
 
+	// 出站队列配额
+	MaxQueueSize int // 本地出站（待发送）队列上限（条），0 表示不限制（默认 10000）
+
 	// 消息确认
 	AutoAck bool // 自动确认收到的 QoS1 消息（默认 true）；false 时需应用显式调用 Message.Ack()
 
@@ -67,6 +70,7 @@ func NewClientOptions() *ClientOptions {
 		ReceiveWindow:      defaultReceiveWindow,
 		RetransmitInterval: defaultRetransmitInterval,
 		MessageQueueSize:   100,
+		MaxQueueSize:       10000,
 		AutoAck:            true, // 默认自动确认 QoS1 消息
 		StoreOptions:       DefaultStoreOptions(),
 	}
@@ -235,6 +239,13 @@ func (o *ClientOptions) WithRetransmitInterval(d time.Duration) *ClientOptions {
 // WithMessageQueueSize 设置消息队列缓冲大小
 func (o *ClientOptions) WithMessageQueueSize(size int) *ClientOptions {
 	o.MessageQueueSize = size
+	return o
+}
+
+// WithMaxQueueSize 设置本地出站（待发送）队列上限（条）。
+// 队列满时 Publish 返回 ErrQueueFull；0 表示不限制。
+func (o *ClientOptions) WithMaxQueueSize(size int) *ClientOptions {
+	o.MaxQueueSize = size
 	return o
 }
 
