@@ -177,10 +177,22 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 func (c *Client) handlePuback(p *packet.PubackPacket) error {
 	c.session.pendingAckMu.Lock()
 	pending, ok := c.session.pendingAck[p.PacketID]
+	var delErr error
 	if ok {
+		// 在同一个临界区内完成"删除持久化条目 + 移除 pendingAck"：
+		// 补货逻辑会在同一把锁内检查 pendingAck 并入队，二者互斥，
+		// 避免 ACK 与补货交错时把同一条消息重复装载。
+		delErr = c.queue.Delete(p.PacketID)
 		delete(c.session.pendingAck, p.PacketID)
 	}
 	c.session.pendingAckMu.Unlock()
+
+	if delErr != nil {
+		c.core.logger.Debug("Failed to delete acknowledged message from queue",
+			zap.String("clientID", c.ID),
+			zap.String("packetID", p.PacketID.Hex()),
+			zap.Error(delErr))
+	}
 
 	if ok {
 		topic := ""
@@ -204,13 +216,8 @@ func (c *Client) handlePuback(p *packet.PubackPacket) error {
 				zap.Uint8("reasonCode", uint8(p.ReasonCode)))
 		}
 
-		// 收到 PUBACK 即表示消息已送达，从发送队列中删除
-		if err := c.queue.Delete(p.PacketID); err != nil {
-			c.core.logger.Debug("Failed to delete acknowledged message from queue",
-				zap.String("clientID", c.ID),
-				zap.String("packetID", p.PacketID.Hex()),
-				zap.Error(err))
-		}
+		// ACK 释放了处理窗口：立即补货，避免积压消息等待 RetransmitInterval 才被装载
+		c.kickRefill()
 	}
 	return nil
 }

@@ -2661,3 +2661,123 @@ func TestClientQueueQuota_OfflineSubscriberKeepsNewest(t *testing.T) {
 		t.Fatalf("expected [0 1] after quota, got %v", got)
 	}
 }
+
+// collectTestMessages 在超时时间内收集 n 条消息的 payload。
+func collectTestMessages(t *testing.T, c *client.Client, n int, timeout time.Duration) []string {
+	t.Helper()
+
+	var got []string
+	deadline := time.Now().Add(timeout)
+	for len(got) < n && time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		msg, err := c.PollMessage(ctx, 2*time.Second)
+		cancel()
+		if err != nil {
+			break
+		}
+		got = append(got, string(msg.Packet.Payload))
+	}
+	return got
+}
+
+// TestQoS1Backlog_RefillsWithoutRetransmitTick 验证服务端积压消息在 ACK 驱动下立即补货：
+// 即使 RetransmitInterval 长达 1 小时，离线期间积压的消息也会在重连后全部送达。
+func TestQoS1Backlog_RefillsWithoutRetransmitTick(t *testing.T) {
+	core := testSetupCore(t, NewCoreOptions().WithRetransmitInterval(time.Hour))
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	subscriber := testSetupClient(t, addr, "backlog-sub",
+		client.NewClientOptions().WithSessionTimeout(60).WithReceiveWindow(2))
+	defer subscriber.Close()
+
+	if err := subscriber.SubscribeWithOptions([]string{"backlog/topic"}, client.NewSubscribeOptions().WithQoS(packet.QoS1)); err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	if err := subscriber.Disconnect(); err != nil {
+		t.Fatalf("Failed to disconnect subscriber: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	publisher := testSetupClient(t, addr, "backlog-pub", nil)
+	defer publisher.Close()
+
+	const n = 10
+	want := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		payload := string(rune('a' + i))
+		want = append(want, payload)
+		if err := publisher.Publish("backlog/topic", []byte(payload),
+			client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(2*time.Second)); err != nil {
+			t.Fatalf("publish %d failed: %v", i, err)
+		}
+	}
+
+	if err := subscriber.ConnectWithDialer(&client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}); err != nil {
+		t.Fatalf("Failed to reconnect subscriber: %v", err)
+	}
+
+	got := collectTestMessages(t, subscriber, n, 10*time.Second)
+	if len(got) != n {
+		t.Fatalf("expected %d messages driven by ACK refill, got %d (%v)", n, len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("message order mismatch at %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestClientBacklog_RefillsWithoutRetransmitTick 验证客户端出站积压消息在 PUBACK 驱动下立即补货：
+// 即使客户端 RetransmitInterval 长达 1 小时，重连后积压消息也会全部发出。
+func TestClientBacklog_RefillsWithoutRetransmitTick(t *testing.T) {
+	core := testSetupCore(t, NewCoreOptions().WithReceiveWindow(2))
+	defer core.Stop()
+
+	addr := testServe(t, core)
+
+	subscriber := testSetupClient(t, addr, "client-backlog-sub", nil)
+	defer subscriber.Close()
+
+	if err := subscriber.SubscribeWithOptions([]string{"client/backlog"}, client.NewSubscribeOptions().WithQoS(packet.QoS1)); err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	publisher := testSetupClient(t, addr, "client-backlog-pub",
+		client.NewClientOptions().WithRetransmitInterval(time.Hour))
+	defer publisher.Close()
+
+	if err := publisher.Disconnect(); err != nil {
+		t.Fatalf("Failed to disconnect publisher: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	const n = 10
+	want := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		payload := string(rune('a' + i))
+		want = append(want, payload)
+		if err := publisher.Publish("client/backlog", []byte(payload),
+			client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(2*time.Second)); err != nil {
+			t.Fatalf("publish %d failed: %v", i, err)
+		}
+	}
+
+	if err := publisher.ConnectWithDialer(&client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}); err != nil {
+		t.Fatalf("Failed to reconnect publisher: %v", err)
+	}
+
+	got := collectTestMessages(t, subscriber, n, 10*time.Second)
+	if len(got) != n {
+		t.Fatalf("expected %d messages driven by PUBACK refill, got %d (%v)", n, len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("message order mismatch at %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}

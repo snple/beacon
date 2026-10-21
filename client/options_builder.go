@@ -113,6 +113,12 @@ func (o *ClientOptions) WithSessionTimeout(seconds uint32) *ClientOptions {
 	return o
 }
 
+// WithReceiveWindow 设置客户端的接收窗口（服务端向该客户端发送的未确认消息窗口）
+func (o *ClientOptions) WithReceiveWindow(size uint16) *ClientOptions {
+	o.ReceiveWindow = size
+	return o
+}
+
 // WithConnectTimeout 设置连接超时
 func (o *ClientOptions) WithConnectTimeout(d time.Duration) *ClientOptions {
 	o.ConnectTimeout = d

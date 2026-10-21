@@ -43,8 +43,9 @@ type Conn struct {
 	sendWindow     uint16 // 发送窗口大小
 
 	// 发送队列（连接级别，允许离线缓存）
-	sendQueue  *sendQueue
-	processing atomic.Bool
+	sendQueue   *sendQueue
+	processing  atomic.Bool
+	pendingSend atomic.Bool // true: 处理期间又有新工作，发送协程退出前需再处理一轮
 
 	// 等待确认的包（连接级别，断开后失效）
 	pendingAck   map[nson.Id]pendingMessage
@@ -309,14 +310,36 @@ func (c *Conn) handlePuback(p *packet.PubackPacket) {
 		err = NewPublishWarningError(p.ReasonCode.String())
 	}
 
+	pending, ok := c.completePublishAck(p.PacketID)
+
+	// ACK 释放了处理窗口：立即补货，避免积压消息等待 RetransmitInterval 才被装载
+	c.client.kickRefill()
+
+	if ok && pending.ch != nil {
+		pending.ch <- err
+		close(pending.ch)
+	}
+}
+
+// completePublishAck 在同一个临界区内删除持久化条目并移除 pendingAck。
+// 补货逻辑（retransmitQueuedMessages）在同一把锁内检查 pendingAck 并入队，
+// 二者互斥，避免 ACK 与补货交错时把同一条消息重复装载。
+func (c *Conn) completePublishAck(packetID nson.Id) (pendingMessage, bool) {
+	c.pendingAckMu.Lock()
+	defer c.pendingAckMu.Unlock()
+
 	// 从持久化队列删除（无论成功失败）
-	if delErr := c.client.queue.Delete(p.PacketID); delErr != nil {
+	if delErr := c.client.queue.Delete(packetID); delErr != nil {
 		c.logger.Warn("Failed to delete message from queue after ACK",
-			zap.String("packetID", p.PacketID.Hex()),
+			zap.String("packetID", packetID.Hex()),
 			zap.Error(delErr))
 	}
 
-	c.handleAck(p.PacketID, err)
+	pending, ok := c.pendingAck[packetID]
+	if ok {
+		delete(c.pendingAck, packetID)
+	}
+	return pending, ok
 }
 
 // handleSuback 处理 SUBACK

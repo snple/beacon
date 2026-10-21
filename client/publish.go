@@ -215,8 +215,9 @@ func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, waitCh chan err
 	}
 }
 
-// triggerSend 触发发送协程（非阻塞）
-// 使用 processing 标志避免重复启动。
+// triggerSend 触发发送协程（非阻塞）。
+// 使用 processing 标志避免重复启动；若已有发送协程在运行，则打上 pendingSend 标记，
+// 让它在退出前再处理一轮，避免丢失唤醒。
 // processSendQueue 被纳入 conn.wg 跟踪，确保关闭/重连前其已退出（H3）。
 func (c *Conn) triggerSend() {
 	// 已关闭的连接不再启动新的发送协程，避免与 close 的 wg.Wait 竞态
@@ -228,39 +229,42 @@ func (c *Conn) triggerSend() {
 		c.wg.Go(func() {
 			c.processSendQueue()
 		})
+		return
 	}
+
+	c.pendingSend.Store(true)
 }
 
-// processSendQueue 处理发送队列中的消息
+// processSendQueue 处理发送队列中的消息。
+// 内存发送队列排空后会立即尝试从持久化队列补货（由 PUBACK/发送完成驱动），
+// 不再依赖 RetransmitInterval 定时器。
 func (c *Conn) processSendQueue() {
-	defer c.processing.Store(false)
+	// 正常情况下由 triggerSend 置位；直接调用（测试）时也保证内部 triggerSend 只打标记，
+	// 不会启动第二个发送协程。
+	c.processing.Store(true)
 
-	for !c.closed.Load() {
-		// 尝试从队列取消息
-		msg, ok := c.sendQueue.tryDequeue()
-		if !ok {
-			// 队列为空，退出
-			return
-		}
+	for {
+		c.pendingSend.Store(false)
+		aborted := false
 
-		// 检查消息是否过期
-		if msg.IsExpired() {
-			c.logger.Debug("Message expired, dropping",
-				zap.String("topic", msg.Packet.Topic),
-				zap.String("packetID", msg.Packet.PacketID.Hex()))
-
-			// 从持久化队列删除
-			if c.client.queue != nil {
-				c.client.queue.Delete(msg.Packet.PacketID)
+		for !c.closed.Load() {
+			// 尝试从队列取消息
+			msg, ok := c.sendQueue.tryDequeue()
+			if !ok {
+				// 内存发送队列已空：立即从持久化队列补货
+				if c.client.refillNow() {
+					continue
+				}
+				break
 			}
-			c.sendQueue.finish(msg.Packet.PacketID)
-			continue
-		}
 
-		// 发送消息
-		if err := c.sendMessage(msg); err != nil {
-			if errors.Is(err, ErrMessageTooLarge) {
-				// 消息过大，直接丢弃不重试
+			// 检查消息是否过期
+			if msg.IsExpired() {
+				c.logger.Debug("Message expired, dropping",
+					zap.String("topic", msg.Packet.Topic),
+					zap.String("packetID", msg.Packet.PacketID.Hex()))
+
+				// 从持久化队列删除
 				if c.client.queue != nil {
 					c.client.queue.Delete(msg.Packet.PacketID)
 				}
@@ -268,24 +272,41 @@ func (c *Conn) processSendQueue() {
 				continue
 			}
 
-			c.logger.Warn("Failed to send message from queue",
-				zap.Error(err),
-				zap.String("topic", msg.Packet.Topic),
-				zap.String("packetID", msg.Packet.PacketID.Hex()))
-
-			dupMsg := *msg
-			dupMsg.Dup = true
-			if c.client.queue != nil {
-				if err := c.client.queue.Enqueue(&dupMsg); err != nil {
-					c.logger.Warn("Failed to persist Dup flag after send failure",
-						zap.String("topic", msg.Packet.Topic),
-						zap.String("packetID", msg.Packet.PacketID.Hex()),
-						zap.Error(err))
+			// 发送消息
+			if err := c.sendMessage(msg); err != nil {
+				if errors.Is(err, ErrMessageTooLarge) {
+					// 消息过大，直接丢弃不重试
+					if c.client.queue != nil {
+						c.client.queue.Delete(msg.Packet.PacketID)
+					}
+					c.sendQueue.finish(msg.Packet.PacketID)
+					continue
 				}
+
+				c.logger.Warn("Failed to send message from queue",
+					zap.Error(err),
+					zap.String("topic", msg.Packet.Topic),
+					zap.String("packetID", msg.Packet.PacketID.Hex()))
+
+				dupMsg := *msg
+				dupMsg.Dup = true
+				if c.client.queue != nil {
+					if err := c.client.queue.Enqueue(&dupMsg); err != nil {
+						c.logger.Warn("Failed to persist Dup flag after send failure",
+							zap.String("topic", msg.Packet.Topic),
+							zap.String("packetID", msg.Packet.PacketID.Hex()),
+							zap.Error(err))
+					}
+				}
+
+				c.sendQueue.finish(msg.Packet.PacketID)
+
+				// 写入失败通常意味着连接不可用：退出本轮，由重传 tick 或新的触发再试，
+				// 避免在同一条失败消息上原地忙等。
+				aborted = true
+				break
 			}
 
-			c.sendQueue.finish(msg.Packet.PacketID)
-		} else {
 			// 发送成功
 			// QoS0: 从持久化队列删除（TCP 写成功即可）
 			if msg.Packet.QoS == packet.QoS0 && c.client.queue != nil {
@@ -293,6 +314,15 @@ func (c *Conn) processSendQueue() {
 			}
 			// QoS1: 等待 PUBACK，在 handlePuback 中删除
 			c.sendQueue.finish(msg.Packet.PacketID)
+		}
+
+		// 释放处理权；若期间有新工作则重新接手
+		c.processing.Store(false)
+		if aborted || c.closed.Load() || !c.pendingSend.Swap(false) {
+			return
+		}
+		if !c.processing.CompareAndSwap(false, true) {
+			return
 		}
 	}
 }

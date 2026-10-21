@@ -39,7 +39,8 @@ type conn struct {
 	sendQueue     *sendQueue // 发送队列（基于客户端的 ReceiveWindow）
 
 	// 消息发送控制
-	processing atomic.Bool // true: 正在处理发送队列
+	processing  atomic.Bool // true: 正在处理发送队列
+	pendingSend atomic.Bool // true: 处理期间又有新工作，发送协程退出前需再处理一轮
 
 	// 发送协程跟踪：processSendQueue 纳入 wg，确保关闭存储前其已退出
 	wg sync.WaitGroup

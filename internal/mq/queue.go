@@ -171,6 +171,32 @@ func (q *Queue[T]) DeleteHead() error {
 	})
 }
 
+// PeekID 返回队列头部消息的 PacketID（不读取消息内容）。
+// 用于低成本的"队头能否补货"判断，避免为每次 ACK 解码整条消息。
+func (q *Queue[T]) PeekID() (nson.Id, bool, error) {
+	var id nson.Id
+	found := false
+
+	err := q.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		opts.Prefix = q.prefix
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		it.Seek(q.prefix)
+		if !it.ValidForPrefix(q.prefix) {
+			return nil
+		}
+
+		id = q.extractId(it.Item().KeyCopy(nil))
+		found = true
+		return nil
+	})
+
+	return id, found && err == nil, err
+}
+
 // Peek 查看队列头部消息但不删除
 func (q *Queue[T]) Peek() (T, error) {
 	var zero T

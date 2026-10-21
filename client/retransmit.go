@@ -114,7 +114,16 @@ func (c *Client) retransmitUnackedMessages() int {
 		dupMsg := *msg
 		dupMsg.Dup = true
 
-		if err := conn.sendQueue.tryEnqueue(&dupMsg); err != nil {
+		// 收集到入队之间可能已被 ACK：在同一把锁内复查 pendingAck 并入队，避免重复投递。
+		conn.pendingAckMu.Lock()
+		if _, still := conn.pendingAck[dupMsg.Packet.PacketID]; !still {
+			conn.pendingAckMu.Unlock()
+			continue
+		}
+		err := conn.sendQueue.tryEnqueue(&dupMsg)
+		conn.pendingAckMu.Unlock()
+
+		if err != nil {
 			if errors.Is(err, ErrMessageAlreadyInQueue) {
 				// 消息已在队列中，跳过
 				continue
@@ -166,9 +175,15 @@ func (c *Client) retransmitQueuedMessages() int {
 	sentInPass := make(map[nson.Id]struct{})
 
 	for range loadCount {
+		// "读取队头 + 检查 pendingAck + 入队" 必须在同一个临界区内完成：
+		// handlePuback 也在同一把锁内完成"删除持久化条目 + 移除 pendingAck"，
+		// 否则 ACK 与补货交错时会重复装载同一条消息。
+		conn.pendingAckMu.Lock()
+
 		// Peek 获取队列头部消息（不删除）
 		msg, err := c.queue.Peek()
 		if err != nil {
+			conn.pendingAckMu.Unlock()
 			if errors.Is(err, ErrCorruptedMessage) {
 				// 头部消息损坏：删除后继续处理下一条，避免阻塞重传
 				c.logger.Error("dropped corrupted queued message", zap.Error(err))
@@ -184,11 +199,13 @@ func (c *Client) retransmitQueuedMessages() int {
 
 		// 本 pass 已发送过该消息（FIFO 队头），停止处理
 		if _, done := sentInPass[msg.Packet.PacketID]; done {
+			conn.pendingAckMu.Unlock()
 			break
 		}
 
 		// 检查消息是否过期
 		if msg.IsExpired() {
+			conn.pendingAckMu.Unlock()
 			// 删除过期消息并继续
 			if err := c.queue.Delete(msg.Packet.PacketID); err != nil {
 				c.logger.Warn("Failed to delete expired queued message",
@@ -201,15 +218,15 @@ func (c *Client) retransmitQueuedMessages() int {
 
 		// 队列是 FIFO 的。如果头部消息已经发出且还在等待 PUBACK，
 		// 当前连接不能跳过它去重发后面的消息，否则会打乱顺序并重复发送头部消息。
-		conn.pendingAckMu.Lock()
-		_, exists := conn.pendingAck[msg.Packet.PacketID]
-		conn.pendingAckMu.Unlock()
-		if exists {
+		if _, exists := conn.pendingAck[msg.Packet.PacketID]; exists {
+			conn.pendingAckMu.Unlock()
 			break
 		}
 
-		// 尝试放入发送队列
-		if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+		// 尝试放入发送队列（持有锁，避免与 ACK 处理交错）
+		err = conn.sendQueue.tryEnqueue(msg)
+		conn.pendingAckMu.Unlock()
+		if err != nil {
 			if errors.Is(err, ErrMessageAlreadyInQueue) {
 				// 消息已在队列中，跳过
 				continue
@@ -237,4 +254,43 @@ func (c *Client) TriggerRetransmit() {
 			c.processRetransmit()
 		}()
 	}
+}
+
+// refillNow 同步把持久化队列中的消息补进发送队列，返回是否装载了消息。
+// 与 TriggerRetransmit 共用 retransmitting 标志，避免并发装载。
+func (c *Client) refillNow() bool {
+	if c.queue == nil {
+		return false
+	}
+	if !c.retransmitting.CompareAndSwap(false, true) {
+		return false
+	}
+	defer c.retransmitting.Store(false)
+
+	return c.retransmitQueuedMessages() > 0
+}
+
+// kickRefill PUBACK 释放窗口后立即唤醒发送协程补货（重传 tick 仅作为兜底）。
+func (c *Client) kickRefill() {
+	conn := c.getConn()
+	if conn == nil || conn.IsClosed() {
+		return
+	}
+	if conn.sendQueue.available() == 0 {
+		return
+	}
+
+	id, ok, err := c.queue.PeekID()
+	if err != nil || !ok {
+		return
+	}
+
+	conn.pendingAckMu.Lock()
+	_, pending := conn.pendingAck[id]
+	conn.pendingAckMu.Unlock()
+	if pending {
+		return
+	}
+
+	conn.triggerSend()
 }
