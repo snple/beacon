@@ -138,6 +138,7 @@ func (c *Client) handshake(conn net.Conn) (*packet.ConnackPacket, error) {
 	connect.ClientID = c.options.ClientID
 	connect.KeepAlive = c.options.KeepAlive
 	connect.SessionTimeout = c.options.SessionTimeout
+	connect.CleanStart = c.options.CleanStart
 
 	connect.Properties.AuthMethod = c.options.AuthMethod
 	connect.Properties.AuthData = c.options.AuthData

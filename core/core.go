@@ -157,8 +157,9 @@ func (c *Core) Start() error {
 
 	c.running.Store(true)
 
-	// 恢复持久化的消息
+	// 恢复持久化的消息与会话（订阅/过期时间），并清理孤儿队列
 	c.recoverMessages()
+	c.recoverSessions()
 
 	// 启动后台协程
 	c.startBackgroundWorkers()

@@ -185,80 +185,82 @@ func (c *Client) retransmitQueuedMessages() int {
 	sentInPass := make(map[nson.Id]struct{})
 
 	for range loadCount {
-		// "读取队头 + 检查 pendingAck + 入队" 必须在同一个临界区内完成：
-		// handlePuback 也在同一把锁内完成"删除持久化条目 + 移除 pendingAck"，
-		// 否则 ACK 与补货交错时会重复装载同一条消息。
-		c.session.pendingAckMu.Lock()
-
-		msg, err := c.queue.Peek()
-		if err != nil {
-			c.session.pendingAckMu.Unlock()
-			if errors.Is(err, ErrCorruptedMessage) {
-				// 头部消息损坏：删除后继续处理下一条，避免阻塞重传
-				c.core.logger.Error("dropped corrupted queued message",
-					zap.String("clientID", c.ID),
-					zap.Error(err))
-				if delErr := c.queue.DeleteHead(); delErr != nil {
-					c.core.logger.Warn("failed to delete corrupted queued message",
-						zap.String("clientID", c.ID),
-						zap.Error(delErr))
-					break
-				}
-				c.core.stats.MessagesDropped.Add(1)
-				continue
-			}
-			break // 队列已空
+		loaded, stop := c.loadOneQueuedMessage(conn, sentInPass)
+		if loaded {
+			// 成功入队，触发发送协程
+			conn.triggerSend()
+			sent++
 		}
-
-		// 本 pass 已发送过该消息（FIFO 队头，后续消息必然在其之后），停止处理
-		if _, done := sentInPass[msg.PacketID]; done {
-			c.session.pendingAckMu.Unlock()
+		if stop {
 			break
 		}
-
-		if msg.IsExpired() {
-			c.session.pendingAckMu.Unlock()
-			// 删除过期消息
-			if err := c.queue.Delete(msg.PacketID); err != nil {
-				c.core.logger.Warn("Failed to delete expired queued message",
-					zap.String("clientID", c.ID),
-					zap.String("packetID", msg.PacketID.Hex()),
-					zap.Error(err))
-			}
-
-			c.core.stats.MessagesDropped.Add(1)
-			continue
-		}
-
-		// 排除在 pendingAck 中的消息
-		// 队列是 FIFO 的，如果头部消息在 pendingAck 中（等待确认），
-		// 说明它已经被发送了，我们应该停止处理，而不是继续处理后面的消息
-		if _, exists := c.session.pendingAck[msg.PacketID]; exists {
-			c.session.pendingAckMu.Unlock()
-			break
-		}
-
-		// 尝试放入发送队列（持有锁，避免与 ACK 处理交错）
-		err = conn.sendQueue.tryEnqueue(msg)
-		c.session.pendingAckMu.Unlock()
-		if err != nil {
-			if errors.Is(err, ErrMessageAlreadyInQueue) {
-				// 消息已在队列中，跳过
-				continue
-			}
-
-			// 队列已满，停止加载
-			break
-		}
-
-		// 成功入队，触发发送协程
-		conn.triggerSend()
-
-		sentInPass[msg.PacketID] = struct{}{}
-		sent++
 	}
 
 	return sent
+}
+
+// loadOneQueuedMessage 尝试把持久化队列的队头消息装入发送队列。
+// 返回 (loaded, stop)：loaded 表示已装载，stop 表示应结束本次补货。
+//
+// 加锁顺序为 enqueueMu → pendingAckMu：
+//   - enqueueMu 与 deliver 的"持久化入队 + 发送队列入队"互斥，避免重复入队；
+//   - pendingAckMu 与 handlePuback 的"删除队列条目 + 移除 pendingAck"互斥，避免重复装载。
+func (c *Client) loadOneQueuedMessage(conn *conn, sentInPass map[nson.Id]struct{}) (loaded, stop bool) {
+	conn.enqueueMu.Lock()
+	defer conn.enqueueMu.Unlock()
+
+	c.session.pendingAckMu.Lock()
+	defer c.session.pendingAckMu.Unlock()
+
+	msg, err := c.queue.Peek()
+	if err != nil {
+		if errors.Is(err, ErrCorruptedMessage) {
+			// 头部消息损坏：删除后继续处理下一条，避免阻塞重传
+			c.core.logger.Error("dropped corrupted queued message",
+				zap.String("clientID", c.ID),
+				zap.Error(err))
+			if delErr := c.queue.DeleteHead(); delErr != nil {
+				c.core.logger.Warn("failed to delete corrupted queued message",
+					zap.String("clientID", c.ID),
+					zap.Error(delErr))
+				return false, true
+			}
+			c.core.stats.MessagesDropped.Add(1)
+			return false, false
+		}
+		return false, true // 队列已空
+	}
+
+	// 本 pass 已发送过该消息（FIFO 队头，后续消息必然在其之后），停止处理
+	if _, done := sentInPass[msg.PacketID]; done {
+		return false, true
+	}
+
+	if msg.IsExpired() {
+		if err := c.queue.Delete(msg.PacketID); err != nil {
+			c.core.logger.Warn("Failed to delete expired queued message",
+				zap.String("clientID", c.ID),
+				zap.String("packetID", msg.PacketID.Hex()),
+				zap.Error(err))
+		}
+		c.core.stats.MessagesDropped.Add(1)
+		return false, false
+	}
+
+	// 队列是 FIFO 的：头部消息仍在等待确认时，不能跳过它去装载后面的消息
+	if _, exists := c.session.pendingAck[msg.PacketID]; exists {
+		return false, true
+	}
+
+	if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+		if errors.Is(err, ErrMessageAlreadyInQueue) {
+			return false, false
+		}
+		return false, true // 队列已满，停止加载
+	}
+
+	sentInPass[msg.PacketID] = struct{}{}
+	return true, false
 }
 
 // refillNow 同步把持久化队列中的消息补进发送队列，返回是否装载了消息。

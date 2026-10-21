@@ -85,7 +85,7 @@ func (c *Core) handleConn(conn net.Conn) {
 
 	// 构建 CONNACK 属性
 	connackProp := packet.NewConnackProperties()
-	connackProp.SessionTimeout = client.session.timeout
+	connackProp.SessionTimeout = client.session.timeout.Load()
 	connackProp.ClientID = connect.ClientID
 	connackProp.KeepAlive = keepAlive
 	connackProp.MaxPacketSize = c.options.MaxPacketSize
@@ -110,7 +110,7 @@ func (c *Core) handleConn(conn net.Conn) {
 	c.logger.Info("Client connected",
 		zap.String("clientID", client.ID),
 		zap.Uint16("keepAlive", keepAlive),
-		zap.Uint32("sessionTimeout", client.session.timeout),
+		zap.Uint32("sessionTimeout", client.session.timeout.Load()),
 		zap.Bool("sessionPresent", sessionPresent))
 
 	// 调用 OnConnect 钩子
@@ -238,11 +238,28 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 
 	existingClient, exists := c.clients[clientID]
 
+	wasOnline := false
+	if exists {
+		wasOnline = !existingClient.Closed()
+	}
+
+	// CleanStart：客户端要求全新会话，先丢弃旧会话（订阅 + 待投递消息 + 持久化元数据）
+	if exists && connect.CleanStart {
+		if wasOnline {
+			existingClient.Close(packet.ReasonSessionTakenOver)
+		}
+		delete(c.clients, clientID)
+		c.cleanupClientWithoutLock(clientID, existingClient)
+		existingClient = nil
+		exists = false
+	}
+
 	// 情况1: 无旧客户端，创建新 Client
 	if !exists {
 		client := newClient(netConn, connect, c)
 		c.clients[clientID] = client
-		return client, false, false
+		c.saveSession(client, 0)
+		return client, false, wasOnline
 	}
 
 	// 从离线会话列表中移除
@@ -250,14 +267,14 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 	delete(c.offlineSessions, clientID)
 	c.offlineSessionsMu.Unlock()
 
-	// 检查旧客户端是否在线
-	wasOnline := !existingClient.Closed()
+	canResumeSession := existingClient.session.timeout.Load() > 0
 
-	canResumeSession := existingClient.session.timeout > 0
-
-	// 情况2: 新旧连接都要求保留会话，复用旧 Client，只替换 Conn
+	// 情况2: 复用旧 Client，只替换 Conn
 	if connect.SessionTimeout > 0 && canResumeSession {
 		oldConn := existingClient.getConn()
+
+		// 用本次 CONNECT 更新会话参数（超时、认证信息、遗嘱）
+		existingClient.applyConnect(connect)
 
 		// 复用 Client，附加新连接
 		existingClient.attachConn(netConn, connect)
@@ -267,6 +284,9 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 			oldConn.close(packet.ReasonSessionTakenOver)
 		}
 
+		// 会话在线：清除过期时间
+		c.saveSession(existingClient, 0)
+
 		c.logger.Info("Session restored (reusing client, replacing conn)",
 			zap.String("clientID", clientID),
 			zap.Bool("wasOnline", wasOnline))
@@ -274,7 +294,7 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 		return existingClient, true, wasOnline
 	}
 
-	// 情况3: SessionTimeout=0，清理旧 Client，创建新 Client
+	// 情况3: SessionTimeout=0 或旧会话不可恢复，清理旧 Client，创建新 Client
 
 	// 踢掉旧连接，因为我们会手动清理旧会话
 	if wasOnline {
@@ -288,6 +308,7 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 	// 创建新 Client
 	client := newClient(netConn, connect, c)
 	c.clients[clientID] = client
+	c.saveSession(client, 0)
 
 	return client, false, wasOnline
 }
@@ -347,7 +368,7 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	}
 
 	// 检查是否需要保留会话
-	if client.session.timeout == 0 {
+	if client.session.timeout.Load() == 0 {
 		// 立即清理
 		// 异常断开时发布遗嘱消息
 		if !isNormalDisconnect {
@@ -364,11 +385,14 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	}
 
 	// 保留会话，记录过期时间
-	expiryTime := time.Now().Add(time.Duration(client.session.timeout) * time.Second)
+	expiryTime := time.Now().Add(time.Duration(client.session.timeout.Load()) * time.Second)
 
 	c.offlineSessionsMu.Lock()
 	c.offlineSessions[client.ID] = expiryTime
 	c.offlineSessionsMu.Unlock()
+
+	// 持久化会话（订阅 + 过期时间），使进程重启后仍能恢复
+	c.saveSessionExpiring(client, expiryTime)
 
 	// 异常断开时发布遗嘱消息
 	if !isNormalDisconnect {
@@ -377,6 +401,6 @@ func (c *Core) handleClientDisconnect(client *Client) {
 
 	c.logger.Info("Client disconnected, session preserved",
 		zap.String("clientID", client.ID),
-		zap.Uint32("sessionTimeout", client.session.timeout),
+		zap.Uint32("sessionTimeout", client.session.timeout.Load()),
 		zap.String("expiresAt", expiryTime.Format(time.RFC3339)))
 }

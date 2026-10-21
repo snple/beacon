@@ -9,6 +9,9 @@ import (
 
 // extractWillMessage 提取遗嘱消息
 func (c *Client) extractWillMessage(connect *packet.ConnectPacket) {
+	// 遗嘱属于单次连接：没有遗嘱时也要清除上一条连接遗留的遗嘱
+	c.session.willPacket = nil
+
 	if !connect.Will {
 		return
 	}

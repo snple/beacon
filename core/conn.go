@@ -42,6 +42,10 @@ type conn struct {
 	processing  atomic.Bool // true: 正在处理发送队列
 	pendingSend atomic.Bool // true: 处理期间又有新工作，发送协程退出前需再处理一轮
 
+	// enqueueMu 串行化"投递入队（持久化 + 发送队列）"与"持久化补货"，
+	// 避免补货在两次入队之间把消息发走、投递路径又把同一消息入队 → 重复发送。
+	enqueueMu sync.Mutex
+
 	// 发送协程跟踪：processSendQueue 纳入 wg，确保关闭存储前其已退出
 	wg sync.WaitGroup
 

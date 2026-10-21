@@ -323,8 +323,19 @@ func (c *Client) deliver(msg *Message) error {
 		return ErrClientQueueFull
 	}
 
+	conn := c.getConn()
+	online := conn != nil && !conn.closed.Load()
+
+	// "持久化入队 + 发送队列入队" 与补货互斥，避免补货在两步之间发走消息导致重复发送。
+	if online {
+		conn.enqueueMu.Lock()
+	}
+
 	// QoS 0 和 QoS 1 都需要放入发送队列
 	if err := c.queue.Enqueue(msg); err != nil {
+		if online {
+			conn.enqueueMu.Unlock()
+		}
 		// 遇到错误，记录日志并丢弃消息
 		c.core.logger.Debug("Message dropped, client dispatch queue enqueue failed",
 			zap.String("clientID", c.ID),
@@ -334,10 +345,8 @@ func (c *Client) deliver(msg *Message) error {
 		return err
 	}
 
-	// 尝试放入发送队列
-	conn := c.getConn()
-	if conn == nil || conn.closed.Load() {
-		// 客户端离线，但是已经放入了队列，等待重传机制处理
+	// 客户端离线，但是已经放入了队列，等待重传机制处理
+	if !online {
 		c.core.logger.Debug("Client offline, message queued for retransmit",
 			zap.String("clientID", c.ID),
 			zap.String("topic", msg.Packet.Topic),
@@ -346,7 +355,10 @@ func (c *Client) deliver(msg *Message) error {
 		return nil
 	}
 
-	if err := conn.sendQueue.tryEnqueue(msg); err != nil {
+	err := conn.sendQueue.tryEnqueue(msg)
+	conn.enqueueMu.Unlock()
+
+	if err != nil {
 		// 失败：
 		// !!! 由于上面重新分配了 PacketID，这里不可能出现消息已在队列中的情况 !!!
 
@@ -466,8 +478,12 @@ func (c *conn) processSendQueue() {
 					zap.String("packetID", msg.PacketID.Hex()))
 
 				// 从持久化队列删除
-				c.client.queue.Delete(msg.PacketID)
-				c.sendQueue.finish(msg.PacketID)
+				if delErr := c.discardQueuedMessage(msg); delErr != nil {
+					c.client.core.logger.Debug("Failed to delete expired message from queue",
+						zap.String("clientID", c.client.ID),
+						zap.String("packetID", msg.PacketID.Hex()),
+						zap.Error(delErr))
+				}
 
 				// 统计消息丢弃数
 				c.client.core.stats.MessagesDropped.Add(1)
@@ -483,38 +499,36 @@ func (c *conn) processSendQueue() {
 
 				if errors.Is(err, ErrMessageTooLarge) {
 					// 消息过大，直接丢弃不重试
-					c.client.queue.Delete(msg.PacketID)
-					c.sendQueue.finish(msg.PacketID)
+					if delErr := c.discardQueuedMessage(msg); delErr != nil {
+						c.client.core.logger.Debug("Failed to delete oversized message from queue",
+							zap.String("clientID", c.client.ID),
+							zap.String("packetID", msg.PacketID.Hex()),
+							zap.Error(delErr))
+					}
 					c.client.core.stats.MessagesDropped.Add(1)
 					continue
 				}
 
 				if errors.Is(err, ErrDeliveryRejected) {
-					if delErr := c.client.queue.Delete(msg.PacketID); delErr != nil {
+					if delErr := c.discardQueuedMessage(msg); delErr != nil {
 						c.client.core.logger.Debug("Failed to delete delivery-rejected message from queue",
 							zap.String("clientID", c.client.ID),
 							zap.String("packetID", msg.PacketID.Hex()),
 							zap.Error(delErr))
 					}
-					c.sendQueue.finish(msg.PacketID)
 					c.client.core.stats.MessagesDropped.Add(1)
 					continue
 				}
 
 				// 后续重试应明确标记为重复投递，但在 sendMessage 返回前仍保持 sendQueue 去重，
 				// 以免同一条消息在写入进行中被重复入队。
-				// 复制后再置 Dup，避免与仍持有该消息的其它 goroutine 形成数据竞争。
-				dupMsg := msg.Copy()
-				dupMsg.Dup = true
-				if err := c.client.queue.Enqueue(&dupMsg); err != nil {
+				if err := c.requeueAfterSendFailure(msg); err != nil {
 					c.client.core.logger.Warn("Failed to persist Dup flag after send failure",
 						zap.String("clientID", c.client.ID),
 						zap.String("topic", msg.Packet.Topic),
 						zap.String("packetID", msg.PacketID.Hex()),
 						zap.Error(err))
 				}
-
-				c.sendQueue.finish(msg.PacketID)
 
 				// 写入失败通常意味着连接已不可用：退出本轮，由重传 tick 或新的触发再试，
 				// 避免在同一条失败消息上原地忙等。
@@ -524,15 +538,16 @@ func (c *conn) processSendQueue() {
 
 			// 发送成功：QoS0 从持久化队列删除，QoS1 等待 PUBACK
 			if msg.QoS == packet.QoS0 {
-				if delErr := c.client.queue.Delete(msg.PacketID); delErr != nil {
+				if delErr := c.discardQueuedMessage(msg); delErr != nil {
 					c.client.core.logger.Debug("Failed to delete QoS0 message from queue after send",
 						zap.String("clientID", c.client.ID),
 						zap.String("packetID", msg.PacketID.Hex()),
 						zap.Error(delErr))
 				}
+			} else {
+				// QoS1 的删除由 handlePuback 在 pendingAck 锁内完成
+				c.sendQueue.finish(msg.PacketID)
 			}
-
-			c.sendQueue.finish(msg.PacketID)
 
 			// 发送成功，统计消息发送数
 			c.client.core.stats.MessagesSent.Add(1)
@@ -547,6 +562,30 @@ func (c *conn) processSendQueue() {
 			return
 		}
 	}
+}
+
+// discardQueuedMessage 删除持久化条目并结束发送队列中的生命周期。
+// 与补货共用 enqueueMu，避免补货在"删除持久化条目"与"finish"之间重复装载同一条消息。
+func (c *conn) discardQueuedMessage(msg *Message) error {
+	c.enqueueMu.Lock()
+	defer c.enqueueMu.Unlock()
+
+	err := c.client.queue.Delete(msg.PacketID)
+	c.sendQueue.finish(msg.PacketID)
+	return err
+}
+
+// requeueAfterSendFailure 将发送失败的消息标记 Dup 后重新持久化，并结束本次发送。
+// 与补货共用 enqueueMu，避免重复入队。
+func (c *conn) requeueAfterSendFailure(msg *Message) error {
+	c.enqueueMu.Lock()
+	defer c.enqueueMu.Unlock()
+
+	dupMsg := msg.Copy()
+	dupMsg.Dup = true
+	err := c.client.queue.Enqueue(&dupMsg)
+	c.sendQueue.finish(msg.PacketID)
+	return err
 }
 
 // pendingMessage 等待确认的消息

@@ -47,6 +47,10 @@ type Conn struct {
 	processing  atomic.Bool
 	pendingSend atomic.Bool // true: 处理期间又有新工作，发送协程退出前需再处理一轮
 
+	// enqueueMu 串行化"发布入队（持久化 + 发送队列）"与"持久化补货"，
+	// 避免补货在两次入队之间把消息发走、发布路径又把同一消息入队 → 重复发送。
+	enqueueMu sync.Mutex
+
 	// 等待确认的包（连接级别，断开后失效）
 	pendingAck   map[nson.Id]pendingMessage
 	pendingAckMu sync.Mutex

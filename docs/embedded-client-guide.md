@@ -68,8 +68,12 @@ Type=CONNECT, Remaining=...
   KeepAlive: uint16（秒，0 或过大时服务端会用默认值并回写）
   SessionTimeout: uint32（秒；0 = 断开即清理会话）
   Properties: bitmask(2B) + 可选值（MaxPacketSize/ReceiveWindow/AuthMethod/AuthData/TraceID/UserProperties）
-  [Will]: WillFlags(1B: bit0=QoS, bit1=Retain, bit2=Will) + WillTopic(string) + PacketID(12B) + WillProperties + WillPayload
+  Flags(1B): bit0=QoS, bit1=Retain, bit2=Dup, bit3=Will, bit4=CleanStart
+  [Will]: WillTopic(string) + WillProperties + WillPayload（仅 bit3=1 时存在）
 ```
+
+> `CleanStart=1` 表示要求服务端丢弃已有会话（订阅 + 待投递消息）并新建会话；为 0 时，
+> 服务端在 `SessionTimeout>0` 且存在未过期会话的情况下恢复会话（CONNACK 的 `SessionPresent=1`）。
 
 **CONNACK**（服务端 → 客户端）
 ```

@@ -62,6 +62,9 @@ func (c *Core) cleanupExpiredSessions() {
 // cleanupClient 清理客户端相关资源。
 // 当 client 非 nil 时，使用传入的已脱离 clients map 的客户端对象完成资源清理。
 func (c *Core) cleanupClient(clientID string, client *Client) {
+	// 会话元数据随会话一起删除
+	c.deleteSession(clientID)
+
 	// 清理订阅
 	subCount := c.subTree.unsubscribeClient(clientID)
 	if subCount > 0 {
@@ -86,6 +89,9 @@ func (c *Core) cleanupClient(clientID string, client *Client) {
 
 // cleanupClientWithoutLock 清理客户端相关资源（假定调用者已持有 clientsMu 锁）
 func (c *Core) cleanupClientWithoutLock(clientID string, client *Client) {
+	// 会话元数据随会话一起删除
+	c.deleteSession(clientID)
+
 	// 清理订阅
 	subCount := c.subTree.unsubscribeClient(clientID)
 	if subCount > 0 {

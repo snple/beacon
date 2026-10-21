@@ -297,6 +297,9 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 				zap.String("topic", sub.Topic),
 				zap.Uint8("qos", uint8(sub.Options.QoS)))
 		}
+
+		// 订阅属于会话状态：持久化，进程重启后仍能恢复
+		c.core.saveSession(c, 0)
 	}
 
 	// 先发送 SUBACK，确保客户端收到确认后再发送保留消息
@@ -364,6 +367,9 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 			c.core.Unsubscribe(c.ID, topic)
 			c.core.logger.Debug("Client unsubscribed", zap.String("clientID", c.ID), zap.String("topic", topic))
 		}
+
+		// 订阅属于会话状态：持久化
+		c.core.saveSession(c, 0)
 	}
 
 	if err := c.writePacket(unsuback); err != nil {

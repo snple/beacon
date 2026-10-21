@@ -26,6 +26,7 @@ type ClientOptions struct {
 	// 连接选项
 	KeepAlive      uint16            // 心跳间隔 (秒)
 	SessionTimeout uint32            // 会话过期时间 (秒)，0 表示断开即清理
+	CleanStart     bool              // 要求服务端丢弃已有会话（订阅/待投递消息）并新建
 	ConnectTimeout time.Duration     // 连接超时
 	PublishTimeout time.Duration     // 发布超时 (默认 30 秒)
 	MaxPacketSize  uint32            // 客户端能接收的最大数据包大小（0 表示无限制）
@@ -116,6 +117,13 @@ func (o *ClientOptions) WithSessionTimeout(seconds uint32) *ClientOptions {
 // WithReceiveWindow 设置客户端的接收窗口（服务端向该客户端发送的未确认消息窗口）
 func (o *ClientOptions) WithReceiveWindow(size uint16) *ClientOptions {
 	o.ReceiveWindow = size
+	return o
+}
+
+// WithCleanStart 设置是否要求服务端丢弃已有会话（订阅 + 待投递消息）并新建会话。
+// 默认 false：服务端在 SessionTimeout>0 且存在旧会话时恢复会话。
+func (o *ClientOptions) WithCleanStart(clean bool) *ClientOptions {
+	o.CleanStart = clean
 	return o
 }
 

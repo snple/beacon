@@ -15,8 +15,9 @@ type session struct {
 	id string
 
 	// 会话配置
-	// keep    bool   // 是否保持会话
-	timeout uint32 // 会话过期时间（秒），0 表示断开即清理
+	// timeout 会话过期时间（秒），0 表示断开即清理。
+	// 使用原子读写：会话恢复时会在新连接的协程中更新，而其它协程可能同时读取。
+	timeout atomic.Uint32
 
 	authMethod string // 认证方法
 	authData   []byte // 认证数据
@@ -53,21 +54,33 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 		s.authData = connect.Properties.AuthData
 	}
 
-	// 处理会话过期时间
-	// 规则：
-	// 1. SessionTimeout=0: 会话无效，断开即清理
-	// 2. SessionTimeout>0:
-	//   - 服务器未设置 MaxSessionTimeout: 取客户端值作为会话过期时间
-	//   - 客户端设置了值: 取 min(客户端值, MaxSessionTimeout) 作为会话过期时间
-	if connect.SessionTimeout > 0 {
-		if core.options.MaxSessionTimeout > 0 {
-			s.timeout = min(connect.SessionTimeout, core.options.MaxSessionTimeout)
-		} else {
-			s.timeout = connect.SessionTimeout
-		}
-	} else {
-		s.timeout = 0
-	}
+	s.timeout.Store(sessionTimeoutFromConnect(connect, core))
 
 	return s
+}
+
+// sessionTimeoutFromConnect 计算会话过期时间（秒）。
+// 规则：
+//  1. SessionTimeout=0: 会话无效，断开即清理
+//  2. SessionTimeout>0:
+//     - 服务器未设置 MaxSessionTimeout: 取客户端值
+//     - 服务器设置了 MaxSessionTimeout: 取 min(客户端值, MaxSessionTimeout)
+func sessionTimeoutFromConnect(connect *packet.ConnectPacket, core *Core) uint32 {
+	if connect.SessionTimeout == 0 {
+		return 0
+	}
+	if core.options.MaxSessionTimeout > 0 {
+		return min(connect.SessionTimeout, core.options.MaxSessionTimeout)
+	}
+	return connect.SessionTimeout
+}
+
+// applyConnect 用最新的 CONNECT 更新会话参数（会话恢复时调用）。
+func (s *session) applyConnect(connect *packet.ConnectPacket, core *Core) {
+	s.timeout.Store(sessionTimeoutFromConnect(connect, core))
+
+	if connect.Properties != nil {
+		s.authMethod = connect.Properties.AuthMethod
+		s.authData = connect.Properties.AuthData
+	}
 }

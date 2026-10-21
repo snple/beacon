@@ -142,12 +142,19 @@ func (c *Client) Closed() bool {
 
 // SessionTimeout 返回会话过期时间
 func (c *Client) SessionTimeout() uint32 {
-	return c.session.timeout
+	return c.session.timeout.Load()
 }
 
 // WillPacket 返回遗嘱消息
 func (c *Client) WillPacket() *packet.PublishPacket {
 	return c.session.willPacket
+}
+
+// applyConnect 用最新的 CONNECT 更新会话参数（会话恢复时调用）。
+func (c *Client) applyConnect(connect *packet.ConnectPacket) {
+	c.session.applyConnect(connect, c.core)
+	// 遗嘱属于单次连接：先清空，再按本次 CONNECT 重新设置
+	c.extractWillMessage(connect)
 }
 
 // SetWillPacket 设置遗嘱消息

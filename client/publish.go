@@ -97,8 +97,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		zap.String("packetID", msg.Packet.PacketID.Hex()),
 		zap.String("traceID", msg.Packet.Properties.TraceID))
 
-	// 2. 放入持久化队列（QoS0/QoS1 都持久化：QoS0 尽力保证到达，QoS1 保证处理）
-	// 出站队列配额：超限时明确拒绝，避免离线/断连期间无限增长。
+	// 2. 出站队列配额：超限时明确拒绝，避免离线/断连期间无限增长。
 	if c.options != nil {
 		if limit := c.options.MaxQueueSize; limit > 0 && c.queue.Count() >= int64(limit) {
 			c.logger.Warn("Outbound queue full, message rejected",
@@ -108,7 +107,30 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 			return ErrQueueFull
 		}
 	}
+
+	conn := c.getConn()
+	online := conn != nil && !conn.IsClosed()
+
+	// 3. QoS1：先注册 pendingAck，再入队（避免 PUBACK 先于注册到达而丢失）
+	var waitCh chan error
+	if online && msg.Packet.QoS == packet.QoS1 {
+		waitCh = conn.registerPendingAck(msg.Packet.PacketID)
+	}
+
+	// 4. 在线时把"持久化入队 + 发送队列入队"与补货互斥：
+	//    否则补货可能在这两步之间把消息发走，发布路径又入队一次 → 重复发送。
+	if online {
+		conn.enqueueMu.Lock()
+	}
+
+	// 5. 放入持久化队列（QoS0/QoS1 都持久化：QoS0 尽力保证到达，QoS1 保证处理）
 	if err := c.queue.Enqueue(&msg); err != nil {
+		if online {
+			conn.enqueueMu.Unlock()
+			if msg.Packet.QoS == packet.QoS1 {
+				conn.clearPendingAck(msg.Packet.PacketID)
+			}
+		}
 		c.logger.Error("Failed to enqueue message to persistent queue",
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("packetID", msg.Packet.PacketID.Hex()),
@@ -116,63 +138,49 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		return err
 	}
 
-	// 3. 获取当前连接
-	conn := c.getConn()
-
-	// 如果没有连接
-	if conn == nil || conn.IsClosed() {
+	// 没有连接：消息留在持久化队列，等待连接后由补货机制发送
+	if !online {
 		if msg.Packet.QoS == packet.QoS0 {
-			// QoS0: 已持久化到队列，等待连接后发送（尽力保证到达，无需 ACK）
 			c.logger.Debug("Not connected, QoS0 message queued",
 				zap.String("topic", msg.Packet.Topic),
 				zap.String("packetID", msg.Packet.PacketID.Hex()))
 			return nil
 		}
-		// QoS1: 已持久化，等待重连后由重传机制处理
 		c.logger.Debug("Not connected, QoS1 message queued for retransmit",
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("packetID", msg.Packet.PacketID.Hex()))
 		return nil
 	}
 
-	// 4. QoS1：先注册 pendingAck，再放入发送队列。
-	//    避免 processSendQueue 立即发送消息、服务端 PUBACK 先于注册到达而丢失，
-	//    导致偶发 30s 假超时（与 Subscribe/Unsubscribe 的“先注册再发送”保持一致）。
-	var waitCh chan error
-	if msg.Packet.QoS == packet.QoS1 {
-		waitCh = conn.registerPendingAck(msg.Packet.PacketID)
-	}
+	// 6. 尝试放入发送队列
+	err := conn.sendQueue.tryEnqueue(&msg)
+	conn.enqueueMu.Unlock()
 
-	// 5. 尝试放入发送队列
-	if err := conn.sendQueue.tryEnqueue(&msg); err != nil {
-		// 失败：
-		// !!! 由于上面重新分配了 PacketID，这里不可能出现消息已在队列中的情况 !!!
+	if err != nil {
+		if errors.Is(err, ErrMessageAlreadyInQueue) {
+			// 已经由补货装入发送队列，等待 ACK 即可
+			conn.triggerSend()
+			if msg.Packet.QoS == packet.QoS1 {
+				return c.waitForPublishAck(conn, msg.Packet.PacketID, waitCh, timeout)
+			}
+			return nil
+		}
 
-		// 队列已满：清理刚注册的 pendingAck（消息留在持久化层，由重传机制发送时再注册）
+		// 发送队列已满：清理刚注册的 pendingAck（消息留在持久化层，由补货时再注册）
 		if msg.Packet.QoS == packet.QoS1 {
 			conn.clearPendingAck(msg.Packet.PacketID)
 		}
 
-		// 队列已满
-		if msg.Packet.QoS == packet.QoS0 {
-			// QoS0: 虽然列队已满，但消息并没有直接丢弃，因为已经持久化到队列中，等待重传机制处理
-			c.logger.Debug("Send queue full, QoS0 message queued for retransmit",
-				zap.String("topic", msg.Packet.Topic),
-				zap.String("packetID", msg.Packet.PacketID.Hex()))
-			return nil
-		}
-		// QoS1: 已持久化，等待重传机制处理
-		c.logger.Debug("Send queue full, QoS1 message queued for retransmit",
+		c.logger.Debug("Send queue full, message queued for retransmit",
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("packetID", msg.Packet.PacketID.Hex()))
-
 		return nil
 	}
 
-	// 6. 消息已入队，触发发送
+	// 7. 消息已入队，触发发送
 	conn.triggerSend()
 
-	// 7. QoS1: 等待 ACK（仅对首次发布的消息）
+	// 8. QoS1: 等待 ACK（仅对首次发布的消息）
 	if msg.Packet.QoS == packet.QoS1 {
 		return c.waitForPublishAck(conn, msg.Packet.PacketID, waitCh, timeout)
 	}
@@ -265,10 +273,7 @@ func (c *Conn) processSendQueue() {
 					zap.String("packetID", msg.Packet.PacketID.Hex()))
 
 				// 从持久化队列删除
-				if c.client.queue != nil {
-					c.client.queue.Delete(msg.Packet.PacketID)
-				}
-				c.sendQueue.finish(msg.Packet.PacketID)
+				c.discardQueuedMessage(msg)
 				continue
 			}
 
@@ -276,10 +281,7 @@ func (c *Conn) processSendQueue() {
 			if err := c.sendMessage(msg); err != nil {
 				if errors.Is(err, ErrMessageTooLarge) {
 					// 消息过大，直接丢弃不重试
-					if c.client.queue != nil {
-						c.client.queue.Delete(msg.Packet.PacketID)
-					}
-					c.sendQueue.finish(msg.Packet.PacketID)
+					c.discardQueuedMessage(msg)
 					continue
 				}
 
@@ -288,18 +290,12 @@ func (c *Conn) processSendQueue() {
 					zap.String("topic", msg.Packet.Topic),
 					zap.String("packetID", msg.Packet.PacketID.Hex()))
 
-				dupMsg := *msg
-				dupMsg.Dup = true
-				if c.client.queue != nil {
-					if err := c.client.queue.Enqueue(&dupMsg); err != nil {
-						c.logger.Warn("Failed to persist Dup flag after send failure",
-							zap.String("topic", msg.Packet.Topic),
-							zap.String("packetID", msg.Packet.PacketID.Hex()),
-							zap.Error(err))
-					}
+				if err := c.requeueAfterSendFailure(msg); err != nil {
+					c.logger.Warn("Failed to persist Dup flag after send failure",
+						zap.String("topic", msg.Packet.Topic),
+						zap.String("packetID", msg.Packet.PacketID.Hex()),
+						zap.Error(err))
 				}
-
-				c.sendQueue.finish(msg.Packet.PacketID)
 
 				// 写入失败通常意味着连接不可用：退出本轮，由重传 tick 或新的触发再试，
 				// 避免在同一条失败消息上原地忙等。
@@ -308,12 +304,13 @@ func (c *Conn) processSendQueue() {
 			}
 
 			// 发送成功
-			// QoS0: 从持久化队列删除（TCP 写成功即可）
-			if msg.Packet.QoS == packet.QoS0 && c.client.queue != nil {
-				c.client.queue.Delete(msg.Packet.PacketID)
+			if msg.Packet.QoS == packet.QoS0 {
+				// QoS0: 从持久化队列删除（TCP 写成功即可）
+				c.discardQueuedMessage(msg)
+			} else {
+				// QoS1: 等待 PUBACK，由 handlePuback 删除持久化条目
+				c.sendQueue.finish(msg.Packet.PacketID)
 			}
-			// QoS1: 等待 PUBACK，在 handlePuback 中删除
-			c.sendQueue.finish(msg.Packet.PacketID)
 		}
 
 		// 释放处理权；若期间有新工作则重新接手
@@ -325,6 +322,38 @@ func (c *Conn) processSendQueue() {
 			return
 		}
 	}
+}
+
+// discardQueuedMessage 删除持久化条目并结束发送队列中的生命周期。
+// 与补货共用 enqueueMu，避免补货在"删除持久化条目"与"finish"之间重复装载同一条消息。
+func (c *Conn) discardQueuedMessage(msg *Message) {
+	c.enqueueMu.Lock()
+	defer c.enqueueMu.Unlock()
+
+	if c.client.queue != nil {
+		if err := c.client.queue.Delete(msg.Packet.PacketID); err != nil {
+			c.logger.Debug("Failed to delete message from queue",
+				zap.String("packetID", msg.Packet.PacketID.Hex()),
+				zap.Error(err))
+		}
+	}
+	c.sendQueue.finish(msg.Packet.PacketID)
+}
+
+// requeueAfterSendFailure 将发送失败的消息标记 Dup 后重新持久化，并结束本次发送。
+func (c *Conn) requeueAfterSendFailure(msg *Message) error {
+	c.enqueueMu.Lock()
+	defer c.enqueueMu.Unlock()
+
+	dupMsg := *msg
+	dupMsg.Dup = true
+
+	var err error
+	if c.client.queue != nil {
+		err = c.client.queue.Enqueue(&dupMsg)
+	}
+	c.sendQueue.finish(msg.Packet.PacketID)
+	return err
 }
 
 // Subscribe 订阅主题（轮询模式，通过 PollMessage 获取消息）

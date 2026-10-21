@@ -330,3 +330,51 @@ func TestReadPacket_RejectsTrailingBytes(t *testing.T) {
 		t.Fatalf("expected ErrMalformedPacket, got %v", err)
 	}
 }
+
+func TestConnectPacket_EncodeDecodeCleanStart(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cleanStart bool
+		withWill   bool
+	}{
+		{"NoWill", true, false},
+		{"WithWill", true, true},
+		{"Unset", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pkt := NewConnectPacket()
+			pkt.ClientID = "clean-start-client"
+			pkt.SessionTimeout = 300
+			pkt.CleanStart = tc.cleanStart
+			if tc.withWill {
+				pkt.Will = true
+				pkt.WillPacket = NewPublishPacket("will/topic", []byte("bye"))
+				pkt.WillPacket.QoS = QoS1
+			}
+
+			var buf bytes.Buffer
+			if err := WritePacket(&buf, pkt, 0); err != nil {
+				t.Fatalf("编码失败: %v", err)
+			}
+
+			decoded := &ConnectPacket{}
+			header := FixedHeader{}
+			if err := header.Decode(&buf); err != nil {
+				t.Fatalf("解码固定头部失败: %v", err)
+			}
+			if err := decoded.decode(&buf, header); err != nil {
+				t.Fatalf("解码失败: %v", err)
+			}
+
+			if decoded.CleanStart != tc.cleanStart {
+				t.Errorf("CleanStart 不匹配: 期望 %v, 得到 %v", tc.cleanStart, decoded.CleanStart)
+			}
+			if decoded.Will != tc.withWill {
+				t.Errorf("Will 不匹配: 期望 %v, 得到 %v", tc.withWill, decoded.Will)
+			}
+			if tc.withWill && decoded.WillPacket.Topic != "will/topic" {
+				t.Errorf("遗嘱主题不匹配: 得到 %q", decoded.WillPacket.Topic)
+			}
+		})
+	}
+}
