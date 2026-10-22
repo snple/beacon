@@ -319,8 +319,7 @@ func BenchmarkQueueEnqueue(b *testing.B) {
 
 	queue := NewQueue(db, "bench_enqueue_")
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		msg := createTestMessage("bench/topic", []byte("benchmark payload"), packet.QoS1)
 		msg.PacketID = nson.NewId()
 		if err := queue.Enqueue(msg); err != nil {
