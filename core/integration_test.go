@@ -1813,32 +1813,6 @@ func TestManagement_DisconnectClient(t *testing.T) {
 	}
 }
 
-// TestManagement_GetTopicSubscribers 测试获取主题订阅者
-func TestManagement_GetTopicSubscribers(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	c1 := testSetupClient(t, addr, "topic-sub1", nil)
-	defer c1.Close()
-	c2 := testSetupClient(t, addr, "topic-sub2", nil)
-	defer c2.Close()
-	c3 := testSetupClient(t, addr, "topic-sub3", nil)
-	defer c3.Close()
-
-	c1.Subscribe("shared/topic")
-	c2.Subscribe("shared/topic")
-	c3.Subscribe("other/topic")
-
-	time.Sleep(100 * time.Millisecond)
-
-	subscribers := core.GetTopicSubscribers("shared/topic")
-	if len(subscribers) != 2 {
-		t.Errorf("Expected 2 subscribers, got %d", len(subscribers))
-	}
-}
-
 // ============================================================================
 // 保留消息高级测试
 // ============================================================================
@@ -2511,7 +2485,7 @@ func TestWill_PreservesQoSAndRetain(t *testing.T) {
 		t.Fatalf("expected will QoS=1, got %d", msg.Packet.QoS)
 	}
 
-	retained := core.GetRetainedMessages("will/qos")
+	retained := retainedMessagesForTest(core, "will/qos")
 	if len(retained) != 1 {
 		t.Fatalf("expected retained will message to be stored, got %d", len(retained))
 	}

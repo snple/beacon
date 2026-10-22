@@ -166,19 +166,25 @@ curl -s localhost:9101/metrics | grep pending
 
 | 能力 | API |
 |---|---|
-| 服务器信息 | `Info()`（版本/uptime/监听器/上限/存储）、`Listeners()`、`Ready()`、`SetBuildInfo()` |
-| 客户端 | `ListClientsPage(PageOptions)`（分页/前缀/在线过滤、页内一致快照）、`GetClientInfo()` |
-| 会话 | `ListSessions()`、`DeleteSession()`、`DisconnectClientAndWait(ctx, ...)` |
+| 服务器信息 | `Info()`（版本/uptime/监听器/上限/存储，版本由 `WithBuildInfo` 构造期注入）、`Listeners()`、`Ready()`、`GetStats()` |
+| 客户端列表 | `ListClients()`：轻量概要（ClientID/在线/地址/时间/离线过期时间），**不分页** |
+| 客户端详情 | `GetClientInfo(id)`：配置、运行状态、队列与在途水位、订阅、每客户端计数器 |
+| 踢下线 | `DisconnectClient()` / `DisconnectClientAndWait(ctx, ...)`（唯一改变会话状态的写操作） |
 | 发布 | `Publish(topic, payload, opts)` 返回 `PublishResult`（命中订阅者数；**仅表示已入队**） |
-| 订阅/主题 | `ListSubscriptions()`、`ListTopics()`、`GetTopicSubscribers()` |
-| 保留消息 | `ListRetainedPage()`（只读元数据）、`DeleteRetained()`、`GetRetainedMessages()` |
-| 积压排障 | `ListPendingAck()`（在途 QoS1）、`PurgeClientQueue()`，`ClientInfo` 含 `QueueSize/QueueBytes/OldestQueuedAge` |
-| 事件流 | `SubscribeEvents(ctx, EventFilter)`：连接/断开/订阅/发布/丢弃/拒绝/会话过期/管理操作 |
+| 事件流 | `SubscribeEvents(ctx, EventOptions) (*EventStream, error)`：连接/断开/订阅/发布/丢弃/拒绝/会话过期/管理操作 |
 | 认证身份 | `AuthConnectContext.Identity`（仅内存），透出到 `ClientInfo.Identity` 与事件 |
 | 错误语义 | 认证器返回 `*AuthError{Reason}` 可指定 CONNACK 原因码（如 `ReasonBanned`）；`DisconnectContext` 含 `Reason`/`Err` |
 
-事件流是**尽力而为**的：订阅者消费过慢时事件被丢弃并计入 `StatsSnapshot.EventsDropped`，
-可结合 `Event.Seq` 跳号判断是否丢过；需要精确状态时以 `List*` API 为准做对账。
+**观测面只有"客户端列表 + 客户端详情"两个入口**，话题/订阅/保留消息不再提供枚举 API；
+需要时用 `GetClientInfo(id).Subscriptions` 查看单个客户端的订阅。
+
+**改变会话/配置状态的写操作只有"踢下线"一条**：`DisconnectClient` / `DisconnectClientAndWait`。
+`Publish` 只产生消息流，不算状态变更。删除会话、删除保留消息、清空积压一律不由 broker 提供
+（保留消息用协议语义的 `Publish(topic, nil, PublishOptions{Retain: true})` 清除）。
+
+事件流是**尽力而为**的：订阅者消费过慢时丢弃新事件，`EventStream.Dropped()` 给出本订阅者的累计丢弃数，
+`Event.Seq` 是**每订阅者连续序号**（未匹配事件不占号），跳号数量 == 丢弃数量。
+需要精确状态时以 `ListClients` / `GetClientInfo` 的快照为准。
 
 封禁、ACL、审计留存、日志 tail、消息历史等属于业务策略，由管理程序用 `AuthHandler` /
 `OnSubscribe` / `OnPublish` / zap sink 自行组合，broker 不内建（设计取舍见

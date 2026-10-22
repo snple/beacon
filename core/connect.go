@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/danclive/nson-go"
@@ -218,13 +217,10 @@ func (c *Core) handleConn(conn net.Conn) {
 		zap.Bool("sessionPresent", sessionPresent))
 
 	c.emit(Event{
-		Type:     EventClientConnected,
-		ClientID: client.ID,
-		Reason:   "connected",
-		Extra: map[string]string{
-			"session_present": boolString(sessionPresent),
-			"remote":          conn.RemoteAddr().String(),
-		},
+		Type:           EventClientConnected,
+		ClientID:       client.ID,
+		RemoteAddr:     conn.RemoteAddr().String(),
+		SessionPresent: sessionPresent,
 	})
 
 	// 调用 OnConnect 钩子
@@ -517,12 +513,6 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	c.uncountClient(client)
 	client.touch()
 
-	// 无条件复查：会话可能在上面读取 map 之后才被管理面删除。
-	if client.adminDeleted.Load() {
-		// 会话已被管理面删除（DeleteSession）：只收敛计数，不再复活会话或发布遗嘱。
-		return
-	}
-
 	// 连接层原因与底层错误：管理面据此区分"心跳超时/被踢/接管/关机"。
 	closeReason := packet.ReasonNormalDisconnect
 	var closeErr error
@@ -542,14 +532,17 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	}
 	c.options.Hooks.callOnDisconnect(disconnectCtx)
 
+	var connDuration time.Duration
+	if connectedAt := client.ConnectedAt(); !connectedAt.IsZero() {
+		connDuration = time.Since(connectedAt)
+	}
+
 	c.emit(Event{
-		Type:     EventClientDisconnected,
-		ClientID: client.ID,
-		Reason:   closeReason.String(),
-		Extra: map[string]string{
-			"duration":          strconv.FormatInt(disconnectCtx.Duration, 10),
-			"session_preserved": boolString(client.session.timeout.Load() > 0),
-		},
+		Type:       EventClientDisconnected,
+		ClientID:   client.ID,
+		RemoteAddr: connAddress(client.getConn()),
+		Reason:     closeReason.String(),
+		Duration:   connDuration,
 	})
 
 	// 决定是否发布遗嘱：

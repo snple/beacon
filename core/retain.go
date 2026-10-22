@@ -1,7 +1,6 @@
 package core
 
 import (
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -11,18 +10,8 @@ import (
 
 // retainEntry 保留消息索引条目（仅存储索引信息，不存储消息本身）
 type retainEntry struct {
-	topic       string // 消息主题
-	expiryTime  int64  // 过期时间 (Unix 时间戳，0 表示永不过期)
-	payloadSize int    // 负载字节数（管理面列表用，避免为列元数据读取负载）
-	updatedAt   int64  // 发布时刻 (Unix 时间戳)
-	qos         packet.QoS
-}
-
-// retainMeta 是保留消息的展示元数据（不影响匹配语义）。
-type retainMeta struct {
-	PayloadSize int
-	UpdatedAt   int64
-	QoS         packet.QoS
+	topic      string // 消息主题
+	expiryTime int64  // 过期时间 (Unix 时间戳，0 表示永不过期)
 }
 
 // retainNode 保留消息树节点
@@ -40,9 +29,8 @@ func newRetainNode() *retainNode {
 // retainStore 保留消息索引存储 - 使用树结构优化匹配
 // 设计原则：只存储 topic 索引和过期时间，消息内容存储在 messageStore
 type retainStore struct {
-	root  *retainNode
-	count int
-	mu    sync.RWMutex
+	root *retainNode
+	mu   sync.RWMutex
 }
 
 // NewretainStore 创建新的保留消息存储
@@ -53,9 +41,8 @@ func newRetainStore() *retainStore {
 }
 
 // set 设置保留消息索引。
-// expiryTime: 过期时间 (Unix 时间戳，0 表示永不过期)；
-// meta: 供管理面列表展示的元数据。
-func (s *retainStore) set(topic string, expiryTime int64, meta retainMeta) error {
+// expiryTime: 过期时间 (Unix 时间戳，0 表示永不过期)。
+func (s *retainStore) set(topic string, expiryTime int64) error {
 	if topic == "" {
 		return ErrInvalidRetainMessage
 	}
@@ -83,46 +70,12 @@ func (s *retainStore) set(topic string, expiryTime int64, meta retainMeta) error
 		node = node.children[part]
 	}
 
-	if node.entry == nil {
-		s.count++
-	}
-
 	node.entry = &retainEntry{
-		topic:       topic,
-		expiryTime:  expiryTime,
-		payloadSize: meta.PayloadSize,
-		updatedAt:   meta.UpdatedAt,
-		qos:         meta.QoS,
+		topic:      topic,
+		expiryTime: expiryTime,
 	}
 
 	return nil
-}
-
-// exists 检查主题是否存在保留消息索引
-func (s *retainStore) exists(topic string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	node := s.root
-	startIdx := 0
-	for startIdx < len(topic) {
-		endIdx := strings.IndexByte(topic[startIdx:], '/')
-		var part string
-		if endIdx == -1 {
-			part = topic[startIdx:]
-			startIdx = len(topic)
-		} else {
-			endIdx += startIdx
-			part = topic[startIdx:endIdx]
-			startIdx = endIdx + 1
-		}
-
-		node = node.children[part]
-		if node == nil {
-			return false
-		}
-	}
-	return node.entry != nil
 }
 
 // getEntry 获取保留消息索引条目
@@ -199,7 +152,6 @@ func (s *retainStore) remove(topic string) {
 		return
 	}
 	node.entry = nil
-	s.count--
 
 	// 自底向上剪枝：保留消息删除后不应留下空节点
 	for i := len(path) - 1; i > 0; i-- {
@@ -279,7 +231,6 @@ func (s *retainStore) cleanupExpired() (int, []string) {
 	now := time.Now().Unix()
 	var expiredTopics []string
 	s.cleanupExpiredNode(s.root, now, &expiredTopics)
-	s.count -= len(expiredTopics)
 	return len(expiredTopics), expiredTopics
 }
 
@@ -303,7 +254,6 @@ func (s *retainStore) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.root = newRetainNode()
-	s.count = 0
 }
 
 // matchTopic 检查主题是否匹配模式（供测试/工具场景使用）
@@ -334,31 +284,4 @@ func matchTopicParts(parts, topic []string, pi, ti int) bool {
 	}
 
 	return false
-}
-
-// snapshot 返回所有未过期的保留消息索引（按 topic 字典序）。
-// 只复制索引，不读取负载，供管理面列表使用。
-func (s *retainStore) snapshot() []retainEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	now := time.Now().Unix()
-	out := make([]retainEntry, 0, s.count)
-	out = s.appendEntries(s.root, out, now)
-
-	sort.Slice(out, func(i, j int) bool { return out[i].topic < out[j].topic })
-	return out
-}
-
-func (s *retainStore) appendEntries(node *retainNode, out []retainEntry, now int64) []retainEntry {
-	if node == nil {
-		return out
-	}
-	if node.entry != nil && !s.isExpired(node.entry, now) {
-		out = append(out, *node.entry)
-	}
-	for _, child := range node.children {
-		out = s.appendEntries(child, out, now)
-	}
-	return out
 }

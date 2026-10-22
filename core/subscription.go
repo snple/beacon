@@ -1,7 +1,6 @@
 package core
 
 import (
-	"sort"
 	"strings"
 	"sync"
 
@@ -369,48 +368,4 @@ func validateTopicFilter(topic string) bool {
 	}
 
 	return true
-}
-
-// snapshotSubscriptions 返回所有订阅记录（按 topic、clientID 字典序）。
-// 仅复制索引信息（不含消息），供管理面枚举使用。
-func (t *subTree) snapshotSubscriptions() []SubscriptionEntry {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	out := make([]SubscriptionEntry, 0, t.countNode(t.root))
-	t.collectSubscriptions(t.root, "", &out)
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Topic != out[j].Topic {
-			return out[i].Topic < out[j].Topic
-		}
-		return out[i].ClientID < out[j].ClientID
-	})
-	return out
-}
-
-func (t *subTree) collectSubscriptions(node *topicNode, prefix string, out *[]SubscriptionEntry) {
-	if node == nil {
-		return
-	}
-
-	for clientID, opts := range node.subscribers {
-		topic := prefix
-		if topic == "" {
-			topic = strings.Join([]string{}, "/")
-		}
-		*out = append(*out, SubscriptionEntry{
-			ClientID:         clientID,
-			Topic:            topic,
-			SubscribeOptions: opts,
-		})
-	}
-
-	for part, child := range node.children {
-		next := part
-		if prefix != "" {
-			next = prefix + "/" + part
-		}
-		t.collectSubscriptions(child, next, out)
-	}
 }

@@ -349,10 +349,6 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 				ClientID: c.ID,
 				Topic:    sub.Topic,
 				QoS:      sub.Options.QoS,
-				Extra: map[string]string{
-					"no_local":            boolString(sub.Options.NoLocal),
-					"retain_as_published": boolString(sub.Options.RetainAsPublished),
-				},
 			})
 		}
 	}

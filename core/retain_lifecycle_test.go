@@ -35,7 +35,7 @@ func TestRetainMessage_LifecycleIndependence(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// 验证保留消息仍然存在
-		retainMsgs := core.GetRetainedMessages("sensor/temp/room1")
+		retainMsgs := retainedMessagesForTest(core, "sensor/temp/room1")
 		if len(retainMsgs) != 1 {
 			t.Errorf("Expected 1 retain message after publisher disconnect, got %d", len(retainMsgs))
 		}
@@ -96,7 +96,7 @@ func TestRetainMessage_LifecycleIndependence(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// 验证保留消息仍然存在
-		retainMsgs := core.GetRetainedMessages("sensor/temp/room2")
+		retainMsgs := retainedMessagesForTest(core, "sensor/temp/room2")
 		if len(retainMsgs) != 1 {
 			t.Errorf("Expected 1 retain message after abnormal disconnect, got %d", len(retainMsgs))
 		}
@@ -119,7 +119,7 @@ func TestRetainMessage_LifecycleIndependence(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// 验证第一条保留消息
-		retainMsgs := core.GetRetainedMessages("sensor/temp/room3")
+		retainMsgs := retainedMessagesForTest(core, "sensor/temp/room3")
 		if len(retainMsgs) != 1 || string(retainMsgs[0].Packet.Payload) != "20.0" {
 			t.Error("First retain message not found")
 		}
@@ -136,7 +136,7 @@ func TestRetainMessage_LifecycleIndependence(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// 验证保留消息已被覆盖
-		retainMsgs = core.GetRetainedMessages("sensor/temp/room3")
+		retainMsgs = retainedMessagesForTest(core, "sensor/temp/room3")
 		if len(retainMsgs) != 1 {
 			t.Errorf("Expected 1 retain message, got %d", len(retainMsgs))
 		}
@@ -157,7 +157,7 @@ func TestRetainMessage_LifecycleIndependence(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// 验证保留消息存在
-		retainMsgs := core.GetRetainedMessages("sensor/temp/room4")
+		retainMsgs := retainedMessagesForTest(core, "sensor/temp/room4")
 		if len(retainMsgs) != 1 {
 			t.Error("Retain message should exist")
 		}
@@ -174,7 +174,7 @@ func TestRetainMessage_LifecycleIndependence(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// 验证保留消息已被清除
-		retainMsgs = core.GetRetainedMessages("sensor/temp/room4")
+		retainMsgs = retainedMessagesForTest(core, "sensor/temp/room4")
 		if len(retainMsgs) != 0 {
 			t.Errorf("Retain message should be cleared, got %d messages", len(retainMsgs))
 		}

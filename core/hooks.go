@@ -234,7 +234,7 @@ type AuthConnectContext struct {
 	// 认证器可以设置以下字段，用于返回给客户端
 	ResponseProperties map[string]string // 返回给客户端的用户属性
 
-	// Identity 由认证器写入，成功认证后可通过 ClientInfo/SessionInfo/事件读取。
+	// Identity 由认证器写入，成功认证后可通过 ClientInfo 与事件读取。
 	// 仅保存在内存中，不随会话持久化。
 	Identity *Identity
 }

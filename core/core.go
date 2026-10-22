@@ -54,11 +54,7 @@ type Core struct {
 	listeners   map[uint64]listenerEntry
 	listenerSeq uint64
 
-	// 构建信息与启动时间（管理面 Info）
-	buildMu   sync.RWMutex
-	buildVer  string
-	buildCom  string
-	buildTime string
+	// 创建时间（管理面 Info/GetStats 的 StartedAt）。构造后只读，无需同步。
 	startedAt time.Time
 
 	// 连接速率限制
@@ -153,7 +149,7 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		handshakeConns:  make(map[net.Conn]struct{}),
 		events:          newEventBus(),
 		listeners:       make(map[uint64]listenerEntry),
-		buildVer:        "devel",
+		startedAt:       time.Now(),
 		ctx:             ctx,
 		cancel:          cancel,
 	}
@@ -223,10 +219,6 @@ func (c *Core) Start() error {
 		c.running.Store(false)
 		return ErrCoreStopped
 	}
-
-	c.buildMu.Lock()
-	c.startedAt = time.Now()
-	c.buildMu.Unlock()
 
 	c.taskMu.Lock()
 	c.tasksClosed = false
@@ -368,7 +360,7 @@ func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 		ClientID: clientID,
 		Topic:    sub.Topic,
 		QoS:      sub.Options.QoS,
-		Extra:    map[string]string{"source": "api"},
+		Detail:   "api",
 	})
 }
 
@@ -395,7 +387,7 @@ func (c *Core) Unsubscribe(clientID, topic string) {
 		Type:     EventUnsubscribed,
 		ClientID: clientID,
 		Topic:    topic,
-		Extra:    map[string]string{"source": "api"},
+		Detail:   "api",
 	})
 }
 
@@ -446,41 +438,12 @@ func (c *Core) saveSessionPreservingExpiry(client *Client) {
 	c.saveSession(client, expiresAt)
 }
 
-// GetRetainedMessages 获取与主题模式匹配的保留消息
-// 从 messageStore 中按需加载消息内容
-func (c *Core) GetRetainedMessages(topic string) []*Message {
-	// 获取匹配的主题列表
-	topics := c.retainStore.matchTopics(topic)
-	if len(topics) == 0 {
-		return nil
-	}
-
-	messages := make([]*Message, 0, len(topics))
-	for _, t := range topics {
-		msg, err := c.store.getRetain(t)
-		if err != nil {
-			c.logger.Debug("Failed to get retain message from store",
-				zap.String("topic", t),
-				zap.Error(err))
-			continue
-		}
-		if msg != nil {
-			messages = append(messages, msg)
-		}
-	}
-	return messages
-}
-
 // GetStats 获取统计信息快照
 func (c *Core) GetStats() StatsSnapshot {
-	c.buildMu.RLock()
-	startedAt := c.startedAt
-	c.buildMu.RUnlock()
-
 	snapshot := StatsSnapshot{
-		StartedAt:          startedAt,
+		StartedAt:          c.startedAt,
 		Limits:             c.limits(),
-		EventsDropped:      c.events.dropped.Load(),
+		EventsDropped:      int64(c.events.dropped.Load()),
 		ClientsConnected:   c.stats.ClientsConnected.Load(),
 		ClientsTotal:       c.stats.ClientsTotal.Load(),
 		MessagesReceived:   c.stats.MessagesReceived.Load(),
@@ -518,9 +481,9 @@ func (c *Core) GetStats() StatsSnapshot {
 
 // StatsSnapshot 统计信息快照 (可安全复制)
 type StatsSnapshot struct {
-	StartedAt time.Time // 进程启动时间
+	StartedAt time.Time // Core 构造时间（只读）
 	Limits    Limits    // 配置上限，用于计算使用率
-	// EventsDropped 是因订阅者消费过慢而被丢弃的事件数
+	// EventsDropped 是所有事件订阅者累计丢弃的事件数（单个订阅者用 EventStream.Dropped() 观察）
 	EventsDropped int64
 
 	ClientsConnected   int64

@@ -52,9 +52,6 @@ type Client struct {
 	// counted 表示该客户端已计入 ClientsConnected，保证减计数恰好一次
 	counted atomic.Bool
 
-	// adminDeleted 表示会话已被管理面删除，断开处理不应再复活会话或发布遗嘱
-	adminDeleted atomic.Bool
-
 	// Core 引用
 	core *Core
 }

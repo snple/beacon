@@ -14,12 +14,10 @@ import (
 
 // TestInfoAndReady 验证管理面服务器信息与就绪状态。
 func TestInfoAndReady(t *testing.T) {
-	c := testSetupCore(t, NewCoreOptions())
+	c := testSetupCore(t, NewCoreOptions().WithBuildInfo("1.2.3", "abc123", "2026-01-01T00:00:00Z"))
 	defer c.Stop()
 
 	require.True(t, c.Ready())
-
-	c.SetBuildInfo("1.2.3", "abc123", "2026-01-01T00:00:00Z")
 
 	// listener 由 ServeTCP 注册，端口是随机的，所以要等它出现。
 	go func() { _ = c.ServeTCP("127.0.0.1:0") }()
@@ -77,11 +75,17 @@ func TestPublishAPI(t *testing.T) {
 	require.Equal(t, "api/topic", msg.Topic())
 	require.Equal(t, []byte("hello"), msg.Payload())
 
-	// 保留消息
+	// 保留消息：新订阅者应能收到
 	res, err = c.Publish("api/retained", []byte("keep"), PublishOptions{Retain: true})
 	require.NoError(t, err)
 	require.True(t, res.Retained)
-	require.Len(t, c.GetRetainedMessages("api/retained"), 1)
+
+	rsub := testSetupClient(t, addr, "pub-retained-sub", nil)
+	defer rsub.Close()
+	require.NoError(t, rsub.Subscribe("api/retained"))
+	msg, err = rsub.PollMessage(context.Background(), 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, []byte("keep"), msg.Payload())
 
 	// 非法主题
 	for _, topic := range []string{"", "a/*", "a/**", "a+b"} {
@@ -103,64 +107,42 @@ func TestPublishAPI_NotStarted(t *testing.T) {
 	require.ErrorIs(t, err, ErrCoreNotRunning)
 }
 
-// TestListClientsPage 验证分页、前缀过滤与在线过滤。
-func TestListClientsPage(t *testing.T) {
+// TestListClients 验证轻量客户端列表：概要字段、在线/离线区分、字典序。
+func TestListClients(t *testing.T) {
 	c := testSetupCore(t, nil)
 	defer c.Stop()
 
 	addr := testServe(t, c)
 
 	for i := 0; i < 5; i++ {
-		cli := testSetupClient(t, addr, fmt.Sprintf("page-%02d", i), nil)
+		cli := testSetupClient(t, addr, fmt.Sprintf("list-%02d", i), nil)
 		defer cli.Close()
 	}
 	// 一个离线会话
-	off := testSetupClient(t, addr, "page-offline", client.NewClientOptions().WithSessionTimeout(60))
+	off := testSetupClient(t, addr, "list-offline", client.NewClientOptions().WithSessionTimeout(60))
 	require.NoError(t, off.Disconnect())
 	defer off.Close()
 	require.True(t, eventually(t, 2*time.Second, 10*time.Millisecond, "offline recorded", func() bool {
-		return c.isOfflineSession("page-offline")
+		return c.isOfflineSession("list-offline")
 	}))
 
-	seen := make(map[string]bool)
-	cursor := ""
-	pages := 0
-	for {
-		infos, page, err := c.ListClientsPage(PageOptions{Limit: 2, Cursor: cursor})
-		require.NoError(t, err)
-		pages++
-		for _, info := range infos {
-			require.False(t, seen[info.ClientID], "duplicate entry %s", info.ClientID)
-			seen[info.ClientID] = true
+	clients := c.ListClients()
+	require.Len(t, clients, 6)
+	for i, summary := range clients {
+		if i > 0 {
+			require.Less(t, clients[i-1].ClientID, summary.ClientID, "must be sorted by ClientID")
 		}
-		if page.NextCursor == "" {
-			break
+		require.False(t, summary.ConnectedAt.IsZero())
+		require.False(t, summary.LastSeenAt.IsZero())
+		if summary.Connected {
+			require.NotEmpty(t, summary.RemoteAddr)
+			require.True(t, summary.ExpiresAt.IsZero())
+		} else {
+			require.Equal(t, "list-offline", summary.ClientID)
+			require.Empty(t, summary.RemoteAddr)
+			require.False(t, summary.ExpiresAt.IsZero())
 		}
-		require.Equal(t, 2, len(infos))
-		cursor = page.NextCursor
-		require.Less(t, pages, 10)
 	}
-	require.Equal(t, 6, len(seen))
-	require.True(t, seen["page-offline"])
-
-	// 在线过滤
-	online := true
-	infos, _, err := c.ListClientsPage(PageOptions{Limit: 100, Online: &online})
-	require.NoError(t, err)
-	require.Len(t, infos, 5)
-
-	offline := false
-	infos, _, err = c.ListClientsPage(PageOptions{Limit: 100, Online: &offline})
-	require.NoError(t, err)
-	require.Len(t, infos, 1)
-	require.Equal(t, "page-offline", infos[0].ClientID)
-	require.False(t, infos[0].ExpiresAt.IsZero())
-	require.False(t, infos[0].LastSeenAt.IsZero())
-
-	// 前缀过滤
-	infos, _, err = c.ListClientsPage(PageOptions{Limit: 100, Prefix: "page-0"})
-	require.NoError(t, err)
-	require.Len(t, infos, 5)
 }
 
 // TestClientInfoFields 验证新增字段（队列水位、身份、传输方式、计数器）。
@@ -220,166 +202,44 @@ func TestClientInfoFields(t *testing.T) {
 	require.Equal(t, "device-42", oi.Identity.Subject)
 }
 
-// TestListSessionsAndDeleteSession 验证会话语义与删除。
-func TestListSessionsAndDeleteSession(t *testing.T) {
+// TestRetainedPublishAndClear 验证保留消息的写入，以及用"空负载 + Retain"清除。
+func TestRetainedPublishAndClear(t *testing.T) {
 	c := testSetupCore(t, nil)
 	defer c.Stop()
 
 	addr := testServe(t, c)
-
-	cli := testSetupClient(t, addr, "sess-1", client.NewClientOptions().WithSessionTimeout(60))
-	require.NoError(t, cli.Subscribe("sess/topic"))
-	require.NoError(t, cli.Disconnect())
-	defer cli.Close()
-	require.True(t, eventually(t, 2*time.Second, 10*time.Millisecond, "offline recorded", func() bool {
-		return c.isOfflineSession("sess-1")
-	}))
-
-	sessions, _, err := c.ListSessions(PageOptions{})
-	require.NoError(t, err)
-	require.Len(t, sessions, 1)
-	require.Equal(t, "sess-1", sessions[0].ClientID)
-	require.False(t, sessions[0].Online)
-	require.False(t, sessions[0].ExpiresAt.IsZero())
-	require.Len(t, sessions[0].Subscriptions, 1)
-
-	require.NoError(t, c.DeleteSession("sess-1"))
-	_, err = c.GetClientInfo("sess-1")
-	require.ErrorIs(t, err, &ClientNotFoundError{})
-	require.False(t, c.isOfflineSession("sess-1"))
-
-	sessions, _, err = c.ListSessions(PageOptions{})
-	require.NoError(t, err)
-	require.Empty(t, sessions)
-
-	// 订阅也应一并清理
-	require.Empty(t, c.subTree.matchTopic("sess/topic"))
-
-	require.ErrorIs(t, c.DeleteSession("nobody"), &ClientNotFoundError{})
-}
-
-// TestDeleteSessionOnline 验证删除在线会话会先踢下线并同步在线计数。
-func TestDeleteSessionOnline(t *testing.T) {
-	c := testSetupCore(t, nil)
-	defer c.Stop()
-
-	addr := testServe(t, c)
-	cli := testSetupClient(t, addr, "sess-online", client.NewClientOptions().WithSessionTimeout(60))
-	defer cli.Close()
-
-	require.True(t, eventually(t, 2*time.Second, 10*time.Millisecond, "client connected", func() bool {
-		return c.IsClientOnline("sess-online")
-	}))
-	before := c.GetStats().ClientsConnected
-
-	require.NoError(t, c.DeleteSession("sess-online"))
-	require.False(t, c.IsClientOnline("sess-online"))
-	require.Equal(t, before-1, c.GetStats().ClientsConnected)
-	require.False(t, c.isOfflineSession("sess-online"))
-}
-
-// TestRetainedListAndDelete 验证保留消息元数据列表与删除。
-func TestRetainedListAndDelete(t *testing.T) {
-	c := testSetupCore(t, nil)
-	defer c.Stop()
-
-	addr := testServe(t, c)
-	watcher := testSetupClient(t, addr, "retained-watcher", nil)
-	defer watcher.Close()
-	require.NoError(t, watcher.Subscribe("r/**"))
 
 	_, err := c.Publish("r/a", []byte("aaa"), PublishOptions{Retain: true})
 	require.NoError(t, err)
-	_, err = c.Publish("r/b", []byte("bbbb"), PublishOptions{Retain: true, QoS: packet.QoS1})
+	_, err = c.Publish("r/a", []byte("bbbb"), PublishOptions{Retain: true, QoS: packet.QoS1})
 	require.NoError(t, err)
 
-	// 先消费掉实时投递，避免干扰后续断言
-	for {
-		if _, err := watcher.PollMessage(context.Background(), 200*time.Millisecond); err != nil {
-			break
-		}
-	}
-
-	infos, page, err := c.ListRetainedPage(PageOptions{Limit: 1})
+	// 新订阅者应收到最后一次写入的保留消息
+	sub := testSetupClient(t, addr, "retained-sub", nil)
+	defer sub.Close()
+	require.NoError(t, sub.Subscribe("r/a"))
+	msg, err := sub.PollMessage(context.Background(), 3*time.Second)
 	require.NoError(t, err)
-	require.Len(t, infos, 1)
-	require.Equal(t, "r/a", infos[0].Topic)
-	require.Equal(t, 3, infos[0].PayloadSize)
-	require.Equal(t, packet.QoS0, infos[0].QoS)
-	require.False(t, infos[0].UpdatedAt.IsZero())
-	require.NotEmpty(t, page.NextCursor)
+	require.Equal(t, "r/a", msg.Topic())
+	require.Equal(t, []byte("bbbb"), msg.Payload())
 
-	infos, _, err = c.ListRetainedPage(PageOptions{Limit: 10, Cursor: page.NextCursor})
+	// 清除：空负载 + Retain（协议语义）
+	_, err = c.Publish("r/a", nil, PublishOptions{Retain: true})
 	require.NoError(t, err)
-	require.Len(t, infos, 1)
-	require.Equal(t, "r/b", infos[0].Topic)
-	require.Equal(t, 4, infos[0].PayloadSize)
-	require.Equal(t, packet.QoS1, infos[0].QoS)
 
-	// 前缀过滤
-	infos, _, err = c.ListRetainedPage(PageOptions{Prefix: "r/"})
-	require.NoError(t, err)
-	require.Len(t, infos, 2)
+	sub2 := testSetupClient(t, addr, "retained-sub2", nil)
+	defer sub2.Close()
+	require.NoError(t, sub2.Subscribe("r/a"))
+	_, err = sub2.PollMessage(context.Background(), 500*time.Millisecond)
+	require.Error(t, err, "retained message should have been cleared")
 
-	require.NoError(t, c.DeleteRetained("r/a"))
-	require.Empty(t, c.GetRetainedMessages("r/a"))
-	require.Len(t, c.GetRetainedMessages("r/b"), 1)
-
-	// 幂等
-	require.NoError(t, c.DeleteRetained("r/a"))
-	require.ErrorIs(t, c.DeleteRetained("bad/*"), ErrInvalidTopic)
-
-	// 不存在的保留消息不匹配
-	topics, _, err := c.ListTopics(PageOptions{})
-	require.NoError(t, err)
-	found := map[string]bool{}
-	for _, tp := range topics {
-		found[tp.Topic] = true
-	}
-	require.True(t, found["r/b"])
-	require.True(t, found["r/**"])
-	require.False(t, found["r/a"])
+	// 非法主题仍被拒绝
+	_, err = c.Publish("bad/*", nil, PublishOptions{Retain: true})
+	require.ErrorIs(t, err, ErrInvalidTopic)
 }
 
-// TestListSubscriptionsAndTopics 验证订阅与主题枚举。
-func TestListSubscriptionsAndTopics(t *testing.T) {
-	c := testSetupCore(t, nil)
-	defer c.Stop()
-
-	addr := testServe(t, c)
-
-	a := testSetupClient(t, addr, "list-a", nil)
-	defer a.Close()
-	b := testSetupClient(t, addr, "list-b", nil)
-	defer b.Close()
-
-	require.NoError(t, a.Subscribe("list/x"))
-	require.NoError(t, b.SubscribeWithOptions([]string{"list/x", "list/y"}, client.NewSubscribeOptions().WithQoS(packet.QoS1)))
-
-	subs, _, err := c.ListSubscriptions(PageOptions{})
-	require.NoError(t, err)
-	require.Len(t, subs, 3)
-	require.Equal(t, "list/x", subs[0].Topic)
-	require.Equal(t, "list-a", subs[0].ClientID)
-	require.Equal(t, "list/x", subs[1].Topic)
-	require.Equal(t, "list-b", subs[1].ClientID)
-	require.Equal(t, packet.QoS1, subs[1].QoS)
-
-	subs, _, err = c.ListSubscriptions(PageOptions{Prefix: "list/y"})
-	require.NoError(t, err)
-	require.Len(t, subs, 1)
-
-	topics, _, err := c.ListTopics(PageOptions{})
-	require.NoError(t, err)
-	require.Len(t, topics, 2)
-	require.Equal(t, "list/x", topics[0].Topic)
-	require.Equal(t, 2, topics[0].SubscriberCount)
-	require.Equal(t, "list/y", topics[1].Topic)
-	require.Equal(t, 1, topics[1].SubscriberCount)
-}
-
-// TestListPendingAck 验证在途 QoS1 消息枚举。
-func TestListPendingAck(t *testing.T) {
+// TestClientInfoPendingAck 验证详情中的在途 QoS1 水位。
+func TestClientInfoPendingAck(t *testing.T) {
 	c := testSetupCore(t, nil)
 	defer c.Stop()
 
@@ -395,58 +255,20 @@ func TestListPendingAck(t *testing.T) {
 	require.NoError(t, err)
 
 	require.True(t, eventually(t, 3*time.Second, 20*time.Millisecond, "pending ack recorded", func() bool {
-		infos, err := c.ListPendingAck("ack-sub")
-		return err == nil && len(infos) == 1
+		info, err := c.GetClientInfo("ack-sub")
+		return err == nil && info.PendingAck == 1 && info.OldestPendingAckAge > 0
 	}))
 
-	infos, err := c.ListPendingAck("ack-sub")
+	info, err := c.GetClientInfo("ack-sub")
 	require.NoError(t, err)
-	require.Len(t, infos, 1)
-	require.Equal(t, "ack/topic", infos[0].Topic)
-	require.Equal(t, packet.QoS1, infos[0].QoS)
-	require.False(t, infos[0].SentAt.IsZero())
-	require.GreaterOrEqual(t, infos[0].Age, time.Duration(0))
+	require.Equal(t, 1, info.PendingAck)
+	require.Positive(t, info.OldestPendingAckAge)
 
-	_, err = c.ListPendingAck("nobody")
+	_, err = c.GetClientInfo("nobody")
 	require.ErrorIs(t, err, &ClientNotFoundError{})
 }
 
-// TestPurgeClientQueue 验证清空积压。
-func TestPurgeClientQueue(t *testing.T) {
-	c := testSetupCore(t, nil)
-	defer c.Stop()
-
-	addr := testServe(t, c)
-	cli := testSetupClient(t, addr, "purge-client", client.NewClientOptions().WithSessionTimeout(60))
-	require.NoError(t, cli.Subscribe("purge/topic"))
-	require.NoError(t, cli.Disconnect())
-	defer cli.Close()
-	require.True(t, eventually(t, 2*time.Second, 10*time.Millisecond, "offline recorded", func() bool {
-		return c.isOfflineSession("purge-client")
-	}))
-
-	for i := 0; i < 3; i++ {
-		_, err := c.Publish("purge/topic", []byte("x"), PublishOptions{})
-		require.NoError(t, err)
-	}
-	require.True(t, eventually(t, 2*time.Second, 10*time.Millisecond, "queued", func() bool {
-		info, err := c.GetClientInfo("purge-client")
-		return err == nil && info.QueueSize >= 3
-	}))
-
-	n, err := c.PurgeClientQueue("purge-client")
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, n, int64(3))
-
-	info, err := c.GetClientInfo("purge-client")
-	require.NoError(t, err)
-	require.Equal(t, int64(0), info.QueueSize)
-
-	_, err = c.PurgeClientQueue("nobody")
-	require.ErrorIs(t, err, &ClientNotFoundError{})
-}
-
-// TestSubscribeEvents 验证事件流的类型、顺序与过滤。
+// TestSubscribeEvents 验证事件流的类型、顺序与每订阅者连续序号。
 func TestSubscribeEvents(t *testing.T) {
 	c := testSetupCore(t, nil)
 	defer c.Stop()
@@ -454,8 +276,9 @@ func TestSubscribeEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	events, err := c.SubscribeEvents(ctx, EventFilter{Buffer: 256})
+	stream, err := c.SubscribeEvents(ctx, EventOptions{Buffer: 256})
 	require.NoError(t, err)
+	defer stream.Close()
 
 	addr := testServe(t, c)
 	cli := testSetupClient(t, addr, "event-client", client.NewClientOptions().WithSessionTimeout(60))
@@ -477,7 +300,7 @@ func TestSubscribeEvents(t *testing.T) {
 	timeout := time.After(5 * time.Second)
 	for len(got) < len(want) {
 		select {
-		case ev := <-events:
+		case ev := <-stream.Events():
 			got = append(got, ev)
 		case <-timeout:
 			t.Fatalf("timeout waiting for events, got %v", typesOf(got))
@@ -486,18 +309,18 @@ func TestSubscribeEvents(t *testing.T) {
 
 	for i, wantType := range want {
 		require.Equal(t, wantType, got[i].Type, "event %d", i)
-		require.NotZero(t, got[i].Seq)
+		require.Equal(t, uint64(i+1), got[i].Seq, "seq must be contiguous per subscriber")
 		require.False(t, got[i].Time.IsZero())
-		if i > 0 {
-			require.Greater(t, got[i].Seq, got[i-1].Seq, "seq must be monotonic")
-		}
 	}
 	require.Equal(t, "event-client", got[0].ClientID)
+	require.NotEmpty(t, got[0].RemoteAddr)
 	require.Equal(t, "event/topic", got[1].Topic)
 	require.Equal(t, packet.ReasonNormalDisconnect.String(), got[3].Reason)
+	require.Greater(t, got[3].Duration, time.Duration(0))
+	require.Zero(t, stream.Dropped())
 }
 
-// TestSubscribeEventsFilterAndDrop 验证过滤器与慢消费者丢弃计数。
+// TestSubscribeEventsFilterAndDrop 验证过滤、每订阅者序号与慢消费者丢弃。
 func TestSubscribeEventsFilterAndDrop(t *testing.T) {
 	c := testSetupCore(t, nil)
 	defer c.Stop()
@@ -505,48 +328,102 @@ func TestSubscribeEventsFilterAndDrop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	only, err := c.SubscribeEvents(ctx, EventFilter{Types: []EventType{EventAdminAction}, Buffer: 1})
+	stream, err := c.SubscribeEvents(ctx, EventOptions{Types: []EventType{EventAdminAction}, Buffer: 1})
 	require.NoError(t, err)
+	defer stream.Close()
 
 	addr := testServe(t, c)
 	cli := testSetupClient(t, addr, "drop-client", nil)
 	defer cli.Close()
 
-	// 大量非 admin 事件不应进入通道
+	// 大量非 admin 事件既不入队、也不占用序号
 	for i := 0; i < 50; i++ {
 		_, err := c.Publish("drop/topic", []byte("x"), PublishOptions{})
 		require.NoError(t, err)
 	}
 	select {
-	case ev := <-only:
+	case ev := <-stream.Events():
 		t.Fatalf("unexpected event %v", ev.Type)
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	// 两个 admin 事件，缓冲只有 1 条：第二条必须被丢弃并计数
-	_, err = c.Publish("drop/retained", []byte("x"), PublishOptions{Retain: true})
-	require.NoError(t, err)
-	require.NoError(t, c.DeleteRetained("drop/retained"))
-	_, err = c.Publish("drop/topic", []byte("x"), PublishOptions{PublisherID: "admin"})
-	require.NoError(t, err)
+	// 三个 admin.action，缓冲只有 1 条：后两条被丢弃
+	for _, actor := range []string{"admin-1", "admin-2", "admin-3"} {
+		_, err = c.Publish("drop/topic", []byte("x"), PublishOptions{PublisherID: actor})
+		require.NoError(t, err)
+	}
 
 	require.True(t, eventually(t, 2*time.Second, 10*time.Millisecond, "events dropped", func() bool {
-		return c.GetStats().EventsDropped > 0
+		return stream.Dropped() == 2
 	}))
 
-	ev := <-only
+	ev := <-stream.Events()
 	require.Equal(t, EventAdminAction, ev.Type)
+	require.Equal(t, uint64(1), ev.Seq)
+	require.Equal(t, "admin-1", ev.Actor)
+	require.Equal(t, uint64(2), stream.Dropped())
+
+	// 再发布一条：序号 4 与已见的 1 相差 3，正好等于丢弃数（2）+ 本条
+	_, err = c.Publish("drop/topic", []byte("x"), PublishOptions{PublisherID: "admin-4"})
+	require.NoError(t, err)
+	ev = <-stream.Events()
+	require.Equal(t, uint64(4), ev.Seq)
 
 	// 取消订阅后通道关闭
 	cancel()
 	require.True(t, eventually(t, 2*time.Second, 10*time.Millisecond, "event channel closed", func() bool {
 		select {
-		case _, ok := <-only:
+		case _, ok := <-stream.Events():
 			return !ok
 		default:
 			return false
 		}
 	}))
+}
+
+// TestSubscribeEventsValidation 验证参数校验与显式关闭。
+func TestSubscribeEventsValidation(t *testing.T) {
+	c := testSetupCore(t, nil)
+	defer c.Stop()
+
+	// 故意传入 nil context 验证防护（避免无人关闭的订阅泄漏）
+	var nilCtx context.Context
+	_, err := c.SubscribeEvents(nilCtx, EventOptions{})
+	require.ErrorIs(t, err, ErrNilContext)
+
+	_, err = c.SubscribeEvents(context.Background(), EventOptions{Types: []EventType{"no.such.event"}})
+	require.ErrorIs(t, err, ErrInvalidEventType)
+
+	stream, err := c.SubscribeEvents(context.Background(), EventOptions{})
+	require.NoError(t, err)
+
+	// 重复 Close 安全
+	stream.Close()
+	stream.Close()
+
+	_, ok := <-stream.Events()
+	require.False(t, ok, "channel must be closed")
+}
+
+// TestEmitHotPathNoAlloc 验证事件发布在无订阅者/有订阅者时都不产生堆分配。
+func TestEmitHotPathNoAlloc(t *testing.T) {
+	c := testSetupCore(t, nil)
+	defer c.Stop()
+
+	ev := Event{Type: EventMessagePublished, ClientID: "c1", Topic: "hot/topic", Bytes: 8}
+
+	require.Zero(t, testing.AllocsPerRun(1000, func() { c.emit(ev) }),
+		"emit without subscribers must not allocate")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := c.SubscribeEvents(ctx, EventOptions{Buffer: 4096})
+	require.NoError(t, err)
+	defer stream.Close()
+
+	require.Zero(t, testing.AllocsPerRun(1000, func() { c.emit(ev) }),
+		"emit with a subscriber must not allocate")
+	require.Zero(t, stream.Dropped())
 }
 
 // TestAuthErrorReason 验证认证器可通过 AuthError 指定 CONNACK 原因码。

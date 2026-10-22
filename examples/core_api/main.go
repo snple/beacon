@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -14,7 +13,8 @@ import (
 
 func main() {
 	// 创建并启动 Core
-	c, err := core.NewWithOptions(core.NewCoreOptions())
+	c, err := core.NewWithOptions(core.NewCoreOptions().
+		WithBuildInfo("1.0.0", "example", "2026-01-01T00:00:00Z"))
 	if err != nil {
 		log.Fatal("Failed to create core:", err)
 	}
@@ -41,19 +41,13 @@ func main() {
 	fmt.Printf("   在线客户端: %d\n", c.GetOnlineClientsCount())
 	fmt.Printf("   总客户端: %d\n", c.GetTotalClientsCount())
 
-	// 2. 列出所有客户端
-	fmt.Println("2. 列出所有客户端:")
+	// 2. 列出所有客户端（轻量概要，不分页）
+	fmt.Println("2. 列出所有客户端（概要）:")
 	clients := c.ListClients()
-	for _, client := range clients {
-		fmt.Printf("   - ClientID: %s\n", client.ClientID)
-		fmt.Printf("     地址: %s\n", client.RemoteAddr)
-		fmt.Printf("     在线: %v\n", client.Connected)
-		fmt.Printf("     心跳间隔: %d 秒\n", client.KeepAlive)
-		fmt.Printf("     等待确认: %d\n", client.PendingAck)
-		fmt.Printf("     订阅数: %d\n", len(client.Subscriptions))
-		for _, sub := range client.Subscriptions {
-			fmt.Printf("       * %s (QoS %d)\n", sub.Topic, sub.QoS)
-		}
+	for _, summary := range clients {
+		fmt.Printf("   - %s online=%v addr=%q lastSeen=%s expires=%s\n",
+			summary.ClientID, summary.Connected, summary.RemoteAddr,
+			summary.LastSeenAt.Format(time.RFC3339), formatTime(summary.ExpiresAt))
 	}
 
 	// 3. 检查特定客户端在线状态
@@ -61,13 +55,6 @@ func main() {
 	fmt.Printf("3. 检查客户端 '%s' 在线状态:\n", testClientID)
 	if c.IsClientOnline(testClientID) {
 		fmt.Println("   客户端在线")
-
-		// 获取详细信息
-		if info, err := c.GetClientInfo(testClientID); err == nil {
-			data, _ := json.MarshalIndent(info, "   ", "  ")
-			fmt.Println("   详细信息:")
-			fmt.Println(string(data))
-		}
 	} else {
 		fmt.Println("   客户端离线")
 	}
@@ -112,32 +99,30 @@ func main() {
 	)
 	fmt.Printf("   成功发送到 %d 个客户端\n", successCount)
 
-	// 6. 获取主题订阅者
-	fmt.Println("6. 获取主题订阅者:")
-	topic := "sensors/temperature"
-	subscribers := c.GetTopicSubscribers(topic)
-	fmt.Printf("   主题 '%s' 的订阅者:\n", topic)
-	for _, opts := range subscribers {
-		fmt.Printf("   - %v\n", opts)
-	}
-
-	// 7. 获取客户端订阅列表
-	fmt.Println("7. 获取客户端订阅列表:")
+	// 6. 客户端详情（配置 + 运行状态 + 统计）
+	fmt.Println("6. 客户端详情:")
 	if len(clients) > 0 {
 		clientID := clients[0].ClientID
-		subs, err := c.GetClientSubscriptions(clientID)
+		info, err := c.GetClientInfo(clientID)
 		if err != nil {
 			fmt.Printf("   错误: %v\n", err)
 		} else {
-			fmt.Printf("   客户端 '%s' 的订阅:\n", clientID)
-			for _, sub := range subs {
-				fmt.Printf("   - %s (QoS %d)\n", sub.Topic, sub.QoS)
+			fmt.Printf("   客户端 '%s': transport=%s protocol=%s keepAlive=%d sessionTimeout=%d\n",
+				info.ClientID, info.Transport, info.ProtocolVersion, info.KeepAlive, info.SessionTimeout)
+			fmt.Printf("   队列: size=%d bytes=%d oldest=%s 在途: ack=%d oldest=%s\n",
+				info.QueueSize, info.QueueBytes, info.OldestQueuedAge,
+				info.PendingAck, info.OldestPendingAckAge)
+			fmt.Printf("   计数: sent=%d dropped=%d rejected=%d bytesOut=%d bytesIn=%d\n",
+				info.MessagesSent, info.MessagesDropped, info.MessagesRejected,
+				info.BytesSent, info.BytesReceived)
+			for _, sub := range info.Subscriptions {
+				fmt.Printf("   订阅: %s (QoS %d)\n", sub.Topic, sub.QoS)
 			}
 		}
 	}
 
-	// 8. 获取统计信息
-	fmt.Println("8. Core 统计信息:")
+	// 7. 获取统计信息
+	fmt.Println("7. Core 统计信息:")
 	stats := c.GetStats()
 	fmt.Printf("   累计会话数: %d\n", stats.ClientsTotal)
 	fmt.Printf("   当前连接: %d\n", stats.ClientsConnected)
@@ -148,38 +133,16 @@ func main() {
 	fmt.Printf("   发送字节数: %d\n", stats.BytesSent)
 	fmt.Printf("   订阅数: %d\n", stats.SubscriptionsCount)
 
-	// 9. 管理面新增 API 演示
-	fmt.Println("9. 服务器信息:")
+	// 8. 服务器信息
+	fmt.Println("8. 服务器信息:")
 	info := c.Info()
-	fmt.Printf("   版本: %s（协议 %s）\n", info.Version, info.Protocol)
+	fmt.Printf("   版本: %s（commit %s, built %s, 协议 %s）\n",
+		info.Version, info.Commit, info.BuildTime, info.Protocol)
 	fmt.Printf("   运行时长: %s\n", info.Uptime)
 	fmt.Printf("   监听器: %v\n", info.Listeners)
 	fmt.Printf("   存储: path=%q ready=%v bytes=%d\n", info.Store.Path, info.Store.Ready, info.Store.Bytes)
 
-	fmt.Println("10. 分页列出客户端（每页 2 条）:")
-	infos, page, err := c.ListClientsPage(core.PageOptions{Limit: 2})
-	if err != nil {
-		fmt.Printf("   错误: %v\n", err)
-	} else {
-		for _, cInfo := range infos {
-			fmt.Printf("   - %s online=%v queue=%d bytes=%d lastSeen=%s\n",
-				cInfo.ClientID, cInfo.Connected, cInfo.QueueSize, cInfo.QueueBytes,
-				cInfo.LastSeenAt.Format(time.RFC3339))
-		}
-		if page.NextCursor != "" {
-			fmt.Printf("   下一页游标: %s\n", page.NextCursor)
-		}
-	}
-
-	fmt.Println("11. 列出会话 / 订阅 / 主题:")
-	sessions, _, _ := c.ListSessions(core.PageOptions{Limit: 10})
-	fmt.Printf("   会话数: %d\n", len(sessions))
-	subs, _, _ := c.ListSubscriptions(core.PageOptions{Limit: 10})
-	fmt.Printf("   订阅数: %d\n", len(subs))
-	topics, _, _ := c.ListTopics(core.PageOptions{Limit: 10})
-	fmt.Printf("   主题数: %d\n", len(topics))
-
-	fmt.Println("12. 以 broker 身份发布（按订阅树投递）:")
+	fmt.Println("9. 以 broker 身份发布（按订阅树投递）:")
 	res, err := c.Publish("sensors/temperature", []byte(`{"value":25.6}`), core.PublishOptions{
 		QoS:     packet.QoS0,
 		TraceID: "admin-publish-001",
@@ -192,28 +155,23 @@ func main() {
 			res.MatchedSubscribers, res.Enqueued, res.Retained)
 	}
 
-	fmt.Println("13. 保留消息元数据:")
-	retained, _, _ := c.ListRetainedPage(core.PageOptions{Limit: 10})
-	for _, r := range retained {
-		fmt.Printf("   - %s size=%d qos=%d updated=%s\n",
-			r.Topic, r.PayloadSize, r.QoS, r.UpdatedAt.Format(time.RFC3339))
-	}
-
-	fmt.Println("14. 订阅事件流（3 秒）:")
+	fmt.Println("10. 订阅事件流（3 秒）:")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	events, err := c.SubscribeEvents(ctx, core.EventFilter{Buffer: 256})
+	stream, err := c.SubscribeEvents(ctx, core.EventOptions{Buffer: 256})
 	if err != nil {
 		fmt.Printf("   错误: %v\n", err)
 	} else {
-		for ev := range events {
+		for ev := range stream.Events() {
 			fmt.Printf("   #%d %s client=%s topic=%s reason=%s\n",
 				ev.Seq, ev.Type, ev.ClientID, ev.Topic, ev.Reason)
 		}
+		fmt.Printf("   丢弃: %d\n", stream.Dropped())
+		stream.Close()
 	}
 
-	// 15. 断开指定客户端（可选）
-	fmt.Println("15. 断开客户端连接 (演示):")
+	// 11. 断开指定客户端（可选）
+	fmt.Println("11. 断开客户端连接 (演示):")
 	if len(clients) > 0 {
 		clientID := clients[0].ClientID
 		fmt.Printf("   可以使用以下代码断开客户端 '%s':\n", clientID)
@@ -233,4 +191,11 @@ func main() {
 
 	// 保持运行
 	select {}
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format(time.RFC3339)
 }

@@ -22,7 +22,7 @@ func (c *Core) publish(msg Message) bool {
 			Bytes:  len(msg.Packet.Payload),
 			QoS:    msg.QoS,
 			Reason: packet.ReasonQuotaExceeded.String(),
-			Extra:  map[string]string{"quota": "pending_messages"},
+			Detail: "pending_messages",
 		})
 		c.logger.Warn("Message rejected, pending queue quota exceeded",
 			zap.String("topic", msg.Packet.Topic),
@@ -38,7 +38,7 @@ func (c *Core) publish(msg Message) bool {
 			Bytes:  len(msg.Packet.Payload),
 			QoS:    msg.QoS,
 			Reason: packet.ReasonQuotaExceeded.String(),
-			Extra:  map[string]string{"quota": "store_bytes"},
+			Detail: "store_bytes",
 		})
 		c.logger.Warn("Message rejected, store quota exceeded",
 			zap.String("topic", msg.Packet.Topic),
@@ -79,7 +79,7 @@ func (c *Core) publish(msg Message) bool {
 		Topic:    msg.Packet.Topic,
 		Bytes:    len(msg.Packet.Payload),
 		QoS:      msg.QoS,
-		Extra:    map[string]string{"retained": boolString(msg.Retain)},
+		Retained: msg.Retain,
 	})
 
 	return true
@@ -116,12 +116,7 @@ func (c *Core) handleRetainedMessage(msg *Message) {
 			expiryTime = msg.Packet.Properties.ExpiryTime
 		}
 
-		updatedAt := msg.Timestamp
-		if updatedAt <= 0 {
-			updatedAt = time.Now().Unix()
-		}
-		meta := retainMeta{PayloadSize: len(msg.Packet.Payload), UpdatedAt: updatedAt, QoS: msg.QoS}
-		if err := c.retainStore.set(msg.Packet.Topic, expiryTime, meta); err != nil {
+		if err := c.retainStore.set(msg.Packet.Topic, expiryTime); err != nil {
 			c.logger.Error("Failed to set retain message index",
 				zap.String("topic", msg.Packet.Topic),
 				zap.Error(err))

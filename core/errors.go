@@ -68,6 +68,14 @@ var (
 	ErrInvalidQoS           = errors.New("invalid qos")
 )
 
+// 管理面（事件流）错误
+var (
+	// ErrInvalidEventType 表示 EventOptions.Types 中包含未知的事件类型。
+	ErrInvalidEventType = errors.New("invalid event type")
+	// ErrNilContext 表示 SubscribeEvents 收到 nil context（无法自动关闭订阅）。
+	ErrNilContext = errors.New("nil context")
+)
+
 // ClientNotFoundError 客户端未找到错误（携带 clientID）
 type ClientNotFoundError struct {
 	ClientID string

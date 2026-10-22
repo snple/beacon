@@ -65,7 +65,7 @@ func TestSession_CleanStartDiscardsExistingSession(t *testing.T) {
 		t.Fatal("CleanStart must not resume the old session")
 	}
 
-	subs, err := core.GetClientSubscriptions("cleanstart-sub")
+	subs, err := getClientSubscriptionsForTest(core, "cleanstart-sub")
 	require.NoError(t, err)
 	require.Empty(t, subs, "old subscriptions must be discarded")
 
@@ -175,7 +175,7 @@ func TestSession_ExpiredWhileStoppedIsDiscarded(t *testing.T) {
 	if second.SessionPresent() {
 		t.Fatal("expired session must not be resumed")
 	}
-	subs, err := core2.GetClientSubscriptions("expired-sub")
+	subs, err := getClientSubscriptionsForTest(core2, "expired-sub")
 	require.NoError(t, err)
 	require.Empty(t, subs, "expired session's subscriptions must be gone")
 

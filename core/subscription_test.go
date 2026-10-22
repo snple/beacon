@@ -486,7 +486,7 @@ func TestWildcardSemantics_ConsistentAcrossImplementations(t *testing.T) {
 			_, inTree := tree.matchTopic(topic)["c1"]
 
 			store := newRetainStore()
-			if err := store.set(topic, 0, retainMeta{}); err != nil {
+			if err := store.set(topic, 0); err != nil {
 				t.Fatalf("retain set failed: %v", err)
 			}
 			inRetain := len(store.matchTopics(filter)) == 1
@@ -518,7 +518,7 @@ func TestWildcardSemantics_ConsistentAcrossImplementations(t *testing.T) {
 			}
 
 			store := newRetainStore()
-			if err := store.set(topic, 0, retainMeta{}); err != nil {
+			if err := store.set(topic, 0); err != nil {
 				t.Fatalf("retain set failed: %v", err)
 			}
 			if len(store.matchTopics(filter)) != 0 {

@@ -60,6 +60,16 @@ type CoreOptions struct {
 
 	// 日志
 	Logger *zap.Logger
+
+	// 构建信息：由宿主在构造时注入，运行期不可变（管理面 Info 展示）
+	BuildInfo BuildInfo
+}
+
+// BuildInfo 是宿主注入的构建信息。
+type BuildInfo struct {
+	Version   string // 版本号，默认 "devel"
+	Commit    string // 源码提交号
+	BuildTime string // 构建时间（格式由宿主决定）
 }
 
 // QueueOverflowPolicy 客户端待发送队列满时的溢出策略
@@ -109,6 +119,13 @@ func NewCoreOptions() *CoreOptions {
 // WithMaxClients 设置最大客户端数
 func (o *CoreOptions) WithMaxClients(n uint32) *CoreOptions {
 	o.MaxClients = n
+	return o
+}
+
+// WithBuildInfo 设置构建信息。属于构造期注入，运行期不可变：
+// 需要不同的版本号请重新构造 Core（与"配置在构造时确定"的原则一致）。
+func (o *CoreOptions) WithBuildInfo(version, commit, buildTime string) *CoreOptions {
+	o.BuildInfo = BuildInfo{Version: version, Commit: commit, BuildTime: buildTime}
 	return o
 }
 
@@ -286,6 +303,10 @@ func (o *CoreOptions) applyDefaults() {
 
 	if o.MaxPublishRate > 0 && o.MaxPublishBurst <= 0 {
 		o.MaxPublishBurst = max(1, int(o.MaxPublishRate))
+	}
+
+	if o.BuildInfo.Version == "" {
+		o.BuildInfo.Version = "devel"
 	}
 }
 

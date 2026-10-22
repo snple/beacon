@@ -132,7 +132,7 @@ func (c *Core) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeMetric(w, "beacon_pending_ack", "gauge", "所有客户端未确认的 QoS1 消息数", float64(s.PendingAckTotal))
 	writeMetric(w, "beacon_offline_sessions", "gauge", "保留中的离线会话数", float64(s.OfflineSessions))
 	writeMetric(w, "beacon_store_bytes", "gauge", "存储占用（字节）", float64(s.StoreBytes))
-	writeMetric(w, "beacon_events_dropped_total", "counter", "事件流因订阅者消费过慢而丢弃的事件数", float64(s.EventsDropped))
+	writeMetric(w, "beacon_events_dropped_total", "counter", "事件流因订阅者消费过慢而丢弃的事件总数（所有订阅者累计）", float64(s.EventsDropped))
 }
 
 // writeMetric 输出单条 Prometheus 文本格式指标。

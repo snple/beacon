@@ -38,7 +38,7 @@ func TestOfflineSessionCap_EvictsEarliest(t *testing.T) {
 		return errFirst != nil && errSecond == nil
 	}), "earliest offline session should be evicted, newest preserved")
 
-	if _, err := c.GetClientSubscriptions("cap-first"); err == nil {
+	if _, err := c.GetClientInfo("cap-first"); err == nil {
 		t.Fatal("evicted session's subscriptions should be removed")
 	}
 }
