@@ -198,6 +198,9 @@ func (c *Core) recoverSessions() {
 			},
 		}
 		client.session.timeout.Store(rec.Timeout)
+		// 恢复的会话不是通过 newClient 构造的，必须补上限流器，
+		// 否则重连后 MaxPublishRate 对该客户端失效。
+		client.initPublishLimiter()
 
 		client.initQueue()
 

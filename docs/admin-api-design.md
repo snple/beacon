@@ -23,7 +23,7 @@ if err := c.Start(); err != nil {
 }
 defer c.Stop()
 
-go func() { _ = c.ServeTCP(":3883") }()
+go func() { _ = c.ServeTCP(":5208") }()
 ```
 
 ## 客户端列表
@@ -74,7 +74,7 @@ for _, sub := range info.Subscriptions {
 | 标识 | `ClientID`、`Transport`（tcp/tls/ws）、`ProtocolVersion`、`RemoteAddr` |
 | 配置 | `KeepAlive`、`SessionTimeout`、`ReceiveWindow` |
 | 状态 | `Connected`、`ConnectedAt`、`LastSeenAt`、`ExpiresAt`、`WillTopic`、`Identity`、`Subscriptions` |
-| 积压/统计 | `QueueSize`、`QueueBytes`、`OldestQueuedAge`、`PendingAck`、`OldestPendingAckAge`、`MessagesSent/Dropped/Rejected`、`BytesSent/Received` |
+| 积压/统计 | `QueueSize`、`OldestQueuedAge`、`PendingAck`、`OldestPendingAckAge`、`MessagesSent/Dropped/Rejected`、`BytesSent/Received` |
 
 `Subscriptions` 元素为 `ClientSubscriptionInfo{Topic string; packet.SubscribeOptions}`。
 
@@ -201,7 +201,7 @@ type EventOptions struct {
 
 func (c *Core) SubscribeEvents(ctx context.Context, opts EventOptions) (*EventStream, error)
 
-func (s *EventStream) Events() <-chan Event // Close/ctx 结束时关闭
+func (s *EventStream) Events() <-chan Event // Close/ctx 结束/Core 停止时关闭
 func (s *EventStream) Dropped() uint64      // 本订阅者累计丢弃数
 func (s *EventStream) Close()               // 幂等
 ```

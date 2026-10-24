@@ -287,7 +287,6 @@ func (c *Core) buildClientInfo(client *Client) *ClientInfo {
 
 	if client.queue != nil {
 		info.QueueSize = client.queue.Count()
-		info.QueueBytes = client.queue.Bytes()
 		if msg, err := client.queue.Peek(); err == nil && msg != nil && msg.Timestamp > 0 {
 			info.OldestQueuedAge = time.Since(time.Unix(msg.Timestamp, 0))
 		}

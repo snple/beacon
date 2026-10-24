@@ -263,6 +263,9 @@ func (c *Client) loadOneQueuedMessage(conn *conn, sentInPass map[nson.Id]struct{
 		return false, true
 	}
 
+	// 注意：从持久化队列装载的消息无法区分"从未发送"与"已发送但未确认"
+	// （pendingAck 在断开时清空），因此这里不置 Dup。Dup 仅用于同一连接内的重发；
+	// 接收端如需去重，请按 PacketID 自行处理。
 	if err := conn.sendQueue.tryEnqueue(msg); err != nil {
 		if errors.Is(err, ErrMessageAlreadyInQueue) {
 			return false, false

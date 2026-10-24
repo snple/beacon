@@ -179,7 +179,6 @@ func TestClientInfoFields(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, info.Connected)
 	require.GreaterOrEqual(t, info.QueueSize, int64(2))
-	require.Greater(t, info.QueueBytes, int64(0))
 	require.Greater(t, info.OldestQueuedAge, time.Duration(0))
 	require.False(t, info.ExpiresAt.IsZero())
 	require.NotNil(t, info.Identity)

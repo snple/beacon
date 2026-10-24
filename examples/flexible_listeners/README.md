@@ -23,7 +23,7 @@ c, _ := core.NewWithOptions(core.NewCoreOptions())
 c.Start()
 
 // 阻塞式启动TCP服务
-if err := c.ServeTCP(":3883"); err != nil {
+if err := c.ServeTCP(":5208"); err != nil {
     log.Fatal(err)
 }
 ```
@@ -61,7 +61,7 @@ if err := c.Serve(listener); err != nil {
 ### 4. 完全手动控制（最大灵活性）
 
 ```go
-listener, _ := net.Listen("tcp", ":3883")
+listener, _ := net.Listen("tcp", ":5208")
 
 c, _ := core.NewWithOptions(core.NewCoreOptions())
 c.Start()
@@ -86,8 +86,8 @@ for {
 c, _ := core.NewWithOptions(core.NewCoreOptions())
 c.Start()
 
-// TCP on 3883
-go c.ServeTCP(":3883")
+// TCP on 5208
+go c.ServeTCP(":5208")
 
 // TLS on 8883
 go c.ServeTLS(":8883", tlsConfig)

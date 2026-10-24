@@ -35,6 +35,14 @@ func WithMaxWaitingConns(n int) CoreOption {
 	}
 }
 
+// WithMaxHandshakeConns 设置握手阶段（CONNECT → STREAM_OPEN/STREAM_READY）的并发连接上限，
+// 默认 1024，0 表示不限制。等待接收流的连接另受 WithMaxWaitingConns 限制。
+func WithMaxHandshakeConns(n int) CoreOption {
+	return func(b *Core) {
+		b.maxHandshakeConns = n
+	}
+}
+
 // WithWriteTimeout 设置控制包（CONNACK/PONG/STREAM_ACK 等）的单次写超时，
 // 默认 10 秒。数据转发路径不受此限制（需要背压）。
 func WithWriteTimeout(d time.Duration) CoreOption {

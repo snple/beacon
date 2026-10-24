@@ -9,5 +9,6 @@
 //   - Client：主动方 OpenStream / 被动方 AcceptStream；
 //   - Stream：实现 net.Conn 的字节流。
 //
-// 等待连接上限与停机行为见 WithMaxWaitingConns、WithWriteTimeout。
+// 握手阶段并发上限、等待连接上限与停机行为见 WithMaxHandshakeConns、
+// WithMaxWaitingConns、WithWriteTimeout。
 package stream

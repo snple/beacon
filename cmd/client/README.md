@@ -5,170 +5,94 @@
 ## 编译
 
 ```bash
-cd cmd/client
-go build -o client .
+go build -o client ./cmd/client
 ```
 
 ## 使用方法
-
-### 基本选项
 
 ```bash
 ./client [options]
 ```
 
-**通用选项:**
-- `-core <address>`: Core 地址 (默认: `localhost:5208`)
-- `-client-id <id>`: 客户端 ID (默认: 自动生成)
-- `-keepalive <seconds>`: 心跳间隔，秒 (默认: 60)
-- `-keep-session`: 保持会话状态 (默认: false)
-- `-debug`: 启用调试日志
-- `-version`: 显示版本信息
+**通用选项：**
 
-### 运行模式
+| 选项 | 默认值 | 说明 |
+|---|---|---|
+| `-core <address>` | `localhost:5208` | Core 地址；`ws://` / `wss://` 前缀自动走 WebSocket |
+| `-client-id <id>` | 自动生成 | 客户端 ID（非空时由服务端校验） |
+| `-keepalive <seconds>` | `60` | 心跳间隔（秒） |
+| `-session-timeout <seconds>` | `0` | 会话保留时间（秒）；`0` 表示断开即清理 |
+| `-debug` | `false` | 输出调试日志 |
+| `-version` | | 显示版本后退出 |
 
-使用 `-mode` 参数选择运行模式：
+**运行模式**（`-mode`，默认 `pub`）：
 
-#### 1. 发布模式 (pub/publish)
+### 发布模式（`pub` / `publish`）
 
-向指定主题发布消息：
+| 选项 | 默认值 | 说明 |
+|---|---|---|
+| `-topic <topic>` | `test/topic` | 发布主题（不允许通配符） |
+| `-message <text>` | `Hello, Beacon!` | 消息内容，实际发送为 `<text> #<序号>` |
+| `-count <n>` | `1` | 发布条数 |
+| `-interval <duration>` | `1s` | 发布间隔 |
 
 ```bash
 # 发布单条消息
 ./client -mode pub -topic test/topic -message "Hello, Beacon!"
 
-# 发布多条消息，间隔 1 秒
+# 发布 10 条，间隔 1 秒
 ./client -mode pub -topic sensor/temp -message "Temperature" -count 10 -interval 1s
 
-# 连接到自定义 core 地址
+# 连接自定义 core
 ./client -core 192.168.1.100:5208 -mode pub -topic test -message "Hello"
 ```
 
-**发布选项:**
-- `-topic <topic>`: 发布主题 (默认: `test/topic`)
-- `-message <text>`: 消息内容 (默认: `Hello, Beacon!`)
-- `-count <n>`: 发布消息数量 (默认: 1)
-- `-interval <duration>`: 消息间隔时间 (默认: `1s`)
+### 订阅模式（`sub` / `subscribe`）
 
-#### 2. 订阅模式 (sub/subscribe)
-
-订阅主题并接收消息：
+| 选项 | 默认值 | 说明 |
+|---|---|---|
+| `-topic <topic>` | `test/topic` | 订阅主题过滤器（支持 `*` / `**`） |
 
 ```bash
-# 订阅单个主题
 ./client -mode sub -topic test/topic
-
-# 订阅并保持会话
-./client -mode sub -topic sensor/# -keep-session
+./client -mode sub -topic 'sensor/**'
 ```
 
-**订阅选项:**
-- `-topic <topic>`: 订阅主题 (默认: `test/topic`)
+消息以 `PollMessage` 轮询接收（5 秒超时后继续等待），Ctrl+C 优雅退出。
 
-按 Ctrl+C 退出订阅。
-
-#### 3. 请求模式 (req/request)
-
-发送请求并等待响应：
-
-```bash
-# 发送单个请求
-./client -mode req -action echo -message "Hello"
-
-# 发送多个请求
-./client -mode req -action calculate -message "2+2" -count 5 -interval 2s
-```
-
-**请求选项:**
-- `-action <name>`: Action 名称 (默认: `echo`)
-- `-message <text>`: 请求负载 (默认: `Hello, Beacon!`)
-- `-count <n>`: 请求数量 (默认: 1)
-- `-interval <duration>`: 请求间隔 (默认: `1s`)
-
-#### 4. 轮询模式 (poll/polling)
-
-注册 action 并处理传入的请求：
-
-```bash
-# 作为 echo 服务运行
-./client -mode poll -action echo
-
-# 作为计算服务运行
-./client -mode poll -action calculator
-```
-
-**轮询选项:**
-- `-action <name>`: 注册的 action 名称 (默认: `echo`)
-
-轮询模式会自动响应收到的请求 (Echo 模式)。按 Ctrl+C 退出。
+> 通配符语法为 `*`（单层）与 `**`（多层，只能位于末尾）；MQTT 风格的 `#` / `+` 会被服务端拒绝。
 
 ## 示例场景
 
-### 场景 1: 简单的发布/订阅
+### 发布/订阅
 
-终端 1 (订阅者):
+终端 1（订阅者）：
+
 ```bash
 ./client -mode sub -topic sensors/temperature
 ```
 
-终端 2 (发布者):
-```bash
-./client -mode pub -topic sensors/temperature -message "25.5°C" -count 100 -interval 1s
-```
-
-### 场景 2: 请求/响应服务
-
-终端 1 (服务提供者):
-```bash
-./client -mode poll -action echo -client-id echo-server
-```
-
-终端 2 (客户端):
-```bash
-./client -mode req -action echo -message "Test message" -count 10
-```
-
-### 场景 3: 持久会话
+终端 2（发布者）：
 
 ```bash
-# 首次连接，订阅主题
-./client -mode sub -topic my/topic -keep-session -client-id my-client
-
-# 断开后重新连接，会话会恢复
-./client -mode sub -topic my/topic -keep-session -client-id my-client
+./client -mode pub -topic sensors/temperature -message "25.5C" -count 100 -interval 1s
 ```
 
-## 测试
-
-运行单元测试:
+### WebSocket 传输
 
 ```bash
-cd cmd/client
-go test -v
+# 服务端：beacon-core --addr :5208 --ws-addr :8080 --ws-path /ws
+./client -core ws://127.0.0.1:8080/ws -mode sub -topic 'test/**'
+./client -core ws://127.0.0.1:8080/ws -mode pub -topic test/hello -message "hi"
 ```
 
-运行集成测试:
+### 持久会话
 
 ```bash
-# 需要先启动 core
-cd cmd/core
-./core &
-
-# 运行集成测试脚本
-cd ../../tests
-./integration_test.sh
+# 断开后 60 秒内用同一 ClientID 重连，服务端会恢复会话（订阅与待投递消息）
+./client -mode sub -topic my/topic -client-id my-client -session-timeout 60
 ```
-
-## 调试
-
-启用调试日志查看详细信息:
-
-```bash
-./client -debug -mode sub -topic test
-```
-
-这将输出详细的连接、认证、消息传输等信息。
 
 ## 退出
 
-在任何模式下，按 `Ctrl+C` 可优雅地断开连接并退出。
+任何模式下按 `Ctrl+C` 都会发送 DISCONNECT 并优雅关闭客户端。

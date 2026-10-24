@@ -171,7 +171,13 @@ func runPublishMode(ctx context.Context, c *client.Client, topic, message string
 		fmt.Printf("✓ Published message #%d: %s\n", i+1, msg)
 
 		if i < count-1 && interval > 0 {
-			time.Sleep(interval)
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 	}
 

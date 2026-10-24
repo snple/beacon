@@ -445,7 +445,7 @@ func (c *Client) SubscribeWithOptions(topics []string, opts *SubscribeOptions) e
 	case <-timer.C:
 		// 没有拿到 SUBACK：保留记录，重连后会重新发送（重复订阅是幂等的）。
 		conn.clearPendingAck(sub.PacketID)
-		return ErrPublishTimeout
+		return ErrSubscribeTimeout
 	case <-conn.ctx.Done():
 		conn.clearPendingAck(sub.PacketID)
 		return ErrNotConnected
@@ -548,7 +548,7 @@ func (c *Client) Unsubscribe(topics ...string) error {
 		}
 	case <-timer.C:
 		conn.clearPendingAck(unsub.PacketID)
-		return ErrPublishTimeout
+		return ErrUnsubscribeTimeout
 	case <-conn.ctx.Done():
 		conn.clearPendingAck(unsub.PacketID)
 		return ErrNotConnected

@@ -49,10 +49,17 @@ func (c *Core) ServeWSListener(listener net.Listener, path string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Core 停止时关闭 HTTP 服务，让 ServeWSListener 返回
+	// Core 停止时关闭 HTTP 服务，让 ServeWSListener 返回。
+	// stopClose 保证服务因其它原因退出时该协程也会结束，不留下孤儿 goroutine。
+	stopClose := make(chan struct{})
+	defer close(stopClose)
+
 	go func() {
-		<-c.ctx.Done()
-		_ = srv.Close()
+		select {
+		case <-c.ctx.Done():
+			_ = srv.Close()
+		case <-stopClose:
+		}
 	}()
 
 	id := c.registerListener(listener.Addr().String(), "ws")

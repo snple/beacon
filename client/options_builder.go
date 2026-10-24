@@ -14,7 +14,7 @@ import (
 // ClientOptions 客户端配置选项（Builder 模式）
 type ClientOptions struct {
 	// 连接信息
-	Core     string // 地址 (如 "localhost:3883" 或 "tls://localhost:8883")
+	Core     string // 地址 (如 "localhost:5208" 或 "tls://localhost:8883")
 	ClientID string
 
 	// 认证信息
@@ -64,9 +64,11 @@ type ClientOptions struct {
 }
 
 // NewClientOptions 创建新的客户端配置选项
+//
+// 默认地址与 beacon-core 的默认监听端口一致（:5208），开箱即可连接。
 func NewClientOptions() *ClientOptions {
 	return &ClientOptions{
-		Core:               "localhost:3883",
+		Core:               "localhost:5208",
 		KeepAlive:          defaultKeepAlive,
 		SessionTimeout:     0, // 默认不保持会话
 		ConnectTimeout:     defaultConnectTimeout,
@@ -287,7 +289,7 @@ func (o *ClientOptions) WithAutoAck(autoAck bool) *ClientOptions {
 // applyDefaults 应用默认值
 func (o *ClientOptions) applyDefaults() {
 	if o.Core == "" {
-		o.Core = "localhost:3883"
+		o.Core = "localhost:5208"
 	}
 	if o.KeepAlive == 0 {
 		o.KeepAlive = defaultKeepAlive
@@ -336,6 +338,10 @@ func (o *ClientOptions) Validate() error {
 	}
 	if o.WriteTimeout < 0 {
 		return fmt.Errorf("writeTimeout must be >= 0, got %v", o.WriteTimeout)
+	}
+	// 与 core 保持一致：非法存储配置会让 badger 行为异常，必须在构造前拒绝。
+	if err := o.StoreOptions.Validate(); err != nil {
+		return fmt.Errorf("store options validation failed: %w", err)
 	}
 	return nil
 }

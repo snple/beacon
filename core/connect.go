@@ -352,6 +352,14 @@ func (c *Core) authClient(conn net.Conn, connect *packet.ConnectPacket) (*AuthCo
 // 2. 有旧客户端 + KeepSession=true：复用旧 Client，替换其 Conn
 // 3. 有旧客户端 + KeepSession=false：清理旧 Client，创建新 Client
 func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (*Client, bool, bool, []*conn) {
+	// 注册过程整体串行：丢弃旧会话时需要在 clientsMu 之外做存储清理，
+	// 只有串行化注册才能保证清理期间没有同 ClientID 的新客户端插入 map，
+	// 否则清理会把新会话的队列与会话记录一并删掉。
+	c.registerMu.Lock()
+	defer c.registerMu.Unlock()
+
+	clientID := connect.ClientID
+
 	c.clientsMu.Lock()
 
 	// 停机后不再接受注册：与 Stop 的客户端快照共用同一把锁，
@@ -361,13 +369,37 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 		return nil, false, false, nil
 	}
 
-	clientID := connect.ClientID
-
 	existingClient, exists := c.clients[clientID]
 
 	wasOnline := false
 	if exists {
 		wasOnline = !existingClient.Closed()
+	}
+
+	// 从离线会话列表中移除，同时判断会话是否已过期。
+	// 清理协程是周期性运行的，会话过期后到被清理之间仍可能收到重连；
+	// 此时必须按"会话不存在"处理（SessionPresent=false），
+	// 否则客户端会拿到一个本应已失效的会话。
+	sessionExpired := false
+	if exists {
+		c.offlineSessionsMu.Lock()
+		// 只对离线会话判过期：在线会话（接管场景）不应因为表里的残留时间戳被误判。
+		if expiry, ok := c.offlineSessions[clientID]; ok && existingClient.Closed() && time.Now().After(expiry) {
+			sessionExpired = true
+		}
+		delete(c.offlineSessions, clientID)
+		c.offlineSessionsMu.Unlock()
+	}
+
+	canResumeSession := exists && !connect.CleanStart && connect.SessionTimeout > 0 &&
+		!sessionExpired && existingClient.session.timeout.Load() > 0
+
+	// 情况1: 无旧客户端，创建新 Client
+	if !exists {
+		client := newClient(netConn, connect, c)
+		c.clients[clientID] = client
+		c.clientsMu.Unlock()
+		return client, false, wasOnline, nil
 	}
 
 	// oldConns 收集需要在锁外关闭的旧连接。
@@ -376,49 +408,8 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 	// 在全局锁内等待慢客户端会阻塞所有新连接注册。
 	var oldConns []*conn
 
-	// CleanStart：客户端要求全新会话，先丢弃旧会话（订阅 + 待投递消息 + 持久化元数据）
-	if exists && connect.CleanStart {
-		if wasOnline {
-			if oc := existingClient.getConn(); oc != nil {
-				oc.detach(packet.ReasonSessionTakenOver)
-				oldConns = append(oldConns, oc)
-			}
-		}
-		delete(c.clients, clientID)
-		c.cleanupClientWithoutLock(clientID, existingClient)
-		// 旧会话记录已被丢弃：同步移除离线会话表，避免留下过期时间戳。
-		c.offlineSessionsMu.Lock()
-		delete(c.offlineSessions, clientID)
-		c.offlineSessionsMu.Unlock()
-		existingClient = nil
-		exists = false
-	}
-
-	// 情况1: 无旧客户端，创建新 Client
-	if !exists {
-		client := newClient(netConn, connect, c)
-		c.clients[clientID] = client
-		c.clientsMu.Unlock()
-		return client, false, wasOnline, oldConns
-	}
-
-	// 从离线会话列表中移除，同时判断会话是否已过期。
-	// 清理协程是周期性运行的，会话过期后到被清理之间仍可能收到重连；
-	// 此时必须按"会话不存在"处理（SessionPresent=false），
-	// 否则客户端会拿到一个本应已失效的会话。
-	sessionExpired := false
-	c.offlineSessionsMu.Lock()
-	// 只对离线会话判过期：在线会话（接管场景）不应因为表里的残留时间戳被误判。
-	if expiry, ok := c.offlineSessions[clientID]; ok && existingClient.Closed() && time.Now().After(expiry) {
-		sessionExpired = true
-	}
-	delete(c.offlineSessions, clientID)
-	c.offlineSessionsMu.Unlock()
-
-	canResumeSession := !sessionExpired && existingClient.session.timeout.Load() > 0
-
 	// 情况2: 复用旧 Client，只替换 Conn
-	if connect.SessionTimeout > 0 && canResumeSession {
+	if canResumeSession {
 		oldConn := existingClient.getConn()
 
 		// 用本次 CONNECT 更新会话参数（超时、认证信息、遗嘱）
@@ -441,7 +432,7 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 		return existingClient, true, wasOnline, oldConns
 	}
 
-	// 情况3: SessionTimeout=0 或旧会话不可恢复，清理旧 Client，创建新 Client
+	// 情况3: CleanStart / SessionTimeout=0 / 旧会话已过期，丢弃旧会话后创建新 Client。
 
 	// 踢掉旧连接，因为我们会手动清理旧会话
 	if wasOnline {
@@ -451,15 +442,19 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 		}
 	}
 
-	// 清理旧资源（在持有锁的情况下调用不需要锁的版本）
+	// 锁内只摘除 map 条目；删除会话记录、清空旧队列等 badger 写入放到锁外，
+	// 否则慢盘或大积压会把所有连接注册阻塞在全局锁上。
 	delete(c.clients, clientID)
-	c.cleanupClientWithoutLock(clientID, existingClient)
-
-	// 创建新 Client
-	client := newClient(netConn, connect, c)
-	c.clients[clientID] = client
-
 	c.clientsMu.Unlock()
+
+	c.cleanupClient(clientID, existingClient)
+
+	// 创建新 Client（此时旧队列已被清空，initQueue 的计数才准确）
+	client := newClient(netConn, connect, c)
+	c.clientsMu.Lock()
+	c.clients[clientID] = client
+	c.clientsMu.Unlock()
+
 	return client, false, wasOnline, oldConns
 }
 
@@ -498,6 +493,14 @@ func (c *Core) sendConnack(conn net.Conn, sessionPresent bool, code packet.Reaso
 // 3. 正常断开（收到 DISCONNECT 包）：清除遗嘱消息，不发送
 // 4. 异常断开（没有 DISCONNECT 包）：发布遗嘱消息
 func (c *Core) handleClientDisconnect(client *Client) {
+	// 被新连接接管的连接不参与任何断开清理：不发布遗嘱、不修改可能已被替换的会话。
+	// 该判断覆盖两种情况：新 Client 对象已就位（下方 map 检查），以及 registerClient
+	// 正在锁外清理旧会话、map 中暂时没有该 ClientID 的空窗期。
+	if conn := client.getConn(); conn != nil && conn.closeReasonCode() == packet.ReasonSessionTakenOver {
+		client.touch()
+		return
+	}
+
 	// 如果同一 ClientID 已经被新的 Client 实例接管，这里只能结束旧连接的生命周期，
 	// 不能再修改当前 map 中的新会话状态。
 	c.clientsMu.RLock()

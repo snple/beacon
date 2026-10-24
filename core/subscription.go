@@ -8,16 +8,6 @@ import (
 )
 
 // ============================================================================
-// SubInfo - 订阅信息
-// ============================================================================
-
-// SubInfo 订阅信息
-// type SubInfo struct {
-// 	ClientID string
-// 	QoS      packet.QoS
-// }
-
-// ============================================================================
 // SubTree - 订阅树（用于主题匹配）
 // ============================================================================
 
@@ -134,10 +124,14 @@ func (t *subTree) unsubscribeClient(clientID string) int {
 // matchTopic 匹配主题，返回订阅者 map（自动去重，保留最高 QoS 的选项）
 // 返回 map[clientID]SubscribeOptions
 //
-// 通配符语义：
+// 通配符语义以 packet.MatchTopic 为唯一参照：
 //   - *  匹配单个层级
 //   - ** 匹配零个或多个剩余层级，且只能作为最后一层
 //     （ValidateTopicFilter 拒绝 a/**/b 这类中缀写法）
+//
+// 这里按"过滤器树 → 具体主题"遍历；与 retainStore.matchTopics（"过滤器 → 主题集合"）
+// 方向相反，故保留两份遍历。二者与 packet.MatchTopic 的一致性由
+// topic_match_consistency_test.go 做差分校验。
 func (t *subTree) matchTopic(topic string) map[string]packet.SubscribeOptions {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

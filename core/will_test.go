@@ -91,6 +91,27 @@ func TestWill_ServerShutdownDoesNotPublish(t *testing.T) {
 		"server shutdown must not publish the will")
 }
 
+// TestWill_SessionTakeoverDoesNotPublish 验证被接管的连接不发布遗嘱。
+// 既覆盖新 Client 对象已就位的情况，也覆盖 registerClient 在锁外清理旧会话、
+// map 中暂时没有该 ClientID 的空窗期。
+func TestWill_SessionTakeoverDoesNotPublish(t *testing.T) {
+	core, err := NewWithOptions(NewCoreOptions())
+	require.NoError(t, err)
+	defer core.store.close()
+
+	client := newQuotaTestClient(t, core, "will-takeover")
+	client.session.willPacket = packet.NewPublishPacket("will/takeover", []byte("bye"))
+
+	conn := &conn{client: client, conn: &failingWriteConn{}}
+	conn.closeReason.Store(uint32(packet.ReasonSessionTakenOver))
+	client.conn = conn
+
+	before := core.queue.Count()
+	core.handleClientDisconnect(client)
+	require.Equal(t, before, core.queue.Count(),
+		"session takeover must not publish the will")
+}
+
 // TestWill_AbnormalDisconnectPublishes 验证异常断开（心跳超时/网络错误）仍会发布遗嘱。
 func TestWill_AbnormalDisconnectPublishes(t *testing.T) {
 	core, err := NewWithOptions(NewCoreOptions())

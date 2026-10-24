@@ -39,20 +39,26 @@ Beacon 是一个**精简的二进制协议**（协议名 `MX`，版本 2），�
 包类型：`CONNECT=1, CONNACK=2, PUBLISH=3, PUBACK=4, SUBSCRIBE=5, SUBACK=6, UNSUBSCRIBE=7, UNSUBACK=8, PING=9, PONG=10, DISCONNECT=11, AUTH=12, TRACE=13`（以 `packet/constants.go` 为准）。
 
 **字符串**：`[Len(2B 大端)][UTF-8 字节]`；**Id**：12 字节（见 §5.2）；
-**属性**：`[Len(4B 大端)][Bitmask(2B)][按位序的属性值]`。即使没有任何属性，也要写 `Len=2` 和 `Bitmask=0`，共 6 字节（`00 00 00 02 00 00`）。
+**属性**：`[Len(4B 大端)][属性体]`，属性体为 `[Bitmask(2B)][按位序的属性值]`。
+`Len=0`（仅 4 字节长度前缀）表示"没有属性"，解码器必须接受；本仓库的编码器总是写入
+`Len=2 + Bitmask=0`（共 6 字节，`00 00 00 02 00 00`）。
 > 例外：AUTH 包的属性没有长度前缀，直接是 `[Bitmask(1B)][按位序的值]`（AUTH 包体只有 ReasonCode 和属性）。
 
 ### 2.2 各包最小 Remaining（可据此快速拒绝畸形包）
+
+下表按"字符/属性体为 0 字节"计算，与 `packet.minRemainingLength` 一致；
+"属性长度(4)"只计 4 字节长度前缀，若实现选择写 `Bitmask=0`，每种带属性的包再加 2 字节。
+
 | 包 | 最小 Remaining | 说明 |
 |---|---|---|
-| CONNECT | 17 | 协议名(2+2)+版本(1)+ClientID(2)+KeepAlive(2)+SessionTimeout(4)+SessionFlags(1)+属性(2) |
-| CONNACK | 6 | SessionPresent(1)+ReasonCode(1)+属性(2)+固定 |
-| PUBLISH | 19 | Flags(1)+Topic(2)+PacketID(12)+属性(2)+固定 |
+| CONNECT | 17 | 协议名(2+0)+版本(1)+ClientID(2+0)+KeepAlive(2)+SessionTimeout(4)+SessionFlags(1)+属性长度(4)+WillFlags(1) |
+| CONNACK | 6 | SessionPresent(1)+ReasonCode(1)+属性长度(4) |
+| PUBLISH | 19 | Flags(1)+Topic(2+0)+PacketID(12)+属性长度(4) |
 | PUBACK | 12 | PacketID(12) |
-| SUBSCRIBE | 19 | PacketID(12)+属性(2)+Topic(2)+Options(1)+固定 |
-| SUBACK | 17 | PacketID(12)+属性(2)+ReasonCode(1) |
-| UNSUBSCRIBE | 18 | PacketID(12)+属性(2)+Topic(2) |
-| UNSUBACK | 17 | PacketID(12)+属性(2)+ReasonCode(1) |
+| SUBSCRIBE | 19 | PacketID(12)+属性长度(4)+Topic(2+0)+Options(1) |
+| SUBACK | 17 | PacketID(12)+属性长度(4)+ReasonCode(1) |
+| UNSUBSCRIBE | 18 | PacketID(12)+属性长度(4)+Topic(2+0) |
+| UNSUBACK | 17 | PacketID(12)+属性长度(4)+ReasonCode(1) |
 | PING | 12 | Seq(4)+Timestamp(8) |
 | PONG | 13 | Seq(4)+Echo(8)+Load(1) |
 | DISCONNECT/AUTH | 0 | 可无包体 |
@@ -81,6 +87,11 @@ Type=CONNECT, Remaining=...
 > **ClientID 约束**：非空、不超过 256 字节、合法 UTF-8，且不能包含 `:` 或控制字符。
 > 服务端以 `CONNACK(ReasonClientIDNotValid, 0x85)` 拒绝非法 ID；ClientID 留空时由服务端分配
 > （在 CONNACK 的 `ClientID` 属性中返回）。
+>
+> **主题约束**：非空、≤ 65535 字节、合法 UTF-8、不含 NUL；发布主题不得含通配符，
+> 订阅过滤器只允许 `*`（单层）与 `**`（仅末层）。非法过滤器按条返回
+> `SUBACK(ReasonTopicFilterInvalid, 0x8F)` 而不断开连接；非法发布主题在 QoS1 下回
+> `PUBACK(TopicNameInvalid)`，QoS0 直接丢弃。
 
 **CONNACK**（服务端 → 客户端）
 ```
@@ -278,6 +289,7 @@ IDLE ──发送QoS1──► WAIT_ACK ──收到PUBACK──► IDLE
 
 ### 8.6 主题与通配符
 - 通配符：`*`（单层）、`**`（多层，须在末尾）。发布主题**不允许**通配符。
+- 主题必须是合法 UTF-8、不含 NUL 且 ≤ 65535 字节（与 ClientID 的 UTF-8 要求一致）；`#` / `+` 是本协议之外的历史写法，会被拒绝。
 - 嵌入式只需发送/订阅普通字符串主题；通配符匹配是**服务端**的职责，客户端无需实现匹配逻辑。
 
 ### 8.7 内存优化建议（通用）

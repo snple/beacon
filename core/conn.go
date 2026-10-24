@@ -158,13 +158,33 @@ func (c *conn) serve() {
 				zap.String("clientID", c.client.ID),
 				zap.Error(err))
 
-			if !errors.Is(err, io.EOF) {
-				// 协议错误
-				reason = packet.ReasonProtocolError
-			}
+			reason = closeReasonFromError(err)
 			return
 		}
 	}
+}
+
+// closeReasonError 让包处理函数指定连接关闭原因码（默认按 ProtocolError 处理）。
+type closeReasonError struct {
+	reason packet.ReasonCode
+	err    error
+}
+
+func (e *closeReasonError) Error() string { return e.err.Error() }
+
+func (e *closeReasonError) Unwrap() error { return e.err }
+
+// closeReasonFromError 把 handlePacket 返回的错误映射为连接关闭原因。
+func closeReasonFromError(err error) packet.ReasonCode {
+	var cre *closeReasonError
+	if errors.As(err, &cre) {
+		return cre.reason
+	}
+	if errors.Is(err, io.EOF) {
+		// 客户端发来 DISCONNECT：正常断开，不再回 DISCONNECT。
+		return packet.ReasonNormalDisconnect
+	}
+	return packet.ReasonProtocolError
 }
 
 // calculateKeepAliveTimeout 计算 KeepAlive 超时时间

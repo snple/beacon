@@ -88,3 +88,22 @@ func TestNewWithOptionsNil(t *testing.T) {
 		t.Fatal("Core should not be nil")
 	}
 }
+
+// TestCoreOptionsRejectsNegativeValues 验证负数配置被拒绝，而不是静默变成"关闭"。
+func TestCoreOptionsRejectsNegativeValues(t *testing.T) {
+	cases := map[string]*CoreOptions{
+		"connection rate limit": NewCoreOptions().WithConnectionRateLimit(-1, 0),
+		"connection rate burst": NewCoreOptions().WithConnectionRateLimit(10, -1),
+		"default message expiry": func() *CoreOptions {
+			return NewCoreOptions().WithDefaultMessageExpiry(-time.Second)
+		}(),
+	}
+
+	for name, opts := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := opts.Validate(); err == nil {
+				t.Fatalf("expected validation error for %s", name)
+			}
+		})
+	}
+}

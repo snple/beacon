@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"errors"
 	"net"
 	"testing"
@@ -139,4 +140,54 @@ func TestClientAcceptStream_StopsOnAuthRejection(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("AcceptStream should return immediately on auth rejection")
 	}
+}
+
+// TestSleepOrDone 验证重试退避在 ctx 取消时立即返回。
+func TestSleepOrDone(t *testing.T) {
+	if sleepOrDone(context.Background(), 10*time.Millisecond) {
+		t.Fatal("sleepOrDone should return false after the timer elapses")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !sleepOrDone(ctx, time.Hour) {
+		t.Fatal("sleepOrDone should return true when ctx is done")
+	}
+}
+
+// TestCoreMaxHandshakeConns 验证握手阶段的并发连接受 MaxHandshakeConns 限制，
+// 超限连接会收到 CONNACK(ServerUnavailable) 并关闭。
+func TestCoreMaxHandshakeConns(t *testing.T) {
+	core := newTestStreamCore(t, WithMaxHandshakeConns(1))
+	defer core.Stop()
+
+	addr := core.GetAddress()
+
+	// 第一个连接完成 CONNECT 后不再发送任何包：它停留在握手阶段并占住唯一名额。
+	first, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer first.Close()
+
+	require.NoError(t, packet.WritePacket(first, &packet.ConnectPacket{
+		ClientID:   "hold-slot",
+		Properties: map[string]string{},
+	}))
+	require.NoError(t, first.SetReadDeadline(time.Now().Add(2*time.Second)))
+	pkt, err := packet.ReadPacket(first)
+	require.NoError(t, err)
+	ack, ok := pkt.(*packet.ConnackPacket)
+	require.True(t, ok)
+	require.Equal(t, packet.Success, ack.ReasonCode)
+
+	// 第二个连接应被立即拒绝。
+	second, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer second.Close()
+
+	require.NoError(t, second.SetReadDeadline(time.Now().Add(3*time.Second)))
+	pkt, err = packet.ReadPacket(second)
+	require.NoError(t, err)
+	ack, ok = pkt.(*packet.ConnackPacket)
+	require.True(t, ok)
+	require.Equal(t, packet.ServerUnavailable, ack.ReasonCode)
 }

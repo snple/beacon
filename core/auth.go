@@ -44,6 +44,16 @@ func (c *Client) handleAuth(p *packet.AuthPacket) error {
 		authResp.Properties = packet.NewAuthProperties()
 	}
 
+	// 认证器通过 ResponseProperties 指定回给客户端的用户属性（成功/继续/失败均生效）
+	if len(ctx.ResponseProperties) > 0 {
+		if authResp.Properties.UserProperties == nil {
+			authResp.Properties.UserProperties = make(map[string]string, len(ctx.ResponseProperties))
+		}
+		for k, v := range ctx.ResponseProperties {
+			authResp.Properties.UserProperties[k] = v
+		}
+	}
+
 	if err != nil {
 		// 认证失败
 		authResp.ReasonCode = packet.ReasonNotAuthorized
@@ -61,7 +71,8 @@ func (c *Client) handleAuth(p *packet.AuthPacket) error {
 		c.core.logger.Warn("Authentication failed",
 			zap.String("clientID", c.ID),
 			zap.Error(err))
-		return err
+		// 认证失败不是协议错误：关闭原因应上报 NotAuthorized（管理面/事件可见）。
+		return &closeReasonError{reason: packet.ReasonNotAuthorized, err: err}
 	}
 
 	if continued {
@@ -69,7 +80,11 @@ func (c *Client) handleAuth(p *packet.AuthPacket) error {
 		authResp.ReasonCode = packet.ReasonContinueAuth
 		authResp.Properties.AuthData = authData
 	} else {
-		// 认证成功
+		// 认证成功：重新认证给出的身份必须落到会话上，
+		// 否则 ClientInfo/事件里的身份会一直是首次 CONNECT 时的旧值。
+		if ctx.Identity != nil {
+			c.session.setIdentity(ctx.Identity)
+		}
 		authResp.ReasonCode = packet.ReasonSuccess
 		if authData != nil {
 			authResp.Properties.AuthData = authData

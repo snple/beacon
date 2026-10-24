@@ -25,12 +25,12 @@ func main() {
 
 	// 在后台启动TCP服务
 	go func() {
-		if err := c.ServeTCP(":3883"); err != nil {
+		if err := c.ServeTCP(":5208"); err != nil {
 			log.Fatal("TCP server error:", err)
 		}
 	}()
 
-	fmt.Println("Core started on :3883")
+	fmt.Println("Core started on :5208")
 	fmt.Println("=== Core 管理 API 示例 ===")
 
 	// 等待一些客户端连接
@@ -109,8 +109,8 @@ func main() {
 		} else {
 			fmt.Printf("   客户端 '%s': transport=%s protocol=%s keepAlive=%d sessionTimeout=%d\n",
 				info.ClientID, info.Transport, info.ProtocolVersion, info.KeepAlive, info.SessionTimeout)
-			fmt.Printf("   队列: size=%d bytes=%d oldest=%s 在途: ack=%d oldest=%s\n",
-				info.QueueSize, info.QueueBytes, info.OldestQueuedAge,
+			fmt.Printf("   队列: size=%d oldest=%s 在途: ack=%d oldest=%s\n",
+				info.QueueSize, info.OldestQueuedAge,
 				info.PendingAck, info.OldestPendingAckAge)
 			fmt.Printf("   计数: sent=%d dropped=%d rejected=%d bytesOut=%d bytesIn=%d\n",
 				info.MessagesSent, info.MessagesDropped, info.MessagesRejected,

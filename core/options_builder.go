@@ -31,7 +31,10 @@ type CoreOptions struct {
 
 	// 消息过期
 	DefaultMessageExpiry time.Duration // 默认消息过期时间（0 表示永不过期）
-	ExpiredCheckInterval time.Duration // 过期消息检查间隔
+	// ExpiredCheckInterval 是过期检查间隔（>0 时不得小于 10s）。
+	// 注意：0 表示关闭定期清理，此时过期离线会话与过期保留消息不会被回收
+	// （投递路径仍会按 ExpiryTime 跳过过期消息）。
+	ExpiredCheckInterval time.Duration
 
 	// QoS 重传
 	RetransmitInterval time.Duration // QoS 1 消息重传间隔（默认 30 秒）
@@ -59,7 +62,7 @@ type CoreOptions struct {
 	StoreOptions StoreOptions // 消息持久化配置
 
 	// 日志
-	Logger *zap.Logger
+	Logger *zap.Logger // 可选的日志器，nil 表示静默（不产生任何输出）
 
 	// 构建信息：由宿主在构造时注入，运行期不可变（管理面 Info 展示）
 	BuildInfo BuildInfo
@@ -178,7 +181,7 @@ func (o *CoreOptions) WithDefaultMessageExpiry(d time.Duration) *CoreOptions {
 	return o
 }
 
-// WithExpiredCheckInterval 设置过期消息检查间隔
+// WithExpiredCheckInterval 设置过期检查间隔（0 表示关闭定期清理，见字段注释）
 func (o *CoreOptions) WithExpiredCheckInterval(d time.Duration) *CoreOptions {
 	o.ExpiredCheckInterval = d
 	return o
@@ -298,7 +301,7 @@ func (o *CoreOptions) WithLogger(logger *zap.Logger) *CoreOptions {
 // applyDefaults 应用默认值
 func (o *CoreOptions) applyDefaults() {
 	if o.Logger == nil {
-		o.Logger, _ = zap.NewDevelopment()
+		o.Logger = zap.NewNop()
 	}
 
 	if o.MaxPublishRate > 0 && o.MaxPublishBurst <= 0 {
@@ -337,6 +340,9 @@ func (o *CoreOptions) Validate() error {
 	}
 
 	// 验证消息过期设置
+	if o.DefaultMessageExpiry < 0 {
+		return fmt.Errorf("defaultMessageExpiry must be >= 0, got %v", o.DefaultMessageExpiry)
+	}
 	if o.ExpiredCheckInterval < 0 {
 		return fmt.Errorf("expiredCheckInterval must be >= 0, got %v", o.ExpiredCheckInterval)
 	}
@@ -358,6 +364,12 @@ func (o *CoreOptions) Validate() error {
 	}
 
 	// 验证配额配置
+	if o.ConnectionRateLimit < 0 {
+		return fmt.Errorf("connectionRateLimit must be >= 0, got %v", o.ConnectionRateLimit)
+	}
+	if o.ConnectionRateBurst < 0 {
+		return fmt.Errorf("connectionRateBurst must be >= 0, got %d", o.ConnectionRateBurst)
+	}
 	if o.MaxClientQueueSize < 0 {
 		return fmt.Errorf("maxClientQueueSize must be >= 0, got %d", o.MaxClientQueueSize)
 	}

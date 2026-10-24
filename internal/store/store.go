@@ -20,10 +20,12 @@ type Options struct {
 	Logger           *zap.Logger   // 日志
 }
 
-// Validate 验证存储配置的有效性
+// Validate 验证存储配置的有效性。
+//
+// ValueLogFileSize=0 表示沿用 badger 默认值（New 不会覆盖），负数才视为配置错误。
 func (o *Options) Validate() error {
-	if o.ValueLogFileSize <= 0 {
-		return fmt.Errorf("valueLogFileSize must be > 0, got %d", o.ValueLogFileSize)
+	if o.ValueLogFileSize < 0 {
+		return fmt.Errorf("valueLogFileSize must be >= 0, got %d", o.ValueLogFileSize)
 	}
 	if o.GCInterval < 0 {
 		return fmt.Errorf("gcInterval must be >= 0, got %v", o.GCInterval)
@@ -44,7 +46,7 @@ type Store struct {
 // New 创建存储实例
 func New(options Options) (*Store, error) {
 	if options.Logger == nil {
-		options.Logger, _ = zap.NewDevelopment()
+		options.Logger = zap.NewNop()
 	}
 
 	var opts badger.Options

@@ -110,7 +110,7 @@ type EventStream struct {
 	once sync.Once
 }
 
-// Events 返回只读事件通道。通道在 Close() 或 ctx 结束后关闭。
+// Events 返回只读事件通道。通道在 Close()、ctx 结束或 Core 停止时关闭。
 func (s *EventStream) Events() <-chan Event {
 	return s.sub.ch
 }
@@ -239,17 +239,36 @@ func (b *eventBus) subscribe(opts EventOptions) (*eventSub, error) {
 }
 
 // remove 注销订阅并关闭通道。与 publish 共用总线锁，避免向已关闭通道发送。
+// 幂等：closeAll 已关闭全部订阅时，重复调用不会重复关闭通道。
 func (b *eventBus) remove(sub *eventSub) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if _, ok := b.subs[sub.id]; !ok {
+		return
+	}
 	delete(b.subs, sub.id)
 	b.subCount.Add(-1)
 	close(sub.ch)
-	b.mu.Unlock()
+}
+
+// closeAll 关闭所有订阅（Core 停止时调用）。
+// 订阅者可能使用 context.Background()，只靠调用方 ctx 无法退出，
+// 不主动关通道会让消费者永久阻塞。
+func (b *eventBus) closeAll() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for id, sub := range b.subs {
+		delete(b.subs, id)
+		close(sub.ch)
+	}
+	b.subCount.Store(0)
 }
 
 // SubscribeEvents 订阅管理面事件。
 //
-// ctx 结束或调用 Close() 时关闭通道（Close 可重复调用）。
+// ctx 结束、调用 Close() 或 Core 停止时关闭通道（Close 可重复调用）。
 // 消费者过慢时事件被丢弃（不阻塞 broker），可通过 EventStream.Dropped() 与 Seq 跳号观察；
 // 需要精确状态时以 ListClients / GetClientInfo 快照为准。
 func (c *Core) SubscribeEvents(ctx context.Context, opts EventOptions) (*EventStream, error) {
@@ -266,6 +285,9 @@ func (c *Core) SubscribeEvents(ctx context.Context, opts EventOptions) (*EventSt
 	go func() {
 		select {
 		case <-ctx.Done():
+			s.Close()
+		case <-c.ctx.Done():
+			// Core 停止：即使调用方用 Background ctx 也必须结束订阅
 			s.Close()
 		case <-s.done:
 		}

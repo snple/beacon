@@ -42,3 +42,32 @@ func TestMaxClientIDLengthFitsProtocol(t *testing.T) {
 			MaxClientIDLength, MaxStringLength)
 	}
 }
+
+func TestValidateTopicRejectsInvalidUTF8(t *testing.T) {
+	tests := []struct {
+		name   string
+		topic  string
+		filter bool
+		want   bool
+	}{
+		{"valid utf8 name", "设备/温度", false, true},
+		{"valid utf8 filter", "设备/**", true, true},
+		{"invalid utf8 name", "a\xffb", false, false},
+		{"invalid utf8 filter", "a\xffb/**", true, false},
+		{"nul name", "a\x00b", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got bool
+			if tt.filter {
+				got = ValidateTopicFilter(tt.topic)
+			} else {
+				got = ValidateTopicName(tt.topic)
+			}
+			if got != tt.want {
+				t.Fatalf("topic %q validity = %v, want %v", tt.topic, got, tt.want)
+			}
+		})
+	}
+}

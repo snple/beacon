@@ -12,7 +12,7 @@ import (
 type StoreOptions = istore.Options
 
 // DefaultStoreOptions 返回默认存储配置
-// Logger 为 nil 时由 internal/store 自动创建默认 logger
+// Logger 为 nil 时使用静默 logger（不产生输出）
 func DefaultStoreOptions() StoreOptions {
 	return StoreOptions{
 		DataDir:          "",    // InMemory 模式

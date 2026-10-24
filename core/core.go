@@ -21,6 +21,12 @@ type Core struct {
 	clients   map[string]*Client
 	clientsMu sync.RWMutex
 
+	// registerMu 串行化客户端注册。
+	// 丢弃旧会话时需要在锁外做存储清理（删除会话记录、清空旧队列），
+	// 若并发的同 ClientID 注册在此期间插入新客户端，清理会误删新会话的数据；
+	// 因此注册过程整体串行，clientsMu 只用于保护 map 的读写。
+	registerMu sync.Mutex
+
 	// 离线会话过期管理
 	offlineSessions   map[string]time.Time // clientID -> 过期时间
 	offlineSessionsMu sync.Mutex
@@ -121,7 +127,6 @@ type Stats struct {
 //
 //	b, err := core.NewWithOptions(
 //	    core.NewCoreOptions().
-//	        WithAddress(":3883").
 //	        WithMaxClients(10000).
 //	        WithRetainEnabled(true),
 //	)
@@ -200,7 +205,7 @@ func (c *Core) initStore() error {
 func (c *Core) initQueue() error {
 	c.queue = NewQueue(c.store.db(), "core:")
 
-	c.logger.Info("Message queue initialized (InMemory)")
+	c.logger.Info("Message queue initialized")
 	return nil
 }
 
@@ -287,6 +292,10 @@ func (c *Core) Stop() error {
 		c.taskMu.Unlock()
 
 		c.cancel()
+
+		// 关闭所有事件流。订阅者可能使用 context.Background()，仅靠调用方 ctx
+		// 无法退出，通道不关闭会让消费者永久阻塞。
+		c.events.closeAll()
 
 		// 关闭仍在握手的连接：它们还没注册进 clients，wg.Wait 会被 ConnectTimeout 拖住。
 		c.closeHandshakeConns()
@@ -550,7 +559,6 @@ type ClientInfo struct {
 
 	// 积压
 	QueueSize           int64         // 待发送队列消息条数
-	QueueBytes          int64         // 待发送队列编码后字节数（近似）
 	OldestQueuedAge     time.Duration // 队列中最老消息的存在时长
 	OldestPendingAckAge time.Duration // 最老的未确认 QoS1 消息存在时长
 

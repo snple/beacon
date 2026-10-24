@@ -16,7 +16,7 @@ type Dialer interface {
 
 // TCPDialer TCP/TLS 拨号器
 type TCPDialer struct {
-	Address     string        // 服务器地址 (例如: "127.0.0.1:3883" 或 "tls://127.0.0.1:3884")
+	Address     string        // 服务器地址 (例如: "127.0.0.1:5208" 或 "tls://127.0.0.1:8883")
 	TLSConfig   *tls.Config   // TLS 配置（可选）
 	DialTimeout time.Duration // 连接超时（默认 10s）
 }

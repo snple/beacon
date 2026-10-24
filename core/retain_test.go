@@ -318,9 +318,9 @@ func TestMatchTopic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.pattern+"->"+tt.topic, func(t *testing.T) {
-			got := matchTopic(tt.pattern, tt.topic)
+			got := packet.MatchTopic(tt.pattern, tt.topic)
 			if got != tt.want {
-				t.Errorf("matchTopic(%s, %s) = %v, want %v", tt.pattern, tt.topic, got, tt.want)
+				t.Errorf("packet.MatchTopic(%s, %s) = %v, want %v", tt.pattern, tt.topic, got, tt.want)
 			}
 		})
 	}

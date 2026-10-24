@@ -86,6 +86,9 @@ func (e *ClientNotFoundError) Error() string {
 }
 
 func (e *ClientNotFoundError) Is(target error) bool {
+	if target == ErrClientNotFound {
+		return true
+	}
 	_, ok := target.(*ClientNotFoundError)
 	return ok
 }
@@ -124,6 +127,9 @@ func (e *ClientNotAvailableError) Error() string {
 }
 
 func (e *ClientNotAvailableError) Is(target error) bool {
+	if target == ErrClientNotAvailable {
+		return true
+	}
 	_, ok := target.(*ClientNotAvailableError)
 	return ok
 }

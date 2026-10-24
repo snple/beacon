@@ -67,6 +67,9 @@ func (c *Core) cleanupExpiredSessions() {
 
 // cleanupClient 清理客户端相关资源。
 // 当 client 非 nil 时，使用传入的已脱离 clients map 的客户端对象完成资源清理。
+//
+// 注意：本方法包含 badger 写入（删除会话记录、清空队列），
+// 调用方不得持有 clientsMu，否则慢盘会阻塞整个连接注册/查询路径。
 func (c *Core) cleanupClient(clientID string, client *Client) {
 	// 会话元数据随会话一起删除
 	c.deleteSession(clientID)
@@ -84,27 +87,6 @@ func (c *Core) cleanupClient(clientID string, client *Client) {
 		c.clientsMu.RUnlock()
 	}
 
-	if client != nil {
-		if err := client.queue.Clear(); err != nil {
-			c.logger.Warn("Failed to clear client message queue",
-				zap.String("clientID", clientID),
-				zap.Error(err))
-		}
-	}
-}
-
-// cleanupClientWithoutLock 清理客户端相关资源（假定调用者已持有 clientsMu 锁）
-func (c *Core) cleanupClientWithoutLock(clientID string, client *Client) {
-	// 会话元数据随会话一起删除
-	c.deleteSession(clientID)
-
-	// 清理订阅
-	subCount := c.subTree.unsubscribeClient(clientID)
-	if subCount > 0 {
-		c.stats.SubscriptionsCount.Add(-int64(subCount))
-	}
-
-	// 清理消息队列
 	if client != nil {
 		if err := client.queue.Clear(); err != nil {
 			c.logger.Warn("Failed to clear client message queue",

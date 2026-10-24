@@ -12,7 +12,7 @@ import (
 // TestClientOptionsBuilder 测试 ClientOptions Builder 模式
 func TestClientOptionsBuilder(t *testing.T) {
 	opts := NewClientOptions().
-		WithCore("localhost:3883").
+		WithCore("localhost:5208").
 		WithClientID("test-client").
 		WithKeepAlive(30).
 		WithSessionTimeout(3600).
@@ -23,8 +23,8 @@ func TestClientOptionsBuilder(t *testing.T) {
 		WithUserProperty("key2", "value2").
 		WithMessageQueueSize(500)
 
-	if opts.Core != "localhost:3883" {
-		t.Errorf("expected core localhost:3883, got %s", opts.Core)
+	if opts.Core != "localhost:5208" {
+		t.Errorf("expected core localhost:5208, got %s", opts.Core)
 	}
 	if opts.ClientID != "test-client" {
 		t.Errorf("expected clientID test-client, got %s", opts.ClientID)
@@ -177,8 +177,8 @@ func TestSubscribeOptionsBuilder(t *testing.T) {
 func TestClientOptionsDefaults(t *testing.T) {
 	opts := NewClientOptions()
 
-	if opts.Core != "localhost:3883" {
-		t.Errorf("expected default core localhost:3883, got %s", opts.Core)
+	if opts.Core != "localhost:5208" {
+		t.Errorf("expected default core localhost:5208, got %s", opts.Core)
 	}
 	if opts.KeepAlive != 60 {
 		t.Errorf("expected default keepAlive 60, got %d", opts.KeepAlive)

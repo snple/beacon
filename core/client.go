@@ -71,9 +71,7 @@ func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Cli
 	}
 
 	// 每客户端发布速率限制（令牌桶）；0 表示不限制
-	if rate := core.options.MaxPublishRate; rate > 0 {
-		c.publishLimiter = newTokenBucket(rate, core.options.MaxPublishBurst)
-	}
+	c.initPublishLimiter()
 
 	// 初始化消息队列
 	c.initQueue()
@@ -89,11 +87,21 @@ func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Cli
 	return c
 }
 
+// initPublishLimiter 按 Core 配置创建每客户端发布限流器（MaxPublishRate=0 表示不限制）。
+//
+// 除 newClient 外，从磁盘恢复的离线会话也必须调用：那类 Client 不是通过
+// newClient 构造的，漏掉会绕过发布速率限制。
+func (c *Client) initPublishLimiter() {
+	if rate := c.core.options.MaxPublishRate; rate > 0 {
+		c.publishLimiter = newTokenBucket(rate, c.core.options.MaxPublishBurst)
+	}
+}
+
 // initQueue 初始化消息队列（NewQueue 不会失败）。
 func (c *Client) initQueue() {
 	c.queue = NewQueue(c.core.store.db(), fmt.Sprintf("client:%s:", c.ID))
 
-	c.core.logger.Info("Message queue initialized")
+	c.core.logger.Debug("Message queue initialized")
 }
 
 // attachConn 附加新的网络连接到客户端

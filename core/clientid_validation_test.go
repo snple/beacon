@@ -77,3 +77,21 @@ func TestRecoverSessions_DropsInvalidClientID(t *testing.T) {
 	restored := NewQueue(c2.store.db(), "client:legacy:id:")
 	require.Equal(t, int64(0), restored.Count(), "invalid client ID queue must be cleaned up")
 }
+
+// TestConnect_EmptyClientIDIsAssigned 验证 ClientID 留空时由服务端分配，
+// 并通过 CONNACK 的 ClientID 属性返回给客户端。
+func TestConnect_EmptyClientIDIsAssigned(t *testing.T) {
+	c := testSetupCore(t, NewCoreOptions())
+	defer c.Stop()
+
+	addr := testServe(t, c)
+	cli := testSetupClient(t, addr, "", nil)
+	defer cli.Close()
+
+	assigned := cli.ClientID()
+	require.NotEmpty(t, assigned, "server should assign a client ID")
+	require.True(t, packet.ValidateClientID(assigned), "assigned ID must satisfy server constraints")
+
+	_, err := c.GetClientInfo(assigned)
+	require.NoError(t, err, "assigned ID should be registered in the broker")
+}

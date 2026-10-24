@@ -9,6 +9,9 @@ import (
 	"github.com/dgraph-io/badger/v4"
 )
 
+// idLength 是 nson.Id 的字节长度（从队列 key 尾部切分 PacketID 时使用）。
+const idLength = 12
+
 // 队列相关错误
 var (
 	// ErrQueueEmpty 队列为空
@@ -420,10 +423,13 @@ func (q *Queue[T]) GetLastId() (nson.Id, error) {
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
-		// 构造反向查找的起始 key（prefix + 最大可能值）
-		seekKey := make([]byte, len(q.prefix)+1)
+		// 构造反向查找的起始 key：prefix + 全 0xFF 的 PacketID 占位。
+		// 只用 prefix+单个 0xFF 会跳过"首字节恰好是 0xFF"的最大 key。
+		seekKey := make([]byte, len(q.prefix)+idLength)
 		copy(seekKey, q.prefix)
-		seekKey[len(seekKey)-1] = 0xFF
+		for i := len(q.prefix); i < len(seekKey); i++ {
+			seekKey[i] = 0xFF
+		}
 
 		it.Seek(seekKey)
 

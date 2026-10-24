@@ -140,9 +140,8 @@ type Client struct {
 	retransmitLoopStarted atomic.Bool
 
 	// 生命周期
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closeOnce sync.Once
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	logger *zap.Logger
 }
@@ -153,7 +152,7 @@ type Client struct {
 //
 //	c, err := client.NewWithOptions(
 //	    client.NewClientOptions().
-//	        WithCore("127.0.0.1:3883").
+//	        WithCore("127.0.0.1:5208").
 //	        WithClientID("c1").
 //	        WithKeepAlive(60),
 //	)
@@ -168,10 +167,10 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// 使用用户提供的 logger，或创建默认 logger
+	// 使用用户提供的 logger；未提供时用 Nop（与此前文档一致：nil 表示静默）
 	logger := opts.Logger
 	if logger == nil {
-		logger, _ = zap.NewDevelopment()
+		logger = zap.NewNop()
 	}
 
 	c := &Client{
@@ -200,7 +199,7 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	// 初始化消息队列
 	c.queue = NewQueue(store.db(), "queue:")
 
-	logger.Info("Message queue initialized")
+	logger.Debug("Message queue initialized")
 
 	// 启动统一的重连循环（内部会检查 autoReconnect 开关）
 	c.wg.Add(1)
@@ -255,22 +254,24 @@ func (c *Client) onConnLost(err error) {
 	}
 }
 
+// close 关闭当前连接。
+//
+// 这里不做一次性守卫：Disconnect 之后客户端仍可重新 Connect，
+// 若用 sync.Once 包住，第二次 Disconnect 会静默失效（连接不关闭、c.conn 不复位）。
+// conn.close 自身是幂等的，因此重复调用安全。
 func (c *Client) close(err error) error {
-	c.closeOnce.Do(func() {
-		c.connected.Store(false)
+	c.connected.Store(false)
 
-		// 关闭当前连接
-		c.connMu.Lock()
-		conn := c.conn
-		c.conn = nil
-		c.connMu.Unlock()
+	c.connMu.Lock()
+	conn := c.conn
+	c.conn = nil
+	c.connMu.Unlock()
 
-		if conn != nil {
-			conn.close(err)
-			conn.wait()
-		}
+	if conn != nil {
+		conn.close(err)
+		conn.wait()
+	}
 
-	})
 	return nil
 }
 

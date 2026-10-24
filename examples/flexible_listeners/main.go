@@ -32,7 +32,7 @@ func main() {
 
 	// 方式 1: 使用内置的 ServeTCP（最简单）
 	go func() {
-		if err := c.ServeTCP(":3883"); err != nil {
+		if err := c.ServeTCP(":5208"); err != nil {
 			logger.Error("TCP server error", zap.Error(err))
 		}
 	}()

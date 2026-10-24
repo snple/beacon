@@ -17,7 +17,9 @@
 .DS_Store
 .env
 
+# 配置文件可能含密钥，默认忽略；示例模板用 *.example.toml 显式放行
 *.toml
+!*.example.toml
 *.db
 
 # beacon-core 默认存储目录

@@ -53,6 +53,11 @@ msg.Ack() // 处理完才确认；未确认的消息会被服务端重传
   `Core.Broadcast` 则是即时的、仅在线客户端的扇出，不为离线会话入队。
 - **持久化默认关闭**：库默认使用内存存储（`StoreOptions.DataDir` 为空）。需要重启后仍保留消息，必须配置 `DataDir`，
   并建议同时设置 `SyncWrites=true`，否则进程/机器掉电时已确认的消息仍可能丢失。
+- **过期清理间隔**：`core.WithExpiredCheckInterval(d)` 默认 180 秒；设置为 `0` 会关闭定期清理，
+  过期离线会话与过期保留消息不再被回收（投递路径仍会按 `ExpiryTime` 跳过过期消息）。
+- **`Dup` 标志**：仅在**同一连接内**重发时置 1；重连后从持久化队列补发的消息可能曾发送过，
+  但无法区分"从未发送"与"已发送未确认"，因此不置 `Dup`。两端都不依赖 `Dup` 去重，
+  接收端如需幂等请按 `PacketID` 处理。
 - **写超时**：`core.WithWriteTimeout(d)` / `client.WithWriteTimeout(d)` 控制单次网络写超时（默认 10 秒，`0` 表示不设置）。
   写入超时或失败会关闭该连接，未确认的消息仍保留在持久化队列中，重连后补发；编码失败（如属性超长）不会断开连接。
   这保证了慢速/不读数据的对端不会永久占用发送协程，也不会拖住停机。
@@ -201,7 +206,7 @@ import "github.com/snple/beacon/core"
 
 更多示例：
 
-- [`examples/core_api`](./examples/core_api/main.go)：Core 管理 API（分页/会话/保留消息/事件流/发布）
+- [`examples/core_api`](./examples/core_api/main.go)：Core 管理 API（客户端列表/详情、发布、事件流、踢下线）
 - [`examples/flexible_listeners`](./examples/flexible_listeners/main.go)：自定义监听器（TCP/TLS/Unix Socket）
 - [`examples/secure_core`](./examples/secure_core/main.go)：认证 + TLS + 配额 + metrics 端点
 - [`docs/embedded-client-guide.md`](./docs/embedded-client-guide.md)：CONNECT 报文布局与嵌入式客户端实现要点
@@ -214,6 +219,8 @@ import "github.com/snple/beacon/core"
 - `stream.Core`：监听并中继；`stream.Client.OpenStream`（主动方）/ `AcceptStream`（被动方）建立双向流；
 - `stream.Stream` 实现 `net.Conn`，可直接作为普通字节流使用；
 - 等待中的接收连接总数受 `stream.WithMaxWaitingConns`（默认 10000）限制；
+- 握手阶段（读到 CONNECT 到完成 STREAM_OPEN/READY）的并发连接受 `stream.WithMaxHandshakeConns`（默认 1024）限制，
+  超限直接 `CONNACK(ServerUnavailable)` 并关闭，避免慢客户端用半开连接占满 goroutine；
 - 控制包（CONNACK/PONG/STREAM_ACK）与数据转发都受 `stream.WithWriteTimeout`（默认 10s）约束：
   对端长期不读数据时写超时会结束该流，而不是让转发协程永久阻塞；
 - `Core.Stop()` 会关闭等待连接与活跃流，不会因转发协程阻塞而挂起；认证被拒时 `AcceptStream` 立即返回 `ErrAuthRejected`。
@@ -231,7 +238,7 @@ beacon-core --addr :5208 --ws-addr :8080 --ws-path /ws
 **客户端**：地址以 `ws://` 或 `wss://` 开头时自动走 WebSocket 传输：
 
 ```bash
-beacon-client --core ws://127.0.0.1:8080/ws --client-id c1 --mode sub --topic "test/#"
+beacon-client --core ws://127.0.0.1:8080/ws --client-id c1 --mode sub --topic 'test/**'
 beacon-client --core ws://127.0.0.1:8080/ws --client-id c2 --mode pub --topic test/hello --message "hi"
 ```
 

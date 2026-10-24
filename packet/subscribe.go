@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/danclive/nson-go"
 )
@@ -64,8 +65,8 @@ func ValidateTopicFilter(topic string) bool {
 		return false
 	}
 
-	// 检查 UTF-8 编码中的空字符
-	if strings.ContainsRune(topic, 0) {
+	// 与 ClientID 约束保持一致：必须是合法 UTF-8，且不含空字符
+	if !utf8.ValidString(topic) || strings.ContainsRune(topic, 0) {
 		return false
 	}
 
@@ -108,12 +109,8 @@ func ValidateTopicName(topic string) bool {
 		return false
 	}
 
-	// 检查 UTF-8 编码中的空字符
-	if strings.ContainsRune(topic, 0) {
-		return false
-	}
-
-	return true
+	// 与 ClientID 约束保持一致：必须是合法 UTF-8，且不含空字符
+	return utf8.ValidString(topic) && !strings.ContainsRune(topic, 0)
 }
 
 // MatchTopic 检查主题名是否匹配主题过滤器

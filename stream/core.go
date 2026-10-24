@@ -13,6 +13,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// 握手阶段的超时（可通过 WithWriteTimeout 控制控制包写超时，读取超时固定）。
+const (
+	streamConnectReadTimeout = 10 * time.Second // 读取 CONNECT
+	streamOpenReadTimeout    = 30 * time.Second // 读取 STREAM_OPEN/STREAM_READY 或目标 ACK
+)
+
 // Core 是流中继服务：完成认证、配对等待连接并双向转发字节流。
 type Core struct {
 	address     string
@@ -26,8 +32,10 @@ type Core struct {
 	waitingCount int // 所有 clientID 下等待连接总数（受 maxWaitingConns 限制）
 
 	// 配置
-	maxWaitingConns int
-	writeTimeout    time.Duration
+	maxWaitingConns   int
+	maxHandshakeConns int
+	handshakeSlots    chan struct{} // 握手阶段并发名额（nil 表示不限制）
+	writeTimeout      time.Duration
 
 	// 所有已接受且尚未关闭的连接。Stop 时统一关闭，
 	// 保证握手/转发中的阻塞读写都能被唤醒（否则 wg.Wait 会挂住）。
@@ -90,19 +98,19 @@ type AuthHandler func(clientID, authMethod string, authData []byte) error
 // - address（WithAddress）
 func NewCore(opts ...CoreOption) (*Core, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	// 创建默认的 zap logger
-	logger, _ := zap.NewDevelopment()
+	// 默认静默；WithCoreLogger 可显式注入日志器
 	b := &Core{
-		address:         "",
-		authHandler:     func(clientID, authMethod string, authData []byte) error { return nil },
-		logger:          logger,
-		waitingConns:    make(map[string][]*WaitingConn),
-		streams:         make(map[uint32]*StreamSession),
-		maxWaitingConns: 10000,
-		writeTimeout:    10 * time.Second,
-		conns:           make(map[net.Conn]struct{}),
-		ctx:             ctx,
-		cancel:          cancel,
+		address:           "",
+		authHandler:       func(clientID, authMethod string, authData []byte) error { return nil },
+		logger:            zap.NewNop(),
+		waitingConns:      make(map[string][]*WaitingConn),
+		streams:           make(map[uint32]*StreamSession),
+		maxWaitingConns:   10000,
+		maxHandshakeConns: 1024,
+		writeTimeout:      10 * time.Second,
+		conns:             make(map[net.Conn]struct{}),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
 	for _, opt := range opts {
@@ -112,8 +120,10 @@ func NewCore(opts ...CoreOption) (*Core, error) {
 	}
 
 	if b.logger == nil {
-		logger, _ := zap.NewDevelopment()
-		b.logger = logger
+		b.logger = zap.NewNop()
+	}
+	if b.maxHandshakeConns > 0 {
+		b.handshakeSlots = make(chan struct{}, b.maxHandshakeConns)
 	}
 	if b.address == "" {
 		cancel()
@@ -189,6 +199,22 @@ func (b *Core) Stop() error {
 	b.wg.Wait()
 	b.logger.Info("Core stopped")
 	return nil
+}
+
+// acquireHandshakeSlot 获取握手阶段并发名额。
+// 返回幂等的 release 与是否获取成功；未限制时 ok 恒为 true。
+func (b *Core) acquireHandshakeSlot() (release func(), ok bool) {
+	if b.handshakeSlots == nil {
+		return func() {}, true
+	}
+
+	select {
+	case b.handshakeSlots <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-b.handshakeSlots }) }, true
+	default:
+		return nil, false
+	}
 }
 
 // spawnTask 启动受 wg 跟踪的后台任务；Core 已停止时返回 false。
@@ -310,15 +336,33 @@ func (b *Core) handleConnection(conn net.Conn) {
 		return
 	}
 
+	// 握手阶段（读 CONNECT、等待 STREAM_OPEN 的目标 ACK）单独限流：
+	// 这些连接尚未计入 maxWaitingConns，若不限流，慢速/恶意客户端可以用
+	// 大量半开连接占满 goroutine 与缓冲。
+	release, ok := b.acquireHandshakeSlot()
+	if !ok {
+		b.logger.Warn("Too many concurrent handshakes, rejecting connection",
+			zap.String("remote", conn.RemoteAddr().String()))
+		ack := &packet.ConnackPacket{
+			ReasonCode: packet.ServerUnavailable,
+			Message:    "too many concurrent handshakes",
+			Properties: make(map[string]string),
+		}
+		_ = b.writeControl(conn, ack)
+		b.dropConn(conn)
+		return
+	}
+
 	var connTaken bool // 连接是否被取走用于流
 	defer func() {
+		release()
 		if !connTaken {
 			b.dropConn(conn)
 		}
 	}()
 
 	// 读取CONNECT包
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(streamConnectReadTimeout))
 	pkt, err := packet.ReadPacket(conn)
 	_ = conn.SetReadDeadline(time.Time{})
 
@@ -373,7 +417,7 @@ func (b *Core) handleConnection(conn net.Conn) {
 	b.logger.Info("Client connected", zap.String("clientID", connectPkt.ClientID))
 
 	// 读取下一个包 - 可能是STREAM_OPEN（发起方）或进入等待（接收方）
-	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(streamOpenReadTimeout))
 	pkt, err = packet.ReadPacket(conn)
 	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
@@ -387,10 +431,13 @@ func (b *Core) handleConnection(conn net.Conn) {
 		// handleStreamOpen 仅在成功建立 stream 后接管连接
 		connTaken = b.handleStreamOpen(conn, connectPkt.ClientID, p)
 	case *packet.StreamReadyPacket:
-		// 接收方：收到STREAM_READY表示准备接收流
+		// 接收方：收到 STREAM_READY 表示准备接收流。
+		// 等待阶段由 maxWaitingConns 限制，不再占用握手名额。
+		release()
 		connTaken = b.handleAcceptStream(conn, connectPkt.ClientID)
 	case *packet.PingPacket:
-		// 接收方可能先发送PING来维持连接
+		// 接收方可能先发送 PING 来维持连接
+		release()
 		connTaken = b.handleAcceptStreamWithPing(conn, connectPkt.ClientID)
 	default:
 		b.logger.Warn("Unexpected packet type", zap.String("clientID", connectPkt.ClientID), zap.String("type", fmt.Sprintf("%T", pkt)))
@@ -407,7 +454,7 @@ func (b *Core) handleAcceptStreamWithPing(conn net.Conn, clientID string) bool {
 	}
 
 	// 读取真正的等待信号（StreamReadyPacket）
-	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(streamOpenReadTimeout))
 	pkt, err := packet.ReadPacket(conn)
 	_ = conn.SetReadDeadline(time.Time{})
 
@@ -551,7 +598,7 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 	}
 
 	// 读取目标客户端的ACK
-	_ = targetConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = targetConn.SetReadDeadline(time.Now().Add(streamOpenReadTimeout))
 	pkt, err := packet.ReadPacket(targetConn)
 	_ = targetConn.SetReadDeadline(time.Time{})
 
@@ -641,13 +688,10 @@ func (b *Core) forwardStream(session *StreamSession) {
 			zap.Uint64("sent", session.bytesSent.Load()), zap.Uint64("received", session.bytesRecv.Load()))
 	}()
 
-	// 使用 done channel 在任一方向结束时关闭连接
-	done := make(chan struct{})
+	// 任一方向结束时关闭两端连接，让另一个方向的 Read/Write 返回错误
 	closeOnce := sync.Once{}
 	closeConns := func() {
 		closeOnce.Do(func() {
-			close(done)
-			// 关闭连接会让另一个方向的 Read/Write 返回错误
 			_ = session.sourceConn.conn.Close()
 			_ = session.targetConn.conn.Close()
 		})

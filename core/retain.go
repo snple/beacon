@@ -164,7 +164,8 @@ func (s *retainStore) remove(topic string) {
 }
 
 // matchNodeTopics 递归匹配节点，返回主题列表
-// parts 为模式按 '/' 切分的层级数组，idx 为当前处理到的层级下标
+// parts 为模式按 '/' 切分的层级数组，idx 为当前处理到的层级下标。
+// 语义以 packet.MatchTopic 为唯一参照（差分测试见 topic_match_consistency_test.go）。
 func (s *retainStore) matchNodeTopics(node *retainNode, parts []string, idx int, result []string, now int64) []string {
 	if node == nil {
 		return result
@@ -254,34 +255,4 @@ func (s *retainStore) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.root = newRetainNode()
-}
-
-// matchTopic 检查主题是否匹配模式（供测试/工具场景使用）
-// 支持 * (单层通配符) 和 ** (多层通配符，匹配零个或多个剩余层级，且只能作为最后一层)
-func matchTopic(pattern, topic string) bool {
-	return matchTopicParts(splitTopic(pattern), splitTopic(topic), 0, 0)
-}
-
-// matchTopicParts 按层级递归匹配主题
-// parts 为模式层级，topic 为主题层级
-func matchTopicParts(parts, topic []string, pi, ti int) bool {
-	if pi == len(parts) {
-		return ti == len(topic)
-	}
-
-	part := parts[pi]
-	if part == packet.TopicWildcardMulti {
-		// ** 只能作为最后一层：匹配剩余全部层级（含零层）；非末层视为非法模式
-		return pi == len(parts)-1
-	}
-
-	if ti == len(topic) {
-		return false
-	}
-
-	if part == packet.TopicWildcardSingle || part == topic[ti] {
-		return matchTopicParts(parts, topic, pi+1, ti+1)
-	}
-
-	return false
 }

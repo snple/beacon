@@ -21,6 +21,7 @@ func TestClientOptions_ValidateRejectsUnsafeValues(t *testing.T) {
 		{"negative write timeout", NewClientOptions().WithWriteTimeout(-time.Second)},
 		{"negative max queue size", NewClientOptions().WithMaxQueueSize(-1)},
 		{"oversized max packet", NewClientOptions().WithMaxPacketSize(packet.MaxPacketSize + 1)},
+		{"negative store value log size", NewClientOptions().WithStore(StoreOptions{ValueLogFileSize: -1})},
 	}
 
 	for _, tc := range cases {

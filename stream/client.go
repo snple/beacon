@@ -41,6 +41,20 @@ func writeControl(conn net.Conn, pkt packet.Packet) error {
 	return packet.WritePacket(conn, pkt)
 }
 
+// sleepOrDone 等待 d 或 ctx 结束（返回 true 表示 ctx 已结束）。
+// 用于重试退避，保证 Close() 后调用方无需等待整个退避周期。
+func sleepOrDone(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 func cloneBytes(b []byte) []byte {
 	if len(b) == 0 {
 		return nil
@@ -68,10 +82,9 @@ func cloneStringMap(m map[string]string) map[string]string {
 // - clientID（WithClientID）
 func NewClient(opts ...ClientOption) (*Client, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	// 创建默认的 zap logger
-	logger, _ := zap.NewDevelopment()
+	// 默认静默；WithLogger 可显式注入日志器
 	c := &Client{
-		logger: logger,
+		logger: zap.NewNop(),
 		ctx:    ctx,
 		cancel: cancel,
 	}
@@ -83,8 +96,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	}
 
 	if c.logger == nil {
-		logger, _ := zap.NewDevelopment()
-		c.logger = logger
+		c.logger = zap.NewNop()
 	}
 	if c.coreAddr == "" {
 		cancel()
@@ -246,7 +258,9 @@ func (c *Client) AcceptStream() (*Stream, error) {
 				return nil, err
 			}
 			c.logger.Warn("Failed to connect for accept", zap.Error(err))
-			time.Sleep(5 * time.Second)
+			if sleepOrDone(c.ctx, 5*time.Second) {
+				return nil, c.ctx.Err()
+			}
 			continue
 		}
 
@@ -258,7 +272,9 @@ func (c *Client) AcceptStream() (*Stream, error) {
 		if err := writeControl(conn, readyPkt); err != nil {
 			c.logger.Warn("Failed to send ready signal", zap.Error(err))
 			_ = conn.Close()
-			time.Sleep(5 * time.Second)
+			if sleepOrDone(c.ctx, 5*time.Second) {
+				return nil, c.ctx.Err()
+			}
 			continue
 		}
 
