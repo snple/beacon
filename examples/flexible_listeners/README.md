@@ -4,15 +4,16 @@ Core 提供了最大灵活性的 API 设计，将连接监听和连接处理完�
 
 ## 核心 API
 
-Core 只提供一个主要API：
+连接处理的核心 API 只有一个：
 ```go
 func (c *Core) HandleConn(conn net.Conn) error
 ```
 
-这意味着：
-- ✅ Core 不管理监听器（listener），只处理已建立的连接
-- ✅ 用户完全控制如何监听（TCP、TLS、WebSocket、QUIC、Unix Socket等）
-- ✅ 最大的灵活性和可扩展性
+监听由调用方提供；此外 Core 也提供 `ServeTCP` / `ServeTLS` / `ServeWS` / `Serve` 等便捷封装：
+
+- ✅ Core 不强制管理监听器（listener），只处理已建立的连接
+- ✅ 用户完全控制如何监听（TCP、TLS、WebSocket、QUIC、Unix Socket 等）
+- ✅ 内置 TCP / TLS / WebSocket 接入，其它传输实现 `net.Conn` 即可
 
 ## 使用方式
 
@@ -98,12 +99,8 @@ go func() {
     c.Serve(listener)
 }()
 
-// WebSocket (需要额外库)
-go func() {
-    // 创建WebSocket listener (伪代码)
-    wsListener := createWebSocketListener(":9883")
-    c.Serve(wsListener)
-}()
+// WebSocket（内置）
+go c.ServeWS(":9883", "/ws")
 
 // QUIC (需要额外库)
 go func() {
@@ -121,18 +118,14 @@ c.Stop()
 
 由于 Core 只需要 `net.Conn`，你可以轻松支持任何协议：
 
-### WebSocket 示例（概念）
+### WebSocket（内置）
 ```go
-// 使用 gorilla/websocket
-func serveWebSocket(c *core.Core) {
-    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-        conn, _ := upgrader.Upgrade(w, r, nil)
-        wsConn := &websocketConn{conn} // 实现 net.Conn 接口
-        c.HandleConn(wsConn)
-    })
-    http.ListenAndServe(":9883", nil)
-}
+// 一行启动 WebSocket 端点（内部完成升级并复用 HandleConn）
+go c.ServeWS(":9883", "/ws")
 ```
+
+自定义 HTTP mux / 反向代理场景可继续使用 `HandleConn`，把升级后的连接包装成 `net.Conn`
+（仓库内 `internal/wsconn` 即此适配层）。
 
 ### QUIC 示例（概念）
 ```go
@@ -152,10 +145,10 @@ func serveQUIC(c *core.Core) {
 
 1. **解耦**: Core 专注于协议逻辑，不关心传输层
 2. **灵活**: 支持任何实现 `net.Conn` 的连接
-3. **简单**: API极其简单，只有一个核心方法
+3. **简单**: 连接处理只有一个核心方法（`HandleConn`），监听方式自由选择
 4. **可扩展**: 轻松添加新的传输协议
 5. **可测试**: 容易模拟和测试
 
 ## 完整示例
 
-见 [examples/flexible_listeners/main.go](../examples/flexible_listeners/main.go)
+见 [main.go](./main.go)

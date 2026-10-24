@@ -4,9 +4,15 @@ Beacon 是一个轻量级消息总线协议，专为物联网和实时通信场�
 
 ## 功能特性
 
-- **发布/订阅模式**：支持主题订阅和消息发布
-- **定向投递**：支持通过目标客户端 ID 将消息发送给指定客户端
-- **PUBLISH 请求-响应元数据**：PUBLISH 可携带响应主题和关联数据，用于应用层实现请求-响应、异步回调和任务结果匹配
+- **发布/订阅**：主题订阅（`*` / `**` 通配符）与消息发布，支持 NoLocal、保留消息与重放策略
+- **QoS 0/1**：QoS1 以“消息被处理”为语义（自动确认 / 手动 `Message.Ack()`），未确认自动重传
+- **定向投递与请求-响应**：`TargetClientID` 点对点投递；PUBLISH 可携带响应主题、关联数据与用户属性
+- **会话与可靠性**：会话恢复（订阅 + 积压消息持久化）、遗嘱消息、离线队列、断线自动重连
+- **持久化**：core/client 均基于 BadgerDB（默认内存模式，可配置 `DataDir`）
+- **传输**：TCP、TLS、WebSocket（`ws://` / `wss://`）互通
+- **可观测与运维**：`GetStats()`、Prometheus `/metrics`、`/healthz`、进程内管理 API 与事件流
+- **配额与背压**：客户端队列、全局队列、存储水位、发布速率、握手并发、离线会话上限
+- **流中继**：`stream/` 提供独立的点对点字节流中继协议
 
 ## QoS 语义
 
@@ -29,9 +35,16 @@ c, _ := client.NewWithOptions(
         WithAutoAck(false), // 关闭自动确认，改为手动确认
 )
 
-msg, _ := c.PollMessage(ctx, timeout)
+msg, err := c.PollMessage(ctx, 5*time.Second)
+if err != nil {
+    // 处理 ErrPollTimeout / ErrNotConnected 等
+    return
+}
 // ... 处理消息 ...
-msg.Ack() // 处理完才确认；未确认的消息会被服务端重传
+if err := msg.Ack(); err != nil {
+    // 确认失败（如连接已断开）：消息会被服务端重传
+    log.Printf("ack failed: %v", err)
+}
 ```
 
 注意：手动确认模式下 QoS1 为 at-least-once——若应用在处理中崩溃/断电未确认，服务端会重传该消息并再次投递；应用如需不重复处理，请按 `msg.Packet.PacketID` 自行去重。
@@ -72,12 +85,15 @@ Beacon 的队列默认有上限，避免单个慢消费者或异常客户端把�
 | `WithMaxPendingMessages(n)` | 100000 条 | 全局待分发队列达到上限后，新的发布被拒绝；QoS1 发布端收到 `PUBACK(QuotaExceeded)` |
 | `WithMaxPublishRate(rate, burst)` | 不限制 | 单客户端发布速率超限；QoS1 收到 `PUBACK(MessageRateTooHigh)`，QoS0 被丢弃 |
 | `WithMaxStoreBytes(bytes)` | 不限制 | 存储占用超过水位后拒绝新发布（`QuotaExceeded`）。基于 badger 上报的磁盘占用，有数秒滞后 |
-| `WithMaxHandshakeConnections(n)` | 512 | 认证前（CONNECT 尚未解析）的并发连接上限。超限直接 `CONNACK(ServerBusy)` 并关闭，避免未认证连接无上限占用 goroutine 与包缓冲 |
+| `WithMaxHandshakeConnections(n)` | 512 | 握手阶段（读取 CONNECT + 认证完成前）的并发连接上限。超限直接 `CONNACK(ServerBusy)` 并关闭，避免未认证连接无上限占用 goroutine 与包缓冲 |
 | `WithMaxOfflineSessions(n)` | 10000 个 | 保留中的离线会话超过上限时，驱逐**最早过期**的会话（会话记录、订阅与待投递队列一并清理） |
 | `client.WithMaxQueueSize(n)` | 10000 条 | 客户端本地出站队列满时，`Publish` 返回 `ErrQueueFull` |
 
-所有限制都可以用 `0` 关闭。拒绝/丢弃数量可通过 `core.GetStats()` 的 `MessagesRejected`（接收侧拒绝）
-与 `MessagesDropped`（投递侧丢弃）观察；`Core.GetClientInfo(id).QueueSize` 可查看单个客户端的积压量。
+配额类限制（队列条数、全局队列、存储水位、发布速率、握手并发、离线会话、客户端出站队列）都可以用 `0` 关闭；
+`MaxClients`、`MaxPacketSize`、`ReceiveWindow`、`ConnectTimeout`、`RetransmitInterval` 等基础参数则要求大于 0。
+
+拒绝/丢弃数量可通过 `core.GetStats()` 的 `MessagesRejected`（接收侧拒绝）与 `MessagesDropped`（投递侧丢弃）观察；
+`Core.GetClientInfo(id).QueueSize` 可查看单个客户端的积压量。
 
 注意：
 
@@ -176,8 +192,9 @@ curl -s localhost:9101/metrics | grep pending
 | 客户端详情 | `GetClientInfo(id)`：配置、运行状态、队列与在途水位、订阅、每客户端计数器 |
 | 踢下线 | `DisconnectClient()` / `DisconnectClientAndWait(ctx, ...)`（唯一改变会话状态的写操作） |
 | 发布 | `Publish(topic, payload, opts)` 返回 `PublishResult`（命中订阅者数；**仅表示已入队**） |
+| 定向/广播 | `PublishToClient(clientID, topic, payload, opts)`（离线会话排队）、`Broadcast(topic, payload, opts)`（仅在线扇出，返回成功数） |
 | 事件流 | `SubscribeEvents(ctx, EventOptions) (*EventStream, error)`：连接/断开/订阅/发布/丢弃/拒绝/会话过期/管理操作 |
-| 认证身份 | `AuthConnectContext.Identity`（仅内存），透出到 `ClientInfo.Identity` 与事件 |
+| 认证身份 | `AuthConnectContext.Identity` / `AuthContext.Identity`（仅内存），透出到 `ClientInfo.Identity` 与事件 |
 | 错误语义 | 认证器返回 `*AuthError{Reason}` 可指定 CONNACK 原因码（如 `ReasonBanned`）；`DisconnectContext` 含 `Reason`/`Err` |
 
 **观测面只有"客户端列表 + 客户端详情"两个入口**，话题/订阅/保留消息不再提供枚举 API；
@@ -249,11 +266,17 @@ beacon-client --core ws://127.0.0.1:8080/ws --client-id c2 --mode pub --topic te
 **Go 代码**：使用 `client.WSDialer` 连接：
 
 ```go
-c, _ := client.NewClient(client.NewClientOptions().
+c, err := client.NewWithOptions(client.NewClientOptions().
     WithClientID("browser-client").
-    WithLogger(logger))
+    WithLogger(logger)) // logger 为 *zap.Logger，nil 表示静默
+if err != nil {
+    log.Fatal(err)
+}
+
 dialer := &client.WSDialer{Address: "ws://127.0.0.1:8080/ws", DialTimeout: 10 * time.Second}
-err := c.ConnectWithDialer(dialer)
+if err := c.ConnectWithDialer(dialer); err != nil {
+    log.Fatal(err)
+}
 ```
 
 浏览器/前端应用可直接用原生 WebSocket 或 gorilla/websocket 与 core 的 `/ws` 端点通信。
@@ -280,4 +303,4 @@ CI（`.github/workflows/ci.yml`）会执行同样的检查。
 
 ## License
 
-MIT
+本项目基于 [MIT License](./LICENSE) 开源，Copyright (c) 2026 danc <dangcheng@hotmail.com>。
