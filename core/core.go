@@ -12,7 +12,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Core 是 Beacon 消息总线的核心：管理连接、会话、订阅与持久化消息队列。
+// Core 是 Beacon 消息总线的核心：管理连接、会话、订阅与内存消息队列。
+//
+// 消息只在 messageStore 中以 broker 生成的唯一 ID 保存一份，全局队列与各客户端
+// 队列都只引用该 ID，因此 1→N 分发不复制消息内容，也不落盘。
 type Core struct {
 	options *CoreOptions
 	logger  *zap.Logger
@@ -22,7 +25,7 @@ type Core struct {
 	clientsMu sync.RWMutex
 
 	// registerMu 串行化客户端注册。
-	// 丢弃旧会话时需要在锁外做存储清理（删除会话记录、清空旧队列），
+	// 丢弃旧会话时需要在锁外清理其队列与会话状态，
 	// 若并发的同 ClientID 注册在此期间插入新客户端，清理会误删新会话的数据；
 	// 因此注册过程整体串行，clientsMu 只用于保护 map 的读写。
 	registerMu sync.Mutex
@@ -34,11 +37,11 @@ type Core struct {
 	// 订阅管理
 	subTree *subTree
 
-	// 消息持久化存储
-	store *store
+	// 共享消息表：key 为 broker 生成的唯一 ID
+	msgs *messageStore
 
-	// 消息队列
-	queue        *Queue
+	// 全局待分发队列（只保存消息 ID）
+	pending      *pendingQueue
 	queueTrigger chan struct{}
 
 	// 保留消息
@@ -74,11 +77,6 @@ type Core struct {
 	handshakeConns   map[net.Conn]struct{}
 	handshakeConnsMu sync.Mutex
 
-	// 存储占用水位缓存（避免每条消息都统计 badger 大小）
-	storeSizeMu sync.Mutex
-	storeSize   int64
-	storeSizeAt time.Time
-
 	// 生命周期
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -86,8 +84,8 @@ type Core struct {
 	running atomic.Bool
 	stopped atomic.Bool
 
-	// 临时任务（如按需重传）的启动守卫：Stop 之后禁止再向 wg 添加任务，
-	// 否则会与 wg.Wait 竞争，且任务可能在 store 关闭后访问它。
+	// 临时任务的启动守卫：Stop 之后禁止再向 wg 添加任务，
+	// 否则会与 wg.Wait 竞争。
 	taskMu      sync.Mutex
 	tasksClosed bool
 }
@@ -143,14 +141,18 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	msgs := newMessageStore()
+
 	b := &Core{
 		options:         opts,
 		logger:          opts.Logger,
 		clients:         make(map[string]*Client),
 		offlineSessions: make(map[string]time.Time),
 		subTree:         newSubTree(),
+		msgs:            msgs,
+		pending:         newPendingQueue(),
 		queueTrigger:    make(chan struct{}, 1),
-		retainStore:     newRetainStore(),
+		retainStore:     newRetainStore(msgs),
 		handshakeConns:  make(map[net.Conn]struct{}),
 		events:          newEventBus(),
 		listeners:       make(map[uint64]listenerEntry),
@@ -168,16 +170,6 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		b.connLimiter = newTokenBucket(opts.ConnectionRateLimit, opts.ConnectionRateBurst)
 	}
 
-	// 初始化消息持久化存储（必须先于 initQueue）
-	if err := b.initStore(); err != nil {
-		return nil, err
-	}
-
-	// 初始化消息队列（使用 InMemory badger）
-	if err := b.initQueue(); err != nil {
-		return nil, err
-	}
-
 	return b, nil
 }
 
@@ -186,33 +178,10 @@ func New() (*Core, error) {
 	return NewWithOptions(NewCoreOptions())
 }
 
-// initStore 初始化消息存储
-func (c *Core) initStore() error {
-	// 确保 Logger 正确传递
-	if c.options.StoreOptions.Logger == nil {
-		c.options.StoreOptions.Logger = c.options.Logger
-	}
-
-	store, err := newStore(c.options.StoreOptions)
-	if err != nil {
-		return fmt.Errorf("failed to initialize message store: %w", err)
-	}
-	c.store = store
-	return nil
-}
-
-// initQueue 初始化消息队列
-func (c *Core) initQueue() error {
-	c.queue = NewQueue(c.store.db(), "core:")
-
-	c.logger.Info("Message queue initialized")
-	return nil
-}
-
 // Start 启动 core
 func (c *Core) Start() error {
-	// Stop 之后不可重启：ctx 已取消、存储已关闭，重启只会得到一个"看起来在运行
-	// 但无法收发消息"的实例。需要重启请重新 NewWithOptions。
+	// Stop 之后不可重启：ctx 已取消、后台协程已退出。
+	// 需要重启请重新 NewWithOptions。
 	if c.stopped.Load() {
 		return ErrCoreStopped
 	}
@@ -229,22 +198,8 @@ func (c *Core) Start() error {
 	c.tasksClosed = false
 	c.taskMu.Unlock()
 
-	// 恢复持久化的消息与会话（订阅/过期时间），并清理孤儿队列
-	c.recoverMessages()
-	c.recoverSessions()
-
 	// 启动后台协程
 	c.startBackgroundWorkers()
-
-	// 上次停机时可能仍有未分发的积压消息（已持久化在全局队列中）。
-	// 必须主动触发一次排空：dispatchLoop 只在发布时被唤醒，
-	// 否则积压要等下一次发布才会被处理，甚至在此期间因过期被丢弃。
-	if c.queue != nil {
-		if depth := c.queue.Count(); depth > 0 {
-			c.logger.Info("Dispatching persisted backlog", zap.Int64("pending", depth))
-			c.triggerDispatch()
-		}
-	}
 
 	c.logStartupInfo()
 	return nil
@@ -322,13 +277,6 @@ func (c *Core) Stop() error {
 		c.wg.Wait()
 	}
 
-	// 最后关闭消息存储。未 Start 就 Stop 时同样要关：否则 badger 句柄与文件锁会泄漏。
-	if c.store != nil {
-		if err := c.store.close(); err != nil {
-			c.logger.Warn("Failed to close message store", zap.Error(err))
-		}
-	}
-
 	if wasRunning {
 		c.logger.Info("core stopped")
 	}
@@ -342,7 +290,7 @@ func (c *Core) MaxPacketSize() uint32 {
 
 // Subscribe 订阅主题（编程接口）。
 //
-// 若 clientID 已存在会话（在线或离线），订阅会同时写入会话状态并持久化，
+// 若 clientID 已存在会话（在线或离线），订阅会同时写入会话状态，
 // 与客户端自己发送 SUBSCRIBE 的效果一致；没有会话时只影响全局订阅树。
 func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 	// 统一通配符规则：** 只能作为最后一层。非法过滤器直接忽略，
@@ -362,8 +310,6 @@ func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 	client.session.subscriptions[sub.Topic] = sub.Options
 	client.session.subsMu.Unlock()
 
-	c.saveSessionPreservingExpiry(client)
-
 	c.emit(Event{
 		Type:     EventSubscribed,
 		ClientID: clientID,
@@ -375,7 +321,7 @@ func (c *Core) Subscribe(clientID string, sub packet.Subscription) {
 
 // Unsubscribe 取消订阅（编程接口）。
 //
-// 与 Subscribe 对称：存在会话时同步移除会话状态并持久化。
+// 与 Subscribe 对称：存在会话时同步移除会话状态。
 func (c *Core) Unsubscribe(clientID, topic string) {
 	c.removeSubscription(clientID, topic)
 
@@ -389,8 +335,6 @@ func (c *Core) Unsubscribe(clientID, topic string) {
 	client.session.subsMu.Lock()
 	delete(client.session.subscriptions, topic)
 	client.session.subsMu.Unlock()
-
-	c.saveSessionPreservingExpiry(client)
 
 	c.emit(Event{
 		Type:     EventUnsubscribed,
@@ -409,8 +353,7 @@ func (c *Core) removeSubscription(clientID, topic string) {
 
 // addSubscription 只更新全局订阅树与统计，返回订阅是否被接受。
 //
-// SUBSCRIBE 处理路径与启动恢复使用它：会话状态的维护与持久化由调用方
-// 负责（订阅路径是批量写一次，恢复路径不需要写），避免每主题一次 store 写入。
+// SUBSCRIBE 处理路径与编程接口使用它：会话状态的维护由调用方负责。
 func (c *Core) addSubscription(clientID string, sub packet.Subscription) bool {
 	if !packet.ValidateTopicFilter(sub.Topic) {
 		c.logger.Warn("Ignoring subscription with invalid topic filter",
@@ -432,21 +375,6 @@ func (c *Core) addSubscription(clientID string, sub packet.Subscription) bool {
 	return true
 }
 
-// saveSessionPreservingExpiry 持久化会话元数据；离线会话保留原有过期时间，
-// 避免编程接口写回时把离线会话误标为在线（expiresAt=0）。
-func (c *Core) saveSessionPreservingExpiry(client *Client) {
-	expiresAt := int64(0)
-	if client.Closed() {
-		c.offlineSessionsMu.Lock()
-		expiry, ok := c.offlineSessions[client.ID]
-		c.offlineSessionsMu.Unlock()
-		if ok {
-			expiresAt = expiry.Unix()
-		}
-	}
-	c.saveSession(client, expiresAt)
-}
-
 // GetStats 获取统计信息快照
 func (c *Core) GetStats() StatsSnapshot {
 	snapshot := StatsSnapshot{
@@ -462,13 +390,13 @@ func (c *Core) GetStats() StatsSnapshot {
 		BytesReceived:      c.stats.BytesReceived.Load(),
 		BytesSent:          c.stats.BytesSent.Load(),
 		SubscriptionsCount: c.stats.SubscriptionsCount.Load(),
-		StoreBytes:         c.storeBytes(),
 	}
 
-	// 队列深度只在有队列时统计（NewWithOptions 之前/测试场景可能为 nil）
-	if c.queue != nil {
-		snapshot.PendingQueueDepth = c.queue.Count()
-	}
+	snapshot.PendingQueueDepth = int64(c.pending.len())
+	snapshot.InFlightMessages, snapshot.PendingBytes = func() (int64, int64) {
+		count, bytes := c.msgs.stats()
+		return int64(count), bytes
+	}()
 
 	c.offlineSessionsMu.Lock()
 	snapshot.OfflineSessions = int64(len(c.offlineSessions))
@@ -477,11 +405,9 @@ func (c *Core) GetStats() StatsSnapshot {
 	c.clientsMu.RLock()
 	for _, client := range c.clients {
 		if client.queue != nil {
-			snapshot.ClientQueueDepth += client.queue.Count()
+			snapshot.ClientQueueDepth += int64(client.queue.len())
 		}
-		client.session.pendingAckMu.Lock()
-		snapshot.PendingAckTotal += int64(len(client.session.pendingAck))
-		client.session.pendingAckMu.Unlock()
+		snapshot.PendingAckTotal += int64(client.session.pendingAck.len())
 	}
 	c.clientsMu.RUnlock()
 
@@ -505,32 +431,13 @@ type StatsSnapshot struct {
 	BytesSent          int64
 	SubscriptionsCount int64
 
-	// 队列与存储水位（用于容量规划与告警）
+	// 队列与内存水位（用于容量规划与告警）
 	PendingQueueDepth int64 // 全局待分发队列深度
 	ClientQueueDepth  int64 // 所有客户端待发送队列深度之和
 	PendingAckTotal   int64 // 所有客户端未确认（QoS1）消息总数
 	OfflineSessions   int64 // 保留中（在线时间之外）的离线会话数
-	StoreBytes        int64 // 存储占用（字节）
-}
-
-// storeBytes 返回存储当前占用的近似字节数。
-// 结果缓存 1 秒，避免高频发布时每条消息都统计 badger 大小。
-func (c *Core) storeBytes() int64 {
-	if c.store == nil {
-		return 0
-	}
-
-	c.storeSizeMu.Lock()
-	defer c.storeSizeMu.Unlock()
-
-	if !c.storeSizeAt.IsZero() && time.Since(c.storeSizeAt) < time.Second {
-		return c.storeSize
-	}
-
-	lsm, vlog := c.store.db().Size()
-	c.storeSize = lsm + vlog
-	c.storeSizeAt = time.Now()
-	return c.storeSize
+	InFlightMessages  int64 // 内存中尚未完成投递的共享消息条数
+	PendingBytes      int64 // 上述消息内容的近似内存占用（字节）
 }
 
 // ============================================================================

@@ -51,11 +51,11 @@ func main() {
 
 	opts := core.NewCoreOptions().
 		WithLogger(logger).
-		// 配额与背压：避免慢消费者/异常客户端把内存和磁盘写满
+		// 配额与背压：避免慢消费者/异常客户端把内存写满
 		WithMaxClientQueueSize(5000, core.QueueOverflowDropNewest).
 		WithMaxPendingMessages(50000).
 		WithMaxPublishRate(2000, 4000).
-		WithMaxStoreBytes(4 << 30). // 4 GiB 磁盘水位
+		WithMaxPendingBytes(1 << 30). // 1 GiB 内存水位
 		WithRetainEnabled(true)
 
 	// 认证：CONNECT 携带的 AuthData 必须与注册的 secret 一致

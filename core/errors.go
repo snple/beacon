@@ -20,11 +20,8 @@ var (
 	ErrCoreStopped = errors.New("core already stopped")
 )
 
-// 队列相关错误（复用共享 mq 包的定义，保持 API 兼容）
-var (
-	ErrQueueEmpty       = mq.ErrQueueEmpty
-	ErrCorruptedMessage = mq.ErrCorruptedMessage
-)
+// ErrQueueEmpty 队列为空（复用共享 mq 包的定义，保持 API 兼容）
+var ErrQueueEmpty = mq.ErrQueueEmpty
 
 // 发送队列错误（复用共享 mq 包的定义，保持 API 兼容）
 var (

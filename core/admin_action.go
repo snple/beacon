@@ -51,8 +51,7 @@ func (c *Core) Publish(topic string, payload []byte, opts PublishOptions) (Publi
 		res.MatchedSubscribers++
 	}
 
-	msg := c.newPublishMessage(pub)
-	if !c.publish(msg) {
+	if c.publish(pub) == nil {
 		return PublishResult{MatchedSubscribers: res.MatchedSubscribers}, ErrQuotaExceeded
 	}
 

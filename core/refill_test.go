@@ -29,37 +29,35 @@ func (c *captureWriteConn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// TestProcessSendQueue_RefillsFromPersistentQueue 验证发送协程排空内存队列后会立即从
-// 持久化队列补货，而不是等待 RetransmitInterval 定时器。
-func TestProcessSendQueue_RefillsFromPersistentQueue(t *testing.T) {
-	c, err := NewWithOptions(NewCoreOptions().
-		WithStoreDir(t.TempDir()).
-		WithRetransmitInterval(time.Hour))
+// TestProcessSendQueue_DrainsMemoryQueue 验证发送协程会一次排空内存待发送队列。
+func TestProcessSendQueue_DrainsMemoryQueue(t *testing.T) {
+	c, err := NewWithOptions(NewCoreOptions().WithRetransmitInterval(time.Hour))
 	require.NoError(t, err)
-	defer c.store.close()
 
 	client := newQuotaTestClient(t, c, "refill-client")
 
+	const n = 5
+	for i := range n {
+		msg := mustRegisterMessage(t, c, "refill/topic", []byte{byte('0' + i)})
+		require.NoError(t, client.enqueueDelivery(msg, msg.QoS, msg.Retain))
+		c.msgs.release(msg)
+	}
+	require.Equal(t, n, client.queue.len())
+
+	// 全部入队后再挂上连接：否则 enqueueDelivery 会立即启动发送协程并发排空队列。
 	capture := &captureWriteConn{}
 	conn := &conn{
 		client:        client,
 		conn:          capture,
-		sendQueue:     newSendQueue(10),
 		maxPacketSize: 0,
+		sendWindow:    10,
+		resendSet:     make(map[packet.PacketID]struct{}),
 	}
 	client.conn = conn
 
-	const n = 5
-	for i := 0; i < n; i++ {
-		msg := createTestMessage("refill/topic", []byte{byte('0' + i)}, packet.QoS0)
-		require.NoError(t, client.queue.Enqueue(msg))
-	}
-	require.Equal(t, int64(n), client.queue.Count())
-
 	conn.processSendQueue()
 
-	require.Equal(t, int64(0), client.queue.Count(),
-		"writer should drain the persistent queue without waiting for the retransmit tick")
+	require.Equal(t, 0, client.queue.len(), "writer should drain the memory queue in one pass")
 
 	// 解析捕获到的数据包数量
 	reader := bytes.NewReader(capture.buf)

@@ -8,23 +8,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBroadcast_CopiesMessagePerClient(t *testing.T) {
-	core, err := NewWithOptions(NewCoreOptions().WithStoreDir(t.TempDir()))
-	require.NoError(t, err)
-	defer core.store.close()
-
+// newBroadcastTestClient 构造一个只有内存队列的离线客户端。
+func newBroadcastTestClient(core *Core, clientID string) *Client {
 	connect := packet.NewConnectPacket()
+	connect.ClientID = clientID
 	connect.Properties.ReceiveWindow = 10
 
-	client1 := &Client{ID: "broadcast-client-1", core: core, session: newSession("broadcast-client-1", connect, core)}
-	client1.initQueue()
-	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
-	client1.conn.processing.Store(true)
+	client := &Client{
+		ID:      clientID,
+		core:    core,
+		session: newSession(clientID, connect, core),
+	}
+	client.initQueue()
 
-	client2 := &Client{ID: "broadcast-client-2", core: core, session: newSession("broadcast-client-2", connect, core)}
-	client2.initQueue()
-	client2.conn = &conn{client: client2, sendQueue: newSendQueue(10)}
-	client2.conn.processing.Store(true)
+	// 占位的连接：Broadcast 只投递给在线客户端；processing=true 时 triggerSend
+	// 只会打标记而不会启动发送协程，投递留在队列里供断言。
+	client.conn = &conn{client: client, conn: &captureWriteConn{}, sendWindow: 10, resendSet: make(map[packet.PacketID]struct{})}
+	client.conn.processing.Store(true)
+
+	return client
+}
+
+// TestBroadcast_SharesMessagePerClient 验证广播只保存一份消息内容：
+// 各客户端队列中的投递共享同一个 *Message，但拥有各自独立的出站 PacketID。
+func TestBroadcast_SharesMessagePerClient(t *testing.T) {
+	core, err := NewWithOptions(NewCoreOptions())
+	require.NoError(t, err)
+
+	client1 := newBroadcastTestClient(core, "broadcast-client-1")
+	client2 := newBroadcastTestClient(core, "broadcast-client-2")
 
 	core.clients[client1.ID] = client1
 	core.clients[client2.ID] = client2
@@ -32,82 +44,58 @@ func TestBroadcast_CopiesMessagePerClient(t *testing.T) {
 	sent := core.Broadcast("broadcast/test", []byte("payload"), PublishOptions{QoS: packet.QoS1})
 	require.Equal(t, 2, sent)
 
-	msg1, ok := client1.conn.sendQueue.tryDequeue()
-	require.True(t, ok)
-	msg2, ok := client2.conn.sendQueue.tryDequeue()
-	require.True(t, ok)
+	d1 := client1.queue.peek()
+	d2 := client2.queue.peek()
+	require.NotNil(t, d1)
+	require.NotNil(t, d2)
 
-	require.NotSame(t, msg1, msg2, "broadcast should enqueue independent message instances per client")
-	require.NotEqual(t, msg1.PacketID.Hex(), msg2.PacketID.Hex(), "broadcast deliveries should have distinct packet IDs per client")
-	require.Equal(t, packet.QoS1, msg1.QoS, "broadcast should preserve requested QoS in delivery layer")
-	require.Equal(t, packet.QoS1, msg2.QoS, "broadcast should preserve requested QoS in delivery layer")
+	require.Same(t, d1.msg, d2.msg, "broadcast must share one message content across subscribers")
+	require.NotEqual(t, d1.packetID.Hex(), d2.packetID.Hex(),
+		"each delivery should still get its own packet ID for ACK tracking")
+	require.Equal(t, packet.QoS1, d1.qos)
+	require.Equal(t, packet.QoS1, d2.qos)
 }
 
 func TestBroadcast_UsesDefaultMessageExpiry(t *testing.T) {
-	core, err := NewWithOptions(NewCoreOptions().WithStoreDir(t.TempDir()).WithDefaultMessageExpiry(5 * time.Second))
+	core, err := NewWithOptions(NewCoreOptions().WithDefaultMessageExpiry(5 * time.Second))
 	require.NoError(t, err)
-	defer core.store.close()
 
-	connect := packet.NewConnectPacket()
-	connect.Properties.ReceiveWindow = 10
-
-	client1 := &Client{ID: "broadcast-expiry-client", core: core, session: newSession("broadcast-expiry-client", connect, core)}
-	client1.initQueue()
-	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
-	client1.conn.processing.Store(true)
-
+	client1 := newBroadcastTestClient(core, "broadcast-expiry-client")
 	core.clients[client1.ID] = client1
 
 	before := time.Now().Unix()
 	sent := core.Broadcast("broadcast/expiry", []byte("payload"), PublishOptions{})
 	require.Equal(t, 1, sent)
 
-	msg, ok := client1.conn.sendQueue.tryDequeue()
-	require.True(t, ok)
-	require.NotNil(t, msg.Packet)
-	require.NotNil(t, msg.Packet.Properties)
-	require.Greater(t, msg.Packet.Properties.ExpiryTime, before, "broadcast should apply default message expiry")
-	require.LessOrEqual(t, msg.Packet.Properties.ExpiryTime, before+6, "broadcast expiry should stay close to configured default")
+	d := client1.queue.peek()
+	require.NotNil(t, d)
+	require.NotNil(t, d.msg.Packet.Properties)
+	require.Greater(t, d.msg.Packet.Properties.ExpiryTime, before, "broadcast should apply default message expiry")
+	require.LessOrEqual(t, d.msg.Packet.Properties.ExpiryTime, before+6,
+		"broadcast expiry should stay close to configured default")
 }
 
 func TestBroadcast_PreservesUserProperties(t *testing.T) {
-	core, err := NewWithOptions(NewCoreOptions().WithStoreDir(t.TempDir()))
+	core, err := NewWithOptions(NewCoreOptions())
 	require.NoError(t, err)
-	defer core.store.close()
 
-	connect := packet.NewConnectPacket()
-	connect.Properties.ReceiveWindow = 10
-
-	client1 := &Client{ID: "broadcast-userprops-client", core: core, session: newSession("broadcast-userprops-client", connect, core)}
-	client1.initQueue()
-	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
-	client1.conn.processing.Store(true)
-
+	client1 := newBroadcastTestClient(core, "broadcast-userprops-client")
 	core.clients[client1.ID] = client1
 
-	sent := core.Broadcast("broadcast/userprops", []byte("payload"), PublishOptions{UserProperties: map[string]string{"x-origin": "core"}})
+	sent := core.Broadcast("broadcast/userprops", []byte("payload"),
+		PublishOptions{UserProperties: map[string]string{"x-origin": "core"}})
 	require.Equal(t, 1, sent)
 
-	msg, ok := client1.conn.sendQueue.tryDequeue()
-	require.True(t, ok)
-	require.NotNil(t, msg.Packet)
-	require.NotNil(t, msg.Packet.Properties)
-	require.Equal(t, "core", msg.Packet.Properties.UserProperties["x-origin"])
+	d := client1.queue.peek()
+	require.NotNil(t, d)
+	require.Equal(t, "core", d.msg.Packet.Properties.UserProperties["x-origin"])
 }
 
 func TestBroadcast_ClonesPayloadInput(t *testing.T) {
-	core, err := NewWithOptions(NewCoreOptions().WithStoreDir(t.TempDir()))
+	core, err := NewWithOptions(NewCoreOptions())
 	require.NoError(t, err)
-	defer core.store.close()
 
-	connect := packet.NewConnectPacket()
-	connect.Properties.ReceiveWindow = 10
-
-	client1 := &Client{ID: "broadcast-payload-client", core: core, session: newSession("broadcast-payload-client", connect, core)}
-	client1.initQueue()
-	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
-	client1.conn.processing.Store(true)
-
+	client1 := newBroadcastTestClient(core, "broadcast-payload-client")
 	core.clients[client1.ID] = client1
 
 	payload := []byte("payload")
@@ -116,25 +104,17 @@ func TestBroadcast_ClonesPayloadInput(t *testing.T) {
 
 	copy(payload, []byte("mutated"))
 
-	msg, ok := client1.conn.sendQueue.tryDequeue()
-	require.True(t, ok)
-	require.NotNil(t, msg.Packet)
-	require.Equal(t, []byte("payload"), msg.Packet.Payload, "broadcast should not retain caller-owned payload slice")
+	d := client1.queue.peek()
+	require.NotNil(t, d)
+	require.Equal(t, []byte("payload"), d.msg.Packet.Payload,
+		"broadcast should not retain caller-owned payload slice")
 }
 
 func TestPublishToClient_ClonesPayloadInput(t *testing.T) {
-	core, err := NewWithOptions(NewCoreOptions().WithStoreDir(t.TempDir()))
+	core, err := NewWithOptions(NewCoreOptions())
 	require.NoError(t, err)
-	defer core.store.close()
 
-	connect := packet.NewConnectPacket()
-	connect.Properties.ReceiveWindow = 10
-
-	client1 := &Client{ID: "publish-payload-client", core: core, session: newSession("publish-payload-client", connect, core)}
-	client1.initQueue()
-	client1.conn = &conn{client: client1, sendQueue: newSendQueue(10)}
-	client1.conn.processing.Store(true)
-
+	client1 := newBroadcastTestClient(core, "publish-payload-client")
 	core.clients[client1.ID] = client1
 
 	payload := []byte("payload")
@@ -142,8 +122,8 @@ func TestPublishToClient_ClonesPayloadInput(t *testing.T) {
 
 	copy(payload, []byte("mutated"))
 
-	msg, ok := client1.conn.sendQueue.tryDequeue()
-	require.True(t, ok)
-	require.NotNil(t, msg.Packet)
-	require.Equal(t, []byte("payload"), msg.Packet.Payload, "publish-to-client should not retain caller-owned payload slice")
+	d := client1.queue.peek()
+	require.NotNil(t, d)
+	require.Equal(t, []byte("payload"), d.msg.Packet.Payload,
+		"publish-to-client should not retain caller-owned payload slice")
 }

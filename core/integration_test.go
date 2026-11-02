@@ -2256,9 +2256,7 @@ func TestQoS1Publish_SubscriberQueueFullBackpressure(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	pendingAckCount := 0
 	for time.Now().Before(deadline) {
-		svClient.session.pendingAckMu.Lock()
-		pendingAckCount = len(svClient.session.pendingAck)
-		svClient.session.pendingAckMu.Unlock()
+		pendingAckCount = svClient.session.pendingAck.len()
 		if pendingAckCount > 0 {
 			break
 		}
@@ -2289,38 +2287,27 @@ func TestQoS1Publish_SubscriberQueueFullBackpressure(t *testing.T) {
 	}
 }
 
-// TestRetain_Persistence 测试保留消息持久化
-func TestRetain_Persistence(t *testing.T) {
-	// 创建临时目录用于持久化
-	tmpDir := t.TempDir()
-
-	opts := NewCoreOptions().
-		WithRetainEnabled(true).
-		WithStoreDir(tmpDir)
+// TestRetain_ReplayToNewSubscriber 测试保留消息会被重放给新订阅者。
+// 保留消息保存在内存中：进程重启即丢失（不再验证跨重启恢复）。
+func TestRetain_ReplayToNewSubscriber(t *testing.T) {
+	opts := NewCoreOptions().WithRetainEnabled(true)
 
 	core := testSetupCore(t, opts)
+	defer core.Stop()
 	addr := testServe(t, core)
 
-	publisher := testSetupClient(t, addr, "pub-persist", nil)
+	publisher := testSetupClient(t, addr, "pub-retain", nil)
+	defer publisher.Close()
 
 	retainOpts := client.NewPublishOptions().WithRetain(true)
-	err := publisher.Publish("persist/topic", []byte("persistent data"), retainOpts)
-	if err != nil {
+	if err := publisher.Publish("persist/topic", []byte("retained data"), retainOpts); err != nil {
 		t.Fatalf("Failed to publish: %v", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	publisher.Close()
-	core.Stop()
 
-	// 重启 core
-	core2 := testSetupCore(t, opts)
-	defer core2.Stop()
-
-	addr2 := testServe(t, core2)
-
-	// 新订阅者应收到持久化的保留消息
-	subscriber := testSetupClient(t, addr2, "sub-persist", nil)
+	// 新订阅者应收到内存中的保留消息
+	subscriber := testSetupClient(t, addr, "sub-retain", nil)
 	defer subscriber.Close()
 
 	msgCh := make(chan *client.Message, 1)
@@ -2338,20 +2325,19 @@ func TestRetain_Persistence(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	err = subscriber.Subscribe("persist/topic")
-	if err != nil {
+	if err := subscriber.Subscribe("persist/topic"); err != nil {
 		t.Fatalf("Failed to subscribe: %v", err)
 	}
 
 	select {
 	case msg := <-msgCh:
-		if string(msg.Packet.Payload) != "persistent data" {
+		if string(msg.Packet.Payload) != "retained data" {
 			t.Errorf("Payload mismatch: got %s", string(msg.Packet.Payload))
 		}
 	case err := <-errCh:
 		t.Fatalf("Failed to receive: %v", err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for persisted message")
+		t.Fatal("Timeout waiting for retained message")
 	}
 }
 
@@ -2608,7 +2594,7 @@ func TestClientQueueQuota_OfflineSubscriberKeepsNewest(t *testing.T) {
 	if svClient == nil {
 		t.Fatal("subscriber session should be preserved")
 	}
-	if got := svClient.queue.Count(); got != 2 {
+	if got := svClient.queue.len(); got != 2 {
 		t.Fatalf("expected 2 queued messages after quota enforcement, got %d", got)
 	}
 	if got := core.GetStats().MessagesDropped; got != 3 {

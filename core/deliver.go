@@ -6,82 +6,89 @@ import (
 
 	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
-// publish 发布消息 (内部使用)
-func (c *Core) publish(msg Message) bool {
-	// 全局配额：待分发队列与存储水位。超限时拒绝新消息，
-	// 让发布端（QoS1）收到 QuotaExceeded，而不是把磁盘写满。
-	if limit := c.options.MaxPendingMessages; limit > 0 && c.queue.Count() >= int64(limit) {
+// errDeliveryDropped 表示这条投递应当被丢弃（过期、超出客户端包大小、被钩子拒绝），
+// 它不是连接级错误，发送协程可以继续处理后续消息。
+var errDeliveryDropped = errors.New("delivery dropped")
+
+// defaultSendWindow 是客户端未声明接收窗口时使用的发送窗口。
+const defaultSendWindow = 100
+
+// publish 接收一条消息：注册到 messageStore，并进入全局待分发队列。
+//
+// 消息内容在这里只保存一份（messageStore 以 broker 生成的唯一 ID 为键），
+// 之后的全局队列、客户端队列、待确认列表都只引用这个 ID，不再复制消息。
+//
+// 返回注册后的消息；nil 表示被拒绝（配额超限或无法编码），调用方应回 QuotaExceeded。
+func (c *Core) publish(pub *packet.PublishPacket) *Message {
+	if limit := c.options.MaxPendingMessages; limit > 0 && c.pending.len() >= limit {
 		c.emit(Event{
 			Type:   EventMessageRejected,
-			Topic:  msg.Packet.Topic,
-			Bytes:  len(msg.Packet.Payload),
-			QoS:    msg.QoS,
+			Topic:  pub.Topic,
+			Bytes:  len(pub.Payload),
+			QoS:    pub.QoS,
 			Reason: packet.ReasonQuotaExceeded.String(),
 			Detail: "pending_messages",
 		})
 		c.logger.Warn("Message rejected, pending queue quota exceeded",
-			zap.String("topic", msg.Packet.Topic),
-			zap.Int("pending", int(c.queue.Count())),
+			zap.String("topic", pub.Topic),
+			zap.Int("pending", c.pending.len()),
 			zap.Int("limit", limit))
 		c.stats.MessagesRejected.Add(1)
-		return false
-	}
-	if limit := c.options.MaxStoreBytes; limit > 0 && c.storeBytes() >= limit {
-		c.emit(Event{
-			Type:   EventMessageRejected,
-			Topic:  msg.Packet.Topic,
-			Bytes:  len(msg.Packet.Payload),
-			QoS:    msg.QoS,
-			Reason: packet.ReasonQuotaExceeded.String(),
-			Detail: "store_bytes",
-		})
-		c.logger.Warn("Message rejected, store quota exceeded",
-			zap.String("topic", msg.Packet.Topic),
-			zap.Int64("storeBytes", c.storeBytes()),
-			zap.Int64("limit", limit))
-		c.stats.MessagesRejected.Add(1)
-		return false
+		return nil
 	}
 
-	// 进入队列前重新分配 PacketID，以确保顺序和唯一性
-	msg.PacketID = packet.NewPacketID()
-	c.handleRetainedMessage(&msg)
+	if limit := c.options.MaxPendingBytes; limit > 0 {
+		if _, used := c.msgs.stats(); used >= limit {
+			c.emit(Event{
+				Type:   EventMessageRejected,
+				Topic:  pub.Topic,
+				Bytes:  len(pub.Payload),
+				QoS:    pub.QoS,
+				Reason: packet.ReasonQuotaExceeded.String(),
+				Detail: "pending_bytes",
+			})
+			c.logger.Warn("Message rejected, memory quota exceeded",
+				zap.String("topic", pub.Topic),
+				zap.Int64("pendingBytes", used),
+				zap.Int64("limit", limit))
+			c.stats.MessagesRejected.Add(1)
+			return nil
+		}
+	}
 
-	// 放入消息队列（现在使用 Queue.Enqueue）
-	if err := c.queue.Enqueue(&msg); err != nil {
-		// 遇到错误，记录日志并丢弃消息
-		c.logger.Error("message dropped, dispatch queue enqueue failed",
-			zap.String("topic", msg.Packet.Topic),
-			zap.String("packetID", msg.PacketID.Hex()),
+	msg, err := newMessage(pub)
+	if err != nil {
+		// 编码失败（例如主题超出协议上限）：在入队前拒绝，避免分发阶段逐客户端失败。
+		c.logger.Warn("Message rejected, encode failed",
+			zap.String("topic", pub.Topic),
 			zap.Error(err))
-		c.stats.MessagesDropped.Add(1)
-		return false
+		c.stats.MessagesRejected.Add(1)
+		return nil
 	}
 
-	// 成功入队，触发分发协程
-	c.triggerDispatch()
+	// 引用计数 1：这份引用交给全局分发队列
+	c.msgs.put(msg)
 
-	// 统计消息接收数
+	// 保留消息需要独立于投递链路存活，内部会额外持有一个引用
+	c.handleRetainedMessage(msg)
+
+	c.pending.enqueue(msg.ID)
+	c.triggerDispatch()
 	c.stats.MessagesReceived.Add(1)
 
-	sourceID := ""
-	if msg.Packet.Properties != nil {
-		sourceID = msg.Packet.Properties.SourceClientID
-	}
 	c.emit(Event{
 		Type:     EventMessagePublished,
-		ClientID: sourceID,
-		Topic:    msg.Packet.Topic,
-		Bytes:    len(msg.Packet.Payload),
+		ClientID: msg.sourceClientID(),
+		Topic:    pub.Topic,
+		Bytes:    len(pub.Payload),
 		QoS:      msg.QoS,
 		Retained: msg.Retain,
 	})
 
-	return true
+	return msg
 }
 
 // triggerDispatch 非阻塞地唤醒分发协程。已有触发信号时无需重复发送。
@@ -92,51 +99,37 @@ func (c *Core) triggerDispatch() {
 	}
 }
 
+// handleRetainedMessage 维护保留消息：空载荷表示删除，否则覆盖。
 func (c *Core) handleRetainedMessage(msg *Message) {
-	if msg == nil || msg.Packet == nil {
+	if msg == nil || msg.Packet == nil || !msg.Retain || !c.options.RetainEnabled {
 		return
 	}
 
-	// 处理保留消息。带 TargetClientID 的定向消息不能进入通用 retained 存储，
+	// 带 TargetClientID 的定向消息不能进入通用 retained 存储，
 	// 否则后续普通订阅者会收到本应只发给单个客户端的历史消息。
-	if msg.Retain && c.options.RetainEnabled && (msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID == "") {
-		if len(msg.Packet.Payload) == 0 {
-			c.retainStore.remove(msg.Packet.Topic)
-			if err := c.store.deleteRetain(msg.Packet.Topic); err != nil {
-				c.logger.Warn("Failed to delete retained message",
-					zap.String("topic", msg.Packet.Topic),
-					zap.Error(err))
-			}
-			return
-		}
-
-		var expiryTime int64
-		if msg.Packet.Properties != nil && msg.Packet.Properties.ExpiryTime > 0 {
-			expiryTime = msg.Packet.Properties.ExpiryTime
-		}
-
-		if err := c.retainStore.set(msg.Packet.Topic, expiryTime); err != nil {
-			c.logger.Error("Failed to set retain message index",
-				zap.String("topic", msg.Packet.Topic),
-				zap.Error(err))
-		}
-
-		if c.store != nil {
-			if err := c.store.setRetain(msg.Packet.Topic, msg); err != nil {
-				c.logger.Error("Failed to persist retain message",
-					zap.String("topic", msg.Packet.Topic),
-					zap.Error(err))
-			}
-		}
+	if msg.targetClientID() != "" {
+		return
 	}
-}
 
-func (c *Core) newPublishMessage(pub *packet.PublishPacket) Message {
-	return Message{
-		Packet:    pub,
-		QoS:       pub.QoS,
-		Retain:    pub.Retain,
-		Timestamp: time.Now().Unix(),
+	topic := msg.Packet.Topic
+	if len(msg.Packet.Payload) == 0 {
+		c.retainStore.remove(topic)
+		return
+	}
+
+	var expiryTime int64
+	if msg.Packet.Properties != nil {
+		expiryTime = msg.Packet.Properties.ExpiryTime
+	}
+
+	// 保留消息必须比本次分发存活更久：retainStore 持有一个独立引用
+	c.msgs.retain(msg)
+
+	if err := c.retainStore.set(topic, msg, expiryTime); err != nil {
+		c.msgs.release(msg)
+		c.logger.Error("Failed to set retain message",
+			zap.String("topic", topic),
+			zap.Error(err))
 	}
 }
 
@@ -200,6 +193,7 @@ func (c *Core) applyPublishExpiry(pub *packet.PublishPacket, options PublishOpti
 	pub.Properties.ExpiryTime = expiry.Unix()
 }
 
+// dispatchLoop 从全局队列取出消息 ID，解析出共享消息并分发。
 func (c *Core) dispatchLoop() {
 	defer c.wg.Done()
 
@@ -217,223 +211,123 @@ func (c *Core) dispatchLoop() {
 				default:
 				}
 
-				// 从队列中取出消息并分发
-				msg, err := c.queue.Dequeue()
-				if err != nil {
-					if errors.Is(err, ErrCorruptedMessage) {
-						// 损坏消息已在 Dequeue 中删除，跳过并继续处理后续消息，
-						// 避免单条坏消息永久阻塞整个分发通道
-						c.logger.Error("dropped corrupted message from dispatch queue",
-							zap.Error(err))
-						continue
-					}
-					// 队列为空或其他错误，等待下一轮触发
+				id, ok := c.pending.dequeue()
+				if !ok {
 					break
 				}
 
-				// 分发消息
+				// take：全局队列持有的引用转移到这里
+				msg := c.msgs.take(id)
+				if msg == nil {
+					continue
+				}
+
 				c.deliver(msg)
+
+				// 归还全局队列的引用：若没有其它持有者，消息内容此时即可被 GC 回收
+				c.msgs.release(msg)
 			}
 		}
 	}
 }
 
+// deliver 把一条共享消息投递给所有匹配的订阅者。
+//
+// 这里是 1→N 分发的关键：每个订阅者只生成一个 delivery（持有共享消息的引用），
+// 不做 payload/属性拷贝。
 func (c *Core) deliver(msg *Message) {
-	// 如果指定了 TargetClientID，直接投递给目标客户端
-	if msg.Packet.Properties != nil && msg.Packet.Properties.TargetClientID != "" {
-		c.deliverToTarget(msg)
+	if targetID := msg.targetClientID(); targetID != "" {
+		c.deliverToTarget(msg, targetID)
 		return
 	}
 
-	subscribers := c.subTree.matchTopic(msg.Packet.Topic)
+	subscribers := c.subTree.matchTopic(msg.Topic())
 
-	// 一次性获取所有需要的客户端，减少锁竞争
-	c.clientsMu.RLock()
-	type clientWithOptions struct {
+	type target struct {
 		client *Client
 		opts   packet.SubscribeOptions
 	}
-	clients := make([]clientWithOptions, 0, len(subscribers))
+
+	targets := make([]target, 0, len(subscribers))
+
+	c.clientsMu.RLock()
 	for clientID, subOpts := range subscribers {
-		if client, ok := c.clients[clientID]; ok {
-			clients = append(clients, clientWithOptions{client: client, opts: subOpts})
+		client, ok := c.clients[clientID]
+		if !ok {
+			continue
 		}
+		// NoLocal：消息来源是订阅者自己时不投递
+		if subOpts.NoLocal && msg.sourceClientID() == clientID {
+			c.logger.Debug("Skipping delivery due to NoLocal option",
+				zap.String("clientID", clientID),
+				zap.String("topic", msg.Topic()))
+			continue
+		}
+		targets = append(targets, target{client: client, opts: subOpts})
 	}
 	c.clientsMu.RUnlock()
 
-	// 在锁外发送消息给普通客户端
-	for _, co := range clients {
-		// 检查 NoLocal 选项
-		// 如果订阅者启用了 NoLocal，且消息来源是订阅者自己，则跳过投递
-		if co.opts.NoLocal {
-			if msg.Packet.Properties != nil && msg.Packet.Properties.SourceClientID == co.client.ID {
-				c.logger.Debug("Skipping delivery due to NoLocal option",
-					zap.String("clientID", co.client.ID),
-					zap.String("topic", msg.Packet.Topic),
-					zap.String("sourceClientID", msg.Packet.Properties.SourceClientID))
-				continue
-			}
-		}
-
-		// !!! 这里要复制消息，因为不同客户端的 QoS 可能不同，不能影响原消息 !!!
-		copiedMsg := msg.Copy() // 复制消息
-		// 确定发送 QoS (取订阅 QoS 和消息 QoS 的较小值)
-		copiedMsg.QoS = min(co.opts.QoS, msg.QoS)
-		// RetainAsPublished=false（默认）时实时转发不携带 Retain 标志；
+	for _, t := range targets {
+		// 有效 QoS 取订阅 QoS 与发布 QoS 的较小值；
+		// RetainAsPublished=false（默认）时实时转发不携带 Retain 标志，
 		// 因订阅而重放的保留消息由 sendRetainedMessages 统一置为 true。
-		if !co.opts.RetainAsPublished {
-			copiedMsg.Retain = false
-		}
+		qos := min(t.opts.QoS, msg.QoS)
+		retain := t.opts.RetainAsPublished && msg.Retain
 
-		// 直接调用 Deliver，持久化逻辑在其中统一处理
-		// 注意：不要在这里检查 IsClosed()，因为：
-		// 1. 消息即使客户端离线也需要持久化
-		// 2. client.deliver() 内部会处理离线情况
-		if err := co.client.deliver(&copiedMsg); err != nil {
+		if err := t.client.enqueueDelivery(msg, qos, retain); err != nil {
 			c.logger.Debug("message delivery failed",
-				zap.String("clientID", co.client.ID),
-				zap.String("topic", copiedMsg.Packet.Topic),
+				zap.String("clientID", t.client.ID),
+				zap.String("topic", msg.Topic()),
 				zap.Error(err))
 		}
 	}
 }
 
 // deliverToTarget 投递消息给指定的目标客户端
-func (c *Core) deliverToTarget(msg *Message) {
-	if msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID == "" {
-		c.logger.Debug("No target client ID specified for targeted delivery",
-			zap.String("topic", msg.Packet.Topic))
-
-		return
-	}
-
-	targetID := msg.Packet.Properties.TargetClientID
-
-	// 先尝试普通客户端
+func (c *Core) deliverToTarget(msg *Message, targetID string) {
 	c.clientsMu.RLock()
 	client, exists := c.clients[targetID]
 	c.clientsMu.RUnlock()
 
-	if exists {
-		// 直接调用 Deliver，持久化逻辑在其中统一处理
-		// 注意：不要在这里检查 IsClosed()，因为：
-		// 1. 消息即使客户端离线也需要持久化
-		// 2. client.deliver() 内部会处理离线情况
-		if err := client.deliver(msg); err != nil {
-			c.logger.Debug("Target delivery failed",
-				zap.String("targetClientID", targetID),
-				zap.String("topic", msg.Packet.Topic),
-				zap.Error(err))
-		}
-
+	if !exists {
+		c.logger.Debug("Target client not found",
+			zap.String("targetClientID", targetID),
+			zap.String("topic", msg.Topic()))
+		c.stats.MessagesDropped.Add(1)
 		return
 	}
 
-	// 目标客户端不存在
-	c.logger.Debug("Target client not found",
-		zap.String("targetClientID", targetID),
-		zap.String("topic", msg.Packet.Topic))
-
-	c.stats.MessagesDropped.Add(1)
+	if err := client.enqueueDelivery(msg, msg.QoS, msg.Retain); err != nil {
+		c.logger.Debug("Target delivery failed",
+			zap.String("targetClientID", targetID),
+			zap.String("topic", msg.Topic()),
+			zap.Error(err))
+	}
 }
 
-// deliver 向客户端发送消息
-// 流控策略（Beacon QoS 语义：QoS0 尽力保证到达性但无需 ACK；
-// QoS1 接收方处理完消息后才 ACK，保证消息被处理而非仅协议层收到）：
-// 1. 检查消息是否过期（过期直接丢弃，无论 QoS）
-// 2. QoS0 与 QoS1 都先持久化到客户端队列：
-//   - QoS0：离线或队列满时由重传机制补发，尽力保证到达（无需 ACK）
-//   - QoS1：接收方处理失败未 ACK 时重发，保证消息被处理
+// enqueueDelivery 为客户端生成一次投递并入队。
 //
-// 3. 尝试放入发送队列：
-//   - 成功：启动发送协程处理
-//   - 失败（队列满）：消息仍在持久化队列中，等待重传机制加载发送
-func (c *Client) deliver(msg *Message) error {
-	// PacketID 属于“投递层字段”，必须对每个目标客户端独立分配
-	// 无论 QoS=0 还是 QoS=1，都需要 PacketID
-	msg.PacketID = packet.NewPacketID()
-
-	// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
-	if msg.IsExpired() {
+// 入队只保存 delivery（共享消息的引用 + 逐客户端参数），不复制消息内容。
+// 客户端离线时同样入队：投递保留在内存队列中，重连后补发。
+func (c *Client) enqueueDelivery(m *Message, qos packet.QoS, retain bool) error {
+	if m.IsExpired() {
 		c.core.stats.MessagesDropped.Add(1)
 		return nil
 	}
 
-	// 客户端队列配额：防止单个慢消费者无限占用磁盘
+	// 客户端队列配额：防止单个慢消费者无限占用内存
 	if !c.enforceQueueQuota() {
 		return ErrClientQueueFull
 	}
 
-	conn := c.getConn()
-	online := conn != nil && !conn.closed.Load()
+	d := newDelivery(m, qos, retain)
 
-	// "持久化入队 + 发送队列入队" 与补货互斥，避免补货在两步之间发走消息导致重复发送。
-	if online {
-		conn.enqueueMu.Lock()
+	c.core.msgs.retain(m) // 队列持有一个引用
+	c.queue.pushBack(d)
+
+	if conn := c.getConn(); conn != nil && !conn.closed.Load() {
+		conn.triggerSend()
 	}
-
-	// QoS 0 和 QoS 1 都需要放入发送队列
-	if err := c.queue.Enqueue(msg); err != nil {
-		if online {
-			conn.enqueueMu.Unlock()
-		}
-		// 遇到错误，记录日志并丢弃消息
-		c.core.logger.Debug("Message dropped, client dispatch queue enqueue failed",
-			zap.String("clientID", c.ID),
-			zap.String("topic", msg.Packet.Topic),
-			zap.Error(err))
-		c.core.stats.MessagesDropped.Add(1)
-		c.messagesDropped.Add(1)
-		c.core.emit(Event{
-			Type:     EventMessageDropped,
-			ClientID: c.ID,
-			Topic:    msg.Packet.Topic,
-			Bytes:    len(msg.Packet.Payload),
-			QoS:      msg.QoS,
-			Reason:   "queue_enqueue_failed",
-		})
-		return err
-	}
-
-	// 客户端离线，但是已经放入了队列，等待重传机制处理
-	if !online {
-		c.core.logger.Debug("Client offline, message queued for retransmit",
-			zap.String("clientID", c.ID),
-			zap.String("topic", msg.Packet.Topic),
-			zap.String("packetID", msg.PacketID.Hex()))
-
-		return nil
-	}
-
-	err := conn.sendQueue.tryEnqueue(msg)
-	conn.enqueueMu.Unlock()
-
-	if err != nil {
-		// 失败：
-		// !!! 由于上面重新分配了 PacketID，这里不可能出现消息已在队列中的情况 !!!
-
-		// 队列已满
-		if msg.QoS == packet.QoS0 {
-			// QoS0: 虽然列队已满，但消息并没有直接丢弃，因为已经持久化到队列中，等待重传机制处理
-			c.core.logger.Debug("QoS0 message dropped (queue full)",
-				zap.String("clientID", c.ID),
-				zap.String("topic", msg.Packet.Topic),
-				zap.String("packetID", msg.PacketID.Hex()))
-
-			return nil
-		}
-
-		// QoS1: 已持久化，等待重传机制处理
-		c.core.logger.Debug("QoS1 message queued for retransmit (queue full)",
-			zap.String("clientID", c.ID),
-			zap.String("topic", msg.Packet.Topic),
-			zap.String("packetID", msg.PacketID.Hex()))
-
-		return err
-	}
-
-	// 成功入队，触发发送协程
-	conn.triggerSend()
 
 	return nil
 }
@@ -446,7 +340,7 @@ func (c *Client) enforceQueueQuota() bool {
 		return true
 	}
 
-	if c.queue.Count() < int64(limit) {
+	if c.queue.len() < limit {
 		return true
 	}
 
@@ -461,8 +355,8 @@ func (c *Client) enforceQueueQuota() bool {
 	}
 
 	dropped := 0
-	for c.queue.Count() >= int64(limit) {
-		if _, err := c.queue.Dequeue(); err != nil {
+	for c.queue.len() >= limit {
+		if !c.queue.dropOldest() {
 			break
 		}
 		dropped++
@@ -498,9 +392,10 @@ func (c *conn) triggerSend() {
 	c.pendingSend.Store(true)
 }
 
-// processSendQueue 处理发送队列中的消息。
-// 内存发送队列排空后会立即尝试从持久化队列补货（由 ACK/发送完成驱动），
-// 不再依赖 RetransmitInterval 定时器，避免突发后的秒级～30 秒级投递停顿。
+// processSendQueue 发送协程：先重发超时未确认的消息，再按 FIFO 发送新消息。
+//
+// 队列本身就在内存中，不需要"从持久化队列补货"这一层；窗口（客户端接收窗口）用
+// 待确认条数衡量，ACK 与入队都会唤醒本协程。
 func (c *conn) processSendQueue() {
 	// 正常情况下由 triggerSend 置位；直接调用（测试）时也保证内部 triggerSend 只打标记，
 	// 不会启动第二个发送协程。
@@ -511,97 +406,51 @@ func (c *conn) processSendQueue() {
 		aborted := false
 
 		for !c.closed.Load() {
-			// 尝试从队列取消息
-			msg, ok := c.sendQueue.tryDequeue()
-			if !ok {
-				// 内存发送队列已空：立即从持久化队列补货
-				if c.client.refillNow() {
+			// 1) 重发：条目仍由待确认队列持有引用
+			if d, ok := c.nextResend(); ok {
+				err := c.sendDelivery(d)
+				if err == nil {
+					c.client.core.stats.MessagesSent.Add(1)
+					c.client.messagesSent.Add(1)
 					continue
 				}
-				break
-			}
-
-			// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
-			if msg.IsExpired() {
-				c.client.core.logger.Debug("Message expired, dropping",
-					zap.String("clientID", c.client.ID),
-					zap.String("topic", msg.Packet.Topic),
-					zap.String("packetID", msg.PacketID.Hex()))
-
-				// 从持久化队列删除
-				if delErr := c.discardQueuedMessage(msg); delErr != nil {
-					c.client.core.logger.Debug("Failed to delete expired message from queue",
-						zap.String("clientID", c.client.ID),
-						zap.String("packetID", msg.PacketID.Hex()),
-						zap.Error(delErr))
-				}
-
-				// 统计消息丢弃数
-				c.client.core.stats.MessagesDropped.Add(1)
-				continue
-			}
-
-			// 发送消息
-			if err := c.sendMessage(msg); err != nil {
-				c.client.core.logger.Debug("Failed to send message from queue",
-					zap.String("clientID", c.client.ID),
-					zap.String("topic", msg.Packet.Topic),
-					zap.Error(err))
-
-				if errors.Is(err, ErrMessageTooLarge) {
-					// 消息过大，直接丢弃不重试
-					if delErr := c.discardQueuedMessage(msg); delErr != nil {
-						c.client.core.logger.Debug("Failed to delete oversized message from queue",
-							zap.String("clientID", c.client.ID),
-							zap.String("packetID", msg.PacketID.Hex()),
-							zap.Error(delErr))
-					}
+				if errors.Is(err, errDeliveryDropped) {
+					// 过期/超长/被拒：从待确认队列移除并释放引用
+					c.client.session.pendingAck.drop(d.packetID)
 					c.client.core.stats.MessagesDropped.Add(1)
 					continue
 				}
-
-				if errors.Is(err, ErrDeliveryRejected) {
-					if delErr := c.discardQueuedMessage(msg); delErr != nil {
-						c.client.core.logger.Debug("Failed to delete delivery-rejected message from queue",
-							zap.String("clientID", c.client.ID),
-							zap.String("packetID", msg.PacketID.Hex()),
-							zap.Error(delErr))
-					}
-					c.client.core.stats.MessagesDropped.Add(1)
-					continue
-				}
-
-				// 后续重试应明确标记为重复投递，但在 sendMessage 返回前仍保持 sendQueue 去重，
-				// 以免同一条消息在写入进行中被重复入队。
-				if err := c.requeueAfterSendFailure(msg); err != nil {
-					c.client.core.logger.Warn("Failed to persist Dup flag after send failure",
-						zap.String("clientID", c.client.ID),
-						zap.String("topic", msg.Packet.Topic),
-						zap.String("packetID", msg.PacketID.Hex()),
-						zap.Error(err))
-				}
-
-				// 写入失败通常意味着连接已不可用：退出本轮，由重传 tick 或新的触发再试，
-				// 避免在同一条失败消息上原地忙等。
 				aborted = true
 				break
 			}
 
-			// 发送成功：QoS0 从持久化队列删除，QoS1 等待 PUBACK
-			if msg.QoS == packet.QoS0 {
-				if delErr := c.discardQueuedMessage(msg); delErr != nil {
-					c.client.core.logger.Debug("Failed to delete QoS0 message from queue after send",
-						zap.String("clientID", c.client.ID),
-						zap.String("packetID", msg.PacketID.Hex()),
-						zap.Error(delErr))
-				}
-			} else {
-				// QoS1 的删除由 handlePuback 在 pendingAck 锁内完成
-				c.sendQueue.finish(msg.PacketID)
+			// 2) 窗口允许时发送新消息
+			if !c.windowAvailable() {
+				break
 			}
 
-			// 发送成功，统计消息发送数
-			c.client.core.stats.MessagesSent.Add(1)
+			d, ok := c.client.queue.popFront() // 引用所有权转移给本协程
+			if !ok {
+				break
+			}
+
+			err := c.sendDelivery(d)
+			if err == nil {
+				c.finishSent(d)
+				continue
+			}
+			if errors.Is(err, errDeliveryDropped) {
+				c.client.core.msgs.release(d.msg)
+				c.client.core.stats.MessagesDropped.Add(1)
+				continue
+			}
+
+			// 写失败通常意味着连接已不可用：放回队头并标记重发，
+			// 交由重连后的发送协程继续（不在这里原地忙等）。
+			d.dup.Store(true)
+			c.client.queue.pushFront(d)
+			aborted = true
+			break
 		}
 
 		// 释放处理权；若期间有新工作则重新接手
@@ -615,95 +464,130 @@ func (c *conn) processSendQueue() {
 	}
 }
 
-// discardQueuedMessage 删除持久化条目并结束发送队列中的生命周期。
-// 与补货共用 enqueueMu，避免补货在"删除持久化条目"与"finish"之间重复装载同一条消息。
-func (c *conn) discardQueuedMessage(msg *Message) error {
-	c.enqueueMu.Lock()
-	defer c.enqueueMu.Unlock()
-
-	err := c.client.queue.Delete(msg.PacketID)
-	c.sendQueue.finish(msg.PacketID)
-	return err
+// windowAvailable 报告是否还有可用发送窗口。
+//
+// 窗口等于客户端声明的接收窗口，用"已发送未确认"的条数衡量；QoS0 的投递同样
+// 受这一顺序窗口约束，避免绕过流控。
+func (c *conn) windowAvailable() bool {
+	window := int(c.sendWindow)
+	if window <= 0 {
+		window = defaultSendWindow
+	}
+	return c.client.session.pendingAck.len() < window
 }
 
-// requeueAfterSendFailure 将发送失败的消息标记 Dup 后重新持久化，并结束本次发送。
-// 与补货共用 enqueueMu，避免重复入队。
-func (c *conn) requeueAfterSendFailure(msg *Message) error {
-	c.enqueueMu.Lock()
-	defer c.enqueueMu.Unlock()
+// sendDelivery 把一次投递写到连接上。
+// 返回 errDeliveryDropped 表示该投递被丢弃（不是连接错误）。
+func (c *conn) sendDelivery(d *delivery) error {
+	m := d.msg
 
-	dupMsg := msg.Copy()
-	dupMsg.Dup = true
-	err := c.client.queue.Enqueue(&dupMsg)
-	c.sendQueue.finish(msg.PacketID)
-	return err
-}
-
-// pendingMessage 等待确认的消息
-type pendingMessage struct {
-	msg        *Message // 最终的 PUBLISH 包（只读）
-	lastSentAt int64    // 最后发送时间（Unix 时间戳）
-	retries    int      // 已重发次数
-}
-
-// sendMessage 发送消息到客户端
-// 只负责发送和后处理（pendingAck 注册）；不负责持久化队列删除（由 processSendQueue 统一处理）
-func (c *conn) sendMessage(msg *Message) error {
-	if msg.Packet == nil {
-		return ErrInvalidMessage
+	if m.IsExpired() {
+		c.client.core.logger.Debug("Message expired, dropping",
+			zap.String("clientID", c.client.ID),
+			zap.String("topic", m.Topic()),
+			zap.String("packetID", d.packetID.Hex()))
+		return errDeliveryDropped
 	}
 
-	// 基于只读 PublishPacket 构造一次性出站 packet。
-	// 这里需要深拷贝，隔离 OnDeliver 钩子和编码过程中的局部修改，避免污染共享消息内容层。
-	pub := msg.Packet.DeepCopy()
-	pub.Dup = msg.Dup
-	pub.QoS = msg.QoS
-	pub.Retain = msg.Retain
-	pub.PacketID = msg.PacketID // 无论 QoS=0 还是 QoS=1 都使用 PacketID
+	frame := m.frame(d)
+	if c.maxPacketSize > 0 && frame.Size() > c.maxPacketSize {
+		c.client.core.logger.Warn("Message dropped: packet size exceeds client maxPacketSize",
+			zap.String("clientID", c.client.ID),
+			zap.String("topic", m.Topic()),
+			zap.String("packetID", d.packetID.Hex()),
+			zap.Uint32("size", frame.Size()),
+			zap.Uint32("maxPacketSize", c.maxPacketSize))
+		return errDeliveryDropped
+	}
 
-	// 调用 OnDeliver 钩子，检查是否允许投递
+	// 注册了 OnDeliver 钩子时，钩子可能修改或拒绝消息，会破坏共享的预编码帧，
+	// 因此走"深拷贝 + 完整编码"的兼容路径；未注册钩子（常见情况）走零拷贝快路径。
+	if c.client.core.options.Hooks.hasOnDeliver() {
+		if err := c.sendDeliveryWithHook(d); err != nil {
+			return err
+		}
+	} else if err := c.writePublishFrame(&frame); err != nil {
+		return err
+	}
+
+	d.lastSentAt.Store(time.Now().Unix())
+	return nil
+}
+
+// sendDeliveryWithHook 是注册了 OnDeliver 钩子时的兼容路径：
+// 钩子拿到的是独立副本，可以安全修改，不影响共享消息与其它订阅者。
+func (c *conn) sendDeliveryWithHook(d *delivery) error {
+	pub := d.msg.Packet.DeepCopy()
+	pub.Dup = d.dup.Load()
+	pub.QoS = d.qos
+	pub.Retain = d.retain
+	pub.PacketID = d.packetID
+
 	deliverCtx := &DeliverContext{
 		ClientID: c.client.ID,
 		Packet:   &pub,
 		Identity: c.client.session.getIdentity(),
 	}
 	if !c.client.core.options.Hooks.callOnDeliver(deliverCtx) {
-		return ErrDeliveryRejected // 钩子拒绝投递
+		return errDeliveryDropped
 	}
 
-	if err := c.writePacket(&pub); err != nil {
-		if errors.Is(err, &packet.PacketTooLargeError{}) {
-			// 数据包超过客户端允许的最大大小，返回哨兵错误由 processSendQueue 统一处理
-			c.client.core.logger.Warn("Message dropped: packet size exceeds client maxPacketSize",
-				zap.String("clientID", c.client.ID),
-				zap.String("topic", pub.Topic),
-				zap.String("packetID", pub.PacketID.Hex()),
-				zap.Error(err))
+	return c.writePacket(&pub)
+}
 
-			return ErrMessageTooLarge
-		}
-
-		// 其他写入错误
-		return err
+// finishSent 处理发送成功后的所有权转移与统计。
+func (c *conn) finishSent(d *delivery) {
+	if d.qos == packet.QoS1 {
+		// QoS1 需要等待 PUBACK：引用转移给待确认队列
+		c.client.session.pendingAck.pushBack(d)
+	} else {
+		// QoS0 已写出，释放引用
+		c.client.core.msgs.release(d.msg)
 	}
 
 	c.client.messagesSent.Add(1)
+	c.client.core.stats.MessagesSent.Add(1)
+}
 
-	// 发送成功后的处理
-	if pub.QoS == packet.QoS1 {
-		// QoS=1: 加入 pendingAck 等待确认
-		// 注意：如果是重传的消息，pendingAck 中可能已经存在该记录
-		// 此时需要更新 lastSentAt 为实际发送时间
-		c.client.session.pendingAckMu.Lock()
-		c.client.session.pendingAck[pub.PacketID] = pendingMessage{
-			msg:        msg,
-			lastSentAt: time.Now().Unix(),
-		}
-		c.client.session.pendingAckMu.Unlock()
+// addResend 排队一次重发（同一 PacketID 只排一次）。
+func (c *conn) addResend(d *delivery) bool {
+	c.resendMu.Lock()
+	defer c.resendMu.Unlock()
+
+	if c.resendSet == nil {
+		c.resendSet = make(map[packet.PacketID]struct{})
 	}
-	// QoS=0: 持久化队列删除由 processSendQueue 统一处理
+	if _, exists := c.resendSet[d.packetID]; exists {
+		return false
+	}
 
-	return nil
+	c.resendSet[d.packetID] = struct{}{}
+	c.resendIDs = append(c.resendIDs, d)
+	return true
+}
+
+// nextResend 取出下一个待重发的投递；期间已被 ACK 的条目会被跳过。
+func (c *conn) nextResend() (*delivery, bool) {
+	c.resendMu.Lock()
+	defer c.resendMu.Unlock()
+
+	for len(c.resendIDs) > 0 {
+		d := c.resendIDs[0]
+		c.resendIDs[0] = nil
+		c.resendIDs = c.resendIDs[1:]
+		delete(c.resendSet, d.packetID)
+
+		// ACK 可能已经到达：只有仍在待确认队列中的投递才需要重发
+		if c.client.session.pendingAck.get(d.packetID) != d {
+			continue
+		}
+
+		d.dup.Store(true)
+		d.retries.Add(1)
+		return d, true
+	}
+
+	return nil, false
 }
 
 // PublishToClient 向指定客户端发送消息
@@ -717,24 +601,30 @@ func (c *Core) PublishToClient(clientID string, topic string, payload []byte, op
 		return ErrInvalidTopic
 	}
 
-	pub := c.newServerPublishPacket(topic, payload, clientID, options)
-	msg := c.newPublishMessage(pub)
-
 	c.clientsMu.RLock()
 	client, exists := c.clients[clientID]
 	c.clientsMu.RUnlock()
 
-	if exists {
-		return client.deliver(&msg)
+	if !exists {
+		return NewClientNotFoundError(clientID)
 	}
 
-	return NewClientNotFoundError(clientID)
+	pub := c.newServerPublishPacket(topic, payload, clientID, options)
+	msg, err := newMessage(pub)
+	if err != nil {
+		return err
+	}
+
+	c.msgs.put(msg)
+	defer c.msgs.release(msg)
+
+	return client.enqueueDelivery(msg, msg.QoS, msg.Retain)
 }
 
 // Broadcast 向所有在线客户端广播消息。
 //
 // 注意：这是即时的、仅在线客户的扇出，不进入订阅树，也不为离线会话入队。
-// 需要持久化/按订阅关系投递时请使用主题发布（Publish）。
+// 需要按订阅关系投递（含离线会话入队）时请使用主题发布（Publish）。
 func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) int {
 	if !packet.ValidateTopicName(topic) {
 		c.logger.Warn("Broadcast rejected, invalid topic name", zap.String("topic", topic))
@@ -751,13 +641,22 @@ func (c *Core) Broadcast(topic string, payload []byte, options PublishOptions) i
 	c.clientsMu.RUnlock()
 
 	pub := c.newServerPublishPacket(topic, payload, "", options)
-	msg := c.newPublishMessage(pub)
-	c.handleRetainedMessage(&msg)
+	msg, err := newMessage(pub)
+	if err != nil {
+		c.logger.Warn("Broadcast rejected, encode failed",
+			zap.String("topic", topic),
+			zap.Error(err))
+		return 0
+	}
+
+	c.msgs.put(msg)
+	defer c.msgs.release(msg)
+
+	c.handleRetainedMessage(msg)
 
 	successCount := 0
 	for _, client := range clients {
-		copiedMsg := msg.Copy()
-		if err := client.deliver(&copiedMsg); err == nil {
+		if err := client.enqueueDelivery(msg, msg.QoS, msg.Retain); err == nil {
 			successCount++
 		}
 	}

@@ -63,7 +63,6 @@ func main() {
 	addr := flag.String("addr", ":5208", "Listen address")
 	maxClients := flag.Uint("max-clients", 10000, "Maximum number of clients")
 	authFile := flag.String("auth-file", "", "Path to auth file (TOML with [[nodes]] serial + secret)")
-	storeDir := flag.String("store-dir", "./data", "BadgerDB storage directory")
 	wsAddr := flag.String("ws-addr", "", "WebSocket listen address (empty = disabled, e.g. \":8080\")")
 	wsPath := flag.String("ws-path", "/ws", "WebSocket endpoint path")
 	metricsAddr := flag.String("metrics-addr", "", "Metrics/health HTTP listen address (empty = disabled, e.g. \":9101\")")
@@ -95,7 +94,6 @@ func main() {
 	opts := core.NewCoreOptions().
 		WithMaxClients(uint32(*maxClients)).
 		WithRetainEnabled(true).
-		WithStoreDir(*storeDir).
 		WithLogger(logger)
 
 	// 添加连接生命周期钩子
@@ -232,7 +230,7 @@ func main() {
 
 	printBanner(version, *addr, wsEnabledText(*wsAddr, *wsPath),
 		wsEnabledText(*metricsAddr, "/metrics"), wsEnabledText(*metricsAddr, "/healthz"),
-		*maxClients, *storeDir, *authFile, *debug)
+		*maxClients, *authFile, *debug)
 
 	// 等待中断信号或监听器退出
 	sigCh := make(chan os.Signal, 1)
@@ -250,7 +248,7 @@ func main() {
 }
 
 // printBanner 输出对齐的启动信息（内部宽度 64）。
-func printBanner(version, addr, ws, metrics, health string, maxClients uint, storeDir, authFile string, debug bool) {
+func printBanner(version, addr, ws, metrics, health string, maxClients uint, authFile string, debug bool) {
 	row := func(label, value string) {
 		fmt.Printf("║  %-22s%-40s║\n", label, value)
 	}
@@ -264,8 +262,7 @@ func printBanner(version, addr, ws, metrics, health string, maxClients uint, sto
 	row("Metrics:", metrics)
 	row("Health:", health)
 	row("Max Clients:", fmt.Sprintf("%d", maxClients))
-	row("Persistence:", fmt.Sprintf("%v", storeDir != ""))
-	row("Storage Dir:", storeDir)
+	row("Storage:", "in-memory (no persistence)")
 	row("Auth File:", authFile)
 	row("Debug:", fmt.Sprintf("%v", debug))
 	fmt.Println("╚════════════════════════════════════════════════════════════════╝")

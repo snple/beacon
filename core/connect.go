@@ -116,7 +116,7 @@ func (c *Core) handleConn(conn net.Conn) {
 			clientID = c.generateClientID()
 		}
 
-		// Core 用 "client:<clientID>:" 作为持久化队列前缀；允许 ':' 会让
+		// 旧版 core 用 "client:<clientID>:" 作为持久化队列前缀；允许 ':' 会让
 		// 一个客户端的队列前缀包含另一个客户端的队列（跨会话消息泄露）。
 		if !packet.ValidateClientID(clientID) {
 			c.logger.Warn("Invalid client ID, rejecting connection",
@@ -161,9 +161,6 @@ func (c *Core) handleConn(conn net.Conn) {
 	if authCtx != nil && authCtx.Identity != nil {
 		client.session.setIdentity(authCtx.Identity)
 	}
-
-	// 会话元数据在锁外持久化：badger 写入不应发生在全局 clientsMu 临界区内。
-	c.saveSession(client, 0)
 
 	// 通过 client.getConn() 读取连接状态。
 	// 注意：不能直接访问 client.conn，否则会绕过 connMu 的保护，
@@ -441,8 +438,8 @@ func (c *Core) registerClient(netConn net.Conn, connect *packet.ConnectPacket) (
 		}
 	}
 
-	// 锁内只摘除 map 条目；删除会话记录、清空旧队列等 badger 写入放到锁外，
-	// 否则慢盘或大积压会把所有连接注册阻塞在全局锁上。
+	// 锁内只摘除 map 条目；清空旧队列（释放消息引用）放到锁外，
+	// 避免大积压把连接注册阻塞在全局锁上。
 	delete(c.clients, clientID)
 	c.clientsMu.Unlock()
 
@@ -583,10 +580,8 @@ func (c *Core) handleClientDisconnect(client *Client) {
 	// 保留会话，记录过期时间
 	expiryTime := time.Now().Add(time.Duration(client.session.timeout.Load()) * time.Second)
 
-	// 先持久化会话（订阅 + 过期时间），再纳入离线会话表：
-	// 若达到 MaxOfflineSessions 上限，addOfflineSession 会驱逐最早过期的
-	// 会话（包括可能刚加入的这一个），并一并删除其记录与队列。
-	c.saveSessionExpiring(client, expiryTime)
+	// 纳入离线会话表：若达到 MaxOfflineSessions 上限，addOfflineSession 会
+	// 驱逐最早过期的会话（包括可能刚加入的这一个），并一并清理其队列。
 	c.addOfflineSession(client.ID, expiryTime)
 
 	// 需要时发布遗嘱消息（publishWill 内部会清除遗嘱，防止重复发送）

@@ -145,3 +145,38 @@ func TestReadDeadline(t *testing.T) {
 		t.Fatalf("error = %v, want net timeout", err)
 	}
 }
+
+// TestWriteSegmentsSingleMessage 验证分段写（WriteSegments）只产生一条 WebSocket
+// 二进制消息：分段不能各自成帧，否则对端会读到不完整的包。
+func TestWriteSegmentsSingleMessage(t *testing.T) {
+	got := make(chan []byte, 1)
+	srv := newWSServer(t, func(ws *websocket.Conn) {
+		msgType, data, err := ws.ReadMessage()
+		if err != nil {
+			return
+		}
+		if msgType != websocket.BinaryMessage {
+			return
+		}
+		got <- data
+	})
+
+	conn := dialWS(t, srv)
+
+	n, err := conn.WriteSegments([][]byte{[]byte("ab"), []byte("cd"), nil, []byte("ef")})
+	if err != nil {
+		t.Fatalf("WriteSegments: %v", err)
+	}
+	if n != 6 {
+		t.Fatalf("WriteSegments wrote %d bytes, want 6", n)
+	}
+
+	select {
+	case data := <-got:
+		if string(data) != "abcdef" {
+			t.Fatalf("received %q, want %q", data, "abcdef")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not receive segmented message")
+	}
+}

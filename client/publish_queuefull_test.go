@@ -10,10 +10,8 @@ import (
 )
 
 func TestPublishMessage_QoS1QueueFullReturnsNilAfterPersist(t *testing.T) {
-	db, cleanup := setupClientTestDB(t)
-	defer cleanup()
 
-	queue := NewQueue(db, "client:test:")
+	queue := NewQueue()
 	client := &Client{
 		queue:   queue,
 		logger:  zap.NewNop(),

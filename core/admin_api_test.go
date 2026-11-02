@@ -37,7 +37,7 @@ func TestInfoAndReady(t *testing.T) {
 	require.False(t, info.StartedAt.IsZero())
 	require.Greater(t, info.Uptime, time.Duration(0))
 	require.Equal(t, uint32(10000), info.Limits.MaxClients)
-	require.True(t, info.Store.Ready)
+	require.True(t, info.Memory.Ready)
 	require.Len(t, info.Listeners, 1)
 
 	require.NoError(t, c.Stop())

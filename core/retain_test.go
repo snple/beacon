@@ -7,12 +7,25 @@ import (
 	"github.com/snple/beacon/packet"
 )
 
+// newTestRetainStore 创建一个使用独立消息表的 retainStore。
+func newTestRetainStore() *retainStore {
+	return newRetainStore(newMessageStore())
+}
+
+// testRetainMessage 构造一条已注册的保留消息（引用计数 1，交给 retainStore）。
+func testRetainMessage(topic string) *Message {
+	msg := createTestMessage(topic, []byte("payload"), packet.QoS0)
+	msg.Retain = true
+	msg.Packet.Retain = true
+	return msg
+}
+
 // TestRetainStoreBasicOperations 测试基本操作
 func TestRetainStoreBasicOperations(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	// 测试 set 和 exists
-	if err := store.set("sensor/temperature", 0); err != nil {
+	if err := store.set("sensor/temperature", testRetainMessage("sensor/temperature"), 0); err != nil {
 		t.Fatalf("Failed to set retain message index: %v", err)
 	}
 
@@ -30,7 +43,7 @@ func TestRetainStoreBasicOperations(t *testing.T) {
 	}
 
 	// 测试覆盖
-	if err := store.set("sensor/temperature", 12345); err != nil {
+	if err := store.set("sensor/temperature", testRetainMessage("sensor/temperature"), 12345); err != nil {
 		t.Fatalf("Failed to update retain message index: %v", err)
 	}
 
@@ -48,17 +61,17 @@ func TestRetainStoreBasicOperations(t *testing.T) {
 
 // TestRetainStoreInvalidTopics 测试无效主题
 func TestRetainStoreInvalidTopics(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	// 空主题
-	if err := store.set("", 0); err != ErrInvalidRetainMessage {
+	if err := store.set("", testRetainMessage(""), 0); err != ErrInvalidRetainMessage {
 		t.Errorf("Expected ErrInvalidRetainMessage for empty topic, got %v", err)
 	}
 }
 
 // TestRetainStoreWildcardMatching 测试通配符匹配
 func TestRetainStoreWildcardMatching(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	// 准备测试数据
 	topics := []string{
@@ -71,7 +84,7 @@ func TestRetainStoreWildcardMatching(t *testing.T) {
 	}
 
 	for _, topic := range topics {
-		store.set(topic, 0)
+		store.set(topic, testRetainMessage(topic), 0)
 	}
 
 	tests := []struct {
@@ -107,18 +120,18 @@ func TestRetainStoreWildcardMatching(t *testing.T) {
 
 // TestRetainStoreExpiry 测试过期功能
 func TestRetainStoreExpiry(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	now := time.Now().Unix()
 
 	// 设置一个已过期的索引
-	store.set("expired/topic", now-100)
+	store.set("expired/topic", testRetainMessage("expired/topic"), now-100)
 
 	// 设置一个未过期的索引
-	store.set("valid/topic", now+100)
+	store.set("valid/topic", testRetainMessage("valid/topic"), now+100)
 
 	// 设置一个永不过期的索引
-	store.set("permanent/topic", 0)
+	store.set("permanent/topic", testRetainMessage("permanent/topic"), 0)
 
 	// 验证过期检查
 	entry := store.getEntry("expired/topic")
@@ -162,10 +175,10 @@ func TestRetainStoreExpiry(t *testing.T) {
 
 // TestRetainStoreRemoval 测试删除
 func TestRetainStoreRemoval(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	// 设置保留消息索引
-	store.set("test/topic", 0)
+	store.set("test/topic", testRetainMessage("test/topic"), 0)
 
 	if got := len(store.matchTopics("**")); got != 1 {
 		t.Errorf("Count should be 1, got %d", got)
@@ -185,12 +198,12 @@ func TestRetainStoreRemoval(t *testing.T) {
 
 // TestRetainStoreClear 测试清空
 func TestRetainStoreClear(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	// 添加多个索引
 	for i := 0; i < 10; i++ {
 		topic := "test/" + string(rune('a'+i))
-		store.set(topic, 0)
+		store.set(topic, testRetainMessage(topic), 0)
 	}
 
 	if got := len(store.matchTopics("**")); got != 10 {
@@ -213,7 +226,7 @@ func TestRetainStoreClear(t *testing.T) {
 
 // TestRetainStoreNestedTopics 测试嵌套主题
 func TestRetainStoreNestedTopics(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	topics := []string{
 		"a",
@@ -223,7 +236,7 @@ func TestRetainStoreNestedTopics(t *testing.T) {
 	}
 
 	for _, topic := range topics {
-		store.set(topic, 0)
+		store.set(topic, testRetainMessage(topic), 0)
 	}
 
 	// 测试精确匹配
@@ -245,7 +258,7 @@ func TestRetainStoreNestedTopics(t *testing.T) {
 
 // TestRetainStoreConcurrency 测试并发安全
 func TestRetainStoreConcurrency(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	// 并发写入
 	done := make(chan bool)
@@ -253,7 +266,7 @@ func TestRetainStoreConcurrency(t *testing.T) {
 		go func(id int) {
 			for j := 0; j < 100; j++ {
 				topic := "concurrent/test/" + string(rune('a'+id))
-				store.set(topic, 0)
+				store.set(topic, testRetainMessage(topic), 0)
 			}
 			done <- true
 		}(i)
@@ -326,82 +339,41 @@ func TestMatchTopic(t *testing.T) {
 	}
 }
 
-// TestRetainStoreWithMessageStore 测试与 messageStore 集成
-func TestRetainStoreWithMessageStore(t *testing.T) {
-	// 创建内存模式的 messageStore
-	config := StoreOptions{
-		DataDir:          "", // InMemory 模式
-		ValueLogFileSize: 64,
+// TestRetainStore_MatchMessages 验证保留消息直接引用共享消息表，不复制内容。
+func TestRetainStore_MatchMessages(t *testing.T) {
+	store := newTestRetainStore()
+
+	const topic = "sensor/temperature"
+	msg := testRetainMessage(topic)
+	if err := store.set(topic, msg, 0); err != nil {
+		t.Fatalf("Failed to set retain message: %v", err)
 	}
 
-	ms, err := newStore(config)
-	if err != nil {
-		t.Fatalf("Failed to create message store: %v", err)
-	}
-	defer ms.close()
-
-	store := newRetainStore()
-
-	// 模拟保存保留消息
-	topic := "sensor/temperature"
-	pub := packet.NewPublishPacket(topic, []byte("25.5"))
-	pub.Retain = true
-	msg := &Message{Packet: pub, Retain: true, QoS: packet.QoS1, Timestamp: time.Now().Unix()}
-
-	// 存储索引到 retainStore
-	if err := store.set(topic, 0); err != nil {
-		t.Fatalf("Failed to set retain index: %v", err)
-	}
-
-	// 存储消息到 messageStore
-	if err := ms.setRetain(topic, msg); err != nil {
-		t.Fatalf("Failed to save retain message: %v", err)
-	}
-
-	// 验证索引存在
 	if store.getEntry(topic) == nil {
 		t.Error("Topic should exist in retainStore")
 	}
 
-	// 从 messageStore 获取消息
-	retrieved, err := ms.getRetain(topic)
-	if err != nil {
-		t.Fatalf("Failed to get retain message: %v", err)
+	msgs := store.matchMessages("sensor/**")
+	if len(msgs) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(msgs))
 	}
-	if retrieved == nil {
-		t.Fatal("Retrieved message should not be nil")
-	}
-	if string(retrieved.Packet.Payload) != "25.5" {
-		t.Errorf("Payload mismatch: got %s, want 25.5", retrieved.Packet.Payload)
+	if msgs[0] != msg {
+		t.Error("retainStore should reference the shared message, not a copy")
 	}
 
-	// 测试匹配并获取
-	topics := store.matchTopics("sensor/**")
-	if len(topics) != 1 {
-		t.Errorf("Expected 1 topic, got %d", len(topics))
-	}
-
-	for _, tp := range topics {
-		msg, err := ms.getRetain(tp)
-		if err != nil {
-			t.Errorf("Failed to get message for topic %s: %v", tp, err)
-		}
-		if msg == nil {
-			t.Errorf("Message for topic %s should not be nil", tp)
-		}
-	}
+	store.store.release(msgs[0])
 }
 
 // TestRetainStoreScalability 测试大量消息的可扩展性
 func TestRetainStoreScalability(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 
 	// 添加大量主题（模拟数万条记录的场景）
 	count := 10000
 	for i := 0; i < count; i++ {
 		// 使用唯一的主题格式
 		topic := "device/" + string(rune('a'+i%26)) + "/" + string(rune('a'+(i/26)%26)) + "/" + string(rune('a'+(i/676)%26)) + "/status/" + string(rune('0'+i%10))
-		store.set(topic, 0)
+		store.set(topic, testRetainMessage(topic), 0)
 	}
 
 	if got := len(store.matchTopics("**")); got != count {
@@ -427,8 +399,8 @@ func TestRetainStoreScalability(t *testing.T) {
 
 // TestRetainStore_PrunesEmptyNodes 验证删除保留消息后会剪掉空节点。
 func TestRetainStore_PrunesEmptyNodes(t *testing.T) {
-	store := newRetainStore()
-	if err := store.set("a/b/c", 0); err != nil {
+	store := newTestRetainStore()
+	if err := store.set("a/b/c", testRetainMessage("a/b/c"), 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(store.root.children); got != 1 {
@@ -446,8 +418,8 @@ func TestRetainStore_PrunesEmptyNodes(t *testing.T) {
 
 // TestRetainStore_ExpiredCleanupPrunesNodes 验证过期清理同样会剪枝。
 func TestRetainStore_ExpiredCleanupPrunesNodes(t *testing.T) {
-	store := newRetainStore()
-	if err := store.set("a/b/c", time.Now().Unix()-1); err != nil {
+	store := newTestRetainStore()
+	if err := store.set("a/b/c", testRetainMessage("a/b/c"), time.Now().Unix()-1); err != nil {
 		t.Fatal(err)
 	}
 

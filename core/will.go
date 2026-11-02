@@ -67,20 +67,12 @@ func (c *Client) publishWill() {
 		}
 	}
 
-	// QoS/Retain 必须带到 Message 层：投递链路取的是 Message.QoS / Message.Retain，
-	// 只设置 Packet 上的标志会被丢弃。
-	msg := Message{
-		Packet:    pub,
-		QoS:       pub.QoS,
-		Retain:    pub.Retain,
-		Timestamp: time.Now().Unix(),
-	}
-
 	c.core.logger.Info("Publishing will message",
 		zap.String("clientID", c.ID),
 		zap.String("topic", pub.Topic))
 
-	c.core.publish(msg)
+	// QoS/Retain 由 pub 自身携带：publish 会据此创建共享消息
+	c.core.publish(pub)
 }
 
 // clearWill 清除遗嘱消息（正常断开时调用）

@@ -4,16 +4,9 @@ package core
 // 仍能直接检查 broker 内部状态。
 
 // retainedMessagesForTest 返回匹配 topic（支持通配符）的保留消息。
+// 返回的消息额外持有一个引用，调用方负责 release。
 func retainedMessagesForTest(c *Core, topic string) []*Message {
-	var out []*Message
-	for _, t := range c.retainStore.matchTopics(topic) {
-		msg, err := c.store.getRetain(t)
-		if err != nil || msg == nil {
-			continue
-		}
-		out = append(out, msg)
-	}
-	return out
+	return c.retainStore.matchMessages(topic)
 }
 
 // getClientSubscriptionsForTest 返回客户端的订阅列表（等价于详情中的 Subscriptions）。

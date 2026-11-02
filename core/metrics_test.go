@@ -49,7 +49,7 @@ func TestMetrics_Endpoints(t *testing.T) {
 	for _, name := range []string{
 		"beacon_up", "beacon_clients_connected", "beacon_messages_received_total",
 		"beacon_pending_queue_depth", "beacon_client_queue_depth", "beacon_pending_ack",
-		"beacon_offline_sessions", "beacon_store_bytes", "beacon_subscriptions",
+		"beacon_offline_sessions", "beacon_pending_bytes", "beacon_subscriptions",
 	} {
 		require.Contains(t, text, "# TYPE "+name, "缺少指标 %s", name)
 	}
@@ -100,5 +100,6 @@ func TestMetrics_StatsIncludeRuntimeDepth(t *testing.T) {
 	stats := c.GetStats()
 	require.GreaterOrEqual(t, stats.PendingQueueDepth, int64(0))
 	require.GreaterOrEqual(t, stats.ClientQueueDepth, int64(0))
-	require.GreaterOrEqual(t, stats.StoreBytes, int64(0))
+	require.GreaterOrEqual(t, stats.InFlightMessages, int64(0))
+	require.GreaterOrEqual(t, stats.PendingBytes, int64(0))
 }

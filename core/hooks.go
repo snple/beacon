@@ -235,7 +235,7 @@ type AuthConnectContext struct {
 	ResponseProperties map[string]string // 返回给客户端的用户属性
 
 	// Identity 由认证器写入，成功认证后可通过 ClientInfo 与事件读取。
-	// 仅保存在内存中，不随会话持久化。
+	// 仅保存在内存中（不落盘）。
 	Identity *Identity
 }
 
@@ -331,6 +331,12 @@ func (h *Hooks) callOnPublish(ctx *PublishContext) error {
 		return h.MessageHandler.OnPublish(ctx)
 	}
 	return nil
+}
+
+// hasOnDeliver 报告是否注册了 OnDeliver 钩子。
+// 未注册时可以走零拷贝的预编码投递路径。
+func (h *Hooks) hasOnDeliver() bool {
+	return h != nil && h.MessageHandler != nil
 }
 
 // callOnDeliver 调用 OnDeliver 钩子

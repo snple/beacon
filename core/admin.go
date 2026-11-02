@@ -21,7 +21,7 @@ type Limits struct {
 	ReceiveWindow           uint16
 	MaxClientQueueSize      int
 	MaxPendingMessages      int
-	MaxStoreBytes           int64
+	MaxPendingBytes         int64
 	MaxOfflineSessions      int
 	MaxPublishRate          float64
 	WriteTimeout            time.Duration
@@ -36,7 +36,7 @@ func (c *Core) limits() Limits {
 		ReceiveWindow:           o.ReceiveWindow,
 		MaxClientQueueSize:      o.MaxClientQueueSize,
 		MaxPendingMessages:      o.MaxPendingMessages,
-		MaxStoreBytes:           o.MaxStoreBytes,
+		MaxPendingBytes:         o.MaxPendingBytes,
 		MaxOfflineSessions:      o.MaxOfflineSessions,
 		MaxPublishRate:          o.MaxPublishRate,
 		WriteTimeout:            o.WriteTimeout,
@@ -50,11 +50,11 @@ type ListenerInfo struct {
 	Active   bool
 }
 
-// StoreInfo 描述消息存储状态。
-type StoreInfo struct {
-	Path  string // 空字符串表示内存模式
-	Ready bool
-	Bytes int64
+// MemoryInfo 描述内存中共享消息的状态。
+type MemoryInfo struct {
+	Ready    bool  // broker 是否在运行
+	Messages int   // 尚未完成投递的消息条数
+	Bytes    int64 // 上述消息内容的近似内存占用（字节）
 }
 
 // ServerInfo 是进程级信息快照。
@@ -70,7 +70,7 @@ type ServerInfo struct {
 	Uptime    time.Duration
 	Listeners []ListenerInfo
 	Limits    Limits
-	Store     StoreInfo
+	Memory    MemoryInfo
 }
 
 // Info 返回服务器信息快照。
@@ -91,21 +91,20 @@ func (c *Core) Info() ServerInfo {
 	}
 	info.Listeners = c.Listeners()
 	info.Limits = c.limits()
-	info.Store = StoreInfo{
-		Path:  c.options.StoreOptions.DataDir,
-		Ready: c.Ready(),
-		Bytes: c.storeBytes(),
+
+	count, bytes := c.msgs.stats()
+	info.Memory = MemoryInfo{
+		Ready:    c.Ready(),
+		Messages: count,
+		Bytes:    bytes,
 	}
 
 	return info
 }
 
-// Ready 报告 broker 是否已启动且存储可用（可用于就绪探针）。
+// Ready 报告 broker 是否已启动（可用于就绪探针）。
 func (c *Core) Ready() bool {
-	if !c.running.Load() || c.stopped.Load() {
-		return false
-	}
-	return c.store != nil
+	return c.running.Load() && !c.stopped.Load()
 }
 
 // ============================================================================
@@ -245,22 +244,20 @@ func (c *Core) buildClientInfo(client *Client) *ClientInfo {
 	client.session.subsMu.RUnlock()
 	sort.Slice(subs, func(i, j int) bool { return subs[i].Topic < subs[j].Topic })
 
-	client.session.pendingAckMu.Lock()
-	pendingAck := len(client.session.pendingAck)
 	var oldestAck time.Time
-	for _, p := range client.session.pendingAck {
-		if p.lastSentAt <= 0 {
+	for _, d := range client.session.pendingAck.snapshot() {
+		sentAt := d.lastSentAt.Load()
+		if sentAt <= 0 {
 			continue
 		}
-		sentAt := time.Unix(p.lastSentAt, 0)
-		if oldestAck.IsZero() || sentAt.Before(oldestAck) {
-			oldestAck = sentAt
+		if t := time.Unix(sentAt, 0); oldestAck.IsZero() || t.Before(oldestAck) {
+			oldestAck = t
 		}
 	}
-	client.session.pendingAckMu.Unlock()
 
 	conn := client.getConn()
 	online := conn != nil && !conn.closed.Load()
+	pendingAck := client.session.pendingAck.len()
 
 	info := &ClientInfo{
 		ClientID:       client.ID,
@@ -286,9 +283,9 @@ func (c *Core) buildClientInfo(client *Client) *ClientInfo {
 	}
 
 	if client.queue != nil {
-		info.QueueSize = client.queue.Count()
-		if msg, err := client.queue.Peek(); err == nil && msg != nil && msg.Timestamp > 0 {
-			info.OldestQueuedAge = time.Since(time.Unix(msg.Timestamp, 0))
+		info.QueueSize = int64(client.queue.len())
+		if d := client.queue.peek(); d != nil && d.timestamp > 0 {
+			info.OldestQueuedAge = time.Since(time.Unix(d.timestamp, 0))
 		}
 	}
 

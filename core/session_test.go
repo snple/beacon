@@ -23,7 +23,6 @@ func createMockConn(addr string, t *testing.T) net.Conn {
 func TestSessionRestoration_KeepSession(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600), // 1小时
 	)
 	if err != nil {
@@ -170,8 +169,7 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 // TestSessionRestoration_CleanSession 测试清除会话功能（KeepSession=false）
 func TestSessionRestoration_CleanSession(t *testing.T) {
 	server, err := NewWithOptions(
-		NewCoreOptions().
-			WithStoreDir(t.TempDir()),
+		NewCoreOptions(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +267,6 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 func TestSessionTakeover(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
 	if err != nil {
@@ -394,7 +391,6 @@ func TestSessionTakeover(t *testing.T) {
 func TestSessionExpiry(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(2).                   // 2秒最大过期时间
 			WithExpiredCheckInterval(10 * time.Second), // 10秒检查间隔（最小值）
 	)
@@ -484,7 +480,6 @@ func TestSessionExpiry(t *testing.T) {
 func TestOfflineMessageQueue(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600).
 			WithRetransmitInterval(1 * time.Second), // 使用1秒重传间隔以加速测试
 	)
@@ -538,21 +533,13 @@ func TestOfflineMessageQueue(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 在客户端离线时发布消息
-	testMsg := Message{
-		QoS:       packet.QoS1,
-		Retain:    false,
-		Timestamp: time.Now().Unix(),
-		Packet: &packet.PublishPacket{
-			Topic:   "test/topic",
-			Payload: []byte("offline message"),
-			QoS:     packet.QoS1,
-		},
-	}
-	server.publish(testMsg)
+	offlinePub := packet.NewPublishPacket("test/topic", []byte("offline message"))
+	offlinePub.QoS = packet.QoS1
+	server.publish(offlinePub)
 
 	time.Sleep(100 * time.Millisecond)
 
-	// 验证消息已持久化
+	// 验证消息已进入离线会话的待发送队列
 	server.clientsMu.RLock()
 	client, exists := server.clients["test-client"]
 	server.clientsMu.RUnlock()
@@ -561,18 +548,9 @@ func TestOfflineMessageQueue(t *testing.T) {
 		t.Fatal("Client session should exist")
 	}
 
-	// 验证消息已持久化到 messageStore（客户端离线时不会进入 pendingAck）
-	if server.store == nil {
-		t.Fatal("Message store should be enabled")
-	}
-
-	// 检查持久化的消息数量
-	count, err := client.queue.Size()
-	if err != nil {
-		t.Fatal("Failed to get message count:", err)
-	}
-	if count != 1 {
-		t.Fatalf("Expected 1 persisted message, got %d", count)
+	// 客户端离线：消息留在待发送队列中（不会进入 pendingAck）
+	if got := client.queue.len(); got != 1 {
+		t.Fatalf("Expected 1 queued message, got %d", got)
 	}
 
 	// 重新连接
@@ -632,9 +610,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 验证消息已从 pendingAck 中移除
-	client.session.pendingAckMu.Lock()
-	pendingCount := len(client.session.pendingAck)
-	client.session.pendingAckMu.Unlock()
+	pendingCount := client.session.pendingAck.len()
 
 	if pendingCount != 0 {
 		t.Fatalf("Expected 0 pending messages after ACK, got %d", pendingCount)
@@ -644,8 +620,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 // TestWillMessage 测试遗嘱消息
 func TestWillMessage(t *testing.T) {
 	server, err := NewWithOptions(
-		NewCoreOptions().
-			WithStoreDir(t.TempDir()),
+		NewCoreOptions(),
 	)
 	if err != nil {
 		t.Fatal(err)

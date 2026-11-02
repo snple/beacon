@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/snple/beacon/core"
+	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
@@ -63,4 +64,16 @@ func eventually(t *testing.T, timeout, pollInterval time.Duration, desc string, 
 	}
 	t.Logf("eventually timeout: %s", desc)
 	return false
+}
+
+// clientQueueTestMessage 构造一条带 PacketID 的客户端出站消息。
+func clientQueueTestMessage(topic string, payload []byte, qos packet.QoS) *Message {
+	pkt := packet.NewPublishPacket(topic, payload)
+	pkt.QoS = qos
+	pkt.PacketID = packet.NewPacketID()
+
+	return &Message{
+		Packet:    pkt,
+		Timestamp: time.Now().Unix(),
+	}
 }

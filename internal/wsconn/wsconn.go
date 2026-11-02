@@ -69,6 +69,38 @@ func (c *Conn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// WriteSegments 把多段数据写成一条 WebSocket 二进制消息。
+//
+// WebSocket 是消息协议，分包写出会被对端当成多条消息，因此这里用 NextWriter
+// 把各段依次写入同一条消息：数据仍然不拼接、不复制。
+func (c *Conn) WriteSegments(segs [][]byte) (int64, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	w, err := c.ws.NextWriter(websocket.BinaryMessage)
+	if err != nil {
+		return 0, err
+	}
+
+	var total int64
+	for _, seg := range segs {
+		if len(seg) == 0 {
+			continue
+		}
+		n, err := w.Write(seg)
+		total += int64(n)
+		if err != nil {
+			_ = w.Close()
+			return total, err
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		return total, err
+	}
+	return total, nil
+}
+
 // Close 关闭 WebSocket 连接（发送关闭帧并关闭底层连接）。
 //
 // 这里不获取 writeMu：关闭必须能打断正在阻塞的写操作，

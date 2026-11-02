@@ -3,11 +3,9 @@ package client
 import (
 	"errors"
 	"net"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -29,32 +27,8 @@ type testAddr string
 func (a testAddr) Network() string { return string(a) }
 func (a testAddr) String() string  { return string(a) }
 
-func setupClientTestDB(t *testing.T) (*badger.DB, func()) {
-	t.Helper()
-
-	dir, err := os.MkdirTemp("", "client_queue_test_*")
-	require.NoError(t, err)
-
-	db, err := badger.Open(badger.DefaultOptions(dir).WithLoggingLevel(badger.ERROR))
-	require.NoError(t, err)
-
-	cleanup := func() {
-		_ = db.Close()
-		_ = os.RemoveAll(dir)
-	}
-
-	return db, cleanup
-}
-
 func createClientTestMessage(topic string, payload []byte, qos packet.QoS) *Message {
-	pkt := packet.NewPublishPacket(topic, payload)
-	pkt.QoS = qos
-	pkt.PacketID = packet.NewPacketID()
-
-	return &Message{
-		Packet:    pkt,
-		Timestamp: time.Now().Unix(),
-	}
+	return clientQueueTestMessage(topic, payload, qos)
 }
 
 func TestSendQueueRetainsDedupUntilFinish(t *testing.T) {
@@ -74,11 +48,9 @@ func TestSendQueueRetainsDedupUntilFinish(t *testing.T) {
 }
 
 func TestRetransmitQueuedMessages_FirstDeliveryKeepsDupFalse(t *testing.T) {
-	db, cleanup := setupClientTestDB(t)
-	defer cleanup()
 
 	msg := createClientTestMessage("test/topic", []byte("payload"), packet.QoS1)
-	queue := NewQueue(db, "client:test:")
+	queue := NewQueue()
 	require.NoError(t, queue.Enqueue(msg))
 
 	client := &Client{
@@ -102,11 +74,9 @@ func TestRetransmitQueuedMessages_FirstDeliveryKeepsDupFalse(t *testing.T) {
 }
 
 func TestRetransmitQueuedMessages_SkipsHeadMessageAwaitingPuback(t *testing.T) {
-	db, cleanup := setupClientTestDB(t)
-	defer cleanup()
 
 	msg := createClientTestMessage("test/topic", []byte("payload"), packet.QoS1)
-	queue := NewQueue(db, "client:test:")
+	queue := NewQueue()
 	require.NoError(t, queue.Enqueue(msg))
 
 	client := &Client{
@@ -130,10 +100,8 @@ func TestRetransmitQueuedMessages_SkipsHeadMessageAwaitingPuback(t *testing.T) {
 }
 
 func TestProcessSendQueue_PersistsDupAfterSendFailure(t *testing.T) {
-	db, cleanup := setupClientTestDB(t)
-	defer cleanup()
 
-	queue := NewQueue(db, "client:test:")
+	queue := NewQueue()
 	client := &Client{
 		queue:  queue,
 		logger: zap.NewNop(),
@@ -187,10 +155,8 @@ func TestSendMessage_UsesMessageDupFlag(t *testing.T) {
 }
 
 func TestPublish_ClonesPayloadInput(t *testing.T) {
-	db, cleanup := setupClientTestDB(t)
-	defer cleanup()
 
-	queue := NewQueue(db, "client:test:")
+	queue := NewQueue()
 	client := &Client{
 		queue:  queue,
 		logger: zap.NewNop(),
@@ -215,10 +181,8 @@ func TestPublish_ClonesPayloadInput(t *testing.T) {
 }
 
 func TestPublish_ClonesMutablePropertiesInput(t *testing.T) {
-	db, cleanup := setupClientTestDB(t)
-	defer cleanup()
 
-	queue := NewQueue(db, "client:test:")
+	queue := NewQueue()
 	client := &Client{
 		queue:  queue,
 		logger: zap.NewNop(),
@@ -253,10 +217,8 @@ func TestPublish_ClonesMutablePropertiesInput(t *testing.T) {
 }
 
 func TestPublishToClient_DoesNotMutateCallerOptions(t *testing.T) {
-	db, cleanup := setupClientTestDB(t)
-	defer cleanup()
 
-	queue := NewQueue(db, "client:test:")
+	queue := NewQueue()
 	client := &Client{
 		queue:  queue,
 		logger: zap.NewNop(),

@@ -14,11 +14,9 @@ import (
 // TestProcessSendQueue_RefillsFromPersistentQueue 验证客户端发送协程排空内存队列后会立即
 // 从持久化队列补货，而不是等待 RetransmitInterval 定时器。
 func TestProcessSendQueue_RefillsFromPersistentQueue(t *testing.T) {
-	db, cleanup := setupClientTestDB(t)
-	defer cleanup()
 
 	c := &Client{
-		queue:   NewQueue(db, "client:refill:"),
+		queue:   NewQueue(),
 		logger:  zap.NewNop(),
 		options: NewClientOptions().WithRetransmitInterval(time.Hour),
 		ctx:     context.Background(),

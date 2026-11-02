@@ -38,9 +38,6 @@ type ClientOptions struct {
 	// 遗嘱消息（连接非正常断开时由 core 发送）
 	Will *WillMessage
 
-	// 消息持久化配置
-	StoreOptions StoreOptions // 消息持久化存储配置，nil 表示不启用持久化
-
 	// 重传配置
 	RetransmitInterval time.Duration // QoS 1 消息重传间隔（默认 5 秒）
 
@@ -80,7 +77,6 @@ func NewClientOptions() *ClientOptions {
 		WriteTimeout:       10 * time.Second,
 		MaxQueueSize:       10000,
 		AutoAck:            true, // 默认自动确认 QoS1 消息
-		StoreOptions:       DefaultStoreOptions(),
 	}
 }
 
@@ -239,18 +235,6 @@ func (o *ClientOptions) WithWillSimple(topic string, payload []byte, qos packet.
 	return o
 }
 
-// WithStore 设置消息持久化存储配置
-func (o *ClientOptions) WithStore(cfg StoreOptions) *ClientOptions {
-	o.StoreOptions = cfg
-	return o
-}
-
-// WithStoreDataDir 便捷设置持久化存储目录
-func (o *ClientOptions) WithStoreDataDir(dataDir string) *ClientOptions {
-	o.StoreOptions.DataDir = dataDir
-	return o
-}
-
 // WithRetransmitInterval 设置 QoS1 消息重传间隔
 func (o *ClientOptions) WithRetransmitInterval(d time.Duration) *ClientOptions {
 	o.RetransmitInterval = d
@@ -338,10 +322,6 @@ func (o *ClientOptions) Validate() error {
 	}
 	if o.WriteTimeout < 0 {
 		return fmt.Errorf("writeTimeout must be >= 0, got %v", o.WriteTimeout)
-	}
-	// 与 core 保持一致：非法存储配置会让 badger 行为异常，必须在构造前拒绝。
-	if err := o.StoreOptions.Validate(); err != nil {
-		return fmt.Errorf("store options validation failed: %w", err)
 	}
 	return nil
 }

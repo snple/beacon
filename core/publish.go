@@ -124,100 +124,55 @@ func (c *Client) handlePublish(pub *packet.PublishPacket) error {
 		pub.Properties.ExpiryTime = expiry.Unix()
 	}
 
-	msg := Message{
-		Packet:    pub,
-		Dup:       false,
-		QoS:       pub.QoS,
-		Retain:    pub.Retain,
-		PacketID:  pub.PacketID,
-		Timestamp: time.Now().Unix(),
-	}
-
 	// 如果消息已经过期，直接丢弃
-	if msg.IsExpired() {
+	if pub.Properties != nil && pub.Properties.ExpiryTime > 0 && time.Now().Unix() > pub.Properties.ExpiryTime {
 		c.core.logger.Debug("Message expired upon arrival",
 			zap.String("clientID", c.ID),
 			zap.String("topic", pub.Topic))
-		if pub.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(pub.PacketID, packet.ReasonMessageExpired)
-			if err := c.writePacket(puback); err != nil {
-				c.core.logger.Error("Failed to send PUBACK",
-					zap.String("clientID", c.ID),
-					zap.String("packetID", pub.PacketID.Hex()),
-					zap.Error(err))
-				return err
-			}
-		}
-		return nil
+		return c.replyPuback(pub, packet.ReasonMessageExpired)
 	}
 
 	// QoS 0: 直接发布
 	// QoS 1: 发布并发送 PUBACK
-	publishSuccess := c.core.publish(msg)
-
-	if publishSuccess {
-		// 发布成功
-		if msg.QoS == packet.QoS1 {
-			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonSuccess)
-			if err := c.writePacket(puback); err != nil {
-				c.core.logger.Error("Failed to send PUBACK",
-					zap.String("clientID", c.ID),
-					zap.String("packetID", msg.PacketID.Hex()),
-					zap.Error(err))
-
-				return err
-			}
-		}
-	} else {
-		// 发布失败
-		if msg.QoS == packet.QoS1 {
-			// 对于 QoS 1，仍然发送 PUBACK，表示已接收但无法处理
-			puback := packet.NewPubackPacket(msg.PacketID, packet.ReasonQuotaExceeded)
-			if err := c.writePacket(puback); err != nil {
-				c.core.logger.Error("Failed to send PUBACK after publish failure",
-					zap.String("clientID", c.ID),
-					zap.String("packetID", msg.PacketID.Hex()),
-					zap.Error(err))
-
-				return err
-			}
-		} else {
-			// 对于 QoS 0，丢弃消息
-			c.core.logger.Debug("QoS 0 message dropped due to publish failure",
-				zap.String("clientID", c.ID),
-				zap.String("topic", pub.Topic))
-		}
+	if c.core.publish(pub) != nil {
+		return c.replyPuback(pub, packet.ReasonSuccess)
 	}
 
+	// 发布失败：QoS1 仍回 PUBACK（已接收但无法处理），QoS0 直接丢弃
+	if pub.QoS == packet.QoS1 {
+		return c.replyPuback(pub, packet.ReasonQuotaExceeded)
+	}
+
+	c.core.logger.Debug("QoS 0 message dropped due to publish failure",
+		zap.String("clientID", c.ID),
+		zap.String("topic", pub.Topic))
+	return nil
+}
+
+// replyPuback 按需回复 PUBACK（仅 QoS1 需要）。
+func (c *Client) replyPuback(pub *packet.PublishPacket, reason packet.ReasonCode) error {
+	if pub.QoS != packet.QoS1 {
+		return nil
+	}
+
+	puback := packet.NewPubackPacket(pub.PacketID, reason)
+	if err := c.writePacket(puback); err != nil {
+		c.core.logger.Error("Failed to send PUBACK",
+			zap.String("clientID", c.ID),
+			zap.String("packetID", pub.PacketID.Hex()),
+			zap.Error(err))
+		return err
+	}
 	return nil
 }
 
 // handlePuback 处理 QoS 1 确认 - 客户端已收到消息
 func (c *Client) handlePuback(p *packet.PubackPacket) error {
-	c.session.pendingAckMu.Lock()
-	pending, ok := c.session.pendingAck[p.PacketID]
-	var delErr error
-	if ok {
-		// 在同一个临界区内完成"删除持久化条目 + 移除 pendingAck"：
-		// 补货逻辑会在同一把锁内检查 pendingAck 并入队，二者互斥，
-		// 避免 ACK 与补货交错时把同一条消息重复装载。
-		delErr = c.queue.Delete(p.PacketID)
-		delete(c.session.pendingAck, p.PacketID)
-	}
-	c.session.pendingAckMu.Unlock()
-
-	if delErr != nil {
-		c.core.logger.Debug("Failed to delete acknowledged message from queue",
-			zap.String("clientID", c.ID),
-			zap.String("packetID", p.PacketID.Hex()),
-			zap.Error(delErr))
-	}
+	// 从待确认队列取下该投递：所有权转移回本函数，处理完需释放消息引用。
+	pending, ok := c.session.pendingAck.remove(p.PacketID)
 
 	if ok {
-		topic := ""
-		if pending.msg != nil && pending.msg.Packet != nil {
-			topic = pending.msg.Packet.Topic
-		}
+		topic := pending.msg.Topic()
 
 		if p.ReasonCode.IsError() {
 			// 订阅端明确拒绝/无法处理：消息不会重试，必须留下可见记录。
@@ -235,8 +190,13 @@ func (c *Client) handlePuback(p *packet.PubackPacket) error {
 				zap.Uint8("reasonCode", uint8(p.ReasonCode)))
 		}
 
-		// ACK 释放了处理窗口：立即补货，避免积压消息等待 RetransmitInterval 才被装载
-		c.kickRefill()
+		// 释放该投递持有的消息引用
+		c.core.msgs.release(pending.msg)
+
+		// ACK 释放了发送窗口：立即唤醒发送协程继续发送后续消息
+		if conn := c.getConn(); conn != nil {
+			conn.triggerSend()
+		}
 	}
 	return nil
 }
@@ -340,9 +300,6 @@ func (c *Client) handleSubscribe(p *packet.SubscribePacket) error {
 				zap.Uint8("qos", uint8(sub.Options.QoS)))
 		}
 
-		// 订阅属于会话状态：持久化，进程重启后仍能恢复
-		c.core.saveSession(c, 0)
-
 		for _, sub := range validSubs {
 			c.core.emit(Event{
 				Type:     EventSubscribed,
@@ -422,9 +379,6 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 			c.core.logger.Debug("Client unsubscribed", zap.String("clientID", c.ID), zap.String("topic", topic))
 		}
 
-		// 订阅属于会话状态：持久化
-		c.core.saveSession(c, 0)
-
 		for _, topic := range validTopics {
 			c.core.emit(Event{
 				Type:     EventUnsubscribed,
@@ -445,8 +399,10 @@ func (c *Client) handleUnsubscribe(p *packet.UnsubscribePacket) error {
 	return nil
 }
 
-// sendRetainedMessages 逐条发送订阅时的保留消息
-// 避免一次性加载所有消息到内存
+// sendRetainedMessages 逐条发送订阅时匹配到的保留消息。
+//
+// 保留消息同样来自 messageStore 的共享消息：这里只是为每条消息生成一个
+// delivery 入队，不做内容拷贝。
 func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 	noLocal bool, retainHandling uint8, subQoS packet.QoS) {
 	// 不发送保留消息
@@ -459,47 +415,37 @@ func (c *Client) sendRetainedMessages(topic string, isNewSubscription bool,
 		return
 	}
 
-	// 获取匹配的主题列表（只是索引，不包含消息体）
-	topics := c.core.retainStore.matchTopics(topic)
-	if len(topics) == 0 {
+	// 匹配到的每条消息都额外持有一个引用，用完必须释放
+	msgs := c.core.retainStore.matchMessages(topic)
+	if len(msgs) == 0 {
 		return
 	}
 
 	c.core.logger.Debug("Sending retained messages",
 		zap.String("clientID", c.ID),
 		zap.String("topic", topic),
-		zap.Int("count", len(topics)),
+		zap.Int("count", len(msgs)),
 		zap.Bool("isNewSubscription", isNewSubscription),
 		zap.Uint8("retainHandling", retainHandling))
 
-	// 逐条从 messageStore 获取消息并发送
-	for _, t := range topics {
-		msg, err := c.core.store.getRetain(t)
-		if err != nil {
-			c.core.logger.Debug("Failed to get retain message from store",
-				zap.String("topic", t),
-				zap.Error(err))
-			continue
-		}
-		if msg == nil {
-			continue
-		}
-		if noLocal && msg.Packet != nil && msg.Packet.Properties != nil && msg.Packet.Properties.SourceClientID == c.ID {
-			continue
-		}
-
-		// !!! 这里可以不复制消息，直接修改 Retain 和 QoS 后投递，因为消息是从持久化存储中读取的，不会影响其他地方 !!!
-
-		// 因订阅而重放的保留消息必须带 Retain=true，接收方才能区分历史消息与实时消息。
+	for _, msg := range msgs {
+		// 重放的保留消息必须带 Retain=true，接收方才能区分历史消息与实时消息。
 		// RetainAsPublished 只影响实时转发（见 Core.deliver）。
-		msg.Retain = true
+		qos := min(subQoS, msg.QoS)
 
-		// 应用 QoS 降级：取订阅 QoS 和消息 QoS 的较小值
-		msg.QoS = min(subQoS, msg.QoS)
-		if err := c.deliver(msg); err != nil {
+		var err error
+		if noLocal && msg.sourceClientID() == c.ID {
+			err = nil
+		} else {
+			err = c.enqueueDelivery(msg, qos, true)
+		}
+
+		c.core.msgs.release(msg)
+
+		if err != nil {
 			c.core.logger.Debug("Failed to deliver retained message",
 				zap.String("clientID", c.ID),
-				zap.String("topic", msg.Packet.Topic),
+				zap.String("topic", msg.Topic()),
 				zap.Error(err))
 		}
 	}

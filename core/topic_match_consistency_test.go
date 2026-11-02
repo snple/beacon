@@ -73,9 +73,9 @@ func TestSubTreeMatchAgreesWithPacketOracle(t *testing.T) {
 
 // TestRetainTreeMatchAgreesWithPacketOracle 验证保留消息树匹配与 packet.MatchTopic 一致。
 func TestRetainTreeMatchAgreesWithPacketOracle(t *testing.T) {
-	store := newRetainStore()
+	store := newTestRetainStore()
 	for _, topic := range matchCorpusTopics {
-		require.NoError(t, store.set(topic, 0))
+		require.NoError(t, store.set(topic, testRetainMessage(topic), 0))
 	}
 
 	for _, filter := range matchCorpusFilters {

@@ -60,12 +60,10 @@ func TestCore_StopUnblocksStuckWriter(t *testing.T) {
 	c.clients[client.ID] = client
 	c.clientsMu.Unlock()
 
-	msg := &Message{
-		Packet: packet.NewPublishPacket("stuck/topic", make([]byte, 1024)),
-		QoS:    packet.QoS0,
-	}
-	if err := client.deliver(msg); err != nil {
-		t.Fatalf("deliver: %v", err)
+	msg := mustRegisterMessage(t, c, "stuck/topic", make([]byte, 1024))
+	defer c.msgs.release(msg)
+	if err := client.enqueueDelivery(msg, packet.QoS0, false); err != nil {
+		t.Fatalf("enqueueDelivery: %v", err)
 	}
 
 	// 等待发送协程真正进入阻塞写。

@@ -73,10 +73,20 @@ func TestWill_NormalDisconnectDoesNotPublish(t *testing.T) {
 }
 
 // TestWill_ServerShutdownDoesNotPublish 验证服务端停机关闭连接时不发布遗嘱。
+// peekPendingMessage 取出全局队列头部消息用于断言。
+func peekPendingMessage(t *testing.T, c *Core) *Message {
+	t.Helper()
+	id, ok := c.pending.dequeue()
+	require.True(t, ok, "expected a pending message")
+	msg := c.msgs.take(id)
+	require.NotNil(t, msg)
+	c.msgs.release(msg)
+	return msg
+}
+
 func TestWill_ServerShutdownDoesNotPublish(t *testing.T) {
 	core, err := NewWithOptions(NewCoreOptions())
 	require.NoError(t, err)
-	defer core.store.close()
 
 	client := newQuotaTestClient(t, core, "will-shutdown")
 	client.session.willPacket = packet.NewPublishPacket("will/shutdown", []byte("bye"))
@@ -85,9 +95,9 @@ func TestWill_ServerShutdownDoesNotPublish(t *testing.T) {
 	conn.closeReason.Store(uint32(packet.ReasonServerShuttingDown))
 	client.conn = conn
 
-	before := core.queue.Count()
+	before := core.pending.len()
 	core.handleClientDisconnect(client)
-	require.Equal(t, before, core.queue.Count(),
+	require.Equal(t, before, core.pending.len(),
 		"server shutdown must not publish the will")
 }
 
@@ -97,7 +107,6 @@ func TestWill_ServerShutdownDoesNotPublish(t *testing.T) {
 func TestWill_SessionTakeoverDoesNotPublish(t *testing.T) {
 	core, err := NewWithOptions(NewCoreOptions())
 	require.NoError(t, err)
-	defer core.store.close()
 
 	client := newQuotaTestClient(t, core, "will-takeover")
 	client.session.willPacket = packet.NewPublishPacket("will/takeover", []byte("bye"))
@@ -106,9 +115,9 @@ func TestWill_SessionTakeoverDoesNotPublish(t *testing.T) {
 	conn.closeReason.Store(uint32(packet.ReasonSessionTakenOver))
 	client.conn = conn
 
-	before := core.queue.Count()
+	before := core.pending.len()
 	core.handleClientDisconnect(client)
-	require.Equal(t, before, core.queue.Count(),
+	require.Equal(t, before, core.pending.len(),
 		"session takeover must not publish the will")
 }
 
@@ -116,7 +125,6 @@ func TestWill_SessionTakeoverDoesNotPublish(t *testing.T) {
 func TestWill_AbnormalDisconnectPublishes(t *testing.T) {
 	core, err := NewWithOptions(NewCoreOptions())
 	require.NoError(t, err)
-	defer core.store.close()
 
 	client := newQuotaTestClient(t, core, "will-abnormal")
 	client.session.willPacket = packet.NewPublishPacket("will/abnormal", []byte("bye"))
@@ -125,9 +133,9 @@ func TestWill_AbnormalDisconnectPublishes(t *testing.T) {
 	conn.closeReason.Store(uint32(packet.ReasonKeepAliveTimeout))
 	client.conn = conn
 
-	before := core.queue.Count()
+	before := core.pending.len()
 	core.handleClientDisconnect(client)
-	require.Equal(t, before+1, core.queue.Count(),
+	require.Equal(t, before+1, core.pending.len(),
 		"abnormal disconnect must publish the will")
 }
 
@@ -136,7 +144,6 @@ func TestWill_AbnormalDisconnectPublishes(t *testing.T) {
 func TestWill_ExpiryIsRelativeToPublish(t *testing.T) {
 	core, err := NewWithOptions(NewCoreOptions().WithDefaultMessageExpiry(24 * time.Hour))
 	require.NoError(t, err)
-	defer core.store.close()
 
 	client := newQuotaTestClient(t, core, "will-ttl")
 	will := packet.NewPublishPacket("will/ttl", []byte("bye"))
@@ -145,8 +152,7 @@ func TestWill_ExpiryIsRelativeToPublish(t *testing.T) {
 
 	client.publishWill()
 
-	msg, err := core.queue.Peek()
-	require.NoError(t, err)
+	msg := peekPendingMessage(t, core)
 	require.NotNil(t, msg.Packet.Properties)
 
 	got := time.Unix(msg.Packet.Properties.ExpiryTime, 0)
@@ -158,15 +164,13 @@ func TestWill_ExpiryIsRelativeToPublish(t *testing.T) {
 func TestWill_ZeroExpiryStaysUnlimited(t *testing.T) {
 	core, err := NewWithOptions(NewCoreOptions().WithDefaultMessageExpiry(0))
 	require.NoError(t, err)
-	defer core.store.close()
 
 	client := newQuotaTestClient(t, core, "will-no-ttl")
 	client.session.willPacket = packet.NewPublishPacket("will/no-ttl", []byte("bye"))
 
 	client.publishWill()
 
-	msg, err := core.queue.Peek()
-	require.NoError(t, err)
+	msg := peekPendingMessage(t, core)
 	require.Zero(t, msg.Packet.Properties.ExpiryTime)
 }
 
@@ -178,7 +182,7 @@ func TestWill_ConcurrentAccessNoRace(t *testing.T) {
 	core := testSetupCore(t, NewCoreOptions())
 	defer core.Stop()
 
-	c := &Client{ID: "will-race", core: core, session: &session{core: core}}
+	c := &Client{ID: "will-race", core: core, session: &session{core: core, pendingAck: newDeliveryQueue(core.msgs)}}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -221,6 +225,6 @@ func TestWill_PublishAtMostOnce(t *testing.T) {
 	}
 	wg.Wait()
 
-	require.Equal(t, int64(1), core.queue.Count(), "遗嘱只应发布一次")
+	require.Equal(t, int64(1), core.stats.MessagesReceived.Load(), "遗嘱只应发布一次")
 	require.Nil(t, c.WillPacket(), "发布后应清除遗嘱")
 }

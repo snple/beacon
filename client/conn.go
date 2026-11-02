@@ -49,7 +49,7 @@ type Conn struct {
 	// 单次写超时（0 表示不设置）
 	writeTimeout time.Duration
 
-	// enqueueMu 串行化"发布入队（持久化 + 发送队列）"与"持久化补货"，
+	// enqueueMu 串行化"发布入队（待发送队列 + 发送队列）"与"从队列补货"，
 	// 避免补货在两次入队之间把消息发走、发布路径又把同一消息入队 → 重复发送。
 	enqueueMu sync.Mutex
 
@@ -128,7 +128,7 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 		limiter.SetReadLimit(int64(c.options.MaxPacketSize))
 	}
 
-	// 注意：这里不清空持久化队列。队列是客户端自己的出站 spool
+	// 注意：这里不清空待发送队列。队列是客户端自己的出站 spool
 	// （离线期间 Publish 的消息也在这里等待补发），其生命周期不应由
 	// 服务端会话超时（sessionTimeout）决定，否则离线发布会被静默丢弃。
 
@@ -337,14 +337,14 @@ func (c *Conn) handlePuback(p *packet.PubackPacket) {
 	}
 }
 
-// completePublishAck 在同一个临界区内删除持久化条目并移除 pendingAck。
+// completePublishAck 在同一个临界区内删除队列条目并移除 pendingAck。
 // 补货逻辑（retransmitQueuedMessages）在同一把锁内检查 pendingAck 并入队，
 // 二者互斥，避免 ACK 与补货交错时把同一条消息重复装载。
 func (c *Conn) completePublishAck(packetID packet.PacketID) (pendingMessage, bool) {
 	c.pendingAckMu.Lock()
 	defer c.pendingAckMu.Unlock()
 
-	// 从持久化队列删除（无论成功失败）
+	// 从待发送队列删除（无论成功失败）
 	if delErr := c.client.queue.Delete(packetID); delErr != nil {
 		c.logger.Warn("Failed to delete message from queue after ACK",
 			zap.String("packetID", packetID.Hex()),

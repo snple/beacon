@@ -15,7 +15,6 @@ func TestClientSessionRestoration_WithKeepSession(t *testing.T) {
 	// 启动服务器
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
 	if err != nil {
@@ -85,8 +84,7 @@ func TestClientSessionRestoration_WithKeepSession(t *testing.T) {
 // TestClientSessionRestoration_WithCleanSession 测试客户端清除会话
 func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 	server, err := NewWithOptions(
-		NewCoreOptions().
-			WithStoreDir(t.TempDir()),
+		NewCoreOptions(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +158,6 @@ func TestClientSessionRestoration_WithCleanSession(t *testing.T) {
 func TestClientOfflineMessageDelivery(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600).
 			WithRetransmitInterval(1 * time.Second), // 1秒重传间隔
 	)
@@ -303,7 +300,6 @@ func TestClientOfflineMessageDelivery(t *testing.T) {
 func TestClientSessionTakeover(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
 	if err != nil {
@@ -396,7 +392,6 @@ func TestClientSessionTakeover(t *testing.T) {
 func TestClientSessionTakeover_FromCleanSessionStartsFresh(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
 	if err != nil {
@@ -475,7 +470,6 @@ func TestClientSessionTakeover_FromCleanSessionStartsFresh(t *testing.T) {
 func TestClientAutoReconnect(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
 	if err != nil {
@@ -552,13 +546,12 @@ func TestClientAutoReconnect(t *testing.T) {
 	server.Stop()
 }
 
-// TestClientQoS1MessagePersistence 测试客户端 QoS1 消息持久化：
-// 1) 离线发布的 QoS1 消息应持久化到本地存储，并在连接后自动补发（QoS1 保证到达）；
-// 2) 在线发布的 QoS1 消息应正常送达订阅者。
-func TestClientQoS1MessagePersistence(t *testing.T) {
+// TestClientQoS1OfflineQueue 测试客户端 QoS1 出站队列：
+// 1) 未连接时发布的 QoS1 消息进入本地内存队列，并在连接后自动补发；
+// 2) 在线发布的 QoS1 消息正常送达订阅者。
+func TestClientQoS1OfflineQueue(t *testing.T) {
 	server, err := NewWithOptions(
-		NewCoreOptions().
-			WithStoreDir(t.TempDir()),
+		NewCoreOptions(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -580,25 +573,19 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond) // 等待订阅生效
 
-	// 创建带持久化的客户端
-	storeDir := t.TempDir()
 	c, err := client.NewWithOptions(
 		client.NewClientOptions().
 			WithCore(addr).
 			WithClientID("test-client").
 			WithSessionTimeout(60).
-			WithKeepAlive(60).
-			WithStore(client.StoreOptions{
-				DataDir:    storeDir,
-				SyncWrites: false,
-			}),
+			WithKeepAlive(60),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 
-	// 1) 离线发布 QoS1：未连接时应持久化到本地队列，等待连接后补发
+	// 1) 离线发布 QoS1：未连接时进入本地队列，等待连接后补发
 	if err := c.Publish("test/topic", []byte("offline message"),
 		client.NewPublishOptions().WithQoS(packet.QoS1)); err != nil {
 		t.Fatal(err)
@@ -609,13 +596,13 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 订阅者应收到离线持久化的消息（连接后由重传机制补发）
+	// 订阅者应收到离线入队的消息（连接后由重传机制补发）
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	msg, err := sub.PollMessage(ctx, 4*time.Second)
 	if err != nil {
-		t.Fatalf("subscriber should receive the persisted offline QoS1 message: %v", err)
+		t.Fatalf("subscriber should receive the offline QoS1 message: %v", err)
 	}
 	if msg.Packet.Topic != "test/topic" {
 		t.Errorf("expected topic 'test/topic', got '%s'", msg.Packet.Topic)
@@ -646,7 +633,6 @@ func TestClientQoS1MessagePersistence(t *testing.T) {
 func TestClientSessionTakeover_ClientsConnectedCount(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
 	if err != nil {
@@ -721,7 +707,6 @@ func TestClientSessionTakeover_ClientsConnectedCount(t *testing.T) {
 func TestClientSessionExpiry(t *testing.T) {
 	server, err := NewWithOptions(
 		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
 			WithMaxSessionTimeout(3600),
 	)
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCleanupExpiredPendingAckRemovesMessage 验证过期的未确认消息会被清理出持久化队列，
+// TestCleanupExpiredPendingAckRemovesMessage 验证过期的未确认消息会被清理出待确认队列，
 // 并计入 MessagesDropped。
 func TestCleanupExpiredPendingAckRemovesMessage(t *testing.T) {
 	c, err := NewWithOptions(NewCoreOptions())
@@ -21,47 +21,46 @@ func TestCleanupExpiredPendingAckRemovesMessage(t *testing.T) {
 	c.clients[client.ID] = client
 	c.clientsMu.Unlock()
 
-	pub := packet.NewPublishPacket("expiry/topic", []byte("v"))
-	pub.Properties.ExpiryTime = time.Now().Add(-time.Minute).Unix()
+	msg := mustRegisterMessage(t, c, "expiry/topic", []byte("v"))
+	msg.Packet.Properties.ExpiryTime = time.Now().Add(-time.Minute).Unix()
 
-	msg := &Message{Packet: pub, PacketID: packet.NewPacketID(), Timestamp: time.Now().Unix()}
-	require.NoError(t, client.queue.Enqueue(msg))
+	client.queue.pushBack(newDelivery(msg, packet.QoS0, false))
 
-	client.session.pendingAckMu.Lock()
-	client.session.pendingAck[msg.PacketID] = pendingMessage{msg: msg}
-	client.session.pendingAckMu.Unlock()
+	d := newDelivery(msg, packet.QoS1, false)
+	client.session.pendingAck.pushBack(d)
 
 	before := c.stats.MessagesDropped.Load()
 	c.cleanupExpiredMessages()
 
-	require.Zero(t, client.queue.Count(), "expired pending message must be removed from the queue")
-
-	client.session.pendingAckMu.Lock()
-	require.Empty(t, client.session.pendingAck)
-	client.session.pendingAckMu.Unlock()
-
-	require.Equal(t, before+1, c.stats.MessagesDropped.Load())
+	require.Zero(t, client.queue.len(), "expired queued message must be removed")
+	require.Zero(t, client.session.pendingAck.len(), "expired pending message must be removed")
+	require.Equal(t, before+2, c.stats.MessagesDropped.Load())
 }
 
-// TestCleanupExpiredRetainedMessagesRemovesStoreEntry 验证过期的保留消息会同时从
-// 索引与持久化存储中删除。
-func TestCleanupExpiredRetainedMessagesRemovesStoreEntry(t *testing.T) {
+// TestCleanupExpiredRetainedMessagesRemovesEntry 验证过期的保留消息会从保留存储中删除，
+// 并释放其持有的消息引用。
+func TestCleanupExpiredRetainedMessagesRemovesEntry(t *testing.T) {
 	c, err := NewWithOptions(NewCoreOptions().WithRetainEnabled(true))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
 	defer c.Stop()
 
 	const topic = "retain/expired"
-	pub := packet.NewPublishPacket(topic, []byte("v"))
-	msg := Message{Packet: pub, Timestamp: time.Now().Unix()}
-	require.NoError(t, c.store.setRetain(topic, &msg))
-	require.NoError(t, c.retainStore.set(topic, time.Now().Add(-time.Minute).Unix()))
+
+	msg := mustRegisterMessage(t, c, topic, []byte("v"))
+	msg.Packet.Properties.ExpiryTime = time.Now().Add(-time.Minute).Unix()
+	msg.Retain = true
+
+	c.msgs.retain(msg) // retainStore 持有的引用
+	require.NoError(t, c.retainStore.set(topic, msg, msg.Packet.Properties.ExpiryTime))
+	c.msgs.release(msg) // 归还发布路径的引用
+
+	require.NotNil(t, c.retainStore.getEntry(topic), "retain entry should exist before cleanup")
 
 	c.cleanupExpiredRetainMessages()
 
-	require.Empty(t, c.retainStore.matchTopics("retain/**"), "expired retain index must be removed")
+	require.Nil(t, c.retainStore.getEntry(topic), "expired retain entry must be removed")
 
-	stored, err := c.store.getRetain(topic)
-	require.NoError(t, err)
-	require.Nil(t, stored, "expired retained message must be deleted from the store")
+	count, _ := c.msgs.stats()
+	require.Zero(t, count, "expired retained message should release its reference")
 }

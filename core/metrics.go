@@ -97,12 +97,12 @@ func (c *Core) handleStatsJSON(w http.ResponseWriter, _ *http.Request) {
 		`"messages_received":%d,"messages_sent":%d,"messages_dropped":%d,"messages_rejected":%d,`+
 		`"bytes_received":%d,"bytes_sent":%d,"subscriptions":%d,`+
 		`"pending_queue_depth":%d,"client_queue_depth":%d,"pending_ack":%d,`+
-		`"offline_sessions":%d,"store_bytes":%d,"events_dropped":%d,"up":%d}`+"\n",
+		`"offline_sessions":%d,"in_flight_messages":%d,"pending_bytes":%d,"events_dropped":%d,"up":%d}`+"\n",
 		s.ClientsConnected, s.ClientsTotal,
 		s.MessagesReceived, s.MessagesSent, s.MessagesDropped, s.MessagesRejected,
 		s.BytesReceived, s.BytesSent, s.SubscriptionsCount,
 		s.PendingQueueDepth, s.ClientQueueDepth, s.PendingAckTotal,
-		s.OfflineSessions, s.StoreBytes, s.EventsDropped, boolToInt(c.running.Load()))
+		s.OfflineSessions, s.InFlightMessages, s.PendingBytes, s.EventsDropped, boolToInt(c.running.Load()))
 }
 
 func boolToInt(b bool) int {
@@ -131,7 +131,8 @@ func (c *Core) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeMetric(w, "beacon_client_queue_depth", "gauge", "所有客户端待发送队列深度之和", float64(s.ClientQueueDepth))
 	writeMetric(w, "beacon_pending_ack", "gauge", "所有客户端未确认的 QoS1 消息数", float64(s.PendingAckTotal))
 	writeMetric(w, "beacon_offline_sessions", "gauge", "保留中的离线会话数", float64(s.OfflineSessions))
-	writeMetric(w, "beacon_store_bytes", "gauge", "存储占用（字节）", float64(s.StoreBytes))
+	writeMetric(w, "beacon_in_flight_messages", "gauge", "内存中尚未完成投递的消息条数", float64(s.InFlightMessages))
+	writeMetric(w, "beacon_pending_bytes", "gauge", "内存中待投递消息的近似占用（字节）", float64(s.PendingBytes))
 	writeMetric(w, "beacon_events_dropped_total", "counter", "事件流因订阅者消费过慢而丢弃的事件总数（所有订阅者累计）", float64(s.EventsDropped))
 }
 

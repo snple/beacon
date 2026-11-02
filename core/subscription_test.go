@@ -485,8 +485,8 @@ func TestWildcardSemantics_ConsistentAcrossImplementations(t *testing.T) {
 			tree.subscribe("c1", filter, packet.SubscribeOptions{QoS: packet.QoS0})
 			_, inTree := tree.matchTopic(topic)["c1"]
 
-			store := newRetainStore()
-			if err := store.set(topic, 0); err != nil {
+			store := newTestRetainStore()
+			if err := store.set(topic, testRetainMessage(topic), 0); err != nil {
 				t.Fatalf("retain set failed: %v", err)
 			}
 			inRetain := len(store.matchTopics(filter)) == 1
@@ -517,8 +517,8 @@ func TestWildcardSemantics_ConsistentAcrossImplementations(t *testing.T) {
 				t.Errorf("subTree(%q, %q) matched, want no match", filter, topic)
 			}
 
-			store := newRetainStore()
-			if err := store.set(topic, 0); err != nil {
+			store := newTestRetainStore()
+			if err := store.set(topic, testRetainMessage(topic), 0); err != nil {
 				t.Fatalf("retain set failed: %v", err)
 			}
 			if len(store.matchTopics(filter)) != 0 {

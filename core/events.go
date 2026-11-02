@@ -71,7 +71,7 @@ type Event struct {
 	Bytes    int           // 消息事件的负载字节数
 	QoS      packet.QoS    // 消息/订阅事件的 QoS
 	Reason   string        // 原因码名或拒绝/丢弃原因
-	Detail   string        // 细分原因（可选）：如 "pending_messages"、"store_bytes"、"api"
+	Detail   string        // 细分原因（可选）：如 "pending_messages"、"pending_bytes"、"api"
 	Retained bool          // message.published/admin.action：是否为保留消息
 	Duration time.Duration // client.disconnected：连接持续时长
 }

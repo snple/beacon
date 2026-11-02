@@ -26,85 +26,87 @@ type testAddr string
 func (a testAddr) Network() string { return string(a) }
 func (a testAddr) String() string  { return string(a) }
 
-func TestProcessSendQueue_PersistsDupAfterSendFailure(t *testing.T) {
-	core, err := NewWithOptions(NewCoreOptions().WithStoreDir(t.TempDir()))
-	require.NoError(t, err)
-	defer core.store.close()
+// newSendTestClient 构造一个用于发送路径单测的离线客户端。
+func newSendTestClient(t *testing.T, c *Core, clientID string) *Client {
+	t.Helper()
 
 	connect := packet.NewConnectPacket()
-	connect.ClientID = "dup-persist-client"
+	connect.ClientID = clientID
 	connect.Properties.ReceiveWindow = 10
 
 	client := &Client{
-		ID:      connect.ClientID,
-		core:    core,
-		session: newSession(connect.ClientID, connect, core),
+		ID:      clientID,
+		core:    c,
+		session: newSession(clientID, connect, c),
 	}
 	client.initQueue()
 
+	return client
+}
+
+// TestProcessSendQueue_RequeuesWithDupAfterSendFailure 验证写失败后投递回到队头并标记 Dup，
+// 以便重连后重发时接收端可以识别重复投递。
+func TestProcessSendQueue_RequeuesWithDupAfterSendFailure(t *testing.T) {
+	core, err := NewWithOptions(NewCoreOptions())
+	require.NoError(t, err)
+
+	client := newSendTestClient(t, core, "dup-persist-client")
+
 	conn := &conn{
-		client:    client,
-		conn:      failingWriteConn{},
-		sendQueue: newSendQueue(10),
+		client:        client,
+		conn:          failingWriteConn{},
+		sendWindow:    10,
+		resendSet:     make(map[packet.PacketID]struct{}),
+		maxPacketSize: 0,
 	}
 	client.conn = conn
 
-	msg := createTestMessage("test/topic", []byte("payload"), packet.QoS1)
-	require.NoError(t, client.queue.Enqueue(msg))
-	require.NoError(t, conn.sendQueue.tryEnqueue(msg))
+	msg := mustRegisterMessage(t, core, "test/topic", []byte("payload"))
+	require.NoError(t, client.enqueueDelivery(msg, packet.QoS1, false))
+	core.msgs.release(msg)
 
 	conn.processSendQueue()
 
-	persisted, err := client.queue.Peek()
-	require.NoError(t, err)
-	require.True(t, persisted.Dup, "failed sends should persist Dup=true for the next real retransmit")
+	head := client.queue.peek()
+	require.NotNil(t, head, "failed delivery should stay queued for the next connection")
+	require.True(t, head.dup.Load(), "failed sends should be marked Dup for the next attempt")
 }
 
+// TestProcessSendQueue_DropsDeliveryRejectedMessages 验证被 OnDeliver 钩子拒绝的投递
+// 会被直接丢弃，而不是永远重试。
 func TestProcessSendQueue_DropsDeliveryRejectedMessages(t *testing.T) {
 	core, err := NewWithOptions(
-		NewCoreOptions().
-			WithStoreDir(t.TempDir()).
-			WithMessageHandler(&MessageHandlerFunc{
-				DeliverFunc: func(ctx *DeliverContext) bool {
-					return false
-				},
-			}),
+		NewCoreOptions().WithMessageHandler(&MessageHandlerFunc{
+			DeliverFunc: func(ctx *DeliverContext) bool {
+				return false
+			},
+		}),
 	)
 	require.NoError(t, err)
-	defer core.store.close()
 
-	connect := packet.NewConnectPacket()
-	connect.ClientID = "delivery-rejected-client"
-	connect.Properties.ReceiveWindow = 10
-
-	client := &Client{
-		ID:      connect.ClientID,
-		core:    core,
-		session: newSession(connect.ClientID, connect, core),
-	}
-	client.initQueue()
+	client := newSendTestClient(t, core, "delivery-rejected-client")
 
 	conn := &conn{
-		client:    client,
-		sendQueue: newSendQueue(10),
+		client:     client,
+		conn:       &captureWriteConn{},
+		sendWindow: 10,
+		resendSet:  make(map[packet.PacketID]struct{}),
 	}
 	client.conn = conn
 
-	msg := createTestMessage("test/topic", []byte("payload"), packet.QoS1)
-	require.NoError(t, client.queue.Enqueue(msg))
-	require.NoError(t, conn.sendQueue.tryEnqueue(msg))
+	msg := mustRegisterMessage(t, core, "test/topic", []byte("payload"))
+	require.NoError(t, client.enqueueDelivery(msg, packet.QoS1, false))
+	core.msgs.release(msg)
 
 	conn.processSendQueue()
 
-	isEmpty, err := client.queue.IsEmpty()
-	require.NoError(t, err)
-	require.True(t, isEmpty, "delivery rejected by hook should be dropped instead of retried forever")
+	require.Equal(t, 0, client.queue.len(),
+		"delivery rejected by hook should be dropped instead of retried forever")
+	require.Equal(t, int64(1), core.stats.MessagesDropped.Load())
 }
 
-// TestTriggerRetransmit_TrackedByStop 验证按需重传任务被 wg 跟踪：
-// Stop 与 triggerRetransmit 并发时不会 panic（WaitGroup 在 Wait 期间 Add），
-// 也不会在 store 关闭后继续访问它。
-func TestTriggerRetransmit_TrackedByStop(t *testing.T) {
+// TestTriggerRetransmit_ConcurrentWithStop 验证重传与停机并发时不会 panic。
+func TestTriggerRetransmit_ConcurrentWithStop(t *testing.T) {
 	for range 3 {
 		core := testSetupCore(t, NewCoreOptions())
 		addr := testServe(t, core)

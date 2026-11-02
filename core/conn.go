@@ -48,17 +48,17 @@ type conn struct {
 	disconnectPacket *packet.DisconnectPacket
 
 	// 流量控制（连接级别）
-	maxPacketSize uint32     // 客户端最大包大小（发送时检查）
-	sendWindow    uint16     // 客户端接收窗口大小(core 发送窗口)
-	sendQueue     *sendQueue // 发送队列（基于客户端的 ReceiveWindow）
+	maxPacketSize uint32 // 客户端最大包大小（发送时检查）
+	sendWindow    uint16 // 客户端声明的接收窗口（= 待确认投递上限）
 
 	// 消息发送控制
 	processing  atomic.Bool // true: 正在处理发送队列
 	pendingSend atomic.Bool // true: 处理期间又有新工作，发送协程退出前需再处理一轮
 
-	// enqueueMu 串行化"投递入队（持久化 + 发送队列）"与"持久化补货"，
-	// 避免补货在两次入队之间把消息发走、投递路径又把同一消息入队 → 重复发送。
-	enqueueMu sync.Mutex
+	// 待重发的投递（由重传定时器/重连触发），发送协程统一写出。
+	resendMu  sync.Mutex
+	resendIDs []*delivery
+	resendSet map[packet.PacketID]struct{}
 
 	// 发送协程跟踪：processSendQueue 纳入 wg，确保关闭存储前其已退出
 	wg sync.WaitGroup
@@ -99,14 +99,11 @@ func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *c
 		conn.traceID = connect.Properties.TraceID
 	}
 
-	// 创建发送队列（基于客户端的接收窗口）
-	if conn.sendWindow > 0 {
-		conn.sendQueue = newSendQueue(int(conn.sendWindow))
-	} else {
-		// 如果客户端未指定接收窗口，使用默认值
-		conn.sendQueue = newSendQueue(100)
-		conn.sendWindow = 100
+	if conn.sendWindow == 0 {
+		conn.sendWindow = defaultSendWindow
 	}
+
+	conn.resendSet = make(map[packet.PacketID]struct{})
 
 	return conn
 }
@@ -118,7 +115,11 @@ func (c *conn) serve() {
 	// 后面设置的心跳超时/协议错误原因码全部失效。
 	defer func() { c.close(reason) }()
 
-	// 发送队列里可能已经有消息，触发发送协程
+	// 会话恢复：上一次连接上"已发送但未确认"的投递需要在新连接上重发，
+	// 否则要等一个完整的重传间隔才会被继续投递。
+	c.resendPendingAcks()
+
+	// 队列里可能已有消息（离线期间入队的），触发发送协程
 	c.triggerSend()
 
 	// 设置读取超时
@@ -246,10 +247,34 @@ func (c *conn) handleDisconnect(p *packet.DisconnectPacket) error {
 	return io.EOF // 触发断开
 }
 
-// writePacket 发送数据包
+// writePacket 发送数据包（控制包与兼容路径）。
 func (c *conn) writePacket(pkt packet.Packet) error {
+	// 编码先于任何写入完成：编码失败不应影响连接。
+	frame, err := packet.EncodePacket(pkt, c.maxPacketSize)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.writeSegments([][]byte{frame})
+	return err
+}
+
+// writePublishFrame 分段写出 PUBLISH 帧。
+//
+// 固定头、flags、PacketID 单独构造，topic/属性/载荷直接引用共享内存：
+// 向 N 个订阅者投递同一条消息不会复制任何消息内容。
+func (c *conn) writePublishFrame(frame *packet.PublishFrame) error {
+	_, err := c.writeSegments(frame.Segments())
+	return err
+}
+
+// writeSegments 串行化写入多段数据，并统计字节数。
+//
+// 分段写（TCP writev / WebSocket 单条消息）避免拼接缓冲区；TLS 等不支持
+// 分段写的 Writer 会退化为顺序 Write，数据仍然不复制。
+func (c *conn) writeSegments(segs [][]byte) (int, error) {
 	if c.closed.Load() || c.conn == nil {
-		return ErrClientClosed
+		return 0, ErrClientClosed
 	}
 
 	c.writeMu.Lock()
@@ -257,33 +282,31 @@ func (c *conn) writePacket(pkt packet.Packet) error {
 
 	if c.writeTimeout > 0 {
 		if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
-			return err
+			return 0, err
 		}
 		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
 	}
 
-	n, err := packet.WritePacketWithSize(c.conn, pkt, c.maxPacketSize)
+	n, err := packet.WriteSegments(c.conn, segs)
 	if n > 0 {
-		c.client.bytesSent.Add(int64(n))
-		c.client.core.stats.BytesSent.Add(int64(n))
+		c.client.bytesSent.Add(n)
+		c.client.core.stats.BytesSent.Add(n)
 	}
 
-	// 编码错误发生在写出任何字节之前，不应影响连接；真正的写错误
-	// （超时、对端不读、连接重置）意味着流中可能已有半包，连接不可继续使用。
-	var writeErr *packet.WriteError
-	if errors.As(err, &writeErr) {
+	// 写错误（超时、对端不读、连接重置）意味着流中可能已有半包，连接不可继续使用。
+	if err != nil {
 		_ = c.conn.Close()
+		return int(n), &packet.WriteError{Err: err}
 	}
 
-	return err
+	return int(n), nil
 }
 
-// coreMessagePacketID 提取 core.Message 的 PacketID（nil 安全，供 mq.SendQueue 去重用）
-func coreMessagePacketID(m *Message) packet.PacketID {
-	if m == nil {
-		return packet.PacketID{}
+// resendPendingAcks 把待确认的投递全部标记为重发（新连接建立时调用）。
+func (c *conn) resendPendingAcks() {
+	for _, d := range c.client.session.pendingAck.snapshot() {
+		c.addResend(d)
 	}
-	return m.PacketID
 }
 
 // closeReasonCode 返回连接关闭原因。
@@ -292,7 +315,7 @@ func (c *conn) closeReasonCode() packet.ReasonCode {
 }
 
 // wait 等待连接的所有发送协程退出
-// 用于在关闭消息存储前同步，确保不再有对持久化队列的访问。
+// 用于停机/会话接管时同步，确保不再有协程访问该连接的队列。
 // 注意：不要在持有 clientsMu 时调用（发送协程可能通过用户钩子回调 core API）。
 func (c *conn) wait() {
 	c.wg.Wait()

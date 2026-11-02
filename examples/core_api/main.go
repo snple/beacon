@@ -140,7 +140,7 @@ func main() {
 		info.Version, info.Commit, info.BuildTime, info.Protocol)
 	fmt.Printf("   运行时长: %s\n", info.Uptime)
 	fmt.Printf("   监听器: %v\n", info.Listeners)
-	fmt.Printf("   存储: path=%q ready=%v bytes=%d\n", info.Store.Path, info.Store.Ready, info.Store.Bytes)
+	fmt.Printf("   内存消息: ready=%v messages=%d bytes=%d\n", info.Memory.Ready, info.Memory.Messages, info.Memory.Bytes)
 
 	fmt.Println("9. 以 broker 身份发布（按订阅树投递）:")
 	res, err := c.Publish("sensors/temperature", []byte(`{"value":25.6}`), core.PublishOptions{

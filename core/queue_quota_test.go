@@ -7,50 +7,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestQueue_CountTracksMutations 验证队列计数随写入/覆盖/删除/清空保持一致。
-func TestQueue_CountTracksMutations(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
+// TestDeliveryQueue_CountTracksMutations 验证队列长度随写入/删除/清空保持一致。
+func TestDeliveryQueue_CountTracksMutations(t *testing.T) {
+	store := newMessageStore()
+	q := newDeliveryQueue(store)
 
-	q := NewQueue(db, "quota:")
-	require.Equal(t, int64(0), q.Count())
+	d1 := newDelivery(createTestMessage("q/1", []byte("1"), packet.QoS0), packet.QoS0, false)
+	d2 := newDelivery(createTestMessage("q/2", []byte("2"), packet.QoS0), packet.QoS0, false)
 
-	m1 := createTestMessage("q/1", []byte("1"), packet.QoS0)
-	m2 := createTestMessage("q/2", []byte("2"), packet.QoS0)
+	require.Equal(t, 0, q.len())
 
-	require.NoError(t, q.Enqueue(m1))
-	require.NoError(t, q.Enqueue(m2))
-	require.Equal(t, int64(2), q.Count())
+	q.pushBack(d1)
+	q.pushBack(d2)
+	require.Equal(t, 2, q.len())
 
-	// 相同 PacketID 覆盖写入不应重复计数
-	require.NoError(t, q.Enqueue(m1))
-	require.Equal(t, int64(2), q.Count())
+	// 同一条投递（同一 PacketID）重复入队不会被去重：调用方保证每条投递只入队一次，
+	// 这里只验证按 PacketID 删除的语义。
+	require.True(t, q.drop(d1.packetID))
+	require.Equal(t, 1, q.len())
+	require.False(t, q.drop(d1.packetID))
+	require.Equal(t, 1, q.len())
 
-	// 删除存在/不存在的条目
-	require.NoError(t, q.Delete(m1.PacketID))
-	require.Equal(t, int64(1), q.Count())
-	require.NoError(t, q.Delete(m1.PacketID))
-	require.Equal(t, int64(1), q.Count())
+	require.True(t, q.dropOldest())
+	require.Equal(t, 0, q.len())
 
-	// DeleteHead
-	require.NoError(t, q.DeleteHead())
-	require.Equal(t, int64(0), q.Count())
-
-	require.NoError(t, q.Enqueue(m1))
-	require.Equal(t, int64(1), q.Count())
-	require.NoError(t, q.Clear())
-	require.Equal(t, int64(0), q.Count())
-}
-
-// TestQueue_CountSurvivesReopen 验证新建包装器时会从存储中恢复计数。
-func TestQueue_CountSurvivesReopen(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	q := NewQueue(db, "quota-reopen:")
-	require.NoError(t, q.Enqueue(createTestMessage("q/1", []byte("1"), packet.QoS0)))
-	require.NoError(t, q.Enqueue(createTestMessage("q/2", []byte("2"), packet.QoS0)))
-
-	reopened := NewQueue(db, "quota-reopen:")
-	require.Equal(t, int64(2), reopened.Count())
+	q.pushBack(d2)
+	require.Equal(t, 1, q.len())
+	q.close()
+	require.Equal(t, 0, q.len())
 }

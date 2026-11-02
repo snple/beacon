@@ -8,16 +8,17 @@ import (
 	"github.com/snple/beacon/packet"
 )
 
-// retainEntry 保留消息索引条目（仅存储索引信息，不存储消息本身）
+// retainEntry 保留消息条目
 type retainEntry struct {
-	topic      string // 消息主题
-	expiryTime int64  // 过期时间 (Unix 时间戳，0 表示永不过期)
+	topic      string   // 消息主题
+	msg        *Message // 保留的消息（持有一个 messageStore 引用）
+	expiryTime int64    // 过期时间 (Unix 时间戳，0 表示永不过期)
 }
 
 // retainNode 保留消息树节点
 type retainNode struct {
 	children map[string]*retainNode
-	entry    *retainEntry // 该节点的保留消息索引
+	entry    *retainEntry // 该节点的保留消息
 }
 
 func newRetainNode() *retainNode {
@@ -26,23 +27,28 @@ func newRetainNode() *retainNode {
 	}
 }
 
-// retainStore 保留消息索引存储 - 使用树结构优化匹配
-// 设计原则：只存储 topic 索引和过期时间，消息内容存储在 messageStore
+// retainStore 保留消息存储 - 使用树结构优化匹配
+//
+// 条目直接引用 messageStore 中的共享消息（并持有一个引用），
+// 因此保留消息同样不会在内存中保存多份。
 type retainStore struct {
-	root *retainNode
-	mu   sync.RWMutex
+	root  *retainNode
+	store *messageStore
+	mu    sync.RWMutex
 }
 
-// NewretainStore 创建新的保留消息存储
-func newRetainStore() *retainStore {
+// newRetainStore 创建新的保留消息存储
+func newRetainStore(store *messageStore) *retainStore {
 	return &retainStore{
-		root: newRetainNode(),
+		root:  newRetainNode(),
+		store: store,
 	}
 }
 
-// set 设置保留消息索引。
+// set 设置保留消息。
+// 调用方必须已经为 msg 持有一个 messageStore 引用（所有权转移给 retainStore）。
 // expiryTime: 过期时间 (Unix 时间戳，0 表示永不过期)。
-func (s *retainStore) set(topic string, expiryTime int64) error {
+func (s *retainStore) set(topic string, msg *Message, expiryTime int64) error {
 	if topic == "" {
 		return ErrInvalidRetainMessage
 	}
@@ -70,39 +76,27 @@ func (s *retainStore) set(topic string, expiryTime int64) error {
 		node = node.children[part]
 	}
 
+	// 覆盖旧值时释放它持有的引用
+	old := node.entry
 	node.entry = &retainEntry{
 		topic:      topic,
+		msg:        msg,
 		expiryTime: expiryTime,
+	}
+
+	if old != nil {
+		s.store.release(old.msg)
 	}
 
 	return nil
 }
 
-// getEntry 获取保留消息索引条目
+// getEntry 获取保留消息条目
 func (s *retainStore) getEntry(topic string) *retainEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	node := s.root
-	startIdx := 0
-	for startIdx < len(topic) {
-		endIdx := strings.IndexByte(topic[startIdx:], '/')
-		var part string
-		if endIdx == -1 {
-			part = topic[startIdx:]
-			startIdx = len(topic)
-		} else {
-			endIdx += startIdx
-			part = topic[startIdx:endIdx]
-			startIdx = endIdx + 1
-		}
-
-		node = node.children[part]
-		if node == nil {
-			return nil
-		}
-	}
-	return node.entry
+	return s.lookupLocked(topic)
 }
 
 // matchTopics 匹配主题模式，返回所有匹配的主题列表
@@ -151,7 +145,10 @@ func (s *retainStore) remove(topic string) {
 	if node.entry == nil {
 		return
 	}
+
+	removed := node.entry
 	node.entry = nil
+	s.store.release(removed.msg)
 
 	// 自底向上剪枝：保留消息删除后不应留下空节点
 	for i := len(path) - 1; i > 0; i-- {
@@ -161,6 +158,51 @@ func (s *retainStore) remove(topic string) {
 		}
 		delete(path[i-1].children, parts[i-1])
 	}
+}
+
+// matchMessages 匹配主题模式，返回匹配的保留消息。
+//
+// 返回的每条消息都额外持有一个引用，调用方用完后必须 release。
+func (s *retainStore) matchMessages(pattern string) []*Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now().Unix()
+	var topics []string
+	topics = s.matchNodeTopics(s.root, splitTopic(pattern), 0, topics, now)
+
+	msgs := make([]*Message, 0, len(topics))
+	for _, topic := range topics {
+		if entry := s.lookupLocked(topic); entry != nil && entry.msg != nil {
+			s.store.retain(entry.msg)
+			msgs = append(msgs, entry.msg)
+		}
+	}
+	return msgs
+}
+
+// lookupLocked 按主题查找条目（调用方必须持有 s.mu）。
+func (s *retainStore) lookupLocked(topic string) *retainEntry {
+	node := s.root
+	startIdx := 0
+	for startIdx < len(topic) {
+		endIdx := strings.IndexByte(topic[startIdx:], '/')
+		var part string
+		if endIdx == -1 {
+			part = topic[startIdx:]
+			startIdx = len(topic)
+		} else {
+			endIdx += startIdx
+			part = topic[startIdx:endIdx]
+			startIdx = endIdx + 1
+		}
+
+		node = node.children[part]
+		if node == nil {
+			return nil
+		}
+	}
+	return node.entry
 }
 
 // matchNodeTopics 递归匹配节点，返回主题列表
@@ -239,6 +281,7 @@ func (s *retainStore) cleanupExpired() (int, []string) {
 func (s *retainStore) cleanupExpiredNode(node *retainNode, now int64, expiredTopics *[]string) {
 	if node.entry != nil && s.isExpired(node.entry, now) {
 		*expiredTopics = append(*expiredTopics, node.entry.topic)
+		s.store.release(node.entry.msg)
 		node.entry = nil
 	}
 	for part, child := range node.children {
@@ -254,5 +297,21 @@ func (s *retainStore) cleanupExpiredNode(node *retainNode, now int64, expiredTop
 func (s *retainStore) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	s.releaseAllLocked(s.root)
 	s.root = newRetainNode()
+}
+
+// releaseAllLocked 递归释放子树中的所有保留消息引用。
+func (s *retainStore) releaseAllLocked(node *retainNode) {
+	if node == nil {
+		return
+	}
+	if node.entry != nil {
+		s.store.release(node.entry.msg)
+		node.entry = nil
+	}
+	for _, child := range node.children {
+		s.releaseAllLocked(child)
+	}
 }

@@ -1,7 +1,6 @@
 package core
 
 import (
-	"sort"
 	"time"
 
 	"go.uber.org/zap"
@@ -68,12 +67,9 @@ func (c *Core) cleanupExpiredSessions() {
 // cleanupClient 清理客户端相关资源。
 // 当 client 非 nil 时，使用传入的已脱离 clients map 的客户端对象完成资源清理。
 //
-// 注意：本方法包含 badger 写入（删除会话记录、清空队列），
-// 调用方不得持有 clientsMu，否则慢盘会阻塞整个连接注册/查询路径。
+// 清理会释放队列与待确认列表中持有的消息引用，
+// 调用方不得持有 clientsMu（会与发送协程争锁）。
 func (c *Core) cleanupClient(clientID string, client *Client) {
-	// 会话元数据随会话一起删除
-	c.deleteSession(clientID)
-
 	// 清理订阅
 	subCount := c.subTree.unsubscribeClient(clientID)
 	if subCount > 0 {
@@ -88,11 +84,8 @@ func (c *Core) cleanupClient(clientID string, client *Client) {
 	}
 
 	if client != nil {
-		if err := client.queue.Clear(); err != nil {
-			c.logger.Warn("Failed to clear client message queue",
-				zap.String("clientID", clientID),
-				zap.Error(err))
-		}
+		client.queue.close()
+		client.session.pendingAck.close()
 	}
 }
 
@@ -121,50 +114,20 @@ func (c *Core) cleanupExpiredMessages() {
 
 // cleanupExpiredRetainMessages 清理过期的保留消息
 func (c *Core) cleanupExpiredRetainMessages() {
-	// 清理 retainStore 中的过期索引
-	count, expiredTopics := c.retainStore.cleanupExpired()
+	count, _ := c.retainStore.cleanupExpired()
 	if count > 0 {
-		c.logger.Debug("Cleaned up expired retain message index", zap.Int("count", count))
-
-		// 同时从 store 中删除对应的消息
-		for _, topic := range expiredTopics {
-			if err := c.store.deleteRetain(topic); err != nil {
-				c.logger.Warn("Failed to delete expired retain message from store",
-					zap.String("topic", topic),
-					zap.Error(err))
-			}
-		}
+		c.logger.Debug("Cleaned up expired retain messages", zap.Int("count", count))
 	}
 }
 
-// cleanupExpired 清理过期消息，返回清理数量
+// cleanupExpired 清理该客户端队列与待确认列表中的过期消息，返回清理数量。
+// 被清理的条目会释放其持有的消息引用。
 func (c *Client) cleanupExpired() int {
-	expiredCount := 0
-
-	// 清理 pendingAck 中的过期消息
-	c.session.pendingAckMu.Lock()
-	for packetID, pending := range c.session.pendingAck {
-		if pending.msg.IsExpired() {
-			// 删除持久化
-			if err := c.queue.Delete(packetID); err != nil {
-				c.core.logger.Debug("Failed to delete expired pendingAck message from queue",
-					zap.String("clientID", c.ID),
-					zap.String("packetID", packetID.Hex()),
-					zap.Error(err))
-			}
-
-			// 从内存中删除
-			delete(c.session.pendingAck, packetID)
-			expiredCount++
-		}
-	}
-	c.session.pendingAckMu.Unlock()
-
-	return expiredCount
+	return c.queue.dropExpired() + c.session.pendingAck.dropExpired()
 }
 
 // addOfflineSession 记录离线会话；超过 MaxOfflineSessions 时驱逐最早过期的会话。
-// 调用方应先把会话记录持久化，这样被驱逐时 cleanupClient 能一并删除它。
+// 被驱逐的会话由 cleanupClient 一并清理（订阅 + 待投递队列）。
 func (c *Core) addOfflineSession(clientID string, expiry time.Time) {
 	c.offlineSessionsMu.Lock()
 	c.offlineSessions[clientID] = expiry
@@ -220,44 +183,6 @@ func (c *Core) evictOfflineSession(clientID string) {
 	c.logger.Warn("Offline session evicted (MaxOfflineSessions reached)",
 		zap.String("clientID", clientID),
 		zap.Int("limit", c.options.MaxOfflineSessions))
-}
-
-// trimOfflineSessions 在启动恢复后把离线会话收敛到上限内。
-// 与增量驱逐不同，这里一次性排序，避免大量超限会话导致 O(n²)。
-func (c *Core) trimOfflineSessions() int {
-	limit := c.options.MaxOfflineSessions
-	if limit <= 0 {
-		return 0
-	}
-
-	type sessionExpiry struct {
-		id     string
-		expiry time.Time
-	}
-
-	c.offlineSessionsMu.Lock()
-	if len(c.offlineSessions) <= limit {
-		c.offlineSessionsMu.Unlock()
-		return 0
-	}
-
-	entries := make([]sessionExpiry, 0, len(c.offlineSessions))
-	for id, expiry := range c.offlineSessions {
-		entries = append(entries, sessionExpiry{id: id, expiry: expiry})
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].expiry.Before(entries[j].expiry) })
-
-	victims := entries[:len(entries)-limit]
-	for _, v := range victims {
-		delete(c.offlineSessions, v.id)
-	}
-	c.offlineSessionsMu.Unlock()
-
-	for _, v := range victims {
-		c.evictOfflineSession(v.id)
-	}
-
-	return len(victims)
 }
 
 // isOfflineSession 报告 clientID 当前是否仍在离线会话表中。

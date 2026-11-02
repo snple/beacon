@@ -1,125 +1,64 @@
 package core
 
 import (
-	"errors"
-	"fmt"
-	"sync/atomic"
+	"sync"
 
-	"github.com/dgraph-io/badger/v4"
-	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
 )
 
-// Queue 是基于 PacketID 的消息队列实现
-// 复用共享的 mq.Queue，并注入 core.Message 的 PacketID 提取器（coreMessagePacketIDValue）。
-// 通过嵌入保持原有 API，避免改动大量调用点。
+// pendingQueue 是全局待分发队列。
 //
-// 额外维护一个实时计数（Count），用于客户端队列配额判断，避免每次配额检查都做全量扫描。
-type Queue struct {
-	*mq.Queue[Message]
-	count atomic.Int64
+// 队列里只保存消息 ID（每个 ID 对应 messageStore 中的一条共享消息），
+// 因此队列本身与消息条数无关地保持轻量，也不复制任何消息内容。
+type pendingQueue struct {
+	mu   sync.Mutex
+	ids  []packet.PacketID
+	head int
 }
 
-// NewQueue 创建一个新的基于 PacketID 的队列实例
-// prefix: 队列的命名空间前缀，允许在同一个 DB 中创建多个队列
-func NewQueue(db *badger.DB, prefix string) *Queue {
-	q := &Queue{
-		Queue: mq.NewQueue(db, prefix, coreMessagePacketIDValue),
-	}
-
-	// 初始化计数（用于配额判断）。队列通常很小，键扫描的代价可接受。
-	if n, err := q.Queue.Size(); err == nil {
-		q.count.Store(int64(n))
-	}
-
-	return q
+func newPendingQueue() *pendingQueue {
+	return &pendingQueue{}
 }
 
-// coreMessagePacketIDValue 提取 core.Message 的 PacketID（值类型版本，供 mq.Queue 使用）
-func coreMessagePacketIDValue(m Message) packet.PacketID {
-	return m.PacketID
+// enqueue 追加到队尾。
+func (q *pendingQueue) enqueue(id packet.PacketID) {
+	q.mu.Lock()
+	q.ids = append(q.ids, id)
+	q.mu.Unlock()
 }
 
-// Count 返回队列中的消息条数（随本包装器的写入/删除操作实时维护）。
-func (q *Queue) Count() int64 {
-	return max(q.count.Load(), 0)
+// dequeue 取出队头。
+func (q *pendingQueue) dequeue() (packet.PacketID, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.head >= len(q.ids) {
+		q.resetLocked()
+		return packet.PacketID{}, false
+	}
+
+	id := q.ids[q.head]
+	q.head++
+	if q.head >= len(q.ids) {
+		q.resetLocked()
+	}
+
+	return id, true
 }
 
-// Enqueue 将消息添加到队列
-// 使用消息的 PacketID 作为 key
-func (q *Queue) Enqueue(msg *Message) error {
-	if msg == nil {
-		return fmt.Errorf("invalid message or PacketID")
-	}
-
-	created, err := q.Queue.Put(*msg)
-	if err != nil {
-		return err
-	}
-	if created {
-		q.count.Add(1)
-	}
-	return nil
+// len 返回待分发条数。
+func (q *pendingQueue) len() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.ids) - q.head
 }
 
-// Dequeue 从队列头部取出消息并删除
-func (q *Queue) Dequeue() (*Message, error) {
-	msg, err := q.Queue.Dequeue()
-	if err != nil {
-		// 损坏的头部消息已被删除，计数需要同步
-		if errors.Is(err, mq.ErrCorruptedMessage) {
-			q.count.Add(-1)
-		}
-		return nil, err
+// resetLocked 在队列清空后复位；容量过大时释放底层数组，避免空闲时长期占用内存。
+func (q *pendingQueue) resetLocked() {
+	if cap(q.ids) > 4096 {
+		q.ids = nil
+	} else {
+		q.ids = q.ids[:0]
 	}
-	q.count.Add(-1)
-	return &msg, nil
-}
-
-// Peek 查看队列头部消息但不删除
-func (q *Queue) Peek() (*Message, error) {
-	msg, err := q.Queue.Peek()
-	if err != nil {
-		return nil, err
-	}
-	return &msg, nil
-}
-
-// Get 根据 PacketID 获取消息（不删除）
-func (q *Queue) Get(packetID packet.PacketID) (*Message, error) {
-	msg, err := q.Queue.Get(packetID)
-	if err != nil {
-		return nil, err
-	}
-	return &msg, nil
-}
-
-// Delete 根据 PacketID 删除消息（条目不存在时不会影响计数）
-func (q *Queue) Delete(packetID packet.PacketID) error {
-	existed, err := q.Queue.DeleteIfExists(packetID)
-	if err != nil {
-		return err
-	}
-	if existed {
-		q.count.Add(-1)
-	}
-	return nil
-}
-
-// DeleteHead 删除队列头部消息
-func (q *Queue) DeleteHead() error {
-	if err := q.Queue.DeleteHead(); err != nil {
-		return err
-	}
-	q.count.Add(-1)
-	return nil
-}
-
-// Clear 清空队列
-func (q *Queue) Clear() error {
-	if err := q.Queue.Clear(); err != nil {
-		return err
-	}
-	q.count.Store(0)
-	return nil
+	q.head = 0
 }

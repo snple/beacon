@@ -82,9 +82,9 @@ func (c *Client) PublishToClient(targetClientID, topic string, payload []byte, o
 
 // publishMessage 内部发布消息方法
 //
-// 新流程（参考 core）：
+// 流程：
 // 1. 分配 PacketID（QoS 0 和 QoS 1 都分配，用于队列索引）
-// 2. 放入持久化队列 (queue)
+// 2. 放入待发送队列 (queue，纯内存)
 // 3. 如果客户端在线，尝试放入发送队列 (sendQueue)
 //   - 成功：触发发送
 //   - 失败（队列满）：等待重传机制处理
@@ -124,13 +124,13 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 		waitCh = conn.registerPendingAck(msg.Packet.PacketID)
 	}
 
-	// 4. 在线时把"持久化入队 + 发送队列入队"与补货互斥：
+	// 4. 在线时把"队列入队 + 发送队列入队"与补货互斥：
 	//    否则补货可能在这两步之间把消息发走，发布路径又入队一次 → 重复发送。
 	if online {
 		conn.enqueueMu.Lock()
 	}
 
-	// 5. 放入持久化队列（QoS0/QoS1 都持久化：QoS0 尽力保证到达，QoS1 保证处理）
+	// 5. 放入待发送队列（QoS0/QoS1 都入队：QoS0 尽力保证到达，QoS1 保证处理）
 	if err := c.queue.Enqueue(&msg); err != nil {
 		if online {
 			conn.enqueueMu.Unlock()
@@ -139,17 +139,17 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 			}
 		}
 		if c.closed.Load() {
-			// Close() 与本次发布并发：存储已关闭，返回明确的关闭错误。
+			// Close() 与本次发布并发：客户端已关闭，返回明确的关闭错误。
 			return ErrClientClosed
 		}
-		c.logger.Error("Failed to enqueue message to persistent queue",
+		c.logger.Error("Failed to enqueue message to outbound queue",
 			zap.String("topic", msg.Packet.Topic),
 			zap.String("packetID", msg.Packet.PacketID.Hex()),
 			zap.Error(err))
 		return err
 	}
 
-	// 没有连接：消息留在持久化队列，等待连接后由补货机制发送
+	// 没有连接：消息留在待发送队列，等待连接后由补货机制发送
 	if !online {
 		if msg.Packet.QoS == packet.QoS0 {
 			c.logger.Debug("Not connected, QoS0 message queued",
@@ -177,7 +177,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 			return nil
 		}
 
-		// 发送队列已满：清理刚注册的 pendingAck（消息留在持久化层，由补货时再注册）
+		// 发送队列已满：清理刚注册的 pendingAck（消息留在待发送队列，由补货时再注册）
 		if msg.Packet.QoS == packet.QoS1 {
 			conn.clearPendingAck(msg.Packet.PacketID)
 		}
@@ -203,7 +203,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 //
 // 注意：
 // 1. 仅对首次发布的消息调用（重传消息不等待）
-// 2. 如果超时或连接断开，消息仍在持久化中，会被重传机制处理
+// 2. 如果超时或连接断开，消息仍在待发送队列中，会被重传机制处理
 // 3. 使用 defer 确保 pendingAck 始终被清理
 func (c *Client) waitForPublishAck(conn *Conn, packetID packet.PacketID, waitCh chan error, timeout time.Duration) error {
 	// 注意：这里不在退出时清理 pendingAck——超时后条目保留，
@@ -219,12 +219,12 @@ func (c *Client) waitForPublishAck(conn *Conn, packetID packet.PacketID, waitCh 
 		// 收到 PUBACK
 		return err
 	case <-timer.C:
-		// 超时：消息仍在持久化中，会被重传
+		// 超时：消息仍在待发送队列中，会被重传
 		c.logger.Warn("Publish ACK timeout, message will be retransmitted",
 			zap.String("packetID", packetID.Hex()))
 		return ErrPublishTimeout
 	case <-conn.ctx.Done():
-		// 连接断开：消息在持久化中，会被重传
+		// 连接断开：消息仍在待发送队列中，会被重传
 		c.logger.Debug("Connection lost while waiting for ACK, message will be retransmitted",
 			zap.String("packetID", packetID.Hex()))
 		return ErrNotConnected
@@ -255,7 +255,7 @@ func (c *Conn) triggerSend() {
 }
 
 // processSendQueue 处理发送队列中的消息。
-// 内存发送队列排空后会立即尝试从持久化队列补货（由 PUBACK/发送完成驱动），
+// 内存发送队列排空后会立即尝试从待发送队列补货（由 PUBACK/发送完成驱动），
 // 不再依赖 RetransmitInterval 定时器。
 func (c *Conn) processSendQueue() {
 	// 正常情况下由 triggerSend 置位；直接调用（测试）时也保证内部 triggerSend 只打标记，
@@ -270,7 +270,7 @@ func (c *Conn) processSendQueue() {
 			// 尝试从队列取消息
 			msg, ok := c.sendQueue.tryDequeue()
 			if !ok {
-				// 内存发送队列已空：立即从持久化队列补货
+				// 内存发送队列已空：立即从待发送队列补货
 				if c.client.refillNow() {
 					continue
 				}
@@ -283,7 +283,7 @@ func (c *Conn) processSendQueue() {
 					zap.String("topic", msg.Packet.Topic),
 					zap.String("packetID", msg.Packet.PacketID.Hex()))
 
-				// 从持久化队列删除
+				// 从待发送队列删除
 				c.discardQueuedMessage(msg)
 				continue
 			}
@@ -316,10 +316,10 @@ func (c *Conn) processSendQueue() {
 
 			// 发送成功
 			if msg.Packet.QoS == packet.QoS0 {
-				// QoS0: 从持久化队列删除（TCP 写成功即可）
+				// QoS0: 从待发送队列删除（TCP 写成功即可）
 				c.discardQueuedMessage(msg)
 			} else {
-				// QoS1: 等待 PUBACK，由 handlePuback 删除持久化条目
+				// QoS1: 等待 PUBACK，由 handlePuback 删除队列条目
 				c.sendQueue.finish(msg.Packet.PacketID)
 			}
 		}
@@ -335,8 +335,8 @@ func (c *Conn) processSendQueue() {
 	}
 }
 
-// discardQueuedMessage 删除持久化条目并结束发送队列中的生命周期。
-// 与补货共用 enqueueMu，避免补货在"删除持久化条目"与"finish"之间重复装载同一条消息。
+// discardQueuedMessage 删除队列条目并结束发送队列中的生命周期。
+// 与补货共用 enqueueMu，避免补货在"删除队列条目"与"finish"之间重复装载同一条消息。
 func (c *Conn) discardQueuedMessage(msg *Message) {
 	c.enqueueMu.Lock()
 	defer c.enqueueMu.Unlock()
@@ -351,7 +351,7 @@ func (c *Conn) discardQueuedMessage(msg *Message) {
 	c.sendQueue.finish(msg.Packet.PacketID)
 }
 
-// requeueAfterSendFailure 将发送失败的消息标记 Dup 后重新持久化，并结束本次发送。
+// requeueAfterSendFailure 将发送失败的消息标记 Dup 后放回待发送队列，并结束本次发送。
 func (c *Conn) requeueAfterSendFailure(msg *Message) error {
 	c.enqueueMu.Lock()
 	defer c.enqueueMu.Unlock()

@@ -1,7 +1,6 @@
 package core
 
 import (
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -15,9 +14,6 @@ const (
 	// 超时相关
 	keepAliveMultiplier     = 1.5 // KeepAlive * 1.5 作为读取超时
 	defaultKeepAliveTimeout = 60 * time.Second
-
-	// 重传相关
-	overflowBatchSize = 100 // 从持久化加载的每批最大条数
 )
 
 // Client 表示一个已连接的客户端（组合 Session 和 Conn）
@@ -26,10 +22,10 @@ type Client struct {
 	// 客户端标识
 	ID string
 
-	// 消息队列
-	queue *Queue
+	// 消息队列：待发送投递（内存 FIFO），元素只引用共享消息，不复制内容
+	queue *deliveryQueue
 
-	// 会话层（跨连接持久化的状态）
+	// 会话层（跨连接保留的状态）
 	session *session
 
 	// 发布速率限制（每客户端，跨连接保留）
@@ -89,19 +85,17 @@ func newClient(netConn net.Conn, connect *packet.ConnectPacket, core *Core) *Cli
 
 // initPublishLimiter 按 Core 配置创建每客户端发布限流器（MaxPublishRate=0 表示不限制）。
 //
-// 除 newClient 外，从磁盘恢复的离线会话也必须调用：那类 Client 不是通过
-// newClient 构造的，漏掉会绕过发布速率限制。
+// 除 newClient 外，其它绕过 newClient 构造 Client 的路径（如会话恢复辅助代码）
+// 也必须调用，漏掉会绕过发布速率限制。
 func (c *Client) initPublishLimiter() {
 	if rate := c.core.options.MaxPublishRate; rate > 0 {
 		c.publishLimiter = newTokenBucket(rate, c.core.options.MaxPublishBurst)
 	}
 }
 
-// initQueue 初始化消息队列（NewQueue 不会失败）。
+// initQueue 初始化待发送队列（纯内存）。
 func (c *Client) initQueue() {
-	c.queue = NewQueue(c.core.store.db(), fmt.Sprintf("client:%s:", c.ID))
-
-	c.core.logger.Debug("Message queue initialized")
+	c.queue = newDeliveryQueue(c.core.msgs)
 }
 
 // attachConn 附加新的网络连接到客户端

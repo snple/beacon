@@ -57,8 +57,7 @@ var (
 // 队列相关错误
 var (
 	// 队列相关错误（复用共享 mq 包的定义，保持 API 兼容）
-	ErrQueueEmpty       = mq.ErrQueueEmpty
-	ErrCorruptedMessage = mq.ErrCorruptedMessage
+	ErrQueueEmpty = mq.ErrQueueEmpty
 
 	// ErrMessageTooLarge 消息超过允许的最大大小，应丢弃
 	ErrMessageTooLarge = errors.New("message too large, dropped")

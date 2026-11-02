@@ -274,7 +274,7 @@ const (
 // 最大值限制
 const (
 	// MaxClientIDLength 客户端 ID 的最大字节数。
-	// 限制得比协议字符串上限小，避免超长 ID 放大持久化 key 与会话记录。
+	// 限制得比协议字符串上限小，避免超长 ID 放大内部索引与会话记录。
 	MaxClientIDLength = 256
 	MaxTopicLength    = 65535
 	MaxPacketSize     = 268435456 // 256 MB

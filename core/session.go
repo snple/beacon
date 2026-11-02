@@ -8,7 +8,7 @@ import (
 )
 
 // session 表示客户端的会话状态
-// 负责管理跨连接持久化的状态：订阅、PacketID 种子、会话配置等
+// 负责管理跨连接保留的状态：订阅、会话配置等（全部在内存中，进程重启即失效）
 type session struct {
 	// 会话标识
 	id string
@@ -25,16 +25,13 @@ type session struct {
 	willPacket *packet.PublishPacket
 	willMu     sync.Mutex
 
-	// 订阅状态（会话级别，跨连接持久化）
+	// 订阅状态（会话级别，跨连接保留）
 	subscriptions map[string]packet.SubscribeOptions
 	subsMu        sync.RWMutex
 
 	// QoS 状态 (只需要 QoS 0/1)
-	pendingAck   map[packet.PacketID]pendingMessage // QoS 1: 等待客户端 ACK 的消息
-	pendingAckMu sync.Mutex
-
-	// 重传标志
-	retransmitting atomic.Bool // true: 正在重传消息
+	// pendingAck 保存已发送、等待客户端 ACK 的投递，保持发送顺序以便按序重传。
+	pendingAck *deliveryQueue
 
 	// identity 认证器给出的身份（仅内存，不持久化）
 	identity atomic.Pointer[Identity]
@@ -47,7 +44,7 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 	s := &session{
 		id:            clientID,
 		subscriptions: make(map[string]packet.SubscribeOptions),
-		pendingAck:    make(map[packet.PacketID]pendingMessage),
+		pendingAck:    newDeliveryQueue(core.msgs),
 		core:          core,
 	}
 

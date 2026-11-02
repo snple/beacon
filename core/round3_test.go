@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/client"
 	"github.com/snple/beacon/packet"
+	"github.com/stretchr/testify/require"
 )
 
 func round3Core(t *testing.T, opts *CoreOptions) *Core {
@@ -44,20 +44,6 @@ func TestCoreCannotRestartAfterStop(t *testing.T) {
 	// 重复 Stop 必须幂等
 	if err := c.Stop(); err != nil {
 		t.Fatalf("second stop: %v", err)
-	}
-}
-
-// TestStopBeforeStartClosesStore 确认未 Start 就 Stop 也会关闭存储，
-// 否则 badger 句柄与目录锁会泄漏。
-func TestStopBeforeStartClosesStore(t *testing.T) {
-	c := round3Core(t, nil)
-	if err := c.Stop(); err != nil {
-		t.Fatalf("stop: %v", err)
-	}
-
-	err := c.store.db().View(func(txn *badger.Txn) error { return nil })
-	if !errors.Is(err, badger.ErrDBClosed) {
-		t.Fatalf("expected store to be closed, got %v", err)
 	}
 }
 
@@ -182,8 +168,10 @@ func TestDuplicateTopicInOneSubscribeReplaysRetainedOnce(t *testing.T) {
 	// 订阅者额外收到一条实时投递，从而无法判断保留消息是否被重放两次。
 	retainedPacket := packet.NewPublishPacket("dup/topic", []byte("retained"))
 	retainedPacket.Retain = true
-	retained := c.newPublishMessage(retainedPacket)
-	c.handleRetainedMessage(&retained)
+	retained, err := newMessage(retainedPacket)
+	require.NoError(t, err)
+	c.msgs.put(retained)
+	c.handleRetainedMessage(retained)
 
 	sub := testSetupClient(t, addr, "dup-subscriber", nil)
 	defer sub.Close()
@@ -264,24 +252,20 @@ func TestClientReplaysSubscriptionOptions(t *testing.T) {
 	}
 }
 
-// TestProgrammaticSubscribeIsPersisted 确认编程接口 Core.Subscribe 会同步会话状态，
-// 并在 core 重启后从持久化会话中恢复。
-func TestProgrammaticSubscribeIsPersisted(t *testing.T) {
-	dir := t.TempDir()
-	newOpts := func() *CoreOptions {
-		return NewCoreOptions().
-			WithStoreDir(dir).
-			WithLogger(testIntegrationLogger()).
-			WithConnectTimeout(5)
-	}
-
-	first := round3Core(t, newOpts())
+// TestProgrammaticSubscribeUpdatesSession 确认编程接口 Core.Subscribe 会同步会话状态。
+func TestProgrammaticSubscribeUpdatesSession(t *testing.T) {
+	first := round3Core(t, NewCoreOptions().
+		WithLogger(testIntegrationLogger()).
+		WithConnectTimeout(5))
 	if err := first.Start(); err != nil {
-		t.Fatalf("start first: %v", err)
+		t.Fatalf("start: %v", err)
 	}
+	defer first.Stop()
+
 	addr := testServe(t, first)
 
 	cli := testSetupClient(t, addr, "api-client", client.NewClientOptions().WithSessionTimeout(300))
+	defer cli.Close()
 	if err := cli.Disconnect(); err != nil {
 		t.Fatalf("disconnect: %v", err)
 	}
@@ -297,6 +281,7 @@ func TestProgrammaticSubscribeIsPersisted(t *testing.T) {
 	if svClient == nil {
 		t.Fatal("offline session should still exist")
 	}
+
 	svClient.session.subsMu.RLock()
 	opts, ok := svClient.session.subscriptions["api/topic"]
 	svClient.session.subsMu.RUnlock()
@@ -304,21 +289,9 @@ func TestProgrammaticSubscribeIsPersisted(t *testing.T) {
 		t.Fatalf("programmatic subscribe must update session state, got %+v (ok=%v)", opts, ok)
 	}
 
-	if err := first.Stop(); err != nil {
-		t.Fatalf("stop first: %v", err)
-	}
-	_ = cli.Close()
-
-	second := round3Core(t, newOpts())
-	if err := second.Start(); err != nil {
-		t.Fatalf("start second: %v", err)
-	}
-	defer second.Stop()
-
-	matches := second.subTree.matchTopic("api/topic")
-	restored, ok := matches["api-client"]
-	if !ok || restored.QoS != packet.QoS1 {
-		t.Fatalf("subscription not restored after restart: %+v (ok=%v)", restored, ok)
+	matches := first.subTree.matchTopic("api/topic")
+	if _, ok := matches["api-client"]; !ok {
+		t.Fatal("programmatic subscribe must update the subscription tree")
 	}
 }
 

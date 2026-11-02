@@ -90,17 +90,17 @@ func (c *Core) GetLogger() *zap.Logger
 
 ```go
 info := c.Info()
-fmt.Println(info.Version, info.Uptime, info.Listeners, info.Store.Bytes)
+fmt.Println(info.Version, info.Uptime, info.Listeners, info.Memory.Bytes)
 
 // 使用率 = 当前值 / 上限
 stats, limits := c.GetStats(), c.Info().Limits
-fmt.Printf("clients %d/%d, store %d/%d\n",
-    stats.ClientsConnected, limits.MaxClients, stats.StoreBytes, limits.MaxStoreBytes)
+fmt.Printf("clients %d/%d, pending bytes %d/%d\n",
+    stats.ClientsConnected, limits.MaxClients, stats.PendingBytes, limits.MaxPendingBytes)
 ```
 
-- `ServerInfo`：`Version`/`Commit`/`BuildTime`（来自 `WithBuildInfo`）、`Protocol`（`"MX/2"`）、`StartedAt`（Core 构造时间）、`Uptime`、`Listeners`、`Limits`、`Store`。
-- `StatsSnapshot`：`StartedAt`、`Limits`、`EventsDropped`、`ClientsConnected/Total`、`MessagesReceived/Sent/Dropped/Rejected`、`BytesReceived/Sent`、`SubscriptionsCount`、`PendingQueueDepth`、`ClientQueueDepth`、`PendingAckTotal`、`OfflineSessions`、`StoreBytes`。
-- `Limits`：`MaxClients`、`MaxHandshakeConnections`、`MaxPacketSize`、`ReceiveWindow`、`MaxClientQueueSize`、`MaxPendingMessages`、`MaxStoreBytes`、`MaxOfflineSessions`、`MaxPublishRate`、`WriteTimeout`。
+- `ServerInfo`：`Version`/`Commit`/`BuildTime`（来自 `WithBuildInfo`）、`Protocol`（`"MX/2"`）、`StartedAt`（Core 构造时间）、`Uptime`、`Listeners`、`Limits`、`Memory`（内存中共享消息的条数与近似占用）。
+- `StatsSnapshot`：`StartedAt`、`Limits`、`EventsDropped`、`ClientsConnected/Total`、`MessagesReceived/Sent/Dropped/Rejected`、`BytesReceived/Sent`、`SubscriptionsCount`、`PendingQueueDepth`、`ClientQueueDepth`、`PendingAckTotal`、`OfflineSessions`、`InFlightMessages`、`PendingBytes`。
+- `Limits`：`MaxClients`、`MaxHandshakeConnections`、`MaxPacketSize`、`ReceiveWindow`、`MaxClientQueueSize`、`MaxPendingMessages`、`MaxPendingBytes`、`MaxOfflineSessions`、`MaxPublishRate`、`WriteTimeout`。
 
 ## 主题发布
 

@@ -55,11 +55,8 @@ type CoreOptions struct {
 	MaxPendingMessages        int                 // 全局分发队列上限（条），0 表示不限制
 	MaxPublishRate            float64             // 每客户端每秒最大发布消息数，0 表示不限制
 	MaxPublishBurst           int                 // 每客户端发布速率突发容量（默认取 rate）
-	MaxStoreBytes             int64               // 存储占用水位（字节），0 表示不限制
+	MaxPendingBytes           int64               // 内存中待投递消息的占用水位（字节），0 表示不限制
 	MaxOfflineSessions        int                 // 保留中的离线会话上限（个），0 表示不限制
-
-	// 持久化存储
-	StoreOptions StoreOptions // 消息持久化配置
 
 	// 日志
 	Logger *zap.Logger // 可选的日志器，nil 表示静默（不产生任何输出）
@@ -109,7 +106,6 @@ func NewCoreOptions() *CoreOptions {
 		ExpiredCheckInterval:    180 * time.Second,
 		RetransmitInterval:      30 * time.Second,
 		RetainEnabled:           true,
-		StoreOptions:            DefaultStoreOptions(),
 
 		// 配额与背压默认值
 		MaxClientQueueSize:        10000,
@@ -157,7 +153,7 @@ func (o *CoreOptions) WithKeepAlive(seconds uint16) *CoreOptions {
 }
 
 // WithWriteTimeout 设置单次网络写超时。超时或写失败会关闭该连接，
-// 未确认的消息仍保留在持久化队列中等待重连补发。0 表示不设置写截止时间。
+// 未确认的消息仍保留在内存队列中等待重连补发。0 表示不设置写截止时间。
 func (o *CoreOptions) WithWriteTimeout(d time.Duration) *CoreOptions {
 	o.WriteTimeout = d
 	return o
@@ -272,23 +268,12 @@ func (o *CoreOptions) WithMaxPublishRate(rate float64, burst int) *CoreOptions {
 	return o
 }
 
-// WithMaxStoreBytes 设置存储占用水位（字节），0 表示不限制。
-// 超过水位后新的发布会被拒绝（QoS1 返回 QuotaExceeded），避免写满磁盘。
-// 水位基于 badger 上报的磁盘占用，存在数秒滞后，属于粗粒度保护而非精确配额。
-func (o *CoreOptions) WithMaxStoreBytes(bytes int64) *CoreOptions {
-	o.MaxStoreBytes = bytes
-	return o
-}
-
-// WithStore 设置持久化存储配置
-func (o *CoreOptions) WithStore(storeOptions StoreOptions) *CoreOptions {
-	o.StoreOptions = storeOptions
-	return o
-}
-
-// WithStoreDir 设置持久化存储目录
-func (o *CoreOptions) WithStoreDir(dir string) *CoreOptions {
-	o.StoreOptions.DataDir = dir
+// WithMaxPendingBytes 设置内存中待投递消息的占用水位（字节），0 表示不限制。
+//
+// 消息全部保存在内存里，超过水位后新的发布会被拒绝（QoS1 返回 QuotaExceeded），
+// 避免慢消费者把 broker 的内存吃光。占用值是近似估算，属于粗粒度保护而非精确配额。
+func (o *CoreOptions) WithMaxPendingBytes(bytes int64) *CoreOptions {
+	o.MaxPendingBytes = bytes
 	return o
 }
 
@@ -358,11 +343,6 @@ func (o *CoreOptions) Validate() error {
 		return fmt.Errorf("retransmitInterval must be >= 1s, got %v", o.RetransmitInterval)
 	}
 
-	// 验证存储配置
-	if err := o.StoreOptions.Validate(); err != nil {
-		return fmt.Errorf("store options validation failed: %w", err)
-	}
-
 	// 验证配额配置
 	if o.ConnectionRateLimit < 0 {
 		return fmt.Errorf("connectionRateLimit must be >= 0, got %v", o.ConnectionRateLimit)
@@ -382,8 +362,8 @@ func (o *CoreOptions) Validate() error {
 	if o.MaxPublishBurst < 0 {
 		return fmt.Errorf("maxPublishBurst must be >= 0, got %d", o.MaxPublishBurst)
 	}
-	if o.MaxStoreBytes < 0 {
-		return fmt.Errorf("maxStoreBytes must be >= 0, got %d", o.MaxStoreBytes)
+	if o.MaxPendingBytes < 0 {
+		return fmt.Errorf("maxPendingBytes must be >= 0, got %d", o.MaxPendingBytes)
 	}
 	if o.MaxOfflineSessions < 0 {
 		return fmt.Errorf("maxOfflineSessions must be >= 0, got %d", o.MaxOfflineSessions)

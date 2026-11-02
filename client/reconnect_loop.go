@@ -11,7 +11,7 @@ import (
 //
 // Design goals:
 //   - Reconnect is transport-level (TCP/TLS) reconnection.
-//   - Client-side state (subscriptions, sendQueue, persisted QoS1 store) is preserved.
+//   - Client-side state (subscriptions, send queue, in-memory QoS1 queue) is preserved.
 //   - sendQueue remains intact across reconnections, allowing offline message buffering.
 //   - In-flight waits are unblocked on disconnect by Connection.close(); reconnect does not try to
 //     keep synchronous callers waiting across a disconnect.
