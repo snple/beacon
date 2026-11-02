@@ -60,6 +60,23 @@ func TestPendingQueue_ReusesCapacityAfterDrain(t *testing.T) {
 	require.Equal(t, id, got)
 }
 
+func TestPendingQueue_CompactsConsumedPrefix(t *testing.T) {
+	q := newPendingQueue()
+	for range 4 {
+		q.enqueue(packet.NewPacketID())
+	}
+
+	for range 10_000 {
+		_, ok := q.dequeue()
+		require.True(t, ok)
+		q.enqueue(packet.NewPacketID())
+	}
+
+	require.Equal(t, 4, q.len())
+	require.Less(t, q.head, pendingQueueCompactThreshold)
+	require.LessOrEqual(t, len(q.ids), 4+pendingQueueCompactThreshold)
+}
+
 func TestDeliveryQueue_FIFOAndRemove(t *testing.T) {
 	store := newMessageStore()
 	q := newDeliveryQueue(store)

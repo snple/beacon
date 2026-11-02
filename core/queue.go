@@ -16,6 +16,8 @@ type pendingQueue struct {
 	head int
 }
 
+const pendingQueueCompactThreshold = 1024
+
 func newPendingQueue() *pendingQueue {
 	return &pendingQueue{}
 }
@@ -41,6 +43,8 @@ func (q *pendingQueue) dequeue() (packet.PacketID, bool) {
 	q.head++
 	if q.head >= len(q.ids) {
 		q.resetLocked()
+	} else if q.head >= pendingQueueCompactThreshold && q.head >= len(q.ids)/2 {
+		q.compactLocked()
 	}
 
 	return id, true
@@ -60,5 +64,12 @@ func (q *pendingQueue) resetLocked() {
 	} else {
 		q.ids = q.ids[:0]
 	}
+	q.head = 0
+}
+
+// compactLocked 移除已消费前缀，避免队列持续非空时底层 slice 不断增长。
+func (q *pendingQueue) compactLocked() {
+	remaining := copy(q.ids, q.ids[q.head:])
+	q.ids = q.ids[:remaining]
 	q.head = 0
 }

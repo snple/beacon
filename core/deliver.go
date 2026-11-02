@@ -381,11 +381,9 @@ func (c *conn) triggerSend() {
 	}
 
 	if c.processing.CompareAndSwap(false, true) {
-		c.wg.Add(1)
-		go func() {
-			defer c.wg.Done()
+		c.wg.Go(func() {
 			c.processSendQueue()
-		}()
+		})
 		return
 	}
 
