@@ -2,13 +2,15 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
@@ -29,6 +31,22 @@ const (
 	retransmitBatchSize = 50 // 每次从持久化加载的最大消息数
 )
 
+// 客户端消息持久化格式：
+//
+//	[version(1)][flags(1)][Timestamp(8)][PUBLISH 线格式]
+//
+// flags: bit0=Dup。PacketID 由内容包自身携带（也是队列 key）。
+const (
+	clientMessageFormatVersion byte = 1
+	clientMessageHeaderSize         = 1 + 1 + 8
+	clientMessageFlagDup       byte = 1 << 0
+)
+
+var (
+	_ mq.BinaryMarshaler   = Message{}
+	_ mq.BinaryUnmarshaler = (*Message)(nil)
+)
+
 // Message 内部消息表示
 //
 // 设计原则：
@@ -36,17 +54,70 @@ const (
 // - 投递层（PacketID/QoS/Dup）由发送队列/持久化层单独管理
 type Message struct {
 	// 原始 PUBLISH 包（视为只读）
-	Packet *packet.PublishPacket `nson:"pkt"`
+	Packet *packet.PublishPacket
 
 	// 固定头部标志
-	Dup bool `nson:"dup"` // 重发标志
+	Dup bool // 重发标志
 
 	// 时间相关（非协议字段，仅用于调试/观察）
-	Timestamp int64 `nson:"ts"`
+	Timestamp int64
 
 	// 手动确认回调：仅当 AutoAck=false 且消息为 QoS1 时非 nil。
-	// 不导出且不参与 nson 序列化，仅内存中生效。
+	// 不导出且不编码，仅内存中生效。
 	ack func() error
+}
+
+// MarshalBinary 将消息编码为固定二进制格式。
+// PUBLISH 内容复用 packet 的线格式，避免反射开销。
+func (m Message) MarshalBinary() ([]byte, error) {
+	if m.Packet == nil {
+		return nil, ErrInvalidMessage
+	}
+
+	frame, err := packet.EncodePacket(m.Packet, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	data := make([]byte, clientMessageHeaderSize, clientMessageHeaderSize+len(frame))
+	data[0] = clientMessageFormatVersion
+	if m.Dup {
+		data[1] = clientMessageFlagDup
+	}
+	binary.BigEndian.PutUint64(data[2:10], uint64(m.Timestamp))
+
+	return append(data, frame...), nil
+}
+
+// UnmarshalBinary 从固定二进制格式解码消息。
+func (m *Message) UnmarshalBinary(data []byte) error {
+	if len(data) < clientMessageHeaderSize {
+		return fmt.Errorf("%w: message too short (%d bytes)", ErrInvalidMessage, len(data))
+	}
+	if data[0] != clientMessageFormatVersion {
+		return fmt.Errorf("%w: unsupported message format version %d", ErrInvalidMessage, data[0])
+	}
+
+	m.Dup = data[1]&clientMessageFlagDup != 0
+	m.Timestamp = int64(binary.BigEndian.Uint64(data[2:10]))
+
+	r := bytes.NewReader(data[clientMessageHeaderSize:])
+	// 以剩余字节数作为包上限：损坏数据里伪造的 Remaining 会在分配缓冲前被拒绝。
+	pkt, _, err := packet.ReadPacketWithSize(r, uint32(r.Len()))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidMessage, err)
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("%w: trailing bytes after packet", ErrInvalidMessage)
+	}
+
+	pub, ok := pkt.(*packet.PublishPacket)
+	if !ok {
+		return fmt.Errorf("%w: unexpected packet type %T", ErrInvalidMessage, pkt)
+	}
+
+	m.Packet = pub
+	return nil
 }
 
 // Ack 手动确认消息已处理（仅当客户端 AutoAck=false 且消息为 QoS1 时有效）。
@@ -380,9 +451,9 @@ func (c *Client) LastRTT() time.Duration {
 	return c.conn.LastRTT()
 }
 
-// allocatePacketID 分配新的 PacketID（使用 nson.Id 以保证全局唯一性和有序性）
-func (c *Client) allocatePacketID() nson.Id {
-	return nson.NewId()
+// allocatePacketID 分配新的 PacketID（使用 packet.PacketID 以保证全局唯一性和有序性）
+func (c *Client) allocatePacketID() packet.PacketID {
+	return packet.NewPacketID()
 }
 
 // getConn 获取当前活跃的连接

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 )
 
@@ -195,7 +194,7 @@ func TestSubscriptionHandlerFunc_OnSubscribe(t *testing.T) {
 			handler := &SubscriptionHandlerFunc{
 				SubscribeFunc: tt.subscribeFunc,
 			}
-			subPacket := packet.NewSubscribePacket(nson.NewId())
+			subPacket := packet.NewSubscribePacket(packet.NewPacketID())
 			subPacket.Subscriptions = []packet.Subscription{
 				{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 			}
@@ -226,7 +225,7 @@ func TestSubscriptionHandlerFunc_OnUnsubscribe(t *testing.T) {
 		},
 	}
 
-	unsubPacket := packet.NewUnsubscribePacket(nson.NewId())
+	unsubPacket := packet.NewUnsubscribePacket(packet.NewPacketID())
 	unsubPacket.Topics = []string{"test/topic"}
 	ctx := &UnsubscribeContext{
 		ClientID: "test-client",
@@ -555,7 +554,7 @@ func TestHooks_CallOnSubscribe(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			subPacket := packet.NewSubscribePacket(nson.NewId())
+			subPacket := packet.NewSubscribePacket(packet.NewPacketID())
 			subPacket.Subscriptions = []packet.Subscription{
 				{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS0}},
 			}
@@ -582,7 +581,7 @@ func TestHooks_CallOnUnsubscribe(t *testing.T) {
 		},
 	}
 
-	unsubPacket := packet.NewUnsubscribePacket(nson.NewId())
+	unsubPacket := packet.NewUnsubscribePacket(packet.NewPacketID())
 	unsubPacket.Topics = []string{"test/topic"}
 	ctx := &UnsubscribeContext{
 		ClientID: "test-client",

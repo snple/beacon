@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/internal/mq"
+	"github.com/snple/beacon/packet"
 )
 
 // Queue 是基于 PacketID 的消息队列实现
@@ -34,9 +34,9 @@ func NewQueue(db *badger.DB, prefix string) *Queue {
 }
 
 // clientMessagePacketIDValue 提取 client.Message 的 PacketID（值类型版本，供 mq.Queue 使用）
-func clientMessagePacketIDValue(m Message) nson.Id {
+func clientMessagePacketIDValue(m Message) packet.PacketID {
 	if m.Packet == nil {
-		return nson.Id{}
+		return packet.PacketID{}
 	}
 	return m.Packet.PacketID
 }
@@ -87,7 +87,7 @@ func (q *Queue) Peek() (*Message, error) {
 }
 
 // Get 根据 PacketID 获取消息（不删除）
-func (q *Queue) Get(packetID nson.Id) (*Message, error) {
+func (q *Queue) Get(packetID packet.PacketID) (*Message, error) {
 	msg, err := q.Queue.Get(packetID)
 	if err != nil {
 		return nil, err
@@ -96,7 +96,7 @@ func (q *Queue) Get(packetID nson.Id) (*Message, error) {
 }
 
 // Delete 根据 PacketID 删除消息（条目不存在时不会影响计数）
-func (q *Queue) Delete(packetID nson.Id) error {
+func (q *Queue) Delete(packetID packet.PacketID) error {
 	existed, err := q.DeleteIfExists(packetID)
 	if err != nil {
 		return err

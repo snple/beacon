@@ -6,8 +6,6 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/danclive/nson-go"
 )
 
 // SubscribeOptions 订阅选项。
@@ -153,13 +151,13 @@ func MatchTopic(filter, topic string) bool {
 
 // SubscribePacket SUBSCRIBE 数据包
 type SubscribePacket struct {
-	PacketID      nson.Id
+	PacketID      PacketID
 	Properties    *ReasonProperties
 	Subscriptions []Subscription
 }
 
 // NewSubscribePacket 创建新的 SUBSCRIBE 包
-func NewSubscribePacket(packetID nson.Id) *SubscribePacket {
+func NewSubscribePacket(packetID PacketID) *SubscribePacket {
 	return &SubscribePacket{
 		PacketID:   packetID,
 		Properties: NewReasonProperties(),
@@ -182,7 +180,7 @@ func (p *SubscribePacket) Type() PacketType {
 
 func (p *SubscribePacket) encode(w io.Writer) error {
 	// 包标识符
-	if err := EncodeId(w, p.PacketID); err != nil {
+	if err := EncodePacketID(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -221,7 +219,7 @@ func (p *SubscribePacket) encode(w io.Writer) error {
 func (p *SubscribePacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeId(r)
+	p.PacketID, err = DecodePacketID(r)
 	if err != nil {
 		return err
 	}
@@ -267,13 +265,13 @@ func (p *SubscribePacket) decode(r io.Reader, header FixedHeader) error {
 
 // SubackPacket SUBACK 数据包
 type SubackPacket struct {
-	PacketID    nson.Id
+	PacketID    PacketID
 	Properties  *ReasonProperties
 	ReasonCodes []ReasonCode
 }
 
 // NewSubackPacket 创建新的 SUBACK 包
-func NewSubackPacket(packetID nson.Id) *SubackPacket {
+func NewSubackPacket(packetID PacketID) *SubackPacket {
 	return &SubackPacket{
 		PacketID:   packetID,
 		Properties: NewReasonProperties(),
@@ -286,7 +284,7 @@ func (p *SubackPacket) Type() PacketType {
 
 func (p *SubackPacket) encode(w io.Writer) error {
 	// 包标识符
-	if err := EncodeId(w, p.PacketID); err != nil {
+	if err := EncodePacketID(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -312,7 +310,7 @@ func (p *SubackPacket) encode(w io.Writer) error {
 func (p *SubackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeId(r)
+	p.PacketID, err = DecodePacketID(r)
 	if err != nil {
 		return err
 	}
@@ -339,13 +337,13 @@ func (p *SubackPacket) decode(r io.Reader, header FixedHeader) error {
 
 // UnsubscribePacket UNSUBSCRIBE 数据包
 type UnsubscribePacket struct {
-	PacketID   nson.Id
+	PacketID   PacketID
 	Properties *ReasonProperties
 	Topics     []string
 }
 
 // NewUnsubscribePacket 创建新的 UNSUBSCRIBE 包
-func NewUnsubscribePacket(packetID nson.Id) *UnsubscribePacket {
+func NewUnsubscribePacket(packetID PacketID) *UnsubscribePacket {
 	return &UnsubscribePacket{
 		PacketID:   packetID,
 		Properties: NewReasonProperties(),
@@ -358,7 +356,7 @@ func (p *UnsubscribePacket) Type() PacketType {
 
 func (p *UnsubscribePacket) encode(w io.Writer) error {
 	// 包标识符
-	if err := EncodeId(w, p.PacketID); err != nil {
+	if err := EncodePacketID(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -384,7 +382,7 @@ func (p *UnsubscribePacket) encode(w io.Writer) error {
 func (p *UnsubscribePacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeId(r)
+	p.PacketID, err = DecodePacketID(r)
 	if err != nil {
 		return err
 	}
@@ -411,13 +409,13 @@ func (p *UnsubscribePacket) decode(r io.Reader, header FixedHeader) error {
 
 // UnsubackPacket UNSUBACK 数据包
 type UnsubackPacket struct {
-	PacketID    nson.Id
+	PacketID    PacketID
 	Properties  *ReasonProperties
 	ReasonCodes []ReasonCode
 }
 
 // NewUnsubackPacket 创建新的 UNSUBACK 包
-func NewUnsubackPacket(packetID nson.Id) *UnsubackPacket {
+func NewUnsubackPacket(packetID PacketID) *UnsubackPacket {
 	return &UnsubackPacket{
 		PacketID:   packetID,
 		Properties: NewReasonProperties(),
@@ -431,7 +429,7 @@ func (p *UnsubackPacket) Type() PacketType {
 func (p *UnsubackPacket) encode(w io.Writer) error {
 
 	// 包标识符
-	if err := EncodeId(w, p.PacketID); err != nil {
+	if err := EncodePacketID(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -457,7 +455,7 @@ func (p *UnsubackPacket) encode(w io.Writer) error {
 func (p *UnsubackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeId(r)
+	p.PacketID, err = DecodePacketID(r)
 	if err != nil {
 		return err
 	}

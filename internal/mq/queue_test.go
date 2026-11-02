@@ -1,16 +1,48 @@
 package mq
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 
-	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
+	"github.com/snple/beacon/packet"
 )
 
+// queueTestMsg 是队列泛型测试用的消息类型，实现 mq 的二进制编解码契约。
 type queueTestMsg struct {
-	ID   nson.Id `nson:"id"`
-	Body string  `nson:"body"`
+	ID   packet.PacketID
+	Body string
+}
+
+func (m queueTestMsg) MarshalBinary() ([]byte, error) {
+	if len(m.Body) > 0xFFFF {
+		return nil, errors.New("body too long")
+	}
+
+	data := make([]byte, 1+12+2+len(m.Body))
+	data[0] = 1 // 格式版本
+	copy(data[1:13], m.ID[:])
+	binary.BigEndian.PutUint16(data[13:15], uint16(len(m.Body)))
+	copy(data[15:], m.Body)
+	return data, nil
+}
+
+func (m *queueTestMsg) UnmarshalBinary(data []byte) error {
+	const headerSize = 1 + 12 + 2
+
+	if len(data) < headerSize || data[0] != 1 {
+		return errors.New("invalid queue test message")
+	}
+
+	bodyLen := int(binary.BigEndian.Uint16(data[13:15]))
+	if len(data) != headerSize+bodyLen {
+		return errors.New("invalid queue test message length")
+	}
+
+	copy(m.ID[:], data[1:13])
+	m.Body = string(data[headerSize:])
+	return nil
 }
 
 func newTestQueue(t *testing.T) (*Queue[queueTestMsg], *badger.DB) {
@@ -22,14 +54,14 @@ func newTestQueue(t *testing.T) (*Queue[queueTestMsg], *badger.DB) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	q := NewQueue(db, "test:", func(m queueTestMsg) nson.Id { return m.ID })
+	q := NewQueue(db, "test:", func(m queueTestMsg) packet.PacketID { return m.ID })
 	return q, db
 }
 
 func TestQueue_FIFOAndDelete(t *testing.T) {
 	q, _ := newTestQueue(t)
 
-	ids := []nson.Id{nson.NewId(), nson.NewId(), nson.NewId()}
+	ids := []packet.PacketID{packet.NewPacketID(), packet.NewPacketID(), packet.NewPacketID()}
 	// 确保 ID 严格递增，避免同一毫秒内计数回绕影响断言。
 	for i := range ids {
 		if i > 0 && string(ids[i][:]) <= string(ids[i-1][:]) {
@@ -70,7 +102,7 @@ func TestQueue_FIFOAndDelete(t *testing.T) {
 
 func TestQueue_PutOverwriteAndDeleteIfExists(t *testing.T) {
 	q, _ := newTestQueue(t)
-	id := nson.NewId()
+	id := packet.NewPacketID()
 
 	created, err := q.Put(queueTestMsg{ID: id, Body: "v1"})
 	if err != nil || !created {
@@ -102,10 +134,10 @@ func TestQueue_PutOverwriteAndDeleteIfExists(t *testing.T) {
 
 func TestQueue_CorruptedHeadIsRemoved(t *testing.T) {
 	q, db := newTestQueue(t)
-	id := nson.NewId()
+	id := packet.NewPacketID()
 
 	if err := db.Update(func(txn *badger.Txn) error {
-		return txn.Set(q.makeKey(id), []byte("not-an-nson-map"))
+		return txn.Set(q.makeKey(id), []byte("not-a-valid-message"))
 	}); err != nil {
 		t.Fatalf("seed corrupted entry: %v", err)
 	}
@@ -118,7 +150,7 @@ func TestQueue_CorruptedHeadIsRemoved(t *testing.T) {
 	}
 
 	// 后续消息仍可正常处理
-	next := nson.NewId()
+	next := packet.NewPacketID()
 	if err := q.Enqueue(queueTestMsg{ID: next, Body: "ok"}); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -131,7 +163,7 @@ func TestQueue_CorruptedHeadIsRemoved(t *testing.T) {
 func TestQueue_Clear(t *testing.T) {
 	q, _ := newTestQueue(t)
 	for i := 0; i < 10; i++ {
-		if err := q.Enqueue(queueTestMsg{ID: nson.NewId(), Body: "x"}); err != nil {
+		if err := q.Enqueue(queueTestMsg{ID: packet.NewPacketID(), Body: "x"}); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
@@ -144,5 +176,32 @@ func TestQueue_Clear(t *testing.T) {
 	}
 	if empty, err := q.IsEmpty(); err != nil || !empty {
 		t.Fatalf("IsEmpty = %v, %v; want true", empty, err)
+	}
+}
+
+// TestQueue_MalformedKeyLengthDoesNotPanic 验证同前缀下长度异常的 key
+// 不会让 PeekID/GetFirstId/GetLastId 在读路径 panic（切片转数组要求长度足够）。
+func TestQueue_MalformedKeyLengthDoesNotPanic(t *testing.T) {
+	q, db := newTestQueue(t)
+
+	if err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte("test:short"), []byte("x"))
+	}); err != nil {
+		t.Fatalf("seed short key: %v", err)
+	}
+
+	id, found, err := q.PeekID()
+	if err != nil {
+		t.Fatalf("PeekID: %v", err)
+	}
+	if !found || !id.IsZero() {
+		t.Fatalf("PeekID = %s, found=%v; want zero id", id.Hex(), found)
+	}
+
+	if _, err := q.GetFirstId(); err != nil {
+		t.Fatalf("GetFirstId: %v", err)
+	}
+	if _, err := q.GetLastId(); err != nil {
+		t.Fatalf("GetLastId: %v", err)
 	}
 }

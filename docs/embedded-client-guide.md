@@ -41,8 +41,7 @@ Beacon 是一个**精简的二进制协议**（协议名 `MX`，版本 2），�
 **字符串**：`[Len(2B 大端)][UTF-8 字节]`；**Id**：12 字节（见 §8.2）；
 **属性**：`[Len(4B 大端)][属性体]`，属性体为 `[Bitmask(2B)][按位序的属性值]`。
 `Len=0`（仅 4 字节长度前缀）表示"没有属性"，解码器必须接受；本仓库的编码器总是写入
-`Len=2 + Bitmask=0`（共 6 字节，`00 00 00 02 00 00`）。
-> 例外：AUTH 包的属性没有长度前缀，直接是 `[Bitmask(1B)][按位序的值]`（AUTH 包体只有 ReasonCode 和属性）。
+`Len=2 + Bitmask=0`（共 6 字节，`00 00 00 02 00 00`）。AUTH 包使用同一帧格式。
 
 ### 2.2 各包最小 Remaining（可据此快速拒绝畸形包）
 
@@ -266,7 +265,7 @@ IDLE ──发送QoS1──► WAIT_ACK ──收到PUBACK──► IDLE
 - 结论：**能少用 QoS1 就少用**；传感器上报这类高频数据用 QoS0，控制指令/关键事件才用 QoS1。层级 0 已具备 QoS1 能力，代价仅是少量 RAM 与一条在途状态。
 
 ### 8.2 PacketID 生成
-- PacketID 是 **12 字节**（标准实现用 `nson.Id` = 6B 毫秒时间戳 + 2B 计数器 + 4B 随机）。
+- PacketID 是 **12 字节**（本实现用 `packet.PacketID` = 6B 毫秒时间戳 + 2B 计数器 + 4B 随机）。
 - 嵌入式端**不必**严格复刻该格式，但需满足：
   1. **全局唯一**（同一会话内不重复）；服务端用它定位持久化队列条目并匹配 PUBACK；
   2. **单调递增**更好（利于 FIFO 排序）。
@@ -284,8 +283,7 @@ IDLE ──发送QoS1──► WAIT_ACK ──收到PUBACK──► IDLE
 - 层级1 设备的 `ReceiveWindow` 设为 1 即可（一次只处理一条，天然流控）。
 
 ### 8.5 属性（Properties）编码
-- 属性集合都是 `[Len(4B)][Bitmask(2B)]` + 按位序的值；`Len=0` 表示没有属性（连 Bitmask 也省略）。
-  AUTH 包例外：只有 1B Bitmask、无长度前缀。**不认识/不需要的属性直接按类型长度跳过**（字符串=2B长度+内容、uint32=4B、uint16=2B、binary=2B长度+内容），不必完整实现。
+- 属性集合都是 `[Len(4B)][Bitmask(2B)]` + 按位序的值；`Len=0` 表示没有属性（连 Bitmask 也省略）。**不认识/不需要的属性直接按类型长度跳过**（字符串=2B长度+内容、uint32=4B、uint16=2B、binary=2B长度+内容），不必完整实现。
 - 嵌入式最值得解析的属性：PUBLISH 的 `TargetClientID`（判断是否本机定向消息）、`ExpiryTime`（过期丢弃）、CONNACK 的 `KeepAlive`/`MaxPacketSize`/`ReceiveWindow`。
 
 ### 8.6 主题与通配符

@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +24,7 @@ func TestCleanupExpiredPendingAckRemovesMessage(t *testing.T) {
 	pub := packet.NewPublishPacket("expiry/topic", []byte("v"))
 	pub.Properties.ExpiryTime = time.Now().Add(-time.Minute).Unix()
 
-	msg := &Message{Packet: pub, PacketID: nson.NewId(), Timestamp: time.Now().Unix()}
+	msg := &Message{Packet: pub, PacketID: packet.NewPacketID(), Timestamp: time.Now().Unix()}
 	require.NoError(t, client.queue.Enqueue(msg))
 
 	client.session.pendingAckMu.Lock()

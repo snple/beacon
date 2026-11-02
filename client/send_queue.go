@@ -1,8 +1,8 @@
 package client
 
 import (
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/internal/mq"
+	"github.com/snple/beacon/packet"
 )
 
 // sendQueue 发送队列（用于流量控制 + PacketID 去重）
@@ -25,7 +25,7 @@ func (q *sendQueue) tryDequeue() (*Message, bool) {
 	return q.TryDequeue()
 }
 
-func (q *sendQueue) finish(packetID nson.Id) {
+func (q *sendQueue) finish(packetID packet.PacketID) {
 	q.Finish(packetID)
 }
 
@@ -38,9 +38,9 @@ func (q *sendQueue) used() int32 {
 }
 
 // clientMessagePacketID 提取 client.Message 的 PacketID（nil 安全，供 mq.SendQueue 去重用）
-func clientMessagePacketID(m *Message) nson.Id {
+func clientMessagePacketID(m *Message) packet.PacketID {
 	if m == nil || m.Packet == nil {
-		return nson.Id{}
+		return packet.PacketID{}
 	}
 	return m.Packet.PacketID
 }

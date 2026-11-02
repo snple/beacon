@@ -3,8 +3,6 @@ package packet
 import (
 	"bytes"
 	"testing"
-
-	"github.com/danclive/nson-go"
 )
 
 // TestPublishFlagsEncoding 测试 Publish Flags 的编码和解码
@@ -37,7 +35,7 @@ func TestPublishFlagsEncoding(t *testing.T) {
 			}
 
 			if tt.qos > 0 {
-				pub.PacketID = nson.NewId()
+				pub.PacketID = NewPacketID()
 			}
 
 			// 编码

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
@@ -50,7 +49,7 @@ func setupClientTestDB(t *testing.T) (*badger.DB, func()) {
 func createClientTestMessage(topic string, payload []byte, qos packet.QoS) *Message {
 	pkt := packet.NewPublishPacket(topic, payload)
 	pkt.QoS = qos
-	pkt.PacketID = nson.NewId()
+	pkt.PacketID = packet.NewPacketID()
 
 	return &Message{
 		Packet:    pkt,
@@ -117,7 +116,7 @@ func TestRetransmitQueuedMessages_SkipsHeadMessageAwaitingPuback(t *testing.T) {
 	conn := &Conn{
 		client:     client,
 		sendQueue:  newSendQueue(4),
-		pendingAck: map[nson.Id]pendingMessage{msg.Packet.PacketID: {ch: make(chan error, 1)}},
+		pendingAck: map[packet.PacketID]pendingMessage{msg.Packet.PacketID: {ch: make(chan error, 1)}},
 		logger:     zap.NewNop(),
 	}
 	conn.processing.Store(true)

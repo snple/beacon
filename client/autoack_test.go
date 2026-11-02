@@ -5,7 +5,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -41,7 +40,7 @@ func setupManualAckConn(t *testing.T, autoAck bool) (*Client, *Conn, *captureCon
 	conn := &Conn{
 		client:     client,
 		conn:       capture,
-		pendingAck: make(map[nson.Id]pendingMessage),
+		pendingAck: make(map[packet.PacketID]pendingMessage),
 		ctx:        context.Background(),
 		logger:     zap.NewNop(),
 	}
@@ -64,7 +63,7 @@ func TestHandlePublish_AutoAckEnabledAcksOnEnqueue(t *testing.T) {
 
 	pub := packet.NewPublishPacket("test/topic", []byte("hello"))
 	pub.QoS = packet.QoS1
-	pub.PacketID = nson.NewId()
+	pub.PacketID = packet.NewPacketID()
 
 	require.NoError(t, conn.handlePublish(pub))
 
@@ -80,7 +79,7 @@ func TestHandlePublish_AutoAckDisabledRequiresManualAck(t *testing.T) {
 
 	pub := packet.NewPublishPacket("test/topic", []byte("hello"))
 	pub.QoS = packet.QoS1
-	pub.PacketID = nson.NewId()
+	pub.PacketID = packet.NewPacketID()
 
 	require.NoError(t, conn.handlePublish(pub))
 
@@ -107,7 +106,7 @@ func TestHandlePublish_AutoAckDisabledRedeliversRetransmit(t *testing.T) {
 
 	pub := packet.NewPublishPacket("test/topic", []byte("hello"))
 	pub.QoS = packet.QoS1
-	pub.PacketID = nson.NewId()
+	pub.PacketID = packet.NewPacketID()
 
 	require.NoError(t, conn.handlePublish(pub))
 
@@ -128,7 +127,7 @@ func TestHandlePublish_QoS0NoAck(t *testing.T) {
 
 	pub := packet.NewPublishPacket("test/topic", []byte("hello"))
 	pub.QoS = packet.QoS0
-	pub.PacketID = nson.NewId()
+	pub.PacketID = packet.NewPacketID()
 
 	require.NoError(t, conn.handlePublish(pub))
 	require.Empty(t, capture.buf, "QoS0 must not send PUBACK")

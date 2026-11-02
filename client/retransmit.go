@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
@@ -66,7 +66,7 @@ func (c *Client) retransmitUnackedMessages() int {
 	}
 
 	var toResend []*Message
-	var expiredIDs []nson.Id
+	var expiredIDs []packet.PacketID
 
 	conn.pendingAckMu.Lock()
 	for packetID, pending := range conn.pendingAck {
@@ -171,7 +171,7 @@ func (c *Client) retransmitQueuedMessages() int {
 
 	// 本 pass 内已发送的消息（Peek 非破坏性，且异步发送与 pendingAck 注册存在竞态，
 	// 避免同一条消息在一次重传中被重复加载/发送）
-	sentInPass := make(map[nson.Id]struct{})
+	sentInPass := make(map[packet.PacketID]struct{})
 
 	for range loadCount {
 		loaded, stop := c.loadOneQueuedMessage(conn, sentInPass)
@@ -194,7 +194,7 @@ func (c *Client) retransmitQueuedMessages() int {
 // 加锁顺序为 enqueueMu → pendingAckMu：
 //   - enqueueMu 与 publishMessage 的"持久化入队 + 发送队列入队"互斥，避免重复入队；
 //   - pendingAckMu 与 handlePuback 的"删除队列条目 + 移除 pendingAck"互斥，避免重复装载。
-func (c *Client) loadOneQueuedMessage(conn *Conn, sentInPass map[nson.Id]struct{}) (loaded, stop bool) {
+func (c *Client) loadOneQueuedMessage(conn *Conn, sentInPass map[packet.PacketID]struct{}) (loaded, stop bool) {
 	conn.enqueueMu.Lock()
 	defer conn.enqueueMu.Unlock()
 

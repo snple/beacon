@@ -462,9 +462,9 @@ type AuthProperties struct {
 
 // AuthProperties 位掩码常量
 const (
-	authPropAuthMethod     uint8 = 1 << 0 // bit 0
-	authPropAuthData       uint8 = 1 << 1 // bit 1
-	authPropUserProperties uint8 = 1 << 2 // bit 2
+	authPropAuthMethod     uint16 = 1 << 0 // bit 0
+	authPropAuthData       uint16 = 1 << 1 // bit 1
+	authPropUserProperties uint16 = 1 << 2 // bit 2
 )
 
 // NewAuthProperties 创建新的认证属性
@@ -474,12 +474,12 @@ func NewAuthProperties() *AuthProperties {
 	}
 }
 
-// Encode 编码认证属性
+// Encode 编码认证属性（与其它包一致：长度前缀 + uint16 位掩码）
 func (p *AuthProperties) Encode(w io.Writer) error {
 	var buf bytes.Buffer
 
 	// 计算位掩码
-	var flags uint8
+	var flags uint16
 	if p.AuthMethod != "" {
 		flags |= authPropAuthMethod
 	}
@@ -490,7 +490,7 @@ func (p *AuthProperties) Encode(w io.Writer) error {
 		flags |= authPropUserProperties
 	}
 
-	if err := WriteByte(&buf, flags); err != nil {
+	if err := EncodeUint16(&buf, flags); err != nil {
 		return err
 	}
 
@@ -510,59 +510,70 @@ func (p *AuthProperties) Encode(w io.Writer) error {
 		}
 	}
 
-	_, err := w.Write(buf.Bytes())
-	return err
+	return writePropertyBlob(w, &buf)
 }
 
-// Decode 解码认证属性
+// Decode 解码认证属性（与其它包一致：长度前缀 + uint16 位掩码）
 func (p *AuthProperties) Decode(r io.Reader) error {
+	data, err := decodePropertyBlob(r)
+	if err != nil {
+		return err
+	}
+	if data == nil {
+		return nil
+	}
+
+	buf := bytes.NewReader(data)
+
 	// 读取位掩码
-	var flags [1]byte
-	if _, err := io.ReadFull(r, flags[:]); err != nil {
+	flags, err := DecodeUint16(buf)
+	if err != nil {
 		return err
 	}
 
 	// 按顺序读取存在的属性
-	if flags[0]&authPropAuthMethod != 0 {
-		var err error
-		p.AuthMethod, err = DecodeString(r)
+	if flags&authPropAuthMethod != 0 {
+		p.AuthMethod, err = DecodeString(buf)
 		if err != nil {
 			return err
 		}
 	}
 
-	if flags[0]&authPropAuthData != 0 {
-		var err error
-		p.AuthData, err = DecodeBinary(r)
+	if flags&authPropAuthData != 0 {
+		p.AuthData, err = DecodeBinary(buf)
 		if err != nil {
 			return err
 		}
 	}
 
-	if flags[0]&authPropUserProperties != 0 {
-		count, err := DecodeUint16(r)
+	if flags&authPropUserProperties != 0 {
+		count, err := DecodeUint16(buf)
 		if err != nil {
 			return err
 		}
 
 		// 每个条目至少 4 字节（两个空字符串的长度前缀）。先按剩余字节校验，
 		// 避免畸形包用极小的报文触发数 MB 的 map 预分配。
-		if br, ok := r.(*bytes.Reader); ok && uint64(count)*4 > uint64(br.Len()) {
+		if uint64(count)*4 > uint64(buf.Len()) {
 			return ErrMalformedPacket
 		}
 
 		p.UserProperties = make(map[string]string, count)
 		for range count {
-			key, err := DecodeString(r)
+			key, err := DecodeString(buf)
 			if err != nil {
 				return err
 			}
-			value, err := DecodeString(r)
+			value, err := DecodeString(buf)
 			if err != nil {
 				return err
 			}
 			p.UserProperties[key] = value
 		}
+	}
+
+	if buf.Len() > 0 {
+		return ErrMalformedPacket
 	}
 
 	return nil
@@ -572,21 +583,21 @@ func (p *AuthProperties) Decode(r io.Reader) error {
 // 使用位掩码优化编码，减少字节开销
 type PublishProperties struct {
 	// 过期时间 (Unix 秒级时间戳，0 会使用 core 默认值)
-	ExpiryTime int64 `nson:"exp"` // 过期时间
+	ExpiryTime int64 // 过期时间
 
 	// 消息格式
-	ContentType string `nson:"ctype"` // MIME 类型
+	ContentType string // MIME 类型
 
-	TraceID string `nson:"trace"` // 分布式追踪 ID
+	TraceID string // 分布式追踪 ID
 
 	// 消息总线 / 请求-响应元数据
-	TargetClientID  string `nson:"tgt"`  // 目标客户端ID，用于点对点消息
-	SourceClientID  string `nson:"src"`  // 来源客户端ID，标识发送者
-	ResponseTopic   string `nson:"resp"` // 响应主题，用于基于 PUBLISH 的请求-响应或异步回执
-	CorrelationData []byte `nson:"corr"` // 关联数据，用于匹配请求与响应或任务回执
+	TargetClientID  string // 目标客户端ID，用于点对点消息
+	SourceClientID  string // 来源客户端ID，标识发送者
+	ResponseTopic   string // 响应主题，用于基于 PUBLISH 的请求-响应或异步回执
+	CorrelationData []byte // 关联数据，用于匹配请求与响应或任务回执
 
 	// 用户属性
-	UserProperties map[string]string `nson:"uprops"` // 用户属性
+	UserProperties map[string]string // 用户属性
 }
 
 // PublishProperties 位掩码常量

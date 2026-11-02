@@ -20,6 +20,7 @@ var minRemainingLength = map[PacketType]uint32{
 	UNSUBACK:    17, // PacketID(12) + Properties(4+0) + ReasonCode(1)
 	PING:        12, // Seq(4) + Timestamp(8)
 	PONG:        13, // Seq(4) + Echo(8) + Load(1)
+	TRACE:       22, // TraceID(2+0) + Event(2+0) + ClientID(2+0) + Topic(2+0) + Timestamp(8) + DetailsCount(2) + Properties(4+0)
 }
 
 // Packet 数据包接口

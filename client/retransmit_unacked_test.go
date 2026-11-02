@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -22,7 +21,7 @@ func setupRetransmitConn(t *testing.T) (*Client, *Conn) {
 	conn := &Conn{
 		client:     client,
 		sendQueue:  newSendQueue(4),
-		pendingAck: make(map[nson.Id]pendingMessage),
+		pendingAck: make(map[packet.PacketID]pendingMessage),
 		ctx:        context.Background(),
 		logger:     zap.NewNop(),
 	}
@@ -76,7 +75,7 @@ func TestRetransmitUnackedMessages_SkipsRecent(t *testing.T) {
 func TestRetransmitUnackedMessages_IgnoresNonPublishPending(t *testing.T) {
 	client, conn := setupRetransmitConn(t)
 
-	id := nson.NewId()
+	id := packet.NewPacketID()
 	conn.pendingAck[id] = pendingMessage{ch: make(chan error, 1)} // msg == nil
 
 	sent := client.retransmitUnackedMessages()

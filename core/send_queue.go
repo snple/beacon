@@ -1,8 +1,8 @@
 package core
 
 import (
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/internal/mq"
+	"github.com/snple/beacon/packet"
 )
 
 // sendQueue 发送队列（用于流量控制 + PacketID 去重）
@@ -25,7 +25,7 @@ func (q *sendQueue) tryDequeue() (*Message, bool) {
 	return q.SendQueue.TryDequeue()
 }
 
-func (q *sendQueue) finish(packetID nson.Id) {
+func (q *sendQueue) finish(packetID packet.PacketID) {
 	q.SendQueue.Finish(packetID)
 }
 

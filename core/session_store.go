@@ -2,9 +2,9 @@ package core
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
@@ -18,13 +18,26 @@ import (
 // 这里把会话元数据单独存储，使"会话状态"和"待投递消息"的生命周期保持一致。
 const sessionKeyPrefix = "session:"
 
-// sessionSubscription 可持久化的订阅项（避免依赖 packet.SubscribeOptions 的序列化细节）。
+// 会话记录持久化格式：
+//
+//	[version(1)][ClientID][Timeout(4)][ExpiresAt(8)][SubCount(4)][订阅项...]
+//
+// 订阅项：[Topic][options(1)]，options: bit0=QoS, bit1=NoLocal,
+// bit2=RetainAsPublished, bit3-4=RetainHandling。
+const sessionRecordFormatVersion byte = 1
+
+var (
+	_ mq.BinaryMarshaler   = (*sessionRecord)(nil)
+	_ mq.BinaryUnmarshaler = (*sessionRecord)(nil)
+)
+
+// sessionSubscription 可持久化的订阅项。
 type sessionSubscription struct {
-	Topic             string `nson:"topic"`
-	QoS               uint8  `nson:"qos"`
-	NoLocal           bool   `nson:"nl"`
-	RetainAsPublished bool   `nson:"rap"`
-	RetainHandling    uint8  `nson:"rh"`
+	Topic             string
+	QoS               uint8
+	NoLocal           bool
+	RetainAsPublished bool
+	RetainHandling    uint8
 }
 
 // sessionRecord 会话元数据。
@@ -32,10 +45,118 @@ type sessionSubscription struct {
 // 遗嘱消息不持久化：它属于单次连接，重连时由新的 CONNECT 提供。
 // 认证数据（AuthMethod/AuthData）也不持久化：认证只在建立连接时进行。
 type sessionRecord struct {
-	ClientID      string                `nson:"id"`
-	Timeout       uint32                `nson:"timeout"`
-	ExpiresAt     int64                 `nson:"expires"`
-	Subscriptions []sessionSubscription `nson:"subs"`
+	ClientID      string
+	Timeout       uint32
+	ExpiresAt     int64
+	Subscriptions []sessionSubscription
+}
+
+// MarshalBinary 将会话记录编码为固定二进制格式（不使用反射式序列化）。
+func (r *sessionRecord) MarshalBinary() ([]byte, error) {
+	if r == nil {
+		return nil, fmt.Errorf("nil session record")
+	}
+
+	var buf bytes.Buffer
+	buf.WriteByte(sessionRecordFormatVersion)
+
+	if err := packet.EncodeString(&buf, r.ClientID); err != nil {
+		return nil, err
+	}
+	if err := packet.EncodeUint32(&buf, r.Timeout); err != nil {
+		return nil, err
+	}
+	if err := packet.EncodeInt64(&buf, r.ExpiresAt); err != nil {
+		return nil, err
+	}
+	// 订阅数量上限由数据长度决定；写 uint32 以免给合法会话设置人为上限。
+	if uint64(len(r.Subscriptions)) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("too many subscriptions: %d", len(r.Subscriptions))
+	}
+	if err := packet.EncodeUint32(&buf, uint32(len(r.Subscriptions))); err != nil {
+		return nil, err
+	}
+
+	for _, sub := range r.Subscriptions {
+		if err := packet.EncodeString(&buf, sub.Topic); err != nil {
+			return nil, err
+		}
+		var opts byte
+		opts |= sub.QoS & 0x01
+		if sub.NoLocal {
+			opts |= 0x02
+		}
+		if sub.RetainAsPublished {
+			opts |= 0x04
+		}
+		opts |= (sub.RetainHandling & 0x03) << 3
+		if err := packet.WriteByte(&buf, opts); err != nil {
+			return nil, err
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
+// UnmarshalBinary 从固定二进制格式解码会话记录。
+func (r *sessionRecord) UnmarshalBinary(data []byte) error {
+	rd := bytes.NewReader(data)
+
+	version, err := rd.ReadByte()
+	if err != nil {
+		return err
+	}
+	if version != sessionRecordFormatVersion {
+		return fmt.Errorf("unsupported session record version %d", version)
+	}
+
+	r.ClientID, err = packet.DecodeString(rd)
+	if err != nil {
+		return err
+	}
+	r.Timeout, err = packet.DecodeUint32(rd)
+	if err != nil {
+		return err
+	}
+	r.ExpiresAt, err = packet.DecodeInt64(rd)
+	if err != nil {
+		return err
+	}
+
+	count, err := packet.DecodeUint32(rd)
+	if err != nil {
+		return err
+	}
+	// 每个订阅项至少 3 字节（Topic 长度前缀 2 + options 1），
+	// 先按剩余字节校验，避免畸形数据触发大切片预分配。
+	if uint64(count)*3 > uint64(rd.Len()) {
+		return fmt.Errorf("invalid subscription count %d", count)
+	}
+
+	r.Subscriptions = make([]sessionSubscription, 0, count)
+	for range count {
+		topic, err := packet.DecodeString(rd)
+		if err != nil {
+			return err
+		}
+		opts, err := packet.ReadByte(rd)
+		if err != nil {
+			return err
+		}
+		r.Subscriptions = append(r.Subscriptions, sessionSubscription{
+			Topic:             topic,
+			QoS:               opts & 0x01,
+			NoLocal:           opts&0x02 != 0,
+			RetainAsPublished: opts&0x04 != 0,
+			RetainHandling:    (opts >> 3) & 0x03,
+		})
+	}
+
+	if rd.Len() != 0 {
+		return fmt.Errorf("trailing bytes in session record")
+	}
+
+	return nil
 }
 
 func sessionKey(clientID string) []byte {
@@ -193,7 +314,7 @@ func (c *Core) recoverSessions() {
 			session: &session{
 				id:            rec.ClientID,
 				subscriptions: make(map[string]packet.SubscribeOptions, len(rec.Subscriptions)),
-				pendingAck:    make(map[nson.Id]pendingMessage),
+				pendingAck:    make(map[packet.PacketID]pendingMessage),
 				core:          c,
 			},
 		}
@@ -270,7 +391,7 @@ func (c *Core) cleanupOrphanClientQueues() {
 
 	const (
 		queuePrefix = "client:"
-		idLen       = 12 // nson.Id 长度
+		idLen       = packet.PacketIDSize
 		batchSize   = 1000
 	)
 
@@ -333,12 +454,12 @@ func clientIDFromQueueKey(key []byte) (string, bool) {
 		return "", false
 	}
 
-	// 至少要有 "client:" + clientID(>=1) + ":" + 12 字节 ID
-	if len(key) < len(prefix)+1+1+12 {
+	// 至少要有 "client:" + clientID(>=1) + ":" + PacketID
+	if len(key) < len(prefix)+1+1+packet.PacketIDSize {
 		return "", false
 	}
 
-	end := len(key) - 12 - 1
+	end := len(key) - packet.PacketIDSize - 1
 	if key[end] != ':' {
 		return "", false
 	}

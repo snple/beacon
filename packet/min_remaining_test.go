@@ -4,38 +4,37 @@ import (
 	"bytes"
 	"errors"
 	"testing"
-
-	"github.com/danclive/nson-go"
 )
 
 // minimalPackets 返回各包类型可编码的最小实例。
 func minimalPackets() map[PacketType]Packet {
-	sub := NewSubscribePacket(nson.NewId())
+	sub := NewSubscribePacket(NewPacketID())
 	sub.AddSubscription("a", QoS0)
 
-	suback := NewSubackPacket(nson.NewId())
+	suback := NewSubackPacket(NewPacketID())
 	suback.ReasonCodes = append(suback.ReasonCodes, ReasonGrantedQoS0)
 
-	unsub := NewUnsubscribePacket(nson.NewId())
+	unsub := NewUnsubscribePacket(NewPacketID())
 	unsub.Topics = append(unsub.Topics, "a")
 
-	unsuback := NewUnsubackPacket(nson.NewId())
+	unsuback := NewUnsubackPacket(NewPacketID())
 	unsuback.ReasonCodes = append(unsuback.ReasonCodes, ReasonSuccess)
 
 	pub := NewPublishPacket("a", nil)
-	pub.PacketID = nson.NewId()
+	pub.PacketID = NewPacketID()
 
 	return map[PacketType]Packet{
 		CONNECT:     NewConnectPacket(),
 		CONNACK:     NewConnackPacket(ReasonSuccess),
 		PUBLISH:     pub,
-		PUBACK:      NewPubackPacket(nson.NewId(), ReasonSuccess),
+		PUBACK:      NewPubackPacket(NewPacketID(), ReasonSuccess),
 		SUBSCRIBE:   sub,
 		SUBACK:      suback,
 		UNSUBSCRIBE: unsub,
 		UNSUBACK:    unsuback,
 		PING:        NewPingPacket(1, 2),
 		PONG:        NewPongPacket(1, 2, 3),
+		TRACE:       NewTracePacket("", "", ""),
 	}
 }
 

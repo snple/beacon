@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
@@ -158,5 +159,51 @@ func TestAuthPacketMinimal(t *testing.T) {
 	// 验证
 	if authDecoded.ReasonCode != ReasonSuccess {
 		t.Errorf("Expected reason code %v, got %v", ReasonSuccess, authDecoded.ReasonCode)
+	}
+}
+
+// TestAuthPropertiesWireFormat 校验 AUTH 属性与其它包使用相同帧格式：
+// [Len(4B)][Bitmask(2B)][按位序的值]，以便复用通用属性解码。
+func TestAuthPropertiesWireFormat(t *testing.T) {
+	auth := NewAuthPacket(ReasonContinueAuth)
+	auth.Properties.AuthMethod = "m"
+
+	var buf bytes.Buffer
+	if err := WritePacket(&buf, auth, 0); err != nil {
+		t.Fatalf("Failed to encode AUTH packet: %v", err)
+	}
+
+	body := buf.Bytes()[5:] // 跳过 5 字节固定头
+	if len(body) < 7 {
+		t.Fatalf("AUTH body too short: %d", len(body))
+	}
+	if body[0] != byte(ReasonContinueAuth) {
+		t.Fatalf("reason code = %d, want %d", body[0], ReasonContinueAuth)
+	}
+
+	propLen := binary.BigEndian.Uint32(body[1:5])
+	if int(propLen) != len(body)-5 {
+		t.Fatalf("property length = %d, want %d", propLen, len(body)-5)
+	}
+
+	flags := binary.BigEndian.Uint16(body[5:7])
+	if flags&authPropAuthMethod == 0 {
+		t.Fatalf("auth method flag not set: 0x%04x", flags)
+	}
+	if flags&^uint16(authPropAuthMethod|authPropAuthData|authPropUserProperties) != 0 {
+		t.Fatalf("unexpected flag bits: 0x%04x", flags)
+	}
+}
+
+// TestAuthPropertiesRejectsTrailingBytes 校验属性块内部的多余字节会被拒绝。
+func TestAuthPropertiesRejectsTrailingBytes(t *testing.T) {
+	var buf bytes.Buffer
+	_ = EncodeUint32(&buf, 3) // 声明 3 字节属性体
+	_ = EncodeUint16(&buf, 0) // 位掩码：无任何属性
+	buf.WriteByte(0xFF)       // 多余字节
+
+	p := NewAuthProperties()
+	if err := p.Decode(&buf); err != ErrMalformedPacket {
+		t.Fatalf("Decode error = %v, want ErrMalformedPacket", err)
 	}
 }

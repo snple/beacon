@@ -4,14 +4,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/packet"
 )
 
 type testMsg struct {
-	id nson.Id
+	id packet.PacketID
 }
 
-func testMsgID(m testMsg) nson.Id {
+func testMsgID(m testMsg) packet.PacketID {
 	return m.id
 }
 
@@ -19,8 +19,8 @@ func testMsgID(m testMsg) nson.Id {
 func TestSendQueue_EnqueueDequeueRoundtrip(t *testing.T) {
 	q := NewSendQueue(4, testMsgID)
 
-	m1 := testMsg{id: nson.NewId()}
-	m2 := testMsg{id: nson.NewId()}
+	m1 := testMsg{id: packet.NewPacketID()}
+	m2 := testMsg{id: packet.NewPacketID()}
 
 	if err := q.TryEnqueue(m1); err != nil {
 		t.Fatalf("enqueue m1 failed: %v", err)
@@ -61,7 +61,7 @@ func TestSendQueue_EnqueueDequeueRoundtrip(t *testing.T) {
 func TestSendQueue_DeduplicateByPacketID(t *testing.T) {
 	q := NewSendQueue(4, testMsgID)
 
-	id := nson.NewId()
+	id := packet.NewPacketID()
 	m := testMsg{id: id}
 
 	if err := q.TryEnqueue(m); err != nil {
@@ -76,14 +76,14 @@ func TestSendQueue_DeduplicateByPacketID(t *testing.T) {
 func TestSendQueue_Full(t *testing.T) {
 	q := NewSendQueue(2, testMsgID)
 
-	if err := q.TryEnqueue(testMsg{id: nson.NewId()}); err != nil {
+	if err := q.TryEnqueue(testMsg{id: packet.NewPacketID()}); err != nil {
 		t.Fatalf("enqueue 1 failed: %v", err)
 	}
-	if err := q.TryEnqueue(testMsg{id: nson.NewId()}); err != nil {
+	if err := q.TryEnqueue(testMsg{id: packet.NewPacketID()}); err != nil {
 		t.Fatalf("enqueue 2 failed: %v", err)
 	}
 
-	if err := q.TryEnqueue(testMsg{id: nson.NewId()}); !errors.Is(err, ErrSendQueueFull) {
+	if err := q.TryEnqueue(testMsg{id: packet.NewPacketID()}); !errors.Is(err, ErrSendQueueFull) {
 		t.Fatalf("expected ErrSendQueueFull, got %v", err)
 	}
 }
@@ -93,11 +93,11 @@ func TestSendQueue_ZeroCapacityUsesDefault(t *testing.T) {
 	q := NewSendQueue(0, testMsgID)
 
 	for i := 0; i < 100; i++ {
-		if err := q.TryEnqueue(testMsg{id: nson.NewId()}); err != nil {
+		if err := q.TryEnqueue(testMsg{id: packet.NewPacketID()}); err != nil {
 			t.Fatalf("enqueue %d failed: %v", i, err)
 		}
 	}
-	if err := q.TryEnqueue(testMsg{id: nson.NewId()}); !errors.Is(err, ErrSendQueueFull) {
+	if err := q.TryEnqueue(testMsg{id: packet.NewPacketID()}); !errors.Is(err, ErrSendQueueFull) {
 		t.Fatalf("expected queue full at capacity 100, got %v", err)
 	}
 }

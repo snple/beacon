@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +29,7 @@ func TestSubscribe_InvalidFilterReturnsPerTopicReason(t *testing.T) {
 	_, ok := pkt.(*packet.ConnackPacket)
 	require.True(t, ok, "expected CONNACK, got %T", pkt)
 
-	sub := packet.NewSubscribePacket(nson.NewId())
+	sub := packet.NewSubscribePacket(packet.NewPacketID())
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "ok/topic", Options: packet.SubscribeOptions{QoS: packet.QoS0}},
 		{Topic: "bad/#", Options: packet.SubscribeOptions{QoS: packet.QoS0}},

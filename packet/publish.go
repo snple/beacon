@@ -4,28 +4,26 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-
-	"github.com/danclive/nson-go"
 )
 
 // PublishPacket PUBLISH 数据包
 type PublishPacket struct {
 	// 固定头部标志
-	Dup    bool `nson:"dup"` // 重发标志
-	QoS    QoS  `nson:"qos"` // 服务质量
-	Retain bool `nson:"ret"` // 保留标志
+	Dup    bool // 重发标志
+	QoS    QoS  // 服务质量
+	Retain bool // 保留标志
 
 	// 主题名
-	Topic string `nson:"topic"`
+	Topic string
 
 	// 包标识符（始终存在，QoS=0 和 QoS=1 都需要）
-	PacketID nson.Id `nson:"pid"`
+	PacketID PacketID
 
 	// 属性
-	Properties *PublishProperties `nson:"props"`
+	Properties *PublishProperties
 
 	// 载荷（如果 Compression != None，则为压缩后的数据）
-	Payload []byte `nson:"payload"`
+	Payload []byte
 }
 
 // NewPublishPacket 创建新的 PUBLISH 包
@@ -111,7 +109,7 @@ func (p *PublishPacket) encode(w io.Writer) error {
 	}
 
 	// 包标识符 (始终存在，QoS=0 和 QoS=1 都需要)
-	if err := EncodeId(w, p.PacketID); err != nil {
+	if err := EncodePacketID(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -153,7 +151,7 @@ func (p *PublishPacket) decode(r io.Reader, header FixedHeader) error {
 	}
 
 	// 包标识符 (始终存在，QoS=0 和 QoS=1 都需要)
-	p.PacketID, err = DecodeId(r)
+	p.PacketID, err = DecodePacketID(r)
 	if err != nil {
 		return err
 	}
@@ -190,13 +188,13 @@ func (p *PublishPacket) String() string {
 
 // PubackPacket PUBACK 数据包
 type PubackPacket struct {
-	PacketID   nson.Id
+	PacketID   PacketID
 	ReasonCode ReasonCode
 	Properties *ReasonProperties
 }
 
 // NewPubackPacket 创建新的 PUBACK 包
-func NewPubackPacket(packetID nson.Id, code ReasonCode) *PubackPacket {
+func NewPubackPacket(packetID PacketID, code ReasonCode) *PubackPacket {
 	return &PubackPacket{
 		PacketID:   packetID,
 		ReasonCode: code,
@@ -211,7 +209,7 @@ func (p *PubackPacket) Type() PacketType {
 func (p *PubackPacket) encode(w io.Writer) error {
 
 	// 包标识符
-	if err := EncodeId(w, p.PacketID); err != nil {
+	if err := EncodePacketID(w, p.PacketID); err != nil {
 		return err
 	}
 
@@ -237,7 +235,7 @@ func (p *PubackPacket) encode(w io.Writer) error {
 func (p *PubackPacket) decode(r io.Reader, header FixedHeader) error {
 	// 包标识符
 	var err error
-	p.PacketID, err = DecodeId(r)
+	p.PacketID, err = DecodePacketID(r)
 	if err != nil {
 		return fmt.Errorf("failed to decode PacketID: %w", err)
 	}

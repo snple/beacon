@@ -7,8 +7,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-
-	"github.com/danclive/nson-go"
 )
 
 // rawPublish 构造一个 PUBLISH 包体：flags + topic + packetID + 属性长度字段。
@@ -122,8 +120,8 @@ type failingWriter struct{}
 func (f *failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 // testPacketID 返回一个非零 PacketID。
-func testPacketID() nson.Id {
-	var id nson.Id
+func testPacketID() PacketID {
+	var id PacketID
 	id[11] = 1
 	return id
 }

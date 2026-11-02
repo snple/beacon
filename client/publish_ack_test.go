@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,11 +16,11 @@ func TestWaitForPublishAck_AckArrivesBeforeWaiting(t *testing.T) {
 
 	conn := &Conn{
 		client:     client,
-		pendingAck: make(map[nson.Id]pendingMessage),
+		pendingAck: make(map[packet.PacketID]pendingMessage),
 		ctx:        connCtx,
 	}
 
-	packetID := nson.NewId()
+	packetID := packet.NewPacketID()
 	waitCh := conn.registerPendingAck(packetID)
 
 	conn.handleAck(packetID, nil)

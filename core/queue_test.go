@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/packet"
 )
@@ -47,20 +46,20 @@ func createTestMessage(topic string, payload []byte, qos packet.QoS) *Message {
 			Payload: payload,
 		},
 		QoS:       qos,
-		PacketID:  nson.NewId(),
+		PacketID:  packet.NewPacketID(),
 		Timestamp: time.Now().Unix(),
 	}
 }
 
-// equalId 比较两个 nson.Id 是否相等
-func equalId(a, b nson.Id) bool {
+// equalId 比较两个 packet.PacketID 是否相等
+func equalId(a, b packet.PacketID) bool {
 	return bytes.Equal(a[:], b[:])
 }
 
 // orderedTestID 构造按序递增的 PacketID（前 8 字节为大端计数器），
-// 使队列顺序测试不依赖 nson.NewId() 的时序实现（B5.4）
-func orderedTestID(n uint64) nson.Id {
-	var id nson.Id
+// 使队列顺序测试不依赖 packet.NewPacketID() 的时序实现（B5.4）
+func orderedTestID(n uint64) packet.PacketID {
+	var id packet.PacketID
 	binary.BigEndian.PutUint64(id[:8], n)
 	return id
 }
@@ -216,7 +215,7 @@ func TestQueuePeek(t *testing.T) {
 	for i := 0; i < messageCount; i++ {
 		time.Sleep(1 * time.Microsecond)
 		msg := createTestMessage("test/topic", []byte{byte(i)}, packet.QoS1)
-		msg.PacketID = nson.NewId()
+		msg.PacketID = packet.NewPacketID()
 		messages[i] = msg
 
 		if err := queue.Enqueue(msg); err != nil {
@@ -263,7 +262,7 @@ func TestQueueDeleteMiddle(t *testing.T) {
 	for i := 0; i < messageCount; i++ {
 		time.Sleep(1 * time.Microsecond)
 		msg := createTestMessage("test/topic", []byte{byte(i)}, packet.QoS1)
-		msg.PacketID = nson.NewId()
+		msg.PacketID = packet.NewPacketID()
 		messages[i] = msg
 
 		if err := queue.Enqueue(msg); err != nil {
@@ -321,7 +320,7 @@ func BenchmarkQueueEnqueue(b *testing.B) {
 
 	for b.Loop() {
 		msg := createTestMessage("bench/topic", []byte("benchmark payload"), packet.QoS1)
-		msg.PacketID = nson.NewId()
+		msg.PacketID = packet.NewPacketID()
 		if err := queue.Enqueue(msg); err != nil {
 			b.Fatalf("failed to enqueue: %v", err)
 		}
@@ -338,7 +337,7 @@ func BenchmarkQueueDequeue(b *testing.B) {
 	// 预先填充队列
 	for i := 0; i < b.N; i++ {
 		msg := createTestMessage("bench/topic", []byte("benchmark payload"), packet.QoS1)
-		msg.PacketID = nson.NewId()
+		msg.PacketID = packet.NewPacketID()
 		if err := queue.Enqueue(msg); err != nil {
 			b.Fatalf("failed to enqueue: %v", err)
 		}

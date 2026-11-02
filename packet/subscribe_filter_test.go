@@ -3,14 +3,12 @@ package packet
 import (
 	"bytes"
 	"testing"
-
-	"github.com/danclive/nson-go"
 )
 
 // TestSubscribePacket_AllowsInvalidFilterOnWire 验证非法过滤器不会导致整包解码失败，
 // 以便服务端通过 SUBACK 的逐条原因码反馈。
 func TestSubscribePacket_AllowsInvalidFilterOnWire(t *testing.T) {
-	sub := NewSubscribePacket(nson.NewId())
+	sub := NewSubscribePacket(NewPacketID())
 	sub.Subscriptions = []Subscription{
 		{Topic: "ok/topic", Options: SubscribeOptions{QoS: QoS0}},
 		{Topic: "bad/#", Options: SubscribeOptions{QoS: QoS0}},

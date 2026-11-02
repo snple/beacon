@@ -4,7 +4,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
 
@@ -49,7 +48,7 @@ func (c *Core) publish(msg Message) bool {
 	}
 
 	// 进入队列前重新分配 PacketID，以确保顺序和唯一性
-	msg.PacketID = nson.NewId()
+	msg.PacketID = packet.NewPacketID()
 	c.handleRetainedMessage(&msg)
 
 	// 放入消息队列（现在使用 Queue.Enqueue）
@@ -352,7 +351,7 @@ func (c *Core) deliverToTarget(msg *Message) {
 func (c *Client) deliver(msg *Message) error {
 	// PacketID 属于“投递层字段”，必须对每个目标客户端独立分配
 	// 无论 QoS=0 还是 QoS=1，都需要 PacketID
-	msg.PacketID = nson.NewId()
+	msg.PacketID = packet.NewPacketID()
 
 	// 检查消息是否过期（过期消息直接丢弃，无论 QoS）
 	if msg.IsExpired() {

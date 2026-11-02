@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/snple/beacon/packet"
 )
@@ -28,7 +27,7 @@ func setupClientQueueDB(t *testing.T) (*badger.DB, func()) {
 func clientQueueTestMessage(topic string, payload []byte, qos packet.QoS) *Message {
 	pub := packet.NewPublishPacket(topic, payload)
 	pub.QoS = qos
-	pub.PacketID = nson.NewId()
+	pub.PacketID = packet.NewPacketID()
 
 	return &Message{
 		Packet:    pub,

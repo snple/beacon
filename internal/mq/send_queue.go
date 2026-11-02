@@ -5,7 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/danclive/nson-go"
+	"github.com/snple/beacon/packet"
 )
 
 // SendQueue 通用发送队列（用于流量控制）
@@ -21,8 +21,8 @@ type SendQueue[T any] struct {
 	queue    chan T       // 消息队列
 	used     atomic.Int32 // 当前使用量
 
-	getID   func(T) nson.Id // 提取消息 PacketID（用于去重）
-	inQueue map[nson.Id]bool
+	getID   func(T) packet.PacketID // 提取消息 PacketID（用于去重）
+	inQueue map[packet.PacketID]bool
 	mu      sync.Mutex // 保护 inQueue map
 }
 
@@ -36,7 +36,7 @@ var (
 
 // NewSendQueue 创建发送队列
 // capacity <= 0 时使用默认容量 100
-func NewSendQueue[T any](capacity int, getID func(T) nson.Id) *SendQueue[T] {
+func NewSendQueue[T any](capacity int, getID func(T) packet.PacketID) *SendQueue[T] {
 	if capacity <= 0 {
 		capacity = 100 // 默认值
 	}
@@ -44,7 +44,7 @@ func NewSendQueue[T any](capacity int, getID func(T) nson.Id) *SendQueue[T] {
 	return &SendQueue[T]{
 		capacity: capacity,
 		queue:    make(chan T, capacity),
-		inQueue:  make(map[nson.Id]bool),
+		inQueue:  make(map[packet.PacketID]bool),
 		getID:    getID,
 	}
 }
@@ -95,7 +95,7 @@ func (q *SendQueue[T]) TryDequeue() (T, bool) {
 }
 
 // Finish 标记消息已离开发送队列生命周期（已发送、发送失败或被丢弃）
-func (q *SendQueue[T]) Finish(packetID nson.Id) {
+func (q *SendQueue[T]) Finish(packetID packet.PacketID) {
 	if packetID.IsZero() {
 		return
 	}

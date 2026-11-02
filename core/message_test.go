@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +18,7 @@ func TestMessageCopy_ReusesReadOnlyPacket(t *testing.T) {
 		Dup:       true,
 		QoS:       packet.QoS1,
 		Retain:    true,
-		PacketID:  nson.NewId(),
+		PacketID:  packet.NewPacketID(),
 		Timestamp: time.Now().Unix(),
 	}
 
@@ -31,7 +30,7 @@ func TestMessageCopy_ReusesReadOnlyPacket(t *testing.T) {
 	require.Equal(t, original.PacketID, cloned.PacketID)
 	require.Same(t, original.Packet, cloned.Packet, "message copy should reuse the read-only packet payload")
 
-	cloned.PacketID = nson.NewId()
+	cloned.PacketID = packet.NewPacketID()
 	cloned.QoS = packet.QoS0
 	cloned.Retain = false
 	cloned.Dup = false

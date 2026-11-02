@@ -5,7 +5,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/internal/mq"
 	"github.com/snple/beacon/packet"
 
@@ -206,7 +205,7 @@ func (c *Client) publishMessage(msg Message, timeout time.Duration) error {
 // 1. 仅对首次发布的消息调用（重传消息不等待）
 // 2. 如果超时或连接断开，消息仍在持久化中，会被重传机制处理
 // 3. 使用 defer 确保 pendingAck 始终被清理
-func (c *Client) waitForPublishAck(conn *Conn, packetID nson.Id, waitCh chan error, timeout time.Duration) error {
+func (c *Client) waitForPublishAck(conn *Conn, packetID packet.PacketID, waitCh chan error, timeout time.Duration) error {
 	// 注意：这里不在退出时清理 pendingAck——超时后条目保留，
 	// 由 retransmitUnackedMessages 按 RetransmitInterval 继续重传直到收到 PUBACK。
 	// 收到 ACK（handleAck）或连接关闭（conn.close）时条目会被相应清理。

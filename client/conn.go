@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
@@ -55,7 +54,7 @@ type Conn struct {
 	enqueueMu sync.Mutex
 
 	// 等待确认的包（连接级别，断开后失效）
-	pendingAck   map[nson.Id]pendingMessage
+	pendingAck   map[packet.PacketID]pendingMessage
 	pendingAckMu sync.Mutex
 
 	// 心跳 RTT
@@ -116,7 +115,7 @@ func newConn(c *Client, netConn net.Conn, connack *packet.ConnackPacket) *Conn {
 		maxPacketSize:  maxMessageSize,
 		sendWindow:     sendWindow,
 		sendQueue:      newSendQueue(int(sendWindow)),
-		pendingAck:     make(map[nson.Id]pendingMessage),
+		pendingAck:     make(map[packet.PacketID]pendingMessage),
 		writeTimeout:   c.options.WriteTimeout,
 		ctx:            ctx,
 		cancel:         cancel,
@@ -341,7 +340,7 @@ func (c *Conn) handlePuback(p *packet.PubackPacket) {
 // completePublishAck 在同一个临界区内删除持久化条目并移除 pendingAck。
 // 补货逻辑（retransmitQueuedMessages）在同一把锁内检查 pendingAck 并入队，
 // 二者互斥，避免 ACK 与补货交错时把同一条消息重复装载。
-func (c *Conn) completePublishAck(packetID nson.Id) (pendingMessage, bool) {
+func (c *Conn) completePublishAck(packetID packet.PacketID) (pendingMessage, bool) {
 	c.pendingAckMu.Lock()
 	defer c.pendingAckMu.Unlock()
 
@@ -412,7 +411,7 @@ func (c *Conn) handlePong(p *packet.PongPacket) {
 }
 
 // handleAck 处理确认响应
-func (c *Conn) handleAck(packetID nson.Id, err error) {
+func (c *Conn) handleAck(packetID packet.PacketID, err error) {
 	c.pendingAckMu.Lock()
 	pending, ok := c.pendingAck[packetID]
 	if ok {
@@ -426,20 +425,20 @@ func (c *Conn) handleAck(packetID nson.Id, err error) {
 	}
 }
 
-func (c *Conn) registerPendingAck(packetID nson.Id) chan error {
+func (c *Conn) registerPendingAck(packetID packet.PacketID) chan error {
 	ch := make(chan error, 1)
 	c.pendingAckMu.Lock()
 	// 懒初始化：白盒测试/直接构造 Conn 时 map 可能为 nil（赋值会 panic，
 	// 而 delete 对 nil map 是安全的）
 	if c.pendingAck == nil {
-		c.pendingAck = make(map[nson.Id]pendingMessage)
+		c.pendingAck = make(map[packet.PacketID]pendingMessage)
 	}
 	c.pendingAck[packetID] = pendingMessage{ch: ch}
 	c.pendingAckMu.Unlock()
 	return ch
 }
 
-func (c *Conn) clearPendingAck(packetID nson.Id) {
+func (c *Conn) clearPendingAck(packetID packet.PacketID) {
 	c.pendingAckMu.Lock()
 	delete(c.pendingAck, packetID)
 	c.pendingAckMu.Unlock()
@@ -473,7 +472,7 @@ func (c *Conn) sendMessage(msg *Message) error {
 		c.pendingAckMu.Lock()
 		// 懒初始化：白盒测试/直接构造 Conn 时 map 可能为 nil（赋值会 panic）
 		if c.pendingAck == nil {
-			c.pendingAck = make(map[nson.Id]pendingMessage)
+			c.pendingAck = make(map[packet.PacketID]pendingMessage)
 		}
 		if pending, ok := c.pendingAck[packetID]; ok {
 			pending.msg = msg
@@ -541,7 +540,7 @@ func (c *Conn) close(err error) {
 				}
 			}
 		}
-		c.pendingAck = make(map[nson.Id]pendingMessage)
+		c.pendingAck = make(map[packet.PacketID]pendingMessage)
 		c.pendingAckMu.Unlock()
 
 		// 通知客户端连接已断开

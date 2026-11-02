@@ -1,16 +1,31 @@
 package mq
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 
-	"github.com/danclive/nson-go"
 	"github.com/dgraph-io/badger/v4"
+	"github.com/snple/beacon/packet"
 )
 
-// idLength 是 nson.Id 的字节长度（从队列 key 尾部切分 PacketID 时使用）。
-const idLength = 12
+// BinaryMarshaler / BinaryUnmarshaler 是队列消息的编解码契约。
+//
+// 使用显式的二进制编解码而不是反射式序列化，消息格式由各类型自定义，
+// 运行时没有反射与结构体缓存开销。
+// 通常在类型定义处用编译期断言固定下来：
+//
+//	var _ mq.BinaryMarshaler = Message{}
+//	var _ mq.BinaryUnmarshaler = (*Message)(nil)
+type BinaryMarshaler interface {
+	MarshalBinary() ([]byte, error)
+}
+
+type BinaryUnmarshaler interface {
+	UnmarshalBinary(data []byte) error
+}
+
+// 队列 key 的布局为 [prefix][12 字节 PacketID]。
+const idLength = packet.PacketIDSize
 
 // 队列相关错误
 var (
@@ -22,7 +37,7 @@ var (
 )
 
 // Queue 是基于 PacketID 的持久化消息队列（泛型）
-// 使用 PacketID (nson.Id) 作为 key，T 作为 value，支持按 PacketID 删除和 FIFO 遍历。
+// 使用 PacketID (packet.PacketID) 作为 key，T 作为 value，支持按 PacketID 删除和 FIFO 遍历。
 //
 // T 为消息的值类型（core.Message / client.Message），
 // getID 用于提取消息的 PacketID：
@@ -32,15 +47,15 @@ var (
 // Enqueue 会拒绝零值 PacketID 的消息。
 type Queue[T any] struct {
 	db     *badger.DB
-	prefix []byte          // 队列的键前缀，支持多队列
-	getID  func(T) nson.Id // 提取消息 PacketID
+	prefix []byte                  // 队列的键前缀，支持多队列
+	getID  func(T) packet.PacketID // 提取消息 PacketID
 }
 
 // NewQueue 创建一个新的基于 PacketID 的队列实例
 // db: badger 数据库实例
 // prefix: 队列的命名空间前缀，允许在同一个 DB 中创建多个队列
 // getID: 提取消息 PacketID（需 nil 安全）
-func NewQueue[T any](db *badger.DB, prefix string, getID func(T) nson.Id) *Queue[T] {
+func NewQueue[T any](db *badger.DB, prefix string, getID func(T) packet.PacketID) *Queue[T] {
 	return &Queue[T]{
 		db:     db,
 		prefix: []byte(prefix),
@@ -176,8 +191,8 @@ func (q *Queue[T]) DeleteHead() error {
 
 // PeekID 返回队列头部消息的 PacketID（不读取消息内容）。
 // 用于低成本的"队头能否补货"判断，避免为每次 ACK 解码整条消息。
-func (q *Queue[T]) PeekID() (nson.Id, bool, error) {
-	var id nson.Id
+func (q *Queue[T]) PeekID() (packet.PacketID, bool, error) {
+	var id packet.PacketID
 	found := false
 
 	err := q.db.View(func(txn *badger.Txn) error {
@@ -241,14 +256,14 @@ func (q *Queue[T]) Peek() (T, error) {
 }
 
 // Delete 根据 PacketID 删除消息
-func (q *Queue[T]) Delete(packetID nson.Id) error {
+func (q *Queue[T]) Delete(packetID packet.PacketID) error {
 	_, err := q.DeleteIfExists(packetID)
 	return err
 }
 
 // DeleteIfExists 根据 PacketID 删除消息，并报告该条目是否真实存在。
 // 供上层的队列计数/配额逻辑保持准确（重复删除不会误减计数）。
-func (q *Queue[T]) DeleteIfExists(packetID nson.Id) (bool, error) {
+func (q *Queue[T]) DeleteIfExists(packetID packet.PacketID) (bool, error) {
 	if packetID.IsZero() {
 		return false, fmt.Errorf("invalid PacketID")
 	}
@@ -278,7 +293,7 @@ func (q *Queue[T]) DeleteIfExists(packetID nson.Id) (bool, error) {
 }
 
 // Get 根据 PacketID 获取消息（不删除）
-func (q *Queue[T]) Get(packetID nson.Id) (T, error) {
+func (q *Queue[T]) Get(packetID packet.PacketID) (T, error) {
 	var zero T
 	var result T
 
@@ -386,8 +401,8 @@ func (q *Queue[T]) Clear() error {
 }
 
 // GetFirstId 获取队列中第一个元素的 PacketID（用于测试和调试）
-func (q *Queue[T]) GetFirstId() (nson.Id, error) {
-	var id nson.Id
+func (q *Queue[T]) GetFirstId() (packet.PacketID, error) {
+	var id packet.PacketID
 
 	err := q.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -412,8 +427,8 @@ func (q *Queue[T]) GetFirstId() (nson.Id, error) {
 }
 
 // GetLastId 获取队列中最后一个元素的 PacketID（用于测试和调试）
-func (q *Queue[T]) GetLastId() (nson.Id, error) {
-	var id nson.Id
+func (q *Queue[T]) GetLastId() (packet.PacketID, error) {
+	var id packet.PacketID
 
 	err := q.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -448,7 +463,7 @@ func (q *Queue[T]) GetLastId() (nson.Id, error) {
 }
 
 // 辅助方法：生成队列元素的键
-func (q *Queue[T]) makeKey(id nson.Id) []byte {
+func (q *Queue[T]) makeKey(id packet.PacketID) []byte {
 	key := make([]byte, len(q.prefix)+len(id))
 	copy(key, q.prefix)
 	copy(key[len(q.prefix):], id[:])
@@ -456,40 +471,32 @@ func (q *Queue[T]) makeKey(id nson.Id) []byte {
 }
 
 // 辅助方法：从 key 中提取 PacketID
-func (q *Queue[T]) extractId(key []byte) nson.Id {
-	if len(key) <= len(q.prefix) {
-		return nson.Id{} // 返回空 Id
+func (q *Queue[T]) extractId(key []byte) packet.PacketID {
+	// 必须严格校验长度：切片转数组在长度不足时会 panic，
+	// 同前缀下的异常/残留 key 不应让读路径崩溃。
+	if len(key) != len(q.prefix)+packet.PacketIDSize {
+		return packet.PacketID{}
 	}
-	return nson.Id(key[len(q.prefix):])
+	return packet.PacketID(key[len(q.prefix):])
 }
 
-// EncodeMessage 序列化消息
+// EncodeMessage 序列化消息。
+// msg 必须实现 BinaryMarshaler（值接收者或指针接收者均可）。
 func EncodeMessage[T any](msg T) ([]byte, error) {
-	// 使用 nson.Marshal 将结构体转为 Map
-	m, err := nson.Marshal(msg)
-	if err != nil {
-		return nil, err
+	m, ok := any(msg).(BinaryMarshaler)
+	if !ok {
+		return nil, fmt.Errorf("message type %T does not implement MarshalBinary", msg)
 	}
-
-	// 将 Map 编码为字节
-	buf := new(bytes.Buffer)
-	if err := nson.EncodeMap(m, buf); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
+	return m.MarshalBinary()
 }
 
-// DecodeMessage 反序列化消息到 msg 指向的对象
-// msg 为指向消息值（struct）的指针（如 *core.Message / *client.Message）。
+// DecodeMessage 反序列化消息到 msg 指向的对象。
+// msg 为指向消息值的指针（如 *core.Message / *client.Message），其类型必须实现
+// BinaryUnmarshaler。
 func DecodeMessage[T any](msg *T, data []byte) error {
-	// 将字节解码为 Map
-	buf := bytes.NewBuffer(data)
-	m, err := nson.DecodeMap(buf)
-	if err != nil {
-		return err
+	m, ok := any(msg).(BinaryUnmarshaler)
+	if !ok {
+		return fmt.Errorf("message type %T does not implement UnmarshalBinary", msg)
 	}
-
-	// 将 Map 反序列化为结构体
-	return nson.Unmarshal(m, msg)
+	return m.UnmarshalBinary(data)
 }

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 )
 
@@ -68,7 +67,7 @@ func TestSessionRestoration_KeepSession(t *testing.T) {
 	}
 
 	// 订阅主题
-	sub := packet.NewSubscribePacket(nson.NewId())
+	sub := packet.NewSubscribePacket(packet.NewPacketID())
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 	}
@@ -212,7 +211,7 @@ func TestSessionRestoration_CleanSession(t *testing.T) {
 	}
 
 	// 订阅主题
-	sub := packet.NewSubscribePacket(nson.NewId())
+	sub := packet.NewSubscribePacket(packet.NewPacketID())
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 	}
@@ -438,7 +437,7 @@ func TestSessionExpiry(t *testing.T) {
 	}
 
 	// 订阅主题
-	sub := packet.NewSubscribePacket(nson.NewId())
+	sub := packet.NewSubscribePacket(packet.NewPacketID())
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 	}
@@ -520,7 +519,7 @@ func TestOfflineMessageQueue(t *testing.T) {
 	}
 
 	// 订阅主题
-	sub := packet.NewSubscribePacket(nson.NewId())
+	sub := packet.NewSubscribePacket(packet.NewPacketID())
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "test/topic", Options: packet.SubscribeOptions{QoS: packet.QoS1}},
 	}
@@ -679,7 +678,7 @@ func TestWillMessage(t *testing.T) {
 	}
 
 	// 订阅遗嘱主题
-	sub := packet.NewSubscribePacket(nson.NewId())
+	sub := packet.NewSubscribePacket(packet.NewPacketID())
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "will/topic", Options: packet.SubscribeOptions{QoS: packet.QoS0}},
 	}
@@ -770,7 +769,7 @@ func TestWillMessage_NormalDisconnect(t *testing.T) {
 
 	_, _ = packet.ReadPacket(conn1, 0)
 
-	sub := packet.NewSubscribePacket(nson.NewId())
+	sub := packet.NewSubscribePacket(packet.NewPacketID())
 	sub.Subscriptions = []packet.Subscription{
 		{Topic: "will/topic", Options: packet.SubscribeOptions{QoS: packet.QoS0}},
 	}

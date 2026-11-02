@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/internal/wsconn"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
@@ -280,9 +279,9 @@ func (c *conn) writePacket(pkt packet.Packet) error {
 }
 
 // coreMessagePacketID 提取 core.Message 的 PacketID（nil 安全，供 mq.SendQueue 去重用）
-func coreMessagePacketID(m *Message) nson.Id {
+func coreMessagePacketID(m *Message) packet.PacketID {
 	if m == nil {
-		return nson.Id{}
+		return packet.PacketID{}
 	}
 	return m.PacketID
 }

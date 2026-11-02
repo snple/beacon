@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -12,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/client"
 	"go.uber.org/zap"
 )
@@ -211,13 +209,7 @@ func runSubscribeMode(ctx context.Context, c *client.Client, topic string) {
 
 		msgCount++
 
-		buf := bytes.NewBuffer(msg.Payload())
-		value, err := nson.DecodeMap(buf)
-		if err != nil {
-			fmt.Printf("✓ [%d] Received message on '%s': %s\n", msgCount, msg.Topic(), string(msg.Payload()))
-		} else {
-			fmt.Printf("✓ [%d] Received message on '%s': %v\n", msgCount, msg.Topic(), value)
-		}
+		fmt.Printf("✓ [%d] Received message on '%s': %s\n", msgCount, msg.Topic(), string(msg.Payload()))
 	}
 
 	fmt.Printf("\n✓ Received %d message(s)\n", msgCount)

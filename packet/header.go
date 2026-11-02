@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-
-	"github.com/danclive/nson-go"
 )
 
 const (
@@ -177,15 +175,15 @@ func BinarySize(data []byte) int {
 	return 2 + len(data)
 }
 
-// EncodeId 编码 nson.Id
-func EncodeId(w io.Writer, id nson.Id) error {
+// EncodePacketID 编码 PacketID
+func EncodePacketID(w io.Writer, id PacketID) error {
 	_, err := w.Write(id[:])
 	return err
 }
 
-// DecodeId 解码 nson.Id
-func DecodeId(r io.Reader) (nson.Id, error) {
-	var id nson.Id
+// DecodePacketID 解码 PacketID
+func DecodePacketID(r io.Reader) (PacketID, error) {
+	var id PacketID
 	_, err := io.ReadFull(r, id[:])
 	return id, err
 }

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"testing"
-
-	"github.com/danclive/nson-go"
 )
 
 // validSeedPackets 构造覆盖各包类型（含属性与遗嘱段）的合法包，作为 fuzz 种子。
@@ -51,17 +49,17 @@ func validSeedPackets(t *testing.T) [][]byte {
 	pub.Properties.ResponseTopic = "resp"
 	pub.Properties.CorrelationData = []byte{9, 9}
 
-	sub := NewSubscribePacket(nson.NewId())
+	sub := NewSubscribePacket(NewPacketID())
 	sub.AddSubscription("a/#", QoS1)
 	sub.AddSubscription("b/*", QoS0)
 
-	unsub := NewUnsubscribePacket(nson.NewId())
+	unsub := NewUnsubscribePacket(NewPacketID())
 	unsub.Topics = []string{"a/#", "b/*"}
 
-	suback := NewSubackPacket(nson.NewId())
+	suback := NewSubackPacket(NewPacketID())
 	suback.ReasonCodes = []ReasonCode{ReasonCode(0x00), ReasonCode(0x80)}
 
-	unsuback := NewUnsubackPacket(nson.NewId())
+	unsuback := NewUnsubackPacket(NewPacketID())
 	unsuback.ReasonCodes = []ReasonCode{ReasonCode(0x00)}
 
 	connack := NewConnackPacket(ReasonCode(0x00))
@@ -70,7 +68,7 @@ func validSeedPackets(t *testing.T) [][]byte {
 	connack.Properties.SessionTimeout = 60
 	connack.Properties.TraceID = "trace-1"
 
-	puback := NewPubackPacket(nson.NewId(), ReasonCode(0x00))
+	puback := NewPubackPacket(NewPacketID(), ReasonCode(0x00))
 	puback.Properties.ReasonString = "ok"
 
 	disc := NewDisconnectPacket(ReasonCode(0x00))

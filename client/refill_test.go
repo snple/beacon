@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -30,7 +29,7 @@ func TestProcessSendQueue_RefillsFromPersistentQueue(t *testing.T) {
 		client:     c,
 		conn:       capture,
 		sendQueue:  newSendQueue(10),
-		pendingAck: make(map[nson.Id]pendingMessage),
+		pendingAck: make(map[packet.PacketID]pendingMessage),
 		ctx:        context.Background(),
 		logger:     zap.NewNop(),
 	}

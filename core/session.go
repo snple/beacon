@@ -4,7 +4,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 )
 
@@ -31,7 +30,7 @@ type session struct {
 	subsMu        sync.RWMutex
 
 	// QoS 状态 (只需要 QoS 0/1)
-	pendingAck   map[nson.Id]pendingMessage // QoS 1: 等待客户端 ACK 的消息
+	pendingAck   map[packet.PacketID]pendingMessage // QoS 1: 等待客户端 ACK 的消息
 	pendingAckMu sync.Mutex
 
 	// 重传标志
@@ -48,7 +47,7 @@ func newSession(clientID string, connect *packet.ConnectPacket, core *Core) *ses
 	s := &session{
 		id:            clientID,
 		subscriptions: make(map[string]packet.SubscribeOptions),
-		pendingAck:    make(map[nson.Id]pendingMessage),
+		pendingAck:    make(map[packet.PacketID]pendingMessage),
 		core:          core,
 	}
 

@@ -3,7 +3,6 @@ package client
 import (
 	"testing"
 
-	"github.com/danclive/nson-go"
 	"github.com/snple/beacon/packet"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +18,7 @@ func TestHandlePublish_QueueFullQoS1LeavesUnacknowledged(t *testing.T) {
 
 	pub := packet.NewPublishPacket("test/topic", []byte("x"))
 	pub.QoS = packet.QoS1
-	pub.PacketID = nson.NewId()
+	pub.PacketID = packet.NewPacketID()
 
 	require.NoError(t, conn.handlePublish(pub))
 	require.Empty(t, capture.buf, "queue full must not send any PUBACK")
@@ -35,7 +34,7 @@ func TestHandlePublish_HookRejectSendsNotAuthorized(t *testing.T) {
 
 	pub := packet.NewPublishPacket("test/topic", []byte("x"))
 	pub.QoS = packet.QoS1
-	pub.PacketID = nson.NewId()
+	pub.PacketID = packet.NewPacketID()
 
 	require.NoError(t, conn.handlePublish(pub))
 
