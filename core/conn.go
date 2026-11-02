@@ -2,407 +2,607 @@ package core
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/snple/beacon/internal/wsconn"
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
-// conn 表示单次 TCP 连接
-// 负责管理底层网络连接、读写协程、心跳超时、包确认等连接级别的状态
+// errNoProgress 表示客户端在仍有未确认消息时反复拉取，超过硬上限。
+var errNoProgress = errors.New("client keeps pulling without commit")
+
+// errSessionStale 表示连接已不是会话的当前连接（被接管）。
+var errSessionStale = ErrSessionTakenOver
+
+// conn 表示单次网络连接。
 type conn struct {
-	// 所属的客户端会话
+	core   *Core
 	client *Client
+	nc     net.Conn
 
-	// TCP 连接
-	conn net.Conn
-	// 保护写入操作
-	writeMu sync.Mutex
+	writeMu      sync.Mutex
+	writeTimeout time.Duration
 
-	// 连接参数
-	keepAlive    uint16
-	traceID      string
-	connectedAt  time.Time
-	writeTimeout time.Duration // 单次写超时（0 表示不设置）
+	maxPacketSize     uint32 // 出站限制（对端声明）
+	readMaxPacketSize uint32 // 入站限制
+	keepAlive         uint16
 
-	// 接入方式与协议版本（管理面展示）
-	transport string // "tcp" / "tls" / "ws"
-	protocol  string // 例如 "MX/2"
+	remoteAddr  string
+	connectedAt time.Time
 
-	// lastActivity 最后一次收到数据包的时间（unix 纳秒）
-	lastActivity atomic.Int64
+	ctx    context.Context
+	cancel context.CancelFunc
 
-	// closeErr 记录导致连接关闭的底层错误（管理面展示用）
-	errMu    sync.Mutex
-	closeErr error
+	taskMu      sync.Mutex
+	tasksClosed bool
+	wg          sync.WaitGroup
 
-	// 断开连接包（正常断开时非 nil）
-	disconnectPacket *packet.DisconnectPacket
+	closed    atomic.Bool
+	closeOnce sync.Once
 
-	// 流量控制（连接级别）
-	maxPacketSize uint32 // 客户端最大包大小（发送时检查）
-	sendWindow    uint16 // 客户端声明的接收窗口（= 待确认投递上限）
+	wakeCh       chan struct{}
+	pullInflight atomic.Bool
+	serverBy     atomic.Bool
+	registered   atomic.Bool
 
-	// 消息发送控制
-	processing  atomic.Bool // true: 正在处理发送队列
-	pendingSend atomic.Bool // true: 处理期间又有新工作，发送协程退出前需再处理一轮
+	disconnect atomic.Pointer[packet.DisconnectPacket]
 
-	// 待重发的投递（由重传定时器/重连触发），发送协程统一写出。
-	resendMu  sync.Mutex
-	resendIDs []*delivery
-	resendSet map[packet.PacketID]struct{}
-
-	// 发送协程跟踪：processSendQueue 纳入 wg，确保关闭存储前其已退出
-	wg sync.WaitGroup
-
-	// 生命周期
-	ctx         context.Context
-	cancel      context.CancelFunc
-	closed      atomic.Bool
-	closeReason atomic.Uint32 // packet.ReasonCode，记录连接关闭原因供 hooks/遗嘱判断
-	closeOnce   sync.Once
+	pullMu     sync.Mutex
+	served     int
+	noProgress int
 }
 
-// newConn 创建新的连接对象
-func newConn(client *Client, netConn net.Conn, connect *packet.ConnectPacket) *conn {
+func newConn(core *Core, nc net.Conn) *conn {
 	ctx, cancel := context.WithCancel(context.Background())
-	conn := &conn{
-		client:       client,
-		conn:         netConn,
-		keepAlive:    connect.KeepAlive,
-		connectedAt:  time.Now(),
-		writeTimeout: client.core.options.WriteTimeout,
-		transport:    transportOf(netConn),
-		protocol:     fmt.Sprintf("%s/%d", connect.ProtocolName, connect.ProtocolVersion),
-		ctx:          ctx,
-		cancel:       cancel,
+	cn := &conn{
+		core:              core,
+		nc:                nc,
+		writeTimeout:      core.options.WriteTimeout,
+		readMaxPacketSize: core.options.MaxPacketSize,
+		keepAlive:         core.options.KeepAlive,
+		connectedAt:       time.Now(),
+		ctx:               ctx,
+		cancel:            cancel,
+		wakeCh:            make(chan struct{}, 1),
 	}
-	conn.lastActivity.Store(conn.connectedAt.UnixNano())
-
-	// 应用 Core 默认的 KeepAlive（如果客户端未指定或指定值过大）
-	if client.core.options.KeepAlive > 0 && (conn.keepAlive == 0 || client.core.options.KeepAlive < conn.keepAlive) {
-		conn.keepAlive = client.core.options.KeepAlive
+	if nc != nil {
+		cn.remoteAddr = nc.RemoteAddr().String()
 	}
-
-	// 从 CONNECT 属性中读取客户端的初始接收窗口并设置为 core 的发送窗口
-	if connect.Properties != nil {
-		conn.maxPacketSize = connect.Properties.MaxPacketSize
-		conn.sendWindow = connect.Properties.ReceiveWindow
-		conn.traceID = connect.Properties.TraceID
-	}
-
-	if conn.sendWindow == 0 {
-		conn.sendWindow = defaultSendWindow
-	}
-
-	conn.resendSet = make(map[packet.PacketID]struct{})
-
-	return conn
+	return cn
 }
 
-// Serve 开始处理客户端消息
-func (c *conn) serve() {
-	reason := packet.ReasonNormalDisconnect
-	// 必须在 defer 中读取 reason，否则参数会在 defer 语句执行时求值，
-	// 后面设置的心跳超时/协议错误原因码全部失效。
-	defer func() { c.close(reason) }()
-
-	// 会话恢复：上一次连接上"已发送但未确认"的投递需要在新连接上重发，
-	// 否则要等一个完整的重传间隔才会被继续投递。
-	c.resendPendingAcks()
-
-	// 队列里可能已有消息（离线期间入队的），触发发送协程
-	c.triggerSend()
-
-	// 设置读取超时
-	keepAliveTimeout := c.calculateKeepAliveTimeout()
-	for !c.closed.Load() {
-		// 更新读取超时
-		_ = c.conn.SetReadDeadline(time.Now().Add(keepAliveTimeout))
-
-		pkt, size, err := packet.ReadPacketWithSize(c.conn, c.client.core.MaxPacketSize())
-		if err != nil {
-			if errors.Is(err, io.EOF) || c.closed.Load() {
-				return
-			}
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				c.client.core.logger.Debug("Client keepalive timeout",
-					zap.String("clientID", c.client.ID))
-
-				reason = packet.ReasonKeepAliveTimeout
-				return
-			}
-			c.client.core.logger.Debug("Read packet error",
-				zap.String("clientID", c.client.ID),
-				zap.Error(err))
-
-			c.setCloseErr(err)
-			reason = packet.ReasonProtocolError
-			return
-		}
-
-		c.lastActivity.Store(time.Now().UnixNano())
-		c.client.bytesReceived.Add(int64(size))
-		c.client.core.stats.BytesReceived.Add(int64(size))
-
-		if err := c.handlePacket(pkt); err != nil {
-			c.client.core.logger.Debug("Handle packet error",
-				zap.String("clientID", c.client.ID),
-				zap.Error(err))
-
-			reason = closeReasonFromError(err)
-			return
-		}
+// spawn 启动受 wg 跟踪的协程；连接已关闭时返回 false。
+func (cn *conn) spawn(fn func()) bool {
+	cn.taskMu.Lock()
+	defer cn.taskMu.Unlock()
+	if cn.tasksClosed {
+		return false
 	}
+	cn.wg.Add(1)
+	go func() {
+		defer cn.wg.Done()
+		fn()
+	}()
+	return true
 }
 
-// closeReasonError 让包处理函数指定连接关闭原因码（默认按 ProtocolError 处理）。
-type closeReasonError struct {
-	reason packet.ReasonCode
-	err    error
-}
-
-func (e *closeReasonError) Error() string { return e.err.Error() }
-
-func (e *closeReasonError) Unwrap() error { return e.err }
-
-// closeReasonFromError 把 handlePacket 返回的错误映射为连接关闭原因。
-func closeReasonFromError(err error) packet.ReasonCode {
-	var cre *closeReasonError
-	if errors.As(err, &cre) {
-		return cre.reason
-	}
-	if errors.Is(err, io.EOF) {
-		// 客户端发来 DISCONNECT：正常断开，不再回 DISCONNECT。
-		return packet.ReasonNormalDisconnect
-	}
-	return packet.ReasonProtocolError
-}
-
-// calculateKeepAliveTimeout 计算 KeepAlive 超时时间
-func (c *conn) calculateKeepAliveTimeout() time.Duration {
-	if c.keepAlive == 0 {
-		return defaultKeepAliveTimeout
-	}
-	return time.Duration(float64(c.keepAlive) * float64(time.Second) * keepAliveMultiplier)
-}
-
-// handlePacket 处理收到的包
-func (c *conn) handlePacket(pkt packet.Packet) error {
-	switch p := pkt.(type) {
-	case *packet.PublishPacket:
-		return c.client.handlePublish(p)
-	case *packet.PubackPacket:
-		return c.client.handlePuback(p)
-	case *packet.SubscribePacket:
-		return c.client.handleSubscribe(p)
-	case *packet.UnsubscribePacket:
-		return c.client.handleUnsubscribe(p)
-	case *packet.PingPacket:
-		return c.handlePing(p)
-	case *packet.DisconnectPacket:
-		return c.handleDisconnect(p)
-	case *packet.AuthPacket:
-		return c.client.handleAuth(p)
-	case *packet.TracePacket:
-		return c.client.handleTrace(p)
+// notify 唤醒等待中的 PULL（非阻塞）。
+func (cn *conn) notify() {
+	select {
+	case cn.wakeCh <- struct{}{}:
 	default:
-		c.client.core.logger.Debug("Unknown packet type",
-			zap.Uint8("type", uint8(pkt.Type())))
-		return nil
 	}
 }
 
-// handlePing 处理 PING 包
-func (c *conn) handlePing(p *packet.PingPacket) error {
-	// 回复 PONG，回显客户端时间戳
-	pong := &packet.PongPacket{
-		Seq:  p.Seq,
-		Echo: p.Timestamp,
+// writePacket 写出单个数据包。
+func (cn *conn) writePacket(pkt packet.Packet) error {
+	if cn.closed.Load() {
+		return net.ErrClosed
 	}
-	if err := c.writePacket(pong); err != nil {
-		c.client.core.logger.Error("Failed to send PONG",
-			zap.String("clientID", c.client.ID),
-			zap.Error(err))
+
+	cn.writeMu.Lock()
+	defer cn.writeMu.Unlock()
+
+	if cn.writeTimeout > 0 {
+		_ = cn.nc.SetWriteDeadline(time.Now().Add(cn.writeTimeout))
+	}
+	maxSize := cn.maxPacketSize
+	if maxSize == 0 {
+		maxSize = cn.core.options.MaxPacketSize
+	}
+	if _, err := packet.WritePacketWithSize(cn.nc, pkt, maxSize); err != nil {
 		return err
+	}
+	if cn.writeTimeout > 0 {
+		_ = cn.nc.SetWriteDeadline(time.Time{})
 	}
 	return nil
 }
 
-// handleDisconnect 处理 DISCONNECT 包
-func (c *conn) handleDisconnect(p *packet.DisconnectPacket) error {
-	c.client.core.logger.Debug("Client disconnect request",
-		zap.String("clientID", c.client.ID),
-		zap.Uint8("reasonCode", uint8(p.ReasonCode)))
-	// 保存断开包供 hooks 使用
-	c.disconnectPacket = p
-	return io.EOF // 触发断开
+// serve 运行读循环直到连接结束。
+func (cn *conn) serve() error {
+	for {
+		if cn.closed.Load() {
+			return nil
+		}
+		if timeout := cn.readTimeout(); timeout > 0 {
+			_ = cn.nc.SetReadDeadline(time.Now().Add(timeout))
+		}
+
+		pkt, size, err := packet.ReadPacketWithSize(cn.nc, cn.readMaxPacketSize)
+		if err != nil {
+			var tooLarge *packet.PacketTooLargeError
+			if errors.As(err, &tooLarge) {
+				cn.terminate(packet.ReasonPacketTooLarge, true)
+			}
+			return err
+		}
+
+		cn.core.stats.BytesReceived.Add(int64(size))
+		if cn.client != nil {
+			cn.client.lastSeen.Store(time.Now().UnixMilli())
+		}
+
+		if err := cn.handlePacket(pkt); err != nil {
+			switch {
+			case errors.Is(err, errSessionStale):
+				cn.terminate(packet.ReasonSessionTakenOver, true)
+			case errors.Is(err, errNoProgress):
+				cn.terminate(packet.ReasonCommitRequired, true)
+			}
+			return err
+		}
+	}
 }
 
-// writePacket 发送数据包（控制包与兼容路径）。
-func (c *conn) writePacket(pkt packet.Packet) error {
-	// 编码先于任何写入完成：编码失败不应影响连接。
-	frame, err := packet.EncodePacket(pkt, c.maxPacketSize)
-	if err != nil {
+func (cn *conn) readTimeout() time.Duration {
+	ka := cn.keepAlive
+	if ka == 0 {
+		return 0
+	}
+	// 1.5 倍窗口：允许一个心跳周期再加半个周期的抖动
+	return time.Duration(float64(ka)*1.5) * time.Second
+}
+
+// handlePacket 分发客户端请求。
+func (cn *conn) handlePacket(pkt packet.Packet) error {
+	switch p := pkt.(type) {
+	case *packet.PushPacket:
+		return cn.handlePush(p)
+	case *packet.PullPacket:
+		return cn.handlePull(p)
+	case *packet.CommitPacket:
+		return cn.handleCommit(p)
+	case *packet.DeclarePacket:
+		return cn.handleDeclare(p)
+	case *packet.PingPacket:
+		return cn.handlePing(p)
+	case *packet.DisconnectPacket:
+		return cn.handleDisconnect(p)
+	case *packet.ConnectPacket:
+		return packet.ErrInvalidPacketType
+	default:
+		cn.core.logger.Debug("unexpected packet", zap.String("type", pkt.Type().String()))
+		return nil
+	}
+}
+
+// checkOwner 校验连接仍是会话的当前连接（fencing）。
+func (cn *conn) checkOwner() error {
+	cl := cn.client
+	if cl == nil {
+		return ErrNotAuthorized
+	}
+	if !cl.owns(cn) {
+		return errSessionStale
+	}
+	return nil
+}
+
+func (cn *conn) handlePing(p *packet.PingPacket) error {
+	if err := cn.checkOwner(); err != nil {
 		return err
 	}
-
-	_, err = c.writeSegments([][]byte{frame})
-	return err
+	return cn.writePacket(packet.NewPongPacket(p.Seq, p.Timestamp, 0))
 }
 
-// writePublishFrame 分段写出 PUBLISH 帧。
-//
-// 固定头、flags、PacketID 单独构造，topic/属性/载荷直接引用共享内存：
-// 向 N 个订阅者投递同一条消息不会复制任何消息内容。
-func (c *conn) writePublishFrame(frame *packet.PublishFrame) error {
-	_, err := c.writeSegments(frame.Segments())
-	return err
+func (cn *conn) handleDisconnect(p *packet.DisconnectPacket) error {
+	cn.disconnect.Store(p)
+	return io.EOF
 }
 
-// writeSegments 串行化写入多段数据，并统计字节数。
-//
-// 分段写（TCP writev / WebSocket 单条消息）避免拼接缓冲区；TLS 等不支持
-// 分段写的 Writer 会退化为顺序 Write，数据仍然不复制。
-func (c *conn) writeSegments(segs [][]byte) (int, error) {
-	if c.closed.Load() || c.conn == nil {
-		return 0, ErrClientClosed
-	}
+// lastDisconnect 返回客户端发来的 DISCONNECT（若有）。
+func (cn *conn) lastDisconnect() *packet.DisconnectPacket {
+	return cn.disconnect.Load()
+}
 
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	if c.writeTimeout > 0 {
-		if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
-			return 0, err
+// terminate 由服务端主动关闭连接：先发 DISCONNECT 再关闭。
+func (cn *conn) terminate(reason packet.ReasonCode, suppressWill bool) {
+	cn.serverBy.Store(true)
+	select {
+	case <-cn.ctx.Done():
+	default:
+		dp := packet.NewDisconnectPacket(reason)
+		if suppressWill {
+			dp.Flags |= packet.DisconnectFlagSuppressWill
 		}
-		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+		_ = cn.writePacket(dp)
 	}
-
-	n, err := packet.WriteSegments(c.conn, segs)
-	if n > 0 {
-		c.client.bytesSent.Add(n)
-		c.client.core.stats.BytesSent.Add(n)
-	}
-
-	// 写错误（超时、对端不读、连接重置）意味着流中可能已有半包，连接不可继续使用。
-	if err != nil {
-		_ = c.conn.Close()
-		return int(n), &packet.WriteError{Err: err}
-	}
-
-	return int(n), nil
+	cn.close()
 }
 
-// resendPendingAcks 把待确认的投递全部标记为重发（新连接建立时调用）。
-func (c *conn) resendPendingAcks() {
-	for _, d := range c.client.session.pendingAck.snapshot() {
-		c.addResend(d)
-	}
-}
+// close 关闭底层连接并等待后台协程退出。
+func (cn *conn) close() {
+	cn.closeOnce.Do(func() {
+		cn.closed.Store(true)
 
-// closeReasonCode 返回连接关闭原因。
-func (c *conn) closeReasonCode() packet.ReasonCode {
-	return packet.ReasonCode(c.closeReason.Load())
-}
+		cn.taskMu.Lock()
+		cn.tasksClosed = true
+		cn.taskMu.Unlock()
 
-// wait 等待连接的所有发送协程退出
-// 用于停机/会话接管时同步，确保不再有协程访问该连接的队列。
-// 注意：不要在持有 clientsMu 时调用（发送协程可能通过用户钩子回调 core API）。
-func (c *conn) wait() {
-	c.wg.Wait()
-}
-
-// close 关闭连接（非正常断开时向对端发送 DISCONNECT，受写超时约束）。
-func (c *conn) close(reason packet.ReasonCode) {
-	c.closeWith(reason, true)
-}
-
-// closeLocal 关闭连接但不发送 DISCONNECT。
-// 用于停机、会话接管等不需要（或不应等待）通知对端的场景。
-func (c *conn) closeLocal(reason packet.ReasonCode) {
-	c.closeWith(reason, false)
-}
-
-// detach 仅切换本地状态（无网络 IO、无阻塞），供必须持有全局锁的路径使用。
-// 真正的 socket 关闭由调用方在锁外通过 closeLocal 完成。
-func (c *conn) detach(reason packet.ReasonCode) {
-	c.closeReason.Store(uint32(reason))
-	c.cancel()
-	c.closed.Store(true)
-}
-
-func (c *conn) closeWith(reason packet.ReasonCode, sendDisconnect bool) {
-	c.closeOnce.Do(func() {
-		c.closeReason.Store(uint32(reason))
-
-		// 发送 DISCONNECT (如果不是正常断开)。
-		// 必须在设置 closed 标志之前发送，否则 writePacket 会直接返回；
-		// 该写入受 writeTimeout 约束，不会无限阻塞关闭流程。
-		if sendDisconnect && reason != packet.ReasonNormalDisconnect {
-			disconnect := packet.NewDisconnectPacket(reason)
-			if err := c.writePacket(disconnect); err != nil {
-				c.client.core.logger.Debug("Failed to send DISCONNECT",
-					zap.String("clientID", c.client.ID),
-					zap.Error(err))
-			}
+		cn.cancel()
+		if cn.nc != nil {
+			_ = cn.nc.Close()
 		}
-
-		c.cancel()
-		// 设置 closed 标志，阻止新的写入
-		c.closed.Store(true)
-
-		// 关闭连接（检查是否为 nil）
-		if c.conn != nil {
-			_ = c.conn.Close()
-		}
+		cn.wg.Wait()
 	})
 }
 
-// setCloseErr 记录导致连接关闭的底层错误。
-func (c *conn) setCloseErr(err error) {
-	if err == nil {
-		return
-	}
-	c.errMu.Lock()
-	if c.closeErr == nil {
-		c.closeErr = err
-	}
-	c.errMu.Unlock()
+// ============================================================================
+// PULL
+// ============================================================================
+
+// pullPlan 描述一次 PULL 的结果：写成功后才推进状态。
+type pullPlan struct {
+	resp       *packet.PullOkPacket
+	pending    []taken // 从 pending 取出、写成功后应用
+	delivered  []taken // 仅为发送而 retain、写成功后释放
+	nextServed int
+	empty      bool
 }
 
-// err 返回导致连接关闭的底层错误（可能为 nil）。
-func (c *conn) err() error {
-	c.errMu.Lock()
-	defer c.errMu.Unlock()
-	return c.closeErr
+func recordsOf(batch []taken, dup bool) []packet.Record {
+	out := make([]packet.Record, len(batch))
+	for i, t := range batch {
+		out[i] = t.msg.record(dup)
+	}
+	return out
 }
 
-// lastActiveAt 返回最后一次收到数据包的时间。
-func (c *conn) lastActiveAt() time.Time {
-	ns := c.lastActivity.Load()
-	if ns <= 0 {
-		return c.connectedAt
+// buildPlan 构造一次拉取计划（不改变任何状态）。
+func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
+	cl := cn.client
+	opts := cn.core.options
+
+	maxRecords := int(p.MaxRecords)
+	if maxRecords <= 0 || maxRecords > int(opts.MaxRecords) {
+		maxRecords = int(opts.MaxRecords)
 	}
-	return time.Unix(0, ns)
+	maxBytes := int(p.MaxBytes)
+	if maxBytes <= 0 || maxBytes > int(opts.MaxBytes) {
+		maxBytes = int(opts.MaxBytes)
+	}
+
+	cn.pullMu.Lock()
+	defer cn.pullMu.Unlock()
+
+	pendingDepth, deliveredDepth, oldest := cl.mb.depth()
+
+	plan := &pullPlan{resp: packet.NewPullOkPacket(p.RequestID)}
+
+	// 1) delivered 优先：未确认的消息先重发
+	if deliveredDepth > 0 {
+		batch, next, more, repeated := cl.mb.drainDelivered(cn.served, maxRecords, maxBytes)
+		if len(batch) > 0 {
+			if repeated {
+				cn.noProgress++
+			}
+
+			if hard := opts.NoProgressHard; hard > 0 && cn.noProgress > hard {
+				cl.mb.releaseBatch(batch)
+				return &pullPlan{resp: nil, empty: true}
+			}
+			if soft := opts.NoProgressSoft; soft > 0 && cn.noProgress > soft {
+				cl.mb.releaseBatch(batch)
+				resp := packet.NewPullOkPacket(p.RequestID)
+				resp.Reason = packet.ReasonCommitRequired
+				resp.RetryAfterMs = 1000
+				resp.Pending = pendingDepth
+				resp.Delivered = deliveredDepth
+				resp.OldestUncommitted = oldest
+				cn.core.stats.CommitRequired.Add(1)
+				return &pullPlan{resp: resp}
+			}
+
+			plan.resp.More = more
+			plan.resp.Pending = pendingDepth
+			plan.resp.Delivered = deliveredDepth
+			plan.resp.OldestUncommitted = oldest
+			plan.resp.Records = recordsOf(batch, true)
+			plan.delivered = batch
+			plan.nextServed = next
+			return plan
+		}
+	}
+
+	// 2) 从 pending 取
+	batch, more := cl.mb.takePending(maxRecords, maxBytes)
+
+	// 投递钩子：拒绝的条目直接丢弃（不进入 delivered）
+	if len(batch) > 0 && cn.core.options.Hooks.hasOnDeliver() {
+		kept := batch[:0]
+		for _, t := range batch {
+			if cn.core.options.Hooks.callOnDeliver(&DeliverContext{
+				ClientID: cl.ID,
+				Channel:  t.msg.Channel,
+				Source:   t.msg.Source,
+				Priority: t.prio,
+				Payload:  t.msg.Payload,
+			}) {
+				kept = append(kept, t)
+				continue
+			}
+			cn.core.releaseMessage(t.msg)
+			cn.core.stats.MessagesDropped.Add(1)
+		}
+		batch = kept
+	}
+
+	if len(batch) == 0 {
+		plan.empty = true
+		plan.resp.Pending = pendingDepth
+		plan.resp.Delivered = deliveredDepth
+		plan.resp.OldestUncommitted = oldest
+		return plan
+	}
+
+	reliable := 0
+	for _, t := range batch {
+		if t.prio.RequiresCommit() {
+			reliable++
+		}
+	}
+
+	plan.resp.More = more
+	plan.resp.Pending = [3]uint32{
+		pendingDepth[0], pendingDepth[1], pendingDepth[2],
+	}
+	// 队列深度是扣除本批之后的近似值
+	plan.resp.Pending[0] = saturatingSub(plan.resp.Pending[0], uint32(countPrio(batch, packet.PriorityLow)))
+	plan.resp.Pending[1] = saturatingSub(plan.resp.Pending[1], uint32(countPrio(batch, packet.PriorityMedium)))
+	plan.resp.Pending[2] = saturatingSub(plan.resp.Pending[2], uint32(countPrio(batch, packet.PriorityHigh)))
+	plan.resp.Delivered = deliveredDepth + uint32(reliable)
+	if !oldest.IsZero() {
+		plan.resp.OldestUncommitted = oldest
+	} else {
+		for _, t := range batch {
+			if t.prio.RequiresCommit() {
+				plan.resp.OldestUncommitted = t.id
+				break
+			}
+		}
+	}
+	plan.resp.Records = recordsOf(batch, false)
+	plan.pending = batch
+	plan.nextServed = 0
+	return plan
 }
 
-// transportOf 根据底层连接类型推断接入方式。
-func transportOf(netConn net.Conn) string {
-	switch netConn.(type) {
-	case *wsconn.Conn:
-		return "ws"
-	case *tls.Conn:
-		return "tls"
-	default:
-		return "tcp"
+func countPrio(batch []taken, p packet.Priority) int {
+	n := 0
+	for _, t := range batch {
+		if t.prio == p {
+			n++
+		}
 	}
+	return n
+}
+
+func saturatingSub(a, b uint32) uint32 {
+	if b > a {
+		return 0
+	}
+	return a - b
+}
+
+// applyPlan 在写成功后推进状态。
+func (cn *conn) applyPlan(plan *pullPlan) {
+	cl := cn.client
+
+	cn.pullMu.Lock()
+	if len(plan.delivered) > 0 {
+		cn.served = plan.nextServed
+		cn.core.stats.DuplicatesSent.Add(int64(len(plan.delivered)))
+	}
+	if len(plan.pending) > 0 {
+		cn.served = 0
+		cn.noProgress = 0
+	}
+	cn.pullMu.Unlock()
+
+	if len(plan.delivered) > 0 {
+		cl.mb.releaseBatch(plan.delivered)
+	}
+	if len(plan.pending) > 0 {
+		cl.mb.applySent(plan.pending)
+		if reliable := len(plan.pending) - countPrio(plan.pending, packet.PriorityLow); reliable > 0 {
+			if cl.deliveredSince.Load() == 0 {
+				cl.deliveredSince.Store(time.Now().UnixMilli())
+			}
+		}
+	}
+
+	n := len(plan.delivered) + len(plan.pending)
+	if n > 0 {
+		cn.core.stats.MessagesSent.Add(int64(n))
+		cl.sent.Add(int64(n))
+	}
+}
+
+// abortPlan 在写失败后回滚。
+func (cn *conn) abortPlan(plan *pullPlan) {
+	cl := cn.client
+	if len(plan.delivered) > 0 {
+		cl.mb.releaseBatch(plan.delivered)
+	}
+	if len(plan.pending) > 0 {
+		cl.mb.restore(plan.pending)
+	}
+}
+
+// handlePull 处理 PULL。
+//
+// 同一时刻只允许一个在途 PULL：并发拉取会让同一条消息被重复投递，
+// 也会让客户端的未确认集合互相覆盖。第二个请求会立刻收到 RateLimited。
+func (cn *conn) handlePull(p *packet.PullPacket) error {
+	if err := cn.checkOwner(); err != nil {
+		return err
+	}
+
+	if !cn.pullInflight.CompareAndSwap(false, true) {
+		return cn.writePullRateLimited(p)
+	}
+
+	plan := cn.buildPlan(p)
+	if plan.resp == nil {
+		cn.pullInflight.Store(false)
+		return errNoProgress
+	}
+
+	if plan.empty {
+		if waitMs := cn.waitMillis(p.WaitMs); waitMs > 0 {
+			// 长轮询：把响应交给后台协程，读循环可以继续处理 PING/COMMIT。
+			if cn.spawn(func() {
+				defer cn.pullInflight.Store(false)
+				cn.waitLoop(p, time.Duration(waitMs)*time.Millisecond)
+			}) {
+				return nil
+			}
+		}
+	}
+
+	if err := cn.writePacket(plan.resp); err != nil {
+		cn.abortPlan(plan)
+		cn.pullInflight.Store(false)
+		return err
+	}
+	cn.applyPlan(plan)
+	cn.pullInflight.Store(false)
+	return nil
+}
+
+// pullRetryAfterMs 是拒绝并发 PULL 时回给客户端的建议重试间隔。
+//
+// 正常客户端（含 SDK）不会触发这条路径：它意味着上一条 PULL 还没收到响应。
+// 这里给一个足够大的值，让裸协议客户端不会立刻重试造成忙循环。
+const pullRetryAfterMs uint32 = 1000
+
+// writePullRateLimited 拒绝并发的第二个 PULL。
+func (cn *conn) writePullRateLimited(p *packet.PullPacket) error {
+	pending, delivered, oldest := cn.client.mb.depth()
+
+	resp := packet.NewPullOkPacket(p.RequestID)
+	resp.Reason = packet.ReasonRateLimited
+	resp.RetryAfterMs = pullRetryAfterMs
+	resp.Pending = pending
+	resp.Delivered = delivered
+	resp.OldestUncommitted = oldest
+
+	cn.core.stats.MessagesRejected.Add(1)
+	return cn.writePacket(resp)
+}
+
+func (cn *conn) waitMillis(requested uint32) uint32 {
+	wait := requested
+	if limit := cn.core.options.MaxWaitMs; limit > 0 && wait > limit {
+		wait = limit
+	}
+	return wait
+}
+
+func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-cn.ctx.Done():
+			return
+		case <-timer.C:
+			cn.writeEmptyPull(p)
+			return
+		case <-cn.wakeCh:
+			if cn.closed.Load() {
+				return
+			}
+			plan := cn.buildPlan(p)
+			if plan.resp == nil {
+				return
+			}
+			if plan.empty {
+				continue
+			}
+			if err := cn.writePacket(plan.resp); err != nil {
+				cn.abortPlan(plan)
+				return
+			}
+			cn.applyPlan(plan)
+			return
+		}
+	}
+}
+
+func (cn *conn) writeEmptyPull(p *packet.PullPacket) {
+	cl := cn.client
+	pending, delivered, oldest := cl.mb.depth()
+
+	resp := packet.NewPullOkPacket(p.RequestID)
+	resp.Pending = pending
+	resp.Delivered = delivered
+	resp.OldestUncommitted = oldest
+	_ = cn.writePacket(resp)
+}
+
+// ============================================================================
+// COMMIT
+// ============================================================================
+
+func (cn *conn) handleCommit(p *packet.CommitPacket) error {
+	if err := cn.checkOwner(); err != nil {
+		return err
+	}
+
+	cl := cn.client
+	committed, popped := cl.mb.commit(p.IDs)
+
+	cn.pullMu.Lock()
+	cn.served -= popped
+	if cn.served < 0 {
+		cn.served = 0
+	}
+	cn.noProgress = 0
+	cn.pullMu.Unlock()
+
+	pending, delivered, _ := cl.mb.depth()
+	if delivered == 0 {
+		cl.deliveredSince.Store(0)
+	}
+
+	resp := packet.NewCommitOkPacket(p.RequestID)
+	resp.Committed = uint16(committed)
+	resp.Pending = pending
+	resp.Delivered = delivered
+
+	if err := cn.writePacket(resp); err != nil {
+		return err
+	}
+
+	// 确认后可能腾出了空间，唤醒自己的等待者
+	cn.notify()
+	return nil
 }

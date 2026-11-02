@@ -1,306 +1,244 @@
 # Beacon
 
-Beacon 是一个轻量级消息总线协议，专为物联网和实时通信场景设计。
+Beacon 是一个**面向 IoT 的拉取式消息服务**：生产者推送（`PUSH`），broker 按 channel 匹配后放入
+每个客户端各自的队列，消费者按自己的节奏拉取（`PULL`）并确认（`COMMIT`）。
 
-## 功能特性
+与 MQTT 最大的不同：**服务端从不主动推送消息**。除了对请求的响应和连接终止通知，
+broker 不会向客户端发送任何数据包。
 
-- **发布/订阅**：主题订阅（`*` / `**` 通配符）与消息发布，支持 NoLocal、保留消息与重放策略
-- **QoS 0/1**：QoS1 以“消息被处理”为语义（自动确认 / 手动 `Message.Ack()`），未确认自动重传
-- **定向投递与请求-响应**：`TargetClientID` 点对点投递；PUBLISH 可携带响应主题、关联数据与用户属性
-- **会话与可靠性**：会话恢复（订阅 + 离线积压队列，均为内存态）、遗嘱消息、离线队列、断线自动重连
-- **纯内存消息模型**：broker 收到的消息只保存一份（按 broker 生成的唯一 ID 索引），全局队列与客户端队列只引用 ID，
-  1→N 分发**不复制消息内容**；出站按段写出（TCP writev），payload 零拷贝。不落盘，进程重启即清空
-- **传输**：TCP、TLS、WebSocket（`ws://` / `wss://`）互通
-- **可观测与运维**：`GetStats()`、Prometheus `/metrics`、`/healthz`、进程内管理 API 与事件流
-- **配额与背压**：客户端队列、全局队列、存储水位、发布速率、握手并发、离线会话上限
-- **流中继**：`stream/` 提供独立的点对点字节流中继协议
+- 协议规格：[`docs/protocol-v4.md`](./docs/protocol-v4.md)
+- 嵌入式客户端实现要点：[`docs/embedded-client-guide.md`](./docs/embedded-client-guide.md)
+- 进程内管理 API：[`docs/admin-api-design.md`](./docs/admin-api-design.md)
 
-## QoS 语义
+## 为什么是 pull
 
-Beacon 的 QoS 机制强调“消息被处理”而非仅“协议层收到”：
-
-- **QoS0**：尽力保证到达性（best-effort delivery）。消息会进入接收方的内存队列，在客户端离线或发送队列满时由重传机制补发，但**不需要 ACK**，不保证绝对不丢（进程重启即丢失）。
-- **QoS1**：保证消息被处理（at-least-once processing）。接收方在**消息落入应用可见队列之后**才发送 ACK；
-  未收到 ACK（处理中崩溃、断电、接收队列满被拒收）时，服务端会按 `RetransmitInterval` 重传，
-  直到收到 ACK。需要“应用处理完才算确认”时，用 `WithAutoAck(false)` + `Message.Ack()` 手动确认（见下节）。
-
-## QoS1 确认方式
-
-客户端默认在收到 QoS1 消息**入队后自动发送 ACK**（`AutoAck=true`）。若需要严格保证“消息被应用处理”，可关闭自动确认，由应用处理完消息后显式调用 `Message.Ack()`：
-
-```go
-c, _ := client.NewWithOptions(
-    client.NewClientOptions().
-        WithCore("127.0.0.1:5208").
-        WithClientID("c1").
-        WithAutoAck(false), // 关闭自动确认，改为手动确认
-)
-
-msg, err := c.PollMessage(ctx, 5*time.Second)
-if err != nil {
-    // 处理 ErrPollTimeout / ErrNotConnected 等
-    return
-}
-// ... 处理消息 ...
-if err := msg.Ack(); err != nil {
-    // 确认失败（如连接已断开）：消息会被服务端重传
-    log.Printf("ack failed: %v", err)
-}
-```
-
-注意：手动确认模式下 QoS1 为 at-least-once——若应用在处理中崩溃/断电未确认，服务端会重传该消息并再次投递；应用如需不重复处理，请按 `msg.Packet.PacketID` 自行去重。
-
-`PollMessage(ctx, timeout)` 的 `timeout=0` 表示一直等待；断线后仍可继续取走已缓冲的消息（队列为空时才返回 `ErrNotConnected`）。
-
-## 可靠性边界
-
-以下行为是 QoS 语义的一部分，部署时需要了解：
-
-- **发送窗口**：窗口等于客户端声明的接收窗口，用"已发送未确认"的 QoS1 条数衡量；收到 ACK 会立即唤醒发送协程继续投递，
-  `RetransmitInterval` 仅作为未确认消息的重发间隔，不决定正常投递的吞吐。
-- **订阅端接收队列满**（`client.WithMessageQueueSize`）：QoS1 消息不会被确认，而是由服务端按 `RetransmitInterval`
-  再次投递，形成端到端背压；QoS0 消息直接丢弃。
-- **客户端离线时发布**：消息进入本地出站内存队列，`Publish` 返回 `nil` 表示"已入队"，连接建立后自动补发（进程退出即丢失）。
-- **钩子拒绝**：`OnPublish` 钩子拒绝 QoS1 消息时，服务端/客户端会返回 `NotAuthorized`，发布方立即收到失败，不会无限重传。
-- **保留消息标志**：因订阅而重放的保留消息始终带 `Retain=true`；`RetainAsPublished` 只控制实时转发是否保留发布时的 `Retain` 标志。
-- **定向投递语义**：`TargetClientID` / `Core.PublishToClient` 与主题发布一致——目标客户端离线但会话保留时消息入队，重连后补发；
-  `Core.Broadcast` 则是即时的、仅在线客户端的扇出，不为离线会话入队。
-- **不落盘**：core 与 client 都不再持久化消息、会话与保留消息（BadgerDB 已移除）。进程重启后会话、`SessionPresent`、
-  离线积压与保留消息都会丢失；需要跨重启可靠性时请在上层（应用/存储）自行保障。
-- **过期清理间隔**：`core.WithExpiredCheckInterval(d)` 默认 180 秒；设置为 `0` 会关闭定期清理，
-  过期离线会话与过期保留消息不再被回收（投递路径仍会按 `ExpiryTime` 跳过过期消息）。
-- **`Dup` 标志**：重发（重传定时器触发、写失败后重试、重连后补发未确认消息）时置 1，
-  接收端可据此识别可能重复的投递。两端都不依赖 `Dup` 去重，接收端如需幂等请按 `PacketID` 处理。
-- **写超时**：`core.WithWriteTimeout(d)` / `client.WithWriteTimeout(d)` 控制单次网络写超时（默认 10 秒，`0` 表示不设置）。
-  写入超时或失败会关闭该连接，未确认的消息仍保留在内存队列中，重连后补发；编码失败（如属性超长）不会断开连接。
-  这保证了慢速/不读数据的对端不会永久占用发送协程，也不会拖住停机。
-
-## 配额与背压
-
-Beacon 的队列默认有上限，避免单个慢消费者或异常客户端把内存吃光：
-
-| 配置 | 默认值 | 超限行为 |
+| 维度 | push（MQTT 风格） | pull（Beacon v4） |
 |---|---|---|
-| `WithMaxClientQueueSize(n, policy)` | 10000 条 | 每个客户端的待发送队列达到上限后，按策略丢弃新消息（`QueueOverflowDropNewest`，默认）或最旧消息（`QueueOverflowDropOldest`），计入 `MessagesDropped` |
-| `WithMaxPendingMessages(n)` | 100000 条 | 全局待分发队列达到上限后，新的发布被拒绝；QoS1 发布端收到 `PUBACK(QuotaExceeded)` |
-| `WithMaxPublishRate(rate, burst)` | 不限制 | 单客户端发布速率超限；QoS1 收到 `PUBACK(MessageRateTooHigh)`，QoS0 被丢弃 |
-| `WithMaxPendingBytes(bytes)` | 不限制 | 内存中待投递消息（含保留消息）的近似占用超过水位后拒绝新发布（`QuotaExceeded`） |
-| `WithMaxHandshakeConnections(n)` | 512 | 握手阶段（读取 CONNECT + 认证完成前）的并发连接上限。超限直接 `CONNACK(ServerBusy)` 并关闭，避免未认证连接无上限占用 goroutine 与包缓冲 |
-| `WithMaxOfflineSessions(n)` | 10000 个 | 保留中的离线会话超过上限时，驱逐**最早过期**的会话（会话记录、订阅与待投递队列一并清理） |
-| `client.WithMaxQueueSize(n)` | 10000 条 | 客户端本地出站队列满时，`Publish` 返回 `ErrQueueFull` |
+| 消费节奏 | 服务端推，客户端被动接收 | 客户端决定何时取、取多少 |
+| broker 内存 | 每客户端待发送队列无界增长 | `pending` 受 `QueueCap`、`delivered` 受 `MaxRecords`，两个独立预算 |
+| 确认机制 | 需要 ack 表 + 重传定时器 | `delivered` 是一条 FIFO，`COMMIT` 就是前缀压缩 |
+| 慢消费者 | 拖住 broker 的发送协程 | 只影响它自己的队列 |
+| 低延迟 | 天然接近实时 | 用长轮询（`WaitMs`）拉回同等延迟 |
 
-配额类限制（队列条数、全局队列、内存水位、发布速率、握手并发、离线会话、客户端出站队列）都可以用 `0` 关闭；
-`MaxClients`、`MaxPacketSize`、`ReceiveWindow`、`ConnectTimeout`、`RetransmitInterval` 等基础参数则要求大于 0。
+## 核心模型
 
-拒绝/丢弃数量可通过 `core.GetStats()` 的 `MessagesRejected`（接收侧拒绝）与 `MessagesDropped`（投递侧丢弃）观察；
-`Core.GetClientInfo(id).QueueSize` 可查看单个客户端的积压量。
-
-注意：
-
-- 客户端队列配额按**消息条数**统计。单条消息的大小由 `MaxPacketSize` 限制，生产环境建议同时设置 `WithMaxPendingBytes`
-  作为内存水位的兜底：同一消息被 N 个订阅者引用时只计一份内存。
-- 发布速率限制按客户端会话统计：使用全新会话（`SessionTimeout=0`）重连会获得新的令牌桶。
-  如需防止重连绕过，请配合 `WithConnectionRateLimit` 与认证使用。
-
-## 会话管理
-
-- `SessionTimeout`：会话保留时间（秒），0 表示断开即清理；服务端可用 `MaxSessionTimeout` 限制上限。
-- `client.WithCleanStart(true)`：要求服务端丢弃已有会话（订阅 + 待投递消息）并新建会话；
-  CONNACK 的 `SessionPresent` 指示本次连接是否恢复了旧会话。
-- **ClientID 约束**：非空、不超过 256 字节、合法 UTF-8，且不能包含 `:` 或控制字符
-  （`:` 保留给旧版持久化队列的 key 前缀）。服务端用 `CONNACK(ReasonClientIDNotValid)` 拒绝非法 ID；
-  留空则由服务端自动生成。
-- 会话状态（订阅、会话超时、离线待投递队列）只保存在内存中：会话未过期期间客户端重连可拿到
-  `SessionPresent=true`，无需重新订阅并能继续收到积压消息；core 进程重启后会话全部丢失。
-  **认证数据不随会话保存**，每次建立连接都必须重新认证。
-- **订阅重放**：客户端记录每个订阅的完整选项（QoS/NoLocal/RetainAsPublished/RetainHandling）。
-  连接建立后若 `SessionPresent=false`（CleanStart、会话过期或换了服务端），客户端会按原选项自动重放，
-  手动 `Disconnect()` 后重新 `Connect()` 与自动重连行为一致；`SessionPresent=true` 时不会重复订阅。
-- 过期的离线会话会在后台清理任务中被回收（其订阅与待投递队列一并释放）。
-- 遗嘱消息不随会话保存：它属于单次连接，重连时由新的 CONNECT 提供。
-- **会话接管不发布遗嘱**：同一 ClientID 的新连接替换旧连接（旧连接收到 `DISCONNECT(SessionTakenOver)`）
-  视为客户端主动行为，旧连接的遗嘱既不会发布也不会残留；新会话的遗嘱以新 CONNECT 为准。
-
-## 安全（认证与 TLS）
-
-**认证**：在 `AuthHandler` 中校验 CONNECT 携带的 `AuthData`（建议用恒定时间比较）。`beacon-core` 已内置
-`--auth-file`（TOML，支持 SIGHUP 热重载）：
-
-```toml
-[[nodes]]
-serial = "device-1"
-secret = "s3cr3t"
 ```
+PUSH ──匹配 channel──▶ 各客户端 pending[3]（Low/Medium/High，受 QueueCap 约束）
+                                    │
+PULL ──────────────────────────────▶│  取出 → 写出
+                                    │     ├─ Low      ：写出即删
+                                    │     └─ Medium/High：移入 delivered
+COMMIT(ids) ───────────────────────▶│  delivered 中按 ID 删除
+```
+
+- **优先级即可靠性**：`High`/`Medium` 必须 `COMMIT`；`Low` 尽力而为，写出即删。
+- **`delivered` 优先**：存在未确认消息时，`PULL` 只重发这些消息（`Dup=1`），不取新数据，
+  因此客户端必须先 `COMMIT` 再拉取。
+- **定向投递**：`Record.Target` 指定 clientID，完全跳过 channel 匹配。
+- **会话**：`SessionID` 是会话租约；同 ClientID 的新连接会接管会话并关闭旧连接，
+  旧连接的请求从此不产生任何状态变更（fencing）。
+
+## 快速开始
+
+### 服务端
 
 ```bash
-beacon-core --addr :5208 --auth-file nodes.toml
+go run ./cmd/core --addr :5208 --metrics-addr :9101
 ```
 
-客户端在 CONNECT 时提供认证数据：
+常用参数：
+
+| 参数 | 说明 |
+|---|---|
+| `--addr` | TCP 监听地址 |
+| `--ws-addr` / `--ws-path` | WebSocket 监听地址与路径 |
+| `--metrics-addr` | `/healthz`、`/metrics`、`/stats` 监听地址 |
+| `--auth-file` | 设备密钥 TOML（`[[nodes]] serial=... secret=...`） |
+| `--queue-cap` | 单客户端 pending 队列上限 |
+| `--max-records` / `--max-bytes` | 单次 PULL 的记录数/字节上限 |
+
+### 客户端（CLI）
+
+```bash
+# 订阅并消费（逐批拉取 + 整批确认）
+go run ./cmd/client -core 127.0.0.1:5208 -client-id c1 -mode pull -channel 'sensors/**'
+
+# 发布
+go run ./cmd/client -core 127.0.0.1:5208 -client-id c2 -mode push -channel sensors/temp -message 21.5
+
+# 高优先级 + 定向投递
+go run ./cmd/client -mode push -channel cmd/reboot -priority high -target c1 -message now
+```
+
+### Go 客户端
 
 ```go
-opts := client.NewClientOptions().
+import (
+    "context"
+
+    "github.com/snple/beacon/client"
+)
+
+c, err := client.NewWithOptions(client.NewClientOptions().
     WithCore("127.0.0.1:5208").
-    WithClientID("device-1").
-    WithAuth("token", []byte("s3cr3t")) // AuthMethod + AuthData
-```
+    WithClientID("worker-1").
+    WithChannels("jobs/**"))     // 建连时随 CONNECT 一起声明
+if err != nil {
+    return err
+}
+if err := c.ConnectContext(ctx); err != nil {
+    return err
+}
+defer c.Close()
 
-**TLS**：服务端用 `core.ServeTLS(addr, tlsConfig)`（或自行传入 `tls.Listener`）；客户端地址使用 `tls://` 前缀即可：
-
-```go
-dialer := &client.TCPDialer{
-    Address:   "tls://broker.example.com:8883",
-    TLSConfig: &tls.Config{RootCAs: pool}, // 可选
+// 消费循环：拉取 → 处理 → 整批确认
+for {
+    msgs, err := c.Pull(ctx, client.PullOptions{MaxRecords: 100, WaitMs: 30000})
+    if err != nil {
+        return err
+    }
+    for _, m := range msgs {
+        handle(m.Channel, m.Payload)
+    }
+    if _, err := c.CommitAll(ctx); err != nil {
+        return err
+    }
 }
 ```
 
-未显式设置 `ServerName` 且未关闭校验时，客户端会从地址推导 SNI 名称（IP 字面量则依赖证书 IP SAN），
-不会因为缺少 `ServerName` 而被迫使用 `InsecureSkipVerify`。
+发布：
 
-完整的加固配置示例见 [`examples/secure_core`](./examples/secure_core/main.go)（认证 + TLS + 配额 + 运维端点）。
+```go
+opts := client.PushOptions{}.WithPriority(packet.PriorityHigh)
+
+if err := pub.Push(ctx, "jobs/image", payload, opts); err != nil { ... }
+
+// 不等待确认（省一个 RTT，但发送失败不可知）
+if err := pub.Push(ctx, "jobs/image", payload, opts.WithoutAck()); err != nil { ... }
+
+// 定向投递（跳过 channel 匹配，直接进入目标客户端队列）
+if err := pub.PushTo(ctx, "worker-1", "cmd/stop", nil, client.PushOptions{}); err != nil { ... }
+```
+
+## 语义要点
+
+### 空队列：默认等待，不是忙等
+
+`PULL.WaitMs` 是唯一决定「等不等」的字段：`0` 立即返回，`>0` 最多等待该时长。
+SDK 层的默认值不同——为了让朴素循环不会空转：
+
+| 调用方式 | 行为 |
+|---|---|
+| `Pull(ctx, client.PullOptions{})` | 长轮询，最多等 `ClientOptions.DefaultWaitMs`（默认 30s） |
+| `Pull(ctx, client.PullOptions{WaitMs: 500})` | 最多等 500ms |
+| `Pull(ctx, client.PullOptions{Immediate: true})` | 立即返回，不等待 |
+| `PollMessage(ctx, timeout)` | 内部按批长轮询，攒够或者超时 |
+
+同一连接同一时刻只允许一个在途 `PULL`，第二个会收到 `PULL_OK(RateLimited)`；
+SDK 已在 `Pull` 内部串行化。
+
+### 必须「先 commit 再 pull」
+
+`PULL` 在存在未确认消息时只重发这些消息。因此**客户端不 commit 就再 pull，只会反复收到同样的内容**。
+服务端会统计连续无进展的拉取次数：
+
+- 超过 `NoProgressSoft`（默认 4）：返回 `PULL_OK(ReasonCommitRequired)`，不返回数据；
+- 超过 `NoProgressHard`（默认 16）：断开连接（`DISCONNECT(CommitRequired)`）。
+
+`client.CommitAll()` / `Message.Ack()` 负责提交。
+
+### 消息 ID
+
+`PacketID` 12 字节，前 6 字节是毫秒时间戳，因此**大致**按时间有序（时钟回拨除外）。
+它用于去重与追踪；**投递顺序以队列位置为准，不要依赖 ID 排序**。
+
+### 优先级与丢弃
+
+队列满时按「低优先级优先丢弃、同优先级丢最旧」处理；如果新消息的优先级低于当前最低非空优先级，
+则丢弃新消息本身。被丢弃的数量通过 `PUSH_OK.Results[].Dropped` 返回给发布者。
+
+### 定向投递
+
+- 目标是 clientID；`Channel` 仍参与写权限校验，但不参与匹配；
+- 目标离线但会话保留时仍然入队；
+- 目标没有会话时返回 `TargetNotFound`。
+
+### 会话接管
+
+同一个 ClientID 再次连接会接管会话：新连接拿到新的 `SessionID`，旧连接收到
+`DISCONNECT(SessionTakenOver)` 后被关闭，且旧连接之后的所有请求都不产生状态变更。
+客户端收到该原因码后**不应自动重连**，否则两个实例会互相踢下线。
+
+### 遗嘱
+
+`CONNECT` 可携带遗嘱（channel + payload + headers），仅在**异常断开**时发布；
+`DISCONNECT` 或正常关闭会清除它。会话被接管时遗嘱**不触发**（设备仍在线，只是换了连接）。
+
+### 不落盘
+
+所有队列与会话都在内存中，进程重启即丢失。需要跨重启可靠性时请在上层保障。
 
 ## 可观测性
 
-`GetStats()` 返回 `StatsSnapshot`，包含计数器（消息收发/丢弃/拒绝、字节数、订阅数）与运行时水位
-（`PendingQueueDepth` 全局待分发队列、`ClientQueueDepth` 所有客户端待发送队列之和、`PendingAckTotal`、
-`OfflineSessions`、`InFlightMessages` 内存中未完成投递的消息条数、`PendingBytes` 其近似占用）。
-
-需要 HTTP 端点时启动 `ServeMetrics`（`beacon-core` 对应 `--metrics-addr`）：
-
 | 端点 | 说明 |
 |---|---|
-| `GET /healthz` | 存活探针：运行中返回 `200 ok`，已停止返回 `503` |
-| `GET /metrics` | Prometheus 文本格式指标（`beacon_*`；`beacon_pending_queue_depth`、`beacon_pending_ack`、`beacon_store_bytes` 等用于容量告警） |
-| `GET /stats` | JSON 格式统计快照，便于人工排查 |
+| `GET /healthz` | 存活探针 |
+| `GET /metrics` | Prometheus 文本格式 |
+| `GET /stats` | JSON 统计快照 |
 
-```bash
-beacon-core --addr :5208 --metrics-addr :9101
-curl -s localhost:9101/metrics | grep pending
-```
-
-`/metrics` 与 `/stats` 共用 1 秒快照缓存，避免高频抓取时重复全量遍历客户端；
-需要实时数值时直接调用 `core.GetStats()`。运维端点默认不鉴权，生产环境请绑定 loopback 或置于内网。
+关键指标：`beacon_inflight_messages`、`beacon_inflight_bytes`、`beacon_messages_dropped_total`、
+`beacon_commit_required_total`、`beacon_session_takeovers_total`、`beacon_wildcard_filters`。
 
 ## 管理 API（进程内）
 
-面向外部管理程序（另一个仓库）嵌入使用：broker 只暴露 Go 方法，HTTP/鉴权/前端由管理程序自行实现。
-
-| 能力 | API |
-|---|---|
-| 服务器信息 | `Info()`（版本/uptime/监听器/上限/存储，版本由 `WithBuildInfo` 构造期注入）、`Listeners()`、`Ready()`、`GetStats()` |
-| 客户端列表 | `ListClients()`：轻量概要（ClientID/在线/地址/时间/离线过期时间），**不分页** |
-| 客户端详情 | `GetClientInfo(id)`：配置、运行状态、队列与在途水位、订阅、每客户端计数器 |
-| 踢下线 | `DisconnectClient()` / `DisconnectClientAndWait(ctx, ...)`（唯一改变会话状态的写操作） |
-| 发布 | `Publish(topic, payload, opts)` 返回 `PublishResult`（命中订阅者数；**仅表示已入队**） |
-| 定向/广播 | `PublishToClient(clientID, topic, payload, opts)`（离线会话排队）、`Broadcast(topic, payload, opts)`（仅在线扇出，返回成功数） |
-| 事件流 | `SubscribeEvents(ctx, EventOptions) (*EventStream, error)`：连接/断开/订阅/发布/丢弃/拒绝/会话过期/管理操作 |
-| 认证身份 | `AuthConnectContext.Identity` / `AuthContext.Identity`（仅内存），透出到 `ClientInfo.Identity` 与事件 |
-| 错误语义 | 认证器返回 `*AuthError{Reason}` 可指定 CONNACK 原因码（如 `ReasonBanned`）；`DisconnectContext` 含 `Reason`/`Err` |
-
-**观测面只有"客户端列表 + 客户端详情"两个入口**，话题/订阅/保留消息不再提供枚举 API；
-需要时用 `GetClientInfo(id).Subscriptions` 查看单个客户端的订阅。
-
-**改变会话/配置状态的写操作只有"踢下线"一条**：`DisconnectClient` / `DisconnectClientAndWait`。
-`Publish` 只产生消息流，不算状态变更。删除会话、删除保留消息、清空积压一律不由 broker 提供
-（保留消息用协议语义的 `Publish(topic, nil, PublishOptions{Retain: true})` 清除）。
-
-事件流是**尽力而为**的：订阅者消费过慢时丢弃新事件，`EventStream.Dropped()` 给出本订阅者的累计丢弃数，
-`Event.Seq` 是**每订阅者连续序号**（未匹配事件不占号），跳号数量 == 丢弃数量。
-需要精确状态时以 `ListClients` / `GetClientInfo` 的快照为准。
-
-封禁、ACL、审计留存、日志 tail、消息历史等属于业务策略，由管理程序用 `AuthHandler` /
-`OnSubscribe` / `OnPublish` / zap sink 自行组合，broker 不内建（设计取舍见
-[`docs/admin-api-design.md`](./docs/admin-api-design.md)）。
-
-## 使用方法
-
-导入包：
-
 ```go
-import "github.com/snple/beacon/client"
-import "github.com/snple/beacon/core"
+b.Info()                      // 版本、上限、监听器
+b.ListClients()               // 会话概要（在线 + 离线保留）
+b.GetClientInfo(clientID)     // 详情：队列深度、声明、身份、计数器
+b.DisconnectClient(id, reason)
+b.Push(channel, payload, opts)                 // 系统身份推送
+b.PushToClient(clientID, channel, payload, opts)
+b.GetStats()                  // 计数快照
 ```
 
-更多示例：
+详见 [`docs/admin-api-design.md`](./docs/admin-api-design.md)。
 
-- [`examples/core_api`](./examples/core_api/main.go)：Core 管理 API（客户端列表/详情、发布、事件流、踢下线）
-- [`examples/flexible_listeners`](./examples/flexible_listeners/main.go)：自定义监听器（TCP/TLS/Unix Socket）
-- [`examples/secure_core`](./examples/secure_core/main.go)：认证 + TLS + 配额 + metrics 端点
-- [`docs/embedded-client-guide.md`](./docs/embedded-client-guide.md)：CONNECT 报文布局与嵌入式客户端实现要点
-- [`docs/admin-api-design.md`](./docs/admin-api-design.md)：进程内管理 API 设计（供外部 Web 管理程序嵌入调用；broker 不提供 HTTP 管理面）
+## 传输
 
-## 流中继（独立的 stream 协议）
+- TCP：`core.ServeTCP(addr)`
+- TLS：`core.ServeTLS(addr, tlsConfig)`
+- WebSocket：`core.ServeWS(addr, path)`；客户端用 `client.WSDialer` 或 `ws://` / `wss://` 地址
 
-`stream/` 是**另一套协议**：点对点字节流中继，与 Beacon 消息总线的线格式和语义互不兼容，也不共享 `packet` 包。
+所有传输共用同一线格式，行为完全一致。
 
-- `stream.Core`：监听并中继；`stream.Client.OpenStream`（主动方）/ `AcceptStream`（被动方）建立双向流；
-- `stream.Stream` 实现 `net.Conn`，可直接作为普通字节流使用；
-- 等待中的接收连接总数受 `stream.WithMaxWaitingConns`（默认 10000）限制；
-- 握手阶段（读到 CONNECT 到完成 STREAM_OPEN/READY）的并发连接受 `stream.WithMaxHandshakeConns`（默认 1024）限制，
-  超限直接 `CONNACK(ServerUnavailable)` 并关闭，避免慢客户端用半开连接占满 goroutine；
-- 控制包（CONNACK/PONG/STREAM_ACK）与数据转发都受 `stream.WithWriteTimeout`（默认 10s）约束：
-  对端长期不读数据时写超时会结束该流，而不是让转发协程永久阻塞；
-- `Core.Stop()` 会关闭等待连接与活跃流，不会因转发协程阻塞而挂起；认证被拒时 `AcceptStream` 立即返回 `ErrAuthRejected`。
+## 流中继（独立协议）
 
-## WebSocket 支持
+`stream/` 是另一套协议：点对点字节流中继，与消息总线的线格式和语义互不兼容，也不共享 `packet` 包。
 
-Beacon 同时支持 TCP 与 WebSocket 两种传输方式，二者完全互通（消息、订阅、QoS 语义一致）。
-
-**服务端**：为 core 增加 `--ws-addr` 参数即可同时监听 WebSocket（默认路径 `/ws`）：
+## 开发
 
 ```bash
-beacon-core --addr :5208 --ws-addr :8080 --ws-path /ws
-```
-
-**客户端**：地址以 `ws://` 或 `wss://` 开头时自动走 WebSocket 传输：
-
-```bash
-beacon-client --core ws://127.0.0.1:8080/ws --client-id c1 --mode sub --topic 'test/**'
-beacon-client --core ws://127.0.0.1:8080/ws --client-id c2 --mode pub --topic test/hello --message "hi"
-```
-
-需要 `wss://` 时，给 `core.ServeWSListener` 传入 `tls.NewListener(...)`，或把明文 WS 端点放在反向代理之后
-（`beacon-core --ws-addr` 本身只提供明文 HTTP）。WS 升级默认接受任意 `Origin`（协议在 CONNECT 中认证）；
-浏览器侧的来源限制请在反向代理或网关层配置。
-
-**Go 代码**：使用 `client.WSDialer` 连接：
-
-```go
-c, err := client.NewWithOptions(client.NewClientOptions().
-    WithClientID("browser-client").
-    WithLogger(logger)) // logger 为 *zap.Logger，nil 表示静默
-if err != nil {
-    log.Fatal(err)
-}
-
-dialer := &client.WSDialer{Address: "ws://127.0.0.1:8080/ws", DialTimeout: 10 * time.Second}
-if err := c.ConnectWithDialer(dialer); err != nil {
-    log.Fatal(err)
-}
-```
-
-浏览器/前端应用可直接用原生 WebSocket 或 gorilla/websocket 与 core 的 `/ws` 端点通信。
-
-## 开发与验证
-
-```bash
-make fmt        # 检查格式（不修改文件）
+make fmt        # 检查格式
 make fmt-fix    # 格式化
 make vet
-make lint       # golangci-lint，配置见 .golangci.yml
+make lint       # golangci-lint v2
 make test
 make test-race
 make check      # fmt + vet + lint + test-race
 ```
 
-`make lint` 需要本地安装 golangci-lint v2：
+## 已知限制
 
-```bash
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-```
-
-CI（`.github/workflows/ci.yml`）会执行同样的检查。
+| 限制 | 说明 |
+|---|---|
+| 无历史回放 | channel 是路由键，不存历史；新声明的客户端只收到之后的消息 |
+| 无 pipelining | `delivered` 非空时不取新数据（stop-and-wait） |
+| Low 可能未被投递就被淘汰 | 尽力而为的定义 |
+| High 溢出时仍会丢可靠消息 | 单队列容量上限的必然结果 |
+| 无法表达「低紧急但必须送达」 | 只能用 Medium |
+| 重启丢全部队列 | 纯内存 |
+| `DECLARE` 不能减轻积压 | 只影响未来匹配 |
 
 ## License
 
-本项目基于 [MIT License](./LICENSE) 开源，Copyright (c) 2026 danc <dangcheng@hotmail.com>。
+MIT License，Copyright (c) 2026 danc <dangcheng@hotmail.com>。

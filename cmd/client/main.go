@@ -1,3 +1,4 @@
+// beacon-client 是 Beacon v4 的命令行客户端，用于调试 push/pull。
 package main
 
 import (
@@ -12,205 +13,173 @@ import (
 	"time"
 
 	"github.com/snple/beacon/client"
+	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
-var (
-	version = "0.1.0"
-)
+var version = "0.4.0"
 
 func main() {
-	// 命令行参数
-	core := flag.String("core", "localhost:5208", "Core address")
-	clientID := flag.String("client-id", "", "Client ID (default: auto-generated)")
-	mode := flag.String("mode", "pub", "Mode: pub (publish), sub (subscribe)")
-
-	// 消息相关参数
-	topic := flag.String("topic", "test/topic", "Topic for pub/sub mode")
-	message := flag.String("message", "Hello, Beacon!", "Message payload for pub mode")
-	// 连接参数
-	keepAlive := flag.Uint("keepalive", 60, "Keep alive interval (seconds)")
-	sessionTimeout := flag.Uint("session-timeout", 0, "Session timeout (seconds)")
-
-	// 其他参数
-	count := flag.Int("count", 1, "Number of messages to publish")
-	interval := flag.Duration("interval", 1*time.Second, "Interval between messages")
-	showVersion := flag.Bool("version", false, "Show version")
-	debug := flag.Bool("debug", false, "Enable debug logging")
-
+	var (
+		address  = flag.String("core", "127.0.0.1:5208", "Core address (host:port, ws:// or wss://)")
+		clientID = flag.String("client-id", "", "Client ID (default: auto)")
+		mode     = flag.String("mode", "pull", "Mode: push | pull")
+		channel  = flag.String("channel", "test/channel", "Channel name")
+		message  = flag.String("message", "Hello, Beacon!", "Payload for push mode")
+		count    = flag.Int("count", 1, "Number of messages to push")
+		priority = flag.String("priority", "medium", "Priority: low | medium | high")
+		target   = flag.String("target", "", "Target client ID for directed push")
+		channels = flag.String("channels", "", "Comma separated channel filters to declare")
+		maxRecs  = flag.Int("max-records", 100, "Max records per pull")
+		interval = flag.Duration("interval", 0, "Push interval")
+		waitMs   = flag.Int("wait-ms", 0, "Pull long-poll wait in ms")
+		stdout   = flag.Bool("stdout", true, "Print pulled payloads")
+		debug    = flag.Bool("debug", false, "Enable debug logging")
+		showVer  = flag.Bool("version", false, "Print version and exit")
+	)
 	flag.Parse()
 
-	if *showVersion {
-		fmt.Printf("Beacon 0.1 client v%s\n", version)
-		os.Exit(0)
-	}
-
-	// 设置日志器
-	var logger *zap.Logger
-	var err error
-	if *debug {
-		logger, err = zap.NewDevelopment()
-	} else {
-		logger, err = zap.NewProduction()
-	}
-	if err != nil {
-		fmt.Printf("Failed to initialize logger: %v\n", err)
-		os.Exit(1)
-	}
-	defer func() { _ = logger.Sync() }()
-
-	// 打印启动信息
-	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║                    Beacon Client                               ║")
-	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║  Version:          %-40s ║\n", version)
-	fmt.Printf("║  Core:             %-40s ║\n", *core)
-	fmt.Printf("║  Client ID:        %-40s ║\n", getClientID(*clientID))
-	fmt.Printf("║  Mode:             %-40s ║\n", *mode)
-	fmt.Printf("║  Keep Alive:       %-40d ║\n", *keepAlive)
-	fmt.Printf("║  Session Timeout:  %-40d ║\n", *sessionTimeout)
-	fmt.Printf("║  Debug:            %-40v ║\n", *debug)
-	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
-	fmt.Println()
-
-	// 创建客户端
-	c, err := client.NewWithOptions(
-		client.NewClientOptions().
-			WithCore(*core).
-			WithClientID(*clientID).
-			WithKeepAlive(uint16(*keepAlive)).
-			WithSessionTimeout(uint32(*sessionTimeout)).
-			WithLogger(logger).
-			WithConnectionHandler(&client.ConnectionHandlerFunc{
-				ConnectFunc: func(ctx *client.ConnectContext) {
-					fmt.Printf("✓ Connected to core (ClientID: %s, SessionPresent: %v)\n",
-						ctx.ClientID, ctx.SessionPresent)
-				},
-				DisconnectFunc: func(ctx *client.DisconnectContext) {
-					if ctx.Err != nil {
-						fmt.Printf("✗ Disconnected: %v\n", ctx.Err)
-					} else {
-						fmt.Println("✓ Disconnected")
-					}
-				},
-			}),
-	)
-	if err != nil {
-		logger.Fatal("Failed to create client", zap.Error(err))
-	}
-	defer func() { _ = c.Close() }()
-
-	// 连接到 core（ws:// 或 wss:// 前缀自动走 WebSocket 传输）
-	var dialer client.Dialer
-	if strings.HasPrefix(*core, "ws://") || strings.HasPrefix(*core, "wss://") {
-		dialer = &client.WSDialer{
-			Address:     *core,
-			DialTimeout: 10 * time.Second,
-		}
-	} else {
-		dialer = &client.TCPDialer{
-			Address:     *core,
-			DialTimeout: 10 * time.Second,
-		}
-	}
-	if err := c.ConnectWithDialer(dialer); err != nil {
-		logger.Fatal("Failed to connect", zap.Error(err))
-	}
-
-	// 信号处理
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigCh
-		fmt.Println("\nReceived interrupt signal, shutting down...")
-		cancel()
-	}()
-
-	// 根据模式执行不同操作
-	switch strings.ToLower(*mode) {
-	case "pub", "publish":
-		runPublishMode(ctx, c, *topic, *message, *count, *interval)
-	case "sub", "subscribe":
-		runSubscribeMode(ctx, c, *topic)
-	default:
-		logger.Fatal("Unknown mode", zap.String("mode", *mode))
-	}
-
-	fmt.Println("\nShutting down...")
-}
-
-func getClientID(id string) string {
-	if id == "" {
-		return "auto-generated"
-	}
-	return id
-}
-
-func runPublishMode(ctx context.Context, c *client.Client, topic, message string, count int, interval time.Duration) {
-	fmt.Printf("Publishing %d message(s) to topic '%s'...\n\n", count, topic)
-
-	for i := 0; i < count; i++ {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		msg := fmt.Sprintf("%s #%d", message, i+1)
-		if err := c.Publish(topic, []byte(msg), nil); err != nil {
-			fmt.Printf("✗ Failed to publish message #%d: %v\n", i+1, err)
-			continue
-		}
-
-		fmt.Printf("✓ Published message #%d: %s\n", i+1, msg)
-
-		if i < count-1 && interval > 0 {
-			timer := time.NewTimer(interval)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
-	}
-
-	fmt.Printf("\n✓ Successfully published %d message(s)\n", count)
-}
-
-func runSubscribeMode(ctx context.Context, c *client.Client, topic string) {
-	fmt.Printf("Subscribing to topic '%s'...\n\n", topic)
-
-	if err := c.Subscribe(topic); err != nil {
-		fmt.Printf("✗ Failed to subscribe: %v\n", err)
+	if *showVer {
+		fmt.Println(version)
 		return
 	}
 
-	fmt.Println("✓ Subscribed, waiting for messages (Ctrl+C to exit)...")
-	fmt.Println()
-
-	msgCount := 0
-	for {
-		msg, err := c.PollMessage(ctx, 5*time.Second)
-		if err != nil {
-			if errors.Is(err, client.ErrPollTimeout) {
-				continue
-			}
-			if ctx.Err() != nil {
-				break
-			}
-			fmt.Printf("✗ Error polling message: %v\n", err)
-			break
-		}
-
-		msgCount++
-
-		fmt.Printf("✓ [%d] Received message on '%s': %s\n", msgCount, msg.Topic(), string(msg.Payload()))
+	prio, err := parsePriority(*priority)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
 
-	fmt.Printf("\n✓ Received %d message(s)\n", msgCount)
+	cfg := zap.NewProductionConfig()
+	if *debug {
+		cfg.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+	}
+	logger, _ := cfg.Build()
+	defer func() { _ = logger.Sync() }()
+
+	opts := client.NewClientOptions().
+		WithCore(*address).
+		WithClientID(*clientID).
+		WithSessionTimeout(300).
+		WithLogger(logger)
+
+	if *channels != "" {
+		opts.WithChannels(splitList(*channels)...)
+	} else if *mode == "pull" {
+		opts.WithChannels(*channel)
+	}
+
+	c, err := client.NewWithOptions(opts)
+	if err != nil {
+		logger.Fatal("create client", zap.Error(err))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := c.ConnectContext(ctx); err != nil {
+		logger.Fatal("connect", zap.Error(err))
+	}
+	logger.Info("connected",
+		zap.String("clientID", c.ClientID()),
+		zap.Bool("sessionPresent", c.SessionPresent()))
+	defer func() { _ = c.Close() }()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cancel()
+	}()
+
+	switch *mode {
+	case "push":
+		runPush(ctx, c, *channel, *message, *count, prio, *target, *interval)
+	case "pull":
+		runPull(ctx, c, *maxRecs, *waitMs, *stdout)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown mode %q\n", *mode)
+		os.Exit(2)
+	}
+}
+
+func runPush(ctx context.Context, c *client.Client, channel, message string, count int, prio packet.Priority, target string, interval time.Duration) {
+	opts := client.PushOptions{Target: target}.WithPriority(prio)
+
+	for i := 0; i < count; i++ {
+		if err := c.Push(ctx, channel, []byte(message), opts); err != nil {
+			fmt.Fprintf(os.Stderr, "push failed: %v\n", err)
+			return
+		}
+		fmt.Printf("pushed to %s (priority=%s)\n", channel, prio)
+		if interval > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+			}
+		}
+	}
+}
+
+func runPull(ctx context.Context, c *client.Client, maxRecords, waitMs int, print bool) {
+	for {
+		msgs, err := c.Pull(ctx, client.PullOptions{
+			MaxRecords: uint16(maxRecords),
+			WaitMs:     uint32(waitMs),
+			Immediate:  waitMs == 0,
+		})
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, client.ErrClientClosed) {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "pull failed: %v\n", err)
+			return
+		}
+
+		for _, m := range msgs {
+			if print {
+				fmt.Printf("[%s] %s: %s (dup=%v priority=%s)\n",
+					m.ID.Hex()[:8], m.Channel, string(m.Payload), m.Dup, m.Priority)
+			}
+		}
+
+		if len(msgs) == 0 && waitMs == 0 {
+			// 非阻塞拉取：避免空转
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+
+		if _, err := c.CommitAll(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "commit failed: %v\n", err)
+			return
+		}
+	}
+}
+
+func parsePriority(s string) (packet.Priority, error) {
+	switch strings.ToLower(s) {
+	case "low":
+		return packet.PriorityLow, nil
+	case "medium", "med", "":
+		return packet.PriorityMedium, nil
+	case "high":
+		return packet.PriorityHigh, nil
+	default:
+		return 0, fmt.Errorf("invalid priority %q", s)
+	}
+}
+
+func splitList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

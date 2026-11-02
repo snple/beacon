@@ -1,313 +1,239 @@
 package packet
 
 import (
-	"bytes"
-	"fmt"
 	"io"
 )
 
-// ConnectPacket CONNECT 数据包
-type ConnectPacket struct {
-	// 协议信息
-	ProtocolName    string
-	ProtocolVersion uint8
-
-	// 客户端标识
-	ClientID string
-
-	// 连接保持
-	KeepAlive uint16 // 心跳间隔（秒）
-
-	// 会话管理
-	SessionTimeout uint32 // 会话过期时间（秒）
-	CleanStart     bool   // 是否要求服务端丢弃已有会话并新建
-
-	// 属性
-	Properties *ConnectProperties
-
-	// 遗嘱消息
-	Will       bool // 遗嘱标志
-	WillPacket *PublishPacket
+// ChannelDecl 客户端声明的一项 channel 兴趣。
+type ChannelDecl struct {
+	Channel string
 }
 
-// NewConnectPacket 创建新的 CONNECT 包
-func NewConnectPacket() *ConnectPacket {
+// ConnectPacket CONNECT：建立连接、单轮认证、首次声明。
+type ConnectPacket struct {
+	Version        uint8
+	ClientID       string
+	KeepAlive      uint16 // 秒
+	SessionTimeout uint32 // 秒；0 表示断开即清理
+	MaxPacketSize  uint32
+
+	HasWill     bool
+	WillChannel string
+	WillPayload []byte
+	WillHeaders map[string]string
+
+	AuthMethod string
+	AuthData   []byte
+
+	Channels []ChannelDecl
+}
+
+// NewConnectPacket 创建 CONNECT 包。
+func NewConnectPacket(clientID string) *ConnectPacket {
 	return &ConnectPacket{
-		ProtocolName:    ProtocolName,
-		ProtocolVersion: ProtocolVersion,
-		Properties:      NewConnectProperties(),
-		KeepAlive:       DefaultKeepAlive,
+		Version:   ProtocolVersion,
+		ClientID:  clientID,
+		KeepAlive: DefaultKeepAlive,
 	}
 }
 
-func (p *ConnectPacket) Type() PacketType {
-	return CONNECT
-}
+func (p *ConnectPacket) Type() PacketType { return CONNECT }
 
 func (p *ConnectPacket) encode(w io.Writer) error {
-	// 协议名称
-	if err := EncodeString(w, p.ProtocolName); err != nil {
+	if err := WriteByte(w, p.Version); err != nil {
 		return err
 	}
-
-	// 协议版本
-	if err := WriteByte(w, p.ProtocolVersion); err != nil {
-		return err
-	}
-
-	// 客户端标识
 	if err := EncodeString(w, p.ClientID); err != nil {
 		return err
 	}
-
-	// KeepAlive
 	if err := EncodeUint16(w, p.KeepAlive); err != nil {
 		return err
 	}
-
-	// SessionTimeout
 	if err := EncodeUint32(w, p.SessionTimeout); err != nil {
 		return err
 	}
-
-	// 会话标志字节
-	var sessionFlags uint8
-	if p.CleanStart {
-		sessionFlags |= 0x01 // Bit 0: CleanStart
-	}
-	if err := WriteByte(w, sessionFlags); err != nil {
+	if err := EncodeUint32(w, p.MaxPacketSize); err != nil {
 		return err
 	}
 
-	// 属性（不修改接收者：nil 时使用局部默认值）
-	props := p.Properties
-	if props == nil {
-		props = NewConnectProperties()
+	var willFlags uint8
+	if p.HasWill {
+		willFlags |= 1
 	}
-	if err := props.Encode(w); err != nil {
+	if err := WriteByte(w, willFlags); err != nil {
+		return err
+	}
+	if err := EncodeString(w, p.WillChannel); err != nil {
+		return err
+	}
+	if err := EncodeBytes32(w, p.WillPayload); err != nil {
+		return err
+	}
+	if err := EncodeStringMap(w, p.WillHeaders); err != nil {
 		return err
 	}
 
-	// 遗嘱消息
-	if p.Will && p.WillPacket != nil {
-		// 遗嘱 Flags 字节 (紧凑布局) - 与 PublishPacket 一致
-		// Bit 0: QoS (0 或 1)
-		// Bit 1: Retain
-		// Bit 2: Dup
-		// Bit 3: Will
-		var willFlags uint8
-		willFlags |= uint8(p.WillPacket.QoS) & 0x01 // Bit 0: QoS
-		if p.WillPacket.Retain {
-			willFlags |= 0x02 // Bit 1: Retain
-		}
-		if p.WillPacket.Dup {
-			willFlags |= 0x04 // Bit 2: Dup
-		}
-		willFlags |= 0x08 // Bit 3: Will
+	if err := EncodeString(w, p.AuthMethod); err != nil {
+		return err
+	}
+	if err := EncodeBytes32(w, p.AuthData); err != nil {
+		return err
+	}
 
-		// 写入遗嘱 Flags 字节
-		if err := WriteByte(w, willFlags); err != nil {
-			return err
-		}
-
-		// 遗嘱主题
-		if err := EncodeString(w, p.WillPacket.Topic); err != nil {
-			return err
-		}
-
-		// 遗嘱属性（不修改接收者）
-		willProps := p.WillPacket.Properties
-		if willProps == nil {
-			willProps = NewPublishProperties()
-		}
-		if err := willProps.Encode(w); err != nil {
-			return err
-		}
-
-		// 遗嘱载荷 (直接写入，与 PublishPacket 一致)
-		if _, err := w.Write(p.WillPacket.Payload); err != nil {
-			return err
-		}
-	} else {
-		// 如果没有遗嘱消息,写入一个空的遗嘱标志字节
-		if err := WriteByte(w, 0x00); err != nil {
+	if len(p.Channels) > MaxStringLength {
+		return ErrMalformedPacket
+	}
+	if err := EncodeUint16(w, uint16(len(p.Channels))); err != nil {
+		return err
+	}
+	for _, ch := range p.Channels {
+		if err := EncodeString(w, ch.Channel); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-func (p *ConnectPacket) decode(r io.Reader, header FixedHeader) error {
-	// 协议名称
+func (p *ConnectPacket) decode(r io.Reader, _ FixedHeader) error {
 	var err error
-	p.ProtocolName, err = DecodeString(r)
+	if p.Version, err = ReadByte(r); err != nil {
+		return err
+	}
+	if p.ClientID, err = DecodeString(r); err != nil {
+		return err
+	}
+	if p.KeepAlive, err = DecodeUint16(r); err != nil {
+		return err
+	}
+	if p.SessionTimeout, err = DecodeUint32(r); err != nil {
+		return err
+	}
+	if p.MaxPacketSize, err = DecodeUint32(r); err != nil {
+		return err
+	}
+
+	willFlags, err := ReadByte(r)
 	if err != nil {
 		return err
 	}
-
-	// 协议版本
-	var version [1]byte
-	if _, err := io.ReadFull(r, version[:]); err != nil {
+	p.HasWill = willFlags&1 != 0
+	if p.WillChannel, err = DecodeString(r); err != nil {
 		return err
 	}
-	p.ProtocolVersion = version[0]
+	if p.WillPayload, err = DecodeBytes32(r); err != nil {
+		return err
+	}
+	if p.WillHeaders, err = DecodeStringMap(r); err != nil {
+		return err
+	}
 
-	// 客户端标识
-	p.ClientID, err = DecodeString(r)
+	if p.AuthMethod, err = DecodeString(r); err != nil {
+		return err
+	}
+	if p.AuthData, err = DecodeBytes32(r); err != nil {
+		return err
+	}
+
+	count, err := DecodeUint16(r)
 	if err != nil {
 		return err
 	}
-
-	// Keep Alive
-	p.KeepAlive, err = DecodeUint16(r)
-	if err != nil {
-		return err
-	}
-
-	// Session Timeout
-	p.SessionTimeout, err = DecodeUint32(r)
-	if err != nil {
-		return err
-	}
-
-	// 会话标志字节
-	var sessionFlags [1]byte
-	if _, err := io.ReadFull(r, sessionFlags[:]); err != nil {
-		return err
-	}
-	p.CleanStart = sessionFlags[0]&0x01 != 0
-
-	// 属性
-	p.Properties = NewConnectProperties()
-	if err := p.Properties.Decode(r); err != nil {
-		return err
-	}
-
-	// 读取遗嘱 Flags 字节
-	var willFlags [1]byte
-	if _, err := io.ReadFull(r, willFlags[:]); err != nil {
-		return err
-	}
-	p.Will = willFlags[0]&0x08 != 0 // Bit 3: Will
-
-	// 遗嘱消息
-	if p.Will {
-		p.WillPacket = &PublishPacket{}
-
-		// 遗嘱 Flags 字节 (紧凑布局) - 与 PublishPacket 一致
-		// Bit 0: QoS (0 或 1)
-		// Bit 1: Retain
-		// Bit 2: Dup
-		// Bit 3: Will
-		p.WillPacket.QoS = QoS(willFlags[0] & 0x01)  // Bit 0: QoS
-		p.WillPacket.Retain = willFlags[0]&0x02 != 0 // Bit 1: Retain
-		p.WillPacket.Dup = willFlags[0]&0x04 != 0    // Bit 2: Dup
-
-		// 验证 QoS
-		if !p.WillPacket.QoS.IsValid() {
-			return ErrInvalidQoS
-		}
-
-		// 遗嘱主题
-		p.WillPacket.Topic, err = DecodeString(r)
-		if err != nil {
+	if count > 0 {
+		if err := checkCount(r, count, 1); err != nil {
 			return err
 		}
-
-		// 验证遗嘱主题
-		if !ValidateTopicName(p.WillPacket.Topic) {
-			return fmt.Errorf("invalid will topic: %s", p.WillPacket.Topic)
-		}
-
-		// 遗嘱属性
-		p.WillPacket.Properties = NewPublishProperties()
-		if err := p.WillPacket.Properties.Decode(r); err != nil {
-			return err
-		}
-
-		// 遗嘱载荷 (读取剩余所有数据，与 PublishPacket 一致)
-		if br, ok := r.(*bytes.Reader); ok {
-			p.WillPacket.Payload = make([]byte, br.Len())
-			if _, err := io.ReadFull(r, p.WillPacket.Payload); err != nil {
+		p.Channels = make([]ChannelDecl, 0, count)
+		for i := 0; i < int(count); i++ {
+			ch, err := DecodeString(r)
+			if err != nil {
 				return err
 			}
-		} else {
-			buf := new(bytes.Buffer)
-			_, err = io.Copy(buf, r)
-			if err != nil && err != io.EOF {
-				return err
-			}
-			p.WillPacket.Payload = buf.Bytes()
+			p.Channels = append(p.Channels, ChannelDecl{Channel: ch})
 		}
 	}
-
 	return nil
 }
 
-// ConnackPacket CONNACK 数据包
+// ConnackPacket CONNACK：连接响应。
 type ConnackPacket struct {
-	// 会话存在标志
-	SessionPresent bool
-
-	// 原因码
-	ReasonCode ReasonCode
-
-	// 属性
-	Properties *ConnackProperties
+	SessionPresent      bool
+	ReasonCode          ReasonCode
+	AssignedClientID    string
+	ServerMaxPacketSize uint32
+	SessionID           uint64
+	Pending             [3]uint32
+	Delivered           uint32
+	OldestUncommitted   PacketID
 }
 
-// NewConnackPacket 创建新的 CONNACK 包
-func NewConnackPacket(code ReasonCode) *ConnackPacket {
-	return &ConnackPacket{
-		ReasonCode: code,
-		Properties: NewConnackProperties(),
-	}
+// NewConnackPacket 创建 CONNACK 包。
+func NewConnackPacket(reason ReasonCode) *ConnackPacket {
+	return &ConnackPacket{ReasonCode: reason}
 }
 
-func (p *ConnackPacket) Type() PacketType {
-	return CONNACK
-}
+func (p *ConnackPacket) Type() PacketType { return CONNACK }
 
 func (p *ConnackPacket) encode(w io.Writer) error {
-	// 会话存在标志
-	var flags byte
+	var present uint8
 	if p.SessionPresent {
-		flags |= 0x01
+		present = 1
 	}
-	if err := WriteByte(w, flags); err != nil {
+	if err := WriteByte(w, present); err != nil {
 		return err
 	}
-
-	// 原因码
 	if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
 		return err
 	}
-
-	// 属性（不修改接收者）
-	props := p.Properties
-	if props == nil {
-		props = NewConnackProperties()
+	if err := EncodeString(w, p.AssignedClientID); err != nil {
+		return err
 	}
-	return props.Encode(w)
+	if err := EncodeUint32(w, p.ServerMaxPacketSize); err != nil {
+		return err
+	}
+	if err := EncodeUint64(w, p.SessionID); err != nil {
+		return err
+	}
+	for _, v := range p.Pending {
+		if err := EncodeUint32(w, v); err != nil {
+			return err
+		}
+	}
+	if err := EncodeUint32(w, p.Delivered); err != nil {
+		return err
+	}
+	return EncodePacketID(w, p.OldestUncommitted)
 }
 
-func (p *ConnackPacket) decode(r io.Reader, header FixedHeader) error {
-	// 连接确认标志
-	var flags [1]byte
-	if _, err := io.ReadFull(r, flags[:]); err != nil {
+func (p *ConnackPacket) decode(r io.Reader, _ FixedHeader) error {
+	present, err := ReadByte(r)
+	if err != nil {
 		return err
 	}
-	p.SessionPresent = flags[0]&0x01 != 0
+	p.SessionPresent = present&1 != 0
 
-	// 原因码
-	var code [1]byte
-	if _, err := io.ReadFull(r, code[:]); err != nil {
+	reason, err := ReadByte(r)
+	if err != nil {
 		return err
 	}
-	p.ReasonCode = ReasonCode(code[0])
+	p.ReasonCode = ReasonCode(reason)
 
-	// 属性
-	p.Properties = NewConnackProperties()
-	return p.Properties.Decode(r)
+	if p.AssignedClientID, err = DecodeString(r); err != nil {
+		return err
+	}
+	if p.ServerMaxPacketSize, err = DecodeUint32(r); err != nil {
+		return err
+	}
+	if p.SessionID, err = DecodeUint64(r); err != nil {
+		return err
+	}
+	for i := 0; i < 3; i++ {
+		if p.Pending[i], err = DecodeUint32(r); err != nil {
+			return err
+		}
+	}
+	if p.Delivered, err = DecodeUint32(r); err != nil {
+		return err
+	}
+	p.OldestUncommitted, err = DecodePacketID(r)
+	return err
 }

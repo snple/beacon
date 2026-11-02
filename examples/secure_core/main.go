@@ -1,110 +1,101 @@
-// Package main 演示生产环境常见的加固配置：认证、TLS、配额与运维端点。
-//
-// 运行前准备证书（自签名即可用于本地验证）：
-//
-//	go run ./examples/secure_core -cert server.crt -key server.key
-//
-// 客户端连接时使用 tls:// 前缀；未显式配置 ServerName 时会从地址推导：
-//
-//	dialer := &client.TCPDialer{
-//	    Address:   "tls://127.0.0.1:8883",
-//	    TLSConfig: &tls.Config{RootCAs: pool},
-//	}
+// secure_core 演示认证 + TLS + 配额 + 运维端点。
 package main
 
 import (
-	"crypto/subtle"
 	"crypto/tls"
-	"flag"
+	"crypto/x509"
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/snple/beacon/core"
+	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
-func main() {
-	addr := flag.String("addr", ":8883", "TLS listen address")
-	metricsAddr := flag.String("metrics-addr", ":9101", "Metrics/health listen address")
-	certFile := flag.String("cert", "", "TLS certificate file (PEM)")
-	keyFile := flag.String("key", "", "TLS private key file (PEM)")
-	clientID := flag.String("client-id", "device-1", "Accepted client ID")
-	secret := flag.String("secret", "s3cr3t", "Expected auth data (secret)")
-	flag.Parse()
+// staticAuth 是最小示例认证器：按 clientID 查密钥。
+type staticAuth struct {
+	secrets map[string]string
+}
 
-	if *certFile == "" || *keyFile == "" {
-		log.Fatal("-cert and -key are required (generate a self-signed pair for testing)")
+func (a *staticAuth) Authenticate(ctx *core.AuthContext) error {
+	want, ok := a.secrets[ctx.ClientID]
+	if !ok {
+		return &core.AuthError{Reason: packet.ReasonNotAuthorized}
 	}
+	if string(ctx.Data) != want {
+		return &core.AuthError{Reason: packet.ReasonBadAuthMethodOrAuthData}
+	}
+	ctx.Identity = &core.Identity{
+		ID:            ctx.ClientID,
+		ReadChannels:  []string{"sensors/**"},
+		WriteChannels: []string{"sensors/**", "commands/**"},
+	}
+	return nil
+}
 
-	logger, err := zap.NewProduction()
+func main() {
+	logger, _ := zap.NewProduction()
+	defer func() { _ = logger.Sync() }()
+
+	certFile := os.Getenv("BEACON_CERT")
+	keyFile := os.Getenv("BEACON_KEY")
+	caFile := os.Getenv("BEACON_CA")
+
+	b, err := core.NewWithOptions(core.NewCoreOptions().
+		WithLogger(logger).
+		WithQueueCap(2000).
+		WithMaxRecords(500).
+		WithMaxBytes(256*1024).
+		WithPushRateLimit(1000, 2000).
+		WithHooks(&core.Hooks{
+			Auth: &staticAuth{secrets: map[string]string{
+				"device-1": "s3cret",
+			}},
+		}))
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
-	if err != nil {
-		log.Fatalf("load key pair: %v", err)
+	if err := b.Start(); err != nil {
+		log.Fatal(err)
 	}
+	defer func() { _ = b.Stop() }()
 
-	opts := core.NewCoreOptions().
-		WithLogger(logger).
-		// 配额与背压：避免慢消费者/异常客户端把内存写满
-		WithMaxClientQueueSize(5000, core.QueueOverflowDropNewest).
-		WithMaxPendingMessages(50000).
-		WithMaxPublishRate(2000, 4000).
-		WithMaxPendingBytes(1 << 30). // 1 GiB 内存水位
-		WithRetainEnabled(true)
-
-	// 认证：CONNECT 携带的 AuthData 必须与注册的 secret 一致
-	opts.WithAuthHandler(&core.AuthHandlerFunc{
-		ConnectFunc: func(ctx *core.AuthConnectContext) error {
-			if ctx.ClientID != *clientID {
-				return fmt.Errorf("unknown client: %s", ctx.ClientID)
-			}
-			if ctx.Packet.Properties == nil || len(ctx.Packet.Properties.AuthData) == 0 {
-				return fmt.Errorf("auth data required")
-			}
-			if subtle.ConstantTimeCompare(ctx.Packet.Properties.AuthData, []byte(*secret)) != 1 {
-				return fmt.Errorf("auth failed")
-			}
-			return nil
-		},
-	})
-
-	c, err := core.NewWithOptions(opts)
-	if err != nil {
-		log.Fatalf("create core: %v", err)
-	}
-	if err := c.Start(); err != nil {
-		log.Fatalf("start core: %v", err)
-	}
-	defer c.Stop()
-
-	// 运维端点：/healthz 存活探针、/metrics Prometheus 指标、/stats JSON 快照
 	go func() {
-		if err := c.ServeMetrics(*metricsAddr); err != nil {
-			logger.Error("metrics server", zap.Error(err))
+		if err := b.ServeMetrics("127.0.0.1:19101"); err != nil {
+			logger.Warn("metrics listener", zap.Error(err))
 		}
 	}()
 
-	go func() {
-		if err := c.ServeTLS(*addr, &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		}); err != nil {
-			logger.Error("tls server", zap.Error(err))
-			os.Exit(1)
+	if certFile == "" || keyFile == "" {
+		logger.Warn("BEACON_CERT/BEACON_KEY not set, starting plain TCP only")
+		if err := b.ServeTCP("127.0.0.1:18883"); err != nil {
+			logger.Warn("tcp listener", zap.Error(err))
 		}
-	}()
+		return
+	}
 
-	logger.Info("secure core started",
-		zap.String("addr", *addr),
-		zap.String("metrics", *metricsAddr))
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	if caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			log.Fatal("failed to load CA")
+		}
+		tlsCfg.ClientCAs = pool
+		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+
+	fmt.Println("TLS listener on 127.0.0.1:18883")
+	if err := b.ServeTLS("127.0.0.1:18883", tlsCfg); err != nil {
+		logger.Warn("tls listener", zap.Error(err))
+	}
 }

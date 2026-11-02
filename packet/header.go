@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sort"
 )
 
 const (
@@ -199,4 +200,67 @@ func ReadByte(r io.Reader) (byte, error) {
 	var b [1]byte
 	_, err := io.ReadFull(r, b[:])
 	return b[0], err
+}
+
+// EncodeStringMap 编码 string->string 映射（按键排序，保证确定性）。
+func EncodeStringMap(w io.Writer, m map[string]string) error {
+	if len(m) == 0 {
+		return EncodeUint16(w, 0)
+	}
+	if len(m) > MaxStringLength {
+		return fmt.Errorf("%w: too many map entries", ErrMalformedPacket)
+	}
+
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	if err := EncodeUint16(w, uint16(len(keys))); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if err := EncodeString(w, k); err != nil {
+			return err
+		}
+		if err := EncodeString(w, m[k]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DecodeStringMap 解码 string->string 映射。
+func DecodeStringMap(r io.Reader) (map[string]string, error) {
+	count, err := DecodeUint16(r)
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, nil
+	}
+
+	m := make(map[string]string, count)
+	for i := 0; i < int(count); i++ {
+		k, err := DecodeString(r)
+		if err != nil {
+			return nil, err
+		}
+		v, err := DecodeString(r)
+		if err != nil {
+			return nil, err
+		}
+		m[k] = v
+	}
+	return m, nil
+}
+
+// StringMapSize 返回映射编码后的大小。
+func StringMapSize(m map[string]string) int {
+	size := 2
+	for k, v := range m {
+		size += StringSize(k) + StringSize(v)
+	}
+	return size
 }

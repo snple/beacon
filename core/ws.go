@@ -89,7 +89,7 @@ func (c *Core) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// 在升级之前限制单个 WebSocket 消息的大小。
 	// gorilla 默认不限制帧大小，而 wsconn 会先把整条消息读入内存，
 	// 之后才轮到 beacon 的 MaxPacketSize 校验——不设限等于绕过包大小限制。
-	if limit := c.MaxPacketSize(); limit > 0 {
+	if limit := c.options.MaxPacketSize; limit > 0 {
 		ws.SetReadLimit(int64(limit))
 	}
 

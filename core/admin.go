@@ -2,118 +2,39 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"sort"
 	"time"
 
 	"github.com/snple/beacon/packet"
-	"go.uber.org/zap"
 )
 
-// ============================================================================
-// 服务器信息
-// ============================================================================
-
-// Limits 是配置上限快照，供管理面计算使用率（当前值/上限）。
-type Limits struct {
-	MaxClients              uint32
-	MaxHandshakeConnections uint32
-	MaxPacketSize           uint32
-	ReceiveWindow           uint16
-	MaxClientQueueSize      int
-	MaxPendingMessages      int
-	MaxPendingBytes         int64
-	MaxOfflineSessions      int
-	MaxPublishRate          float64
-	WriteTimeout            time.Duration
-}
-
-func (c *Core) limits() Limits {
-	o := c.options
-	return Limits{
-		MaxClients:              o.MaxClients,
-		MaxHandshakeConnections: o.MaxHandshakeConnections,
-		MaxPacketSize:           o.MaxPacketSize,
-		ReceiveWindow:           o.ReceiveWindow,
-		MaxClientQueueSize:      o.MaxClientQueueSize,
-		MaxPendingMessages:      o.MaxPendingMessages,
-		MaxPendingBytes:         o.MaxPendingBytes,
-		MaxOfflineSessions:      o.MaxOfflineSessions,
-		MaxPublishRate:          o.MaxPublishRate,
-		WriteTimeout:            o.WriteTimeout,
-	}
-}
-
-// ListenerInfo 描述一个正在服务的监听器。
-type ListenerInfo struct {
-	Address  string // 实际监听地址
-	Protocol string // "tcp" / "tls" / "ws" / "metrics" / "custom"
-	Active   bool
-}
-
-// MemoryInfo 描述内存中共享消息的状态。
-type MemoryInfo struct {
-	Ready    bool  // broker 是否在运行
-	Messages int   // 尚未完成投递的消息条数
-	Bytes    int64 // 上述消息内容的近似内存占用（字节）
-}
-
-// ServerInfo 是进程级信息快照。
-//
-// 构建信息来自构造期注入的 CoreOptions.BuildInfo（WithBuildInfo），
-// 运行期不可变，因此读取无需加锁。
-type ServerInfo struct {
-	Version   string
-	Commit    string
-	BuildTime string
-	Protocol  string // "MX/2"
-	StartedAt time.Time
-	Uptime    time.Duration
-	Listeners []ListenerInfo
-	Limits    Limits
-	Memory    MemoryInfo
-}
-
-// Info 返回服务器信息快照。
-//
-// StartedAt 是 Core 的创建时间（宿主通常在进程启动时创建），构造后只读，
-// 因此这里不加锁。
-func (c *Core) Info() ServerInfo {
-	info := ServerInfo{
-		Version:   c.options.BuildInfo.Version,
-		Commit:    c.options.BuildInfo.Commit,
-		BuildTime: c.options.BuildInfo.BuildTime,
-		StartedAt: c.startedAt,
-	}
-
-	info.Protocol = "MX/2"
-	if !info.StartedAt.IsZero() {
-		info.Uptime = time.Since(info.StartedAt)
-	}
-	info.Listeners = c.Listeners()
-	info.Limits = c.limits()
-
-	count, bytes := c.msgs.stats()
-	info.Memory = MemoryInfo{
-		Ready:    c.Ready(),
-		Messages: count,
-		Bytes:    bytes,
-	}
-
-	return info
-}
-
-// Ready 报告 broker 是否已启动（可用于就绪探针）。
-func (c *Core) Ready() bool {
-	return c.running.Load() && !c.stopped.Load()
-}
-
-// ============================================================================
-// 监听器注册表
-// ============================================================================
-
+// listenerEntry 是已注册监听器的元信息。
 type listenerEntry struct {
-	address  string
-	protocol string
+	address   string
+	protocol  string
+	startedAt time.Time
+}
+
+// ListenerInfo 是监听器的公开视图。
+type ListenerInfo struct {
+	Address   string
+	Protocol  string
+	StartedAt time.Time
+}
+
+// ServerInfo 是服务端总体信息。
+type ServerInfo struct {
+	ProtocolVersion uint8
+	StartedAt       time.Time
+	Uptime          time.Duration
+	MaxClients      uint32
+	Connected       int64
+	Sessions        int64
+	Listeners       []ListenerInfo
+	Limits          packet.Limits
+	Storage         string
 }
 
 func (c *Core) registerListener(address, protocol string) uint64 {
@@ -122,7 +43,10 @@ func (c *Core) registerListener(address, protocol string) uint64 {
 
 	c.listenerSeq++
 	id := c.listenerSeq
-	c.listeners[id] = listenerEntry{address: address, protocol: protocol}
+	if c.listeners == nil {
+		c.listeners = make(map[uint64]listenerEntry)
+	}
+	c.listeners[id] = listenerEntry{address: address, protocol: protocol, startedAt: time.Now()}
 	return id
 }
 
@@ -132,213 +56,280 @@ func (c *Core) unregisterListener(id uint64) {
 	c.listenersMu.Unlock()
 }
 
-// Listeners 返回当前所有监听器（按注册顺序）。
+// Listeners 返回当前监听器列表。
 func (c *Core) Listeners() []ListenerInfo {
 	c.listenersMu.Lock()
 	defer c.listenersMu.Unlock()
 
 	out := make([]ListenerInfo, 0, len(c.listeners))
-	for id := uint64(1); id <= c.listenerSeq; id++ {
-		entry, ok := c.listeners[id]
-		if !ok {
-			continue
-		}
-		out = append(out, ListenerInfo{Address: entry.address, Protocol: entry.protocol, Active: true})
+	for _, e := range c.listeners {
+		out = append(out, ListenerInfo{Address: e.address, Protocol: e.protocol, StartedAt: e.startedAt})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
 	return out
 }
 
-func connAddress(conn *conn) string {
-	if conn == nil || conn.conn == nil {
-		return ""
+// Ready 报告 core 是否在运行。
+func (c *Core) Ready() bool { return c.running.Load() }
+
+// limits 返回协议层限制。
+func (c *Core) limits() packet.Limits {
+	return packet.Limits{
+		MaxPacketSize:        c.options.MaxPacketSize,
+		MaxRecords:           c.options.MaxRecords,
+		MaxWaitMs:            c.options.MaxWaitMs,
+		MaxBatch:             c.options.MaxBytes,
+		MaxChannelsPerClient: uint16(min(c.options.MaxChannelsPerClient, 65535)),
 	}
-	return conn.conn.RemoteAddr().String()
 }
 
-// offlineExpiry 返回离线会话的过期时间（不在离线表中时返回零值）。
-func (c *Core) offlineExpiry(clientID string) time.Time {
-	c.offlineSessionsMu.Lock()
-	defer c.offlineSessionsMu.Unlock()
+// Info 返回服务端总体信息。
+func (c *Core) Info() ServerInfo {
+	c.clientsMu.RLock()
+	sessions := int64(len(c.clients))
+	c.clientsMu.RUnlock()
 
-	if expiry, ok := c.offlineSessions[clientID]; ok {
-		return expiry
+	return ServerInfo{
+		ProtocolVersion: packet.ProtocolVersion,
+		StartedAt:       c.startedAt,
+		Uptime:          time.Since(c.startedAt),
+		MaxClients:      c.options.MaxClients,
+		Connected:       c.stats.ClientsConnected.Load(),
+		Sessions:        sessions,
+		Listeners:       c.Listeners(),
+		Limits:          c.limits(),
+		Storage:         "memory",
 	}
-	return time.Time{}
 }
 
-// ============================================================================
-// 客户端列表（轻量）
-// ============================================================================
-
-// ClientSummary 是客户端列表项：只含概要字段，不读取队列、订阅等内部状态。
-// 需要配置、运行状态与统计时用 GetClientInfo（按单个客户端读取，代价可控）。
+// ClientSummary 是客户端列表的轻量概要。
 type ClientSummary struct {
 	ClientID    string
-	Connected   bool      // 在线（false 表示保留中的离线会话）
-	RemoteAddr  string    // 离线时为空
-	ConnectedAt time.Time // 最近一次建立连接的时间（进程重启后恢复的离线会话为零值）
-	LastSeenAt  time.Time // 最后一次活动时间（连接、收包、断开时更新）
-	ExpiresAt   time.Time // 离线会话的过期时间；在线时为零值
+	Connected   bool
+	RemoteAddr  string
+	ConnectedAt time.Time
+	LastSeenAt  time.Time
+	ExpiresAt   time.Time
+	Pending     [3]uint32
+	Delivered   uint32
 }
 
-// ListClients 列出所有客户端（含保留中的离线会话），按 ClientID 字典序。
-//
-// 不做分页：客户端总量受 MaxClients 约束，列表只组装概要字段（无存储读取）；
-// 需要更多内容请对单个客户端调用 GetClientInfo。
+// ListClients 返回全部会话概要（在线 + 离线保留），按 ClientID 字典序。
 func (c *Core) ListClients() []ClientSummary {
 	c.clientsMu.RLock()
-	out := make([]ClientSummary, 0, len(c.clients))
-	for _, client := range c.clients {
-		conn := client.getConn()
-		online := conn != nil && !conn.closed.Load()
+	clients := make([]*Client, 0, len(c.clients))
+	for _, cl := range c.clients {
+		clients = append(clients, cl)
+	}
+	c.clientsMu.RUnlock()
 
+	out := make([]ClientSummary, 0, len(clients))
+	for _, cl := range clients {
+		pending, delivered, _ := cl.mb.depth()
 		summary := ClientSummary{
-			ClientID:    client.ID,
-			Connected:   online,
-			ConnectedAt: client.ConnectedAt(),
-			LastSeenAt:  client.lastSeenAt(),
+			ClientID:  cl.ID,
+			Connected: cl.currentConn() != nil,
+			Pending:   pending,
+			Delivered: delivered,
+			ExpiresAt: cl.expiry(),
 		}
-		if online {
-			summary.RemoteAddr = connAddress(conn)
-			summary.LastSeenAt = conn.lastActiveAt()
-		} else {
-			summary.ExpiresAt = c.offlineExpiry(client.ID)
+		if ms := cl.connectedAt.Load(); ms > 0 {
+			summary.ConnectedAt = time.UnixMilli(ms)
+		}
+		if ms := cl.lastSeen.Load(); ms > 0 {
+			summary.LastSeenAt = time.UnixMilli(ms)
+		}
+		if cn := cl.currentConn(); cn != nil {
+			summary.RemoteAddr = cn.remoteAddr
 		}
 		out = append(out, summary)
 	}
-	c.clientsMu.RUnlock()
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ClientID < out[j].ClientID })
 	return out
 }
 
-// ============================================================================
-// 客户端详情
-// ============================================================================
+// ClientInfo 是单个客户端的详情。
+type ClientInfo struct {
+	ClientID          string
+	Connected         bool
+	RemoteAddr        string
+	ClientSessionID   uint64
+	CreatedAt         time.Time
+	ConnectedAt       time.Time
+	LastSeenAt        time.Time
+	ExpiresAt         time.Time
+	SessionTimeout    uint32
+	Pending           [3]uint32
+	Delivered         uint32
+	OldestUncommitted packet.PacketID
+	Channels          []string
+	Identity          *Identity
+	MessagesSent      int64
+	MessagesDropped   int64
+	MessagesRejected  int64
+}
 
-// GetClientInfo 获取单个客户端的详细信息：配置、运行状态、队列/在途水位与计数器。
+// GetClientInfo 返回单个客户端详情。
 func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 	c.clientsMu.RLock()
-	client, exists := c.clients[clientID]
-	if exists {
-		info := c.buildClientInfo(client)
-		c.clientsMu.RUnlock()
-		return info, nil
-	}
+	cl := c.clients[clientID]
 	c.clientsMu.RUnlock()
-
-	return nil, NewClientNotFoundError(clientID)
-}
-
-// buildClientInfo 组装 ClientInfo。调用方必须持有 clientsMu（读锁即可），
-// 以保证同一快照内的字段来自同一时刻，不出现"在线但无连接"的撕裂视图。
-func (c *Core) buildClientInfo(client *Client) *ClientInfo {
-	client.session.subsMu.RLock()
-	subs := make([]ClientSubscriptionInfo, 0, len(client.session.subscriptions))
-	for topic, opts := range client.session.subscriptions {
-		subs = append(subs, ClientSubscriptionInfo{
-			Topic:            topic,
-			SubscribeOptions: opts,
-		})
-	}
-	client.session.subsMu.RUnlock()
-	sort.Slice(subs, func(i, j int) bool { return subs[i].Topic < subs[j].Topic })
-
-	var oldestAck time.Time
-	for _, d := range client.session.pendingAck.snapshot() {
-		sentAt := d.lastSentAt.Load()
-		if sentAt <= 0 {
-			continue
-		}
-		if t := time.Unix(sentAt, 0); oldestAck.IsZero() || t.Before(oldestAck) {
-			oldestAck = t
-		}
+	if cl == nil {
+		return nil, &ClientNotFoundError{ClientID: clientID}
 	}
 
-	conn := client.getConn()
-	online := conn != nil && !conn.closed.Load()
-	pendingAck := client.session.pendingAck.len()
+	pending, delivered, oldest := cl.mb.depth()
 
 	info := &ClientInfo{
-		ClientID:       client.ID,
-		Connected:      online,
-		ConnectedAt:    client.ConnectedAt(),
-		KeepAlive:      client.KeepAlive(),
-		SessionTimeout: client.SessionTimeout(),
-		Subscriptions:  subs,
-		PendingAck:     pendingAck,
-		Identity:       client.session.getIdentity().Clone(),
-		WillTopic:      client.willTopic(),
-
-		MessagesSent:     client.messagesSent.Load(),
-		MessagesDropped:  client.messagesDropped.Load(),
-		MessagesRejected: client.messagesRejected.Load(),
-		BytesSent:        client.bytesSent.Load(),
-		BytesReceived:    client.bytesReceived.Load(),
-		LastSeenAt:       client.lastSeenAt(),
+		ClientID:          cl.ID,
+		Connected:         cl.currentConn() != nil,
+		ClientSessionID:   cl.sessionID.Load(),
+		CreatedAt:         cl.createdAt,
+		ExpiresAt:         cl.expiry(),
+		SessionTimeout:    cl.sessionTimeout(),
+		Pending:           pending,
+		Delivered:         delivered,
+		OldestUncommitted: oldest,
+		Channels:          c.matcher.filters(cl.ID),
+		Identity:          cl.getIdentity(),
+		MessagesSent:      cl.sent.Load(),
+		MessagesDropped:   cl.dropped.Load(),
+		MessagesRejected:  cl.rejected.Load(),
 	}
-
-	if !oldestAck.IsZero() {
-		info.OldestPendingAckAge = time.Since(oldestAck)
+	if ms := cl.connectedAt.Load(); ms > 0 {
+		info.ConnectedAt = time.UnixMilli(ms)
 	}
-
-	if client.queue != nil {
-		info.QueueSize = int64(client.queue.len())
-		if d := client.queue.peek(); d != nil && d.timestamp > 0 {
-			info.OldestQueuedAge = time.Since(time.Unix(d.timestamp, 0))
-		}
+	if ms := cl.lastSeen.Load(); ms > 0 {
+		info.LastSeenAt = time.UnixMilli(ms)
 	}
-
-	if online {
-		info.RemoteAddr = connAddress(conn)
-		info.ReceiveWindow = conn.sendWindow
-		info.Transport = conn.transport
-		info.ProtocolVersion = conn.protocol
-		info.LastSeenAt = conn.lastActiveAt()
-		info.ExpiresAt = time.Time{}
-	} else {
-		info.ExpiresAt = c.offlineExpiry(client.ID)
+	if cn := cl.currentConn(); cn != nil {
+		info.RemoteAddr = cn.remoteAddr
 	}
-
-	return info
+	return info, nil
 }
 
-// DisconnectClientAndWait 断开指定客户端并等待连接与发送协程退出。
+// DisconnectClient 断开指定客户端的当前连接。
 //
-// 与 DisconnectClient 的区别：本方法在连接关闭后才返回，便于管理面立即刷新状态；
-// 等待受 ctx 约束，ctx 到期返回 ctx.Err()。
-func (c *Core) DisconnectClientAndWait(ctx context.Context, clientID string, reason packet.ReasonCode) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
+// reason 会通过 DISCONNECT 发给客户端；reason=ReasonKicked 时客户端不应自动重连。
+func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode) error {
 	c.clientsMu.RLock()
-	client, exists := c.clients[clientID]
+	cl := c.clients[clientID]
 	c.clientsMu.RUnlock()
-
-	if !exists {
-		return NewClientNotFoundError(clientID)
+	if cl == nil {
+		return &ClientNotFoundError{ClientID: clientID}
 	}
-
-	conn := client.getConn()
-	if conn == nil || conn.closed.Load() {
-		return nil
+	cn := cl.currentConn()
+	if cn == nil {
+		return ErrClientNotConnected
 	}
+	cn.terminate(reason, true)
+	return nil
+}
 
-	client.Close(reason)
+// DisconnectClientAndWait 断开并等待连接彻底关闭。
+func (c *Core) DisconnectClientAndWait(ctx context.Context, clientID string, reason packet.ReasonCode) error {
+	c.clientsMu.RLock()
+	cl := c.clients[clientID]
+	c.clientsMu.RUnlock()
+	if cl == nil {
+		return &ClientNotFoundError{ClientID: clientID}
+	}
+	cn := cl.currentConn()
+	if cn == nil {
+		return ErrClientNotConnected
+	}
+	cn.terminate(reason, true)
 
 	done := make(chan struct{})
 	go func() {
-		conn.wait()
+		cn.close()
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		c.logger.Info("Client disconnected by admin",
-			zap.String("clientID", clientID), zap.Uint8("reason", uint8(reason)))
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// PushOptions 服务端推送选项。
+//
+// Priority 的零值为 Low（尽力而为）。不显式设置时按 Medium 处理；
+// 需要 Low 时请使用 WithPriority(packet.PriorityLow)。
+type PushOptions struct {
+	Priority packet.Priority
+	Headers  map[string]string
+
+	prioritySet bool
+}
+
+// WithPriority 显式设置优先级（允许显式指定 Low）。
+func (o PushOptions) WithPriority(p packet.Priority) PushOptions {
+	o.Priority = p
+	o.prioritySet = true
+	return o
+}
+
+// WithHeaders 设置自定义元数据（会被拷贝，调用方可复用 map）。
+func (o PushOptions) WithHeaders(h map[string]string) PushOptions {
+	o.Headers = h
+	return o
+}
+
+func (o PushOptions) effectivePriority() packet.Priority {
+	if o.prioritySet {
+		return o.Priority
+	}
+	if o.Priority != packet.PriorityLow {
+		return o.Priority
+	}
+	return packet.PriorityMedium
+}
+
+// PushResult 服务端推送结果。
+type PushResult struct {
+	ID      packet.PacketID
+	Reason  packet.ReasonCode
+	Matched uint32
+	Dropped uint32
+}
+
+// Push 以系统身份向 channel 推送一条消息（不做写权限校验）。
+func (c *Core) Push(channel string, payload []byte, opts PushOptions) PushResult {
+	res, _ := c.pushTo("", channel, payload, opts)
+	return res
+}
+
+// PushToClient 向指定客户端定向投递一条消息。
+func (c *Core) PushToClient(clientID, channel string, payload []byte, opts PushOptions) (PushResult, error) {
+	return c.pushTo(clientID, channel, payload, opts)
+}
+
+// pushTo 是服务端推送的内部实现。target 为空表示普通 channel 发布。
+//
+// 因为消息会保留在队列中被多个会话共享，payload 与 headers 都做一次拷贝，
+// 避免调用方后续修改导致队列内容变化。
+func (c *Core) pushTo(target, channel string, payload []byte, opts PushOptions) (PushResult, error) {
+	rec := &packet.Record{
+		Channel: channel,
+		Target:  target,
+		Headers: maps.Clone(opts.Headers),
+		Payload: append([]byte(nil), payload...),
+	}
+	rec.SetPriority(opts.effectivePriority())
+
+	res := c.pushRecord(nil, rec, true)
+	out := PushResult{ID: res.ID, Reason: res.Reason, Matched: res.Matched, Dropped: res.Dropped}
+
+	switch res.Reason {
+	case packet.ReasonTargetNotFound:
+		return out, &ClientNotFoundError{ClientID: target}
+	case packet.ReasonChannelInvalid, packet.ReasonPacketTooLarge, packet.ReasonNotAuthorized:
+		return out, fmt.Errorf("push rejected: %s", res.Reason)
+	default:
+		return out, nil
 	}
 }

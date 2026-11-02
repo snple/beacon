@@ -1,3 +1,7 @@
+// beacon-core 是 Beacon v4 消息服务端。
+//
+// v4 采用 pull 模型：客户端 PUSH 发布、PULL 拉取、COMMIT 确认；
+// 服务端为每个客户端维护内存队列，除响应外不主动发送数据。
 package main
 
 import (
@@ -6,23 +10,16 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sync/atomic"
+	"sync"
 	"syscall"
 
 	"github.com/BurntSushi/toml"
 	"github.com/snple/beacon/core"
+	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
-var (
-	version = "0.1.0"
-)
-
-// authMap 线程安全的认证表。
-type authMap struct {
-	nodes  map[string]string
-	logger *zap.Logger
-}
+var version = "0.4.0"
 
 // nodesTOML 认证文件格式：client_id → secret 映射。
 type nodesTOML struct {
@@ -34,238 +31,131 @@ type nodeEntry struct {
 	Secret string `toml:"secret"`
 }
 
-// loadNodes 加载认证文件，返回 serial → secret 映射。
+// authenticator 基于静态密钥表的认证器。
+type authenticator struct {
+	mu      sync.RWMutex
+	secrets map[string]string
+}
+
 func loadNodes(path string) (map[string]string, error) {
 	var cfg nodesTOML
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return nil, fmt.Errorf("load %s: %w", path, err)
+		return nil, err
 	}
-	nodes := make(map[string]string, len(cfg.Nodes))
+	out := make(map[string]string, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {
-		if n.Serial == "" || n.Secret == "" {
-			continue
-		}
-		nodes[n.Serial] = n.Secret
+		out[n.Serial] = n.Secret
 	}
-	return nodes, nil
+	return out, nil
 }
 
-// wsEnabledText 返回 WebSocket 监听信息（未启用时显示 "disabled"）
-func wsEnabledText(wsAddr, wsPath string) string {
-	if wsAddr == "" {
-		return "disabled"
+func (a *authenticator) Authenticate(ctx *core.AuthContext) error {
+	a.mu.RLock()
+	secret, ok := a.secrets[ctx.ClientID]
+	a.mu.RUnlock()
+
+	if !ok {
+		return &core.AuthError{Reason: packet.ReasonNotAuthorized}
 	}
-	return wsAddr + wsPath
+	if subtle.ConstantTimeCompare([]byte(secret), ctx.Data) != 1 {
+		return &core.AuthError{Reason: packet.ReasonBadAuthMethodOrAuthData}
+	}
+
+	ctx.Identity = &core.Identity{
+		ID:   ctx.ClientID,
+		Name: ctx.ClientID,
+		// 已认证设备可以声明全部 channel；需要更细的隔离时按业务改这里。
+		ReadChannels:  []string{"**"},
+		WriteChannels: []string{"**"},
+	}
+	return nil
 }
 
 func main() {
-	// 命令行参数
-	addr := flag.String("addr", ":5208", "Listen address")
-	maxClients := flag.Uint("max-clients", 10000, "Maximum number of clients")
-	authFile := flag.String("auth-file", "", "Path to auth file (TOML with [[nodes]] serial + secret)")
-	wsAddr := flag.String("ws-addr", "", "WebSocket listen address (empty = disabled, e.g. \":8080\")")
-	wsPath := flag.String("ws-path", "/ws", "WebSocket endpoint path")
-	metricsAddr := flag.String("metrics-addr", "", "Metrics/health HTTP listen address (empty = disabled, e.g. \":9101\")")
-	showVersion := flag.Bool("version", false, "Show version")
-	debug := flag.Bool("debug", false, "Enable debug logging")
-
+	var (
+		addr        = flag.String("addr", ":5208", "TCP listen address")
+		wsAddr      = flag.String("ws-addr", "", "WebSocket listen address (empty to disable)")
+		wsPath      = flag.String("ws-path", "/ws", "WebSocket endpoint path")
+		metricsAddr = flag.String("metrics-addr", "", "metrics/health listen address (empty to disable)")
+		authFile    = flag.String("auth-file", "", "TOML file with device secrets (empty to disable auth)")
+		queueCap    = flag.Int("queue-cap", 10000, "per-client pending queue capacity (0 = unlimited)")
+		maxRecords  = flag.Int("max-records", 1000, "max records per PULL")
+		maxBytes    = flag.Int("max-bytes", 1<<20, "max bytes per PULL/PUSH")
+		debug       = flag.Bool("debug", false, "enable debug logging")
+		showVersion = flag.Bool("version", false, "print version and exit")
+	)
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("Beacon 0.1 core v%s\n", version)
-		os.Exit(0)
+		fmt.Println(version)
+		return
 	}
 
-	// 设置日志器
-	var logger *zap.Logger
-	var err error
+	logLevel := zap.NewProductionConfig()
 	if *debug {
-		logger, err = zap.NewDevelopment()
-	} else {
-		logger, err = zap.NewProduction()
+		logLevel.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
 	}
+	logger, err := logLevel.Build()
 	if err != nil {
-		fmt.Printf("Failed to initialize logger: %v\n", err)
+		fmt.Fprintln(os.Stderr, "init logger:", err)
 		os.Exit(1)
 	}
 	defer func() { _ = logger.Sync() }()
 
-	// 构建 core 选项
 	opts := core.NewCoreOptions().
-		WithMaxClients(uint32(*maxClients)).
-		WithRetainEnabled(true).
+		WithQueueCap(*queueCap).
+		WithMaxRecords(uint16(*maxRecords)).
+		WithMaxBytes(uint32(*maxBytes)).
 		WithLogger(logger)
 
-	// 添加连接生命周期钩子
-	opts.WithConnectionHandler(&core.ConnectionHandlerFunc{
-		ConnectFunc: func(ctx *core.ConnectContext) {
-			logger.Info("Client connected",
-				zap.String("client_id", ctx.ClientID),
-				zap.String("remote_addr", ctx.RemoteAddr),
-				zap.Bool("session_present", ctx.SessionPresent),
-				zap.Uint16("keep_alive", ctx.Packet.KeepAlive),
-			)
-		},
-		DisconnectFunc: func(ctx *core.DisconnectContext) {
-			logger.Info("Client disconnected",
-				zap.String("client_id", ctx.ClientID),
-				zap.Int64("duration_seconds", ctx.Duration),
-			)
-		},
-	})
-
-	// 添加消息处理钩子
-	opts.WithMessageHandler(&core.MessageHandlerFunc{
-		PublishFunc: func(ctx *core.PublishContext) error {
-			logger.Debug("Message published",
-				zap.String("client_id", ctx.ClientID),
-				zap.String("topic", ctx.Packet.Topic),
-				zap.Int("payload_size", len(ctx.Packet.Payload)),
-				zap.Uint8("qos", uint8(ctx.Packet.QoS)),
-			)
-			return nil
-		},
-		DeliverFunc: func(ctx *core.DeliverContext) bool {
-			logger.Debug("Message delivered",
-				zap.String("client_id", ctx.ClientID),
-				zap.String("topic", ctx.Packet.Topic),
-				zap.Int("payload_size", len(ctx.Packet.Payload)),
-			)
-			return true
-		},
-	})
-
-	// 添加订阅管理钩子
-	opts.WithSubscriptionHandler(&core.SubscriptionHandlerFunc{
-		SubscribeFunc: func(ctx *core.SubscribeContext) error {
-			logger.Info("Client subscribed",
-				zap.String("client_id", ctx.ClientID),
-				zap.String("topic", ctx.Subscription.Topic),
-			)
-			return nil
-		},
-		UnsubscribeFunc: func(ctx *core.UnsubscribeContext) {
-			logger.Info("Client unsubscribed",
-				zap.String("client_id", ctx.ClientID),
-				zap.String("topic", ctx.Topic),
-			)
-		},
-	})
-
-	// 认证（通过 auth-file 指定的 TOML 文件，支持 SIGHUP 热重载）
-	var authNodes atomic.Pointer[authMap]
 	if *authFile != "" {
-		nodes, err := loadNodes(*authFile)
+		secrets, err := loadNodes(*authFile)
 		if err != nil {
-			logger.Fatal("Failed to load auth file", zap.Error(err))
+			logger.Fatal("load auth file", zap.Error(err))
 		}
-		authNodes.Store(&authMap{nodes: nodes, logger: logger})
-		logger.Info("Authentication enabled", zap.String("file", *authFile), zap.Int("nodes", len(nodes)))
-
-		// SIGHUP 热重载
-		go func() {
-			ch := make(chan os.Signal, 1)
-			signal.Notify(ch, syscall.SIGHUP)
-			for range ch {
-				nodes, err := loadNodes(*authFile)
-				if err != nil {
-					logger.Error("Failed to reload auth file", zap.Error(err))
-					continue
-				}
-				authNodes.Store(&authMap{nodes: nodes, logger: logger})
-				logger.Info("Auth file reloaded", zap.Int("nodes", len(nodes)))
-			}
-		}()
-
-		opts.WithAuthHandler(&core.AuthHandlerFunc{
-			ConnectFunc: func(ctx *core.AuthConnectContext) error {
-				if ctx.Packet.Properties == nil || len(ctx.Packet.Properties.AuthData) == 0 {
-					return fmt.Errorf("auth required")
-				}
-				am := authNodes.Load()
-				secret, ok := am.nodes[ctx.ClientID]
-				// 使用恒定时间比较，避免时序侧信道泄露 secret
-				if !ok || subtle.ConstantTimeCompare([]byte(secret), ctx.Packet.Properties.AuthData) != 1 {
-					am.logger.Warn("Auth failed", zap.String("client_id", ctx.ClientID))
-					return fmt.Errorf("auth failed: %s", ctx.ClientID)
-				}
-				return nil
-			},
-		})
+		auth := &authenticator{secrets: secrets}
+		opts.WithHooks(&core.Hooks{Auth: auth})
+		logger.Info("authentication enabled", zap.Int("devices", len(secrets)))
 	}
 
-	// 创建并启动 broker（变量名避免遮蔽 core 包）
-	broker, err := core.NewWithOptions(opts)
+	b, err := core.NewWithOptions(opts)
 	if err != nil {
-		logger.Error("Failed to create core", zap.Error(err))
-		os.Exit(1)
+		logger.Fatal("create core", zap.Error(err))
+	}
+	if err := b.Start(); err != nil {
+		logger.Fatal("start core", zap.Error(err))
 	}
 
-	if err := broker.Start(); err != nil {
-		logger.Error("Failed to start core", zap.Error(err))
-		os.Exit(1)
-	}
-
-	// 监听器错误统一送入 errCh，由主协程优雅停机，避免 goroutine 内 os.Exit 跳过清理。
 	errCh := make(chan error, 3)
 
 	go func() {
-		logger.Info("Starting TCP server", zap.String("address", *addr))
-		errCh <- broker.ServeTCP(*addr)
+		logger.Info("TCP listener", zap.String("addr", *addr))
+		errCh <- b.ServeTCP(*addr)
 	}()
-
 	if *wsAddr != "" {
 		go func() {
-			logger.Info("Starting WebSocket server", zap.String("address", *wsAddr), zap.String("path", *wsPath))
-			errCh <- broker.ServeWS(*wsAddr, *wsPath)
+			logger.Info("WebSocket listener", zap.String("addr", *wsAddr), zap.String("path", *wsPath))
+			errCh <- b.ServeWS(*wsAddr, *wsPath)
 		}()
 	}
-
 	if *metricsAddr != "" {
 		go func() {
-			logger.Info("Starting metrics server", zap.String("address", *metricsAddr))
-			errCh <- broker.ServeMetrics(*metricsAddr)
+			logger.Info("metrics listener", zap.String("addr", *metricsAddr))
+			errCh <- b.ServeMetrics(*metricsAddr)
 		}()
 	}
 
-	printBanner(version, *addr, wsEnabledText(*wsAddr, *wsPath),
-		wsEnabledText(*metricsAddr, "/metrics"), wsEnabledText(*metricsAddr, "/healthz"),
-		*maxClients, *authFile, *debug)
-
-	// 等待中断信号或监听器退出
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	select {
-	case <-sigCh:
-		fmt.Println("\nShutting down...")
+	case sig := <-sigCh:
+		logger.Info("shutting down", zap.String("signal", sig.String()))
 	case err := <-errCh:
-		logger.Error("Server stopped, shutting down", zap.Error(err))
+		logger.Error("listener stopped", zap.Error(err))
 	}
 
-	_ = broker.Stop()
-	fmt.Println("core stopped.")
-}
-
-// printBanner 输出对齐的启动信息（内部宽度 64）。
-func printBanner(version, addr, ws, metrics, health string, maxClients uint, authFile string, debug bool) {
-	row := func(label, value string) {
-		fmt.Printf("║  %-22s%-40s║\n", label, value)
+	if err := b.Stop(); err != nil {
+		logger.Error("stop core", zap.Error(err))
 	}
-
-	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
-	row("Beacon core", "")
-	fmt.Println("╠════════════════════════════════════════════════════════════════╣")
-	row("Version:", version)
-	row("Address:", addr)
-	row("WebSocket:", ws)
-	row("Metrics:", metrics)
-	row("Health:", health)
-	row("Max Clients:", fmt.Sprintf("%d", maxClients))
-	row("Storage:", "in-memory (no persistence)")
-	row("Auth File:", authFile)
-	row("Debug:", fmt.Sprintf("%v", debug))
-	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
-	fmt.Println()
-	fmt.Println("Press Ctrl+C to stop the core...")
 }

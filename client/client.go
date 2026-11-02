@@ -1,9 +1,10 @@
-// Package client 提供 Beacon 协议客户端库
 package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,385 +13,386 @@ import (
 	"go.uber.org/zap"
 )
 
-// 客户端相关常量
-const (
-	// 超时相关
-	defaultKeepAlive          = 60 // 默认心跳间隔（秒）
-	defaultConnectTimeout     = 10 * time.Second
-	defaultPublishTimeout     = 30 * time.Second
-	defaultRetransmitInterval = 5 * time.Second // QoS1 消息重传间隔
-
-	// 流量控制
-	defaultMaxPacketSize = 1048576 // 默认最大包大小（1 MB）
-	defaultReceiveWindow = 100     // 默认接收窗口大小
-
-	// 重传相关
-	retransmitBatchSize = 50 // 每次从待发送队列加载的最大消息数
-)
-
-// Message 内部消息表示
-//
-// 设计原则：
-// - 内容层：直接引用原始 *packet.PublishPacket（视为只读、可共享）
-// - 投递层（PacketID/QoS/Dup）由发送队列单独管理
-type Message struct {
-	// 原始 PUBLISH 包（视为只读）
-	Packet *packet.PublishPacket
-
-	// 固定头部标志
-	Dup bool // 重发标志
-
-	// 时间相关（非协议字段，仅用于调试/观察）
-	Timestamp int64
-
-	// 手动确认回调：仅当 AutoAck=false 且消息为 QoS1 时非 nil。
-	// 不导出且不编码，仅内存中生效。
-	ack func() error
-}
-
-// Ack 手动确认消息已处理（仅当客户端 AutoAck=false 且消息为 QoS1 时有效）。
-// 应用在收到消息并处理完成后调用；返回错误表示确认发送失败
-// （例如连接已断开，消息可能被服务端重传）。
-//
-// 注意：手动确认模式下 QoS1 为 at-least-once——若应用在处理中崩溃/断电未确认，
-// 服务端会重传该消息并再次投递。应用如需不重复处理，请按 Packet.PacketID 自行去重。
-func (m *Message) Ack() error {
-	if m.ack == nil {
-		return ErrNoPendingAck
-	}
-	return m.ack()
-}
-
-func (m *Message) IsExpired() bool {
-	if m.Packet == nil || m.Packet.Properties == nil || m.Packet.Properties.ExpiryTime == 0 {
-		return false
-	}
-	return time.Now().Unix() > m.Packet.Properties.ExpiryTime
-}
-
-// Topic 返回消息主题
-func (m *Message) Topic() string {
-	if m.Packet != nil {
-		return m.Packet.Topic
-	}
-	return ""
-}
-
-// Payload 返回消息负载
-func (m *Message) Payload() []byte {
-	if m.Packet != nil {
-		return m.Packet.Payload
-	}
-	return nil
-}
-
-// Client 客户端（会话管理器）
-// 负责管理跨连接的会话状态：订阅、待发送队列等
+// Client 是 Beacon v4 客户端：PUSH 发布、PULL 拉取、COMMIT 确认。
 type Client struct {
-	options *ClientOptions
+	opts   *ClientOptions
+	logger *zap.Logger
 
-	// 订阅主题列表
-	// subscribedTopics 记录"期望订阅集合"及其选项。
-	// 不能只存 topic 名：重连恢复时必须用原始选项重放，否则 QoS1/NoLocal
-	// 等会被静默降级为默认值（QoS0），造成消息静默丢失。
-	subscribedTopics   map[string]SubscribeOptions
-	subscribedTopicsMu sync.RWMutex
+	mu      sync.RWMutex
+	conn    *conn
+	connack *packet.ConnackPacket
 
-	// 当前活跃的连接（可能为 nil）
-	conn      *Conn
-	connMu    sync.RWMutex
-	connectMu sync.Mutex
+	reqSeq atomic.Uint64
 
-	// 连接拨号器（用于自动重连）
-	dialer Dialer
-
-	// 连接状态
-	connected atomic.Bool
-
-	// closed 表示 Close() 已被调用，存储不再可用
-	closed atomic.Bool
-
-	// 轮询模式队列
-	messageQueue chan *Message
-
-	// 自动重连
-	autoReconnect atomic.Bool
-	reconnecting  atomic.Bool
-	connLostCh    chan struct{} // 仅用于唤醒重连循环，不携带错误值
-
-	// 后台 goroutine 跟踪（reconnectLoop / retransmitLoop / 按需重传）
-	wg sync.WaitGroup
-
-	// 临时任务的启动守卫：Close 之后禁止再向 wg 添加任务，
-	// 否则会与 Close 中的 wg.Wait 竞争（Wait 期间 Add 会 panic）。
-	taskMu      sync.Mutex
-	tasksClosed bool
-
-	// 待发送消息队列（内存）
-	queue *Queue
-
-	retransmitting atomic.Bool
-
-	// 重传协程启动守卫：与 retransmitting（TriggerRetransmit 一次性守卫）分离，
-	// 避免标志冲突导致 retransmitLoop 永不启动
-	retransmitLoopStarted atomic.Bool
-
-	// 生命周期
 	ctx    context.Context
 	cancel context.CancelFunc
+	closed atomic.Bool
 
-	logger *zap.Logger
+	// 当前会话的未确认消息（可靠优先级）
+	uncommittedMu sync.Mutex
+	uncommitted   []*Message
+
+	// pullMu 串行化 Pull：并发拉取会让服务端重复投递同一批消息，
+	// 也会让本地未确认集合互相覆盖。
+	pullMu sync.Mutex
+
+	// PollMessage 的本地缓冲
+	bufMu sync.Mutex
+	buf   []*Message
+
+	// 会话变化回调
+	onSessionReset func(prev, next uint64)
+
+	supWG sync.WaitGroup
 }
 
-// NewWithOptions 使用 Builder 模式创建新的客户端（推荐）
-//
-// 用法：
-//
-//	c, err := client.NewWithOptions(
-//	    client.NewClientOptions().
-//	        WithCore("127.0.0.1:5208").
-//	        WithClientID("c1").
-//	        WithKeepAlive(60),
-//	)
+// NewWithOptions 创建客户端。
 func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	if opts == nil {
 		opts = NewClientOptions()
 	}
 	opts.applyDefaults()
 	if err := opts.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid options: %w", err)
+		return nil, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	// 使用用户提供的 logger；未提供时用 Nop（与此前文档一致：nil 表示静默）
-	logger := opts.Logger
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-
-	c := &Client{
-		options:          opts,
-		subscribedTopics: make(map[string]SubscribeOptions),
-		ctx:              ctx,
-		cancel:           cancel,
-		connLostCh:       make(chan struct{}, 1),
-		logger:           logger,
-		messageQueue:     make(chan *Message, opts.MessageQueueSize),
-	}
-
-	// 初始化待发送队列（纯内存）
-	c.queue = NewQueue()
-
-	// 启动统一的重连循环（内部会检查 autoReconnect 开关）
-	c.wg.Add(1)
-	go c.reconnectLoop()
-
-	return c, nil
+	return &Client{
+		opts:   opts,
+		logger: opts.Logger,
+		ctx:    ctx,
+		cancel: cancel,
+	}, nil
 }
 
-// spawnTask 启动受 wg 跟踪的后台任务。客户端已关闭时返回 false。
-func (c *Client) spawnTask(fn func()) bool {
-	c.taskMu.Lock()
-	defer c.taskMu.Unlock()
-	if c.tasksClosed {
-		return false
+// New 使用默认配置创建客户端。
+func New() (*Client, error) { return NewWithOptions(NewClientOptions()) }
+
+// OnSessionReset 设置会话重置回调（SessionID 变化时触发）。
+func (c *Client) OnSessionReset(fn func(prev, next uint64)) { c.onSessionReset = fn }
+
+// ClientID 返回服务端分配的客户端 ID。
+func (c *Client) ClientID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.connack != nil {
+		return c.connack.AssignedClientID
 	}
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		fn()
-	}()
-	return true
+	return c.opts.ClientID
 }
 
-// New 创建新的客户端（使用默认配置）
-func New() (*Client, error) {
-	return NewWithOptions(NewClientOptions())
+// SessionID 返回当前会话租约标识。
+func (c *Client) SessionID() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.connack != nil {
+		return c.connack.SessionID
+	}
+	return 0
 }
 
-// onConnLost 当连接断开时由 Connection 调用
-func (c *Client) onConnLost(err error) {
-	c.connected.Store(false)
-
-	// 获取当前连接的 clientID
-	var clientID string
-	c.connMu.RLock()
-	if c.conn != nil {
-		clientID = c.conn.clientID
-	}
-	c.connMu.RUnlock()
-
-	// 调用 OnDisconnect 钩子
-	c.options.Hooks.callOnDisconnect(&DisconnectContext{
-		ClientID: clientID,
-		Packet:   nil,
-		Err:      err,
-	})
-
-	// 通知重连循环（错误已通过 OnDisconnect 钩子暴露，这里只需要信号）
-	select {
-	case c.connLostCh <- struct{}{}:
-	default:
-	}
+// SessionPresent 报告本次连接是否复用了既有会话。
+func (c *Client) SessionPresent() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.connack != nil && c.connack.SessionPresent
 }
 
-// close 关闭当前连接。
-//
-// 这里不做一次性守卫：Disconnect 之后客户端仍可重新 Connect，
-// 若用 sync.Once 包住，第二次 Disconnect 会静默失效（连接不关闭、c.conn 不复位）。
-// conn.close 自身是幂等的，因此重复调用安全。
-func (c *Client) close(err error) error {
-	c.connected.Store(false)
+// Connect 建立连接。
+func (c *Client) Connect() error { return c.ConnectContext(context.Background()) }
 
-	c.connMu.Lock()
-	conn := c.conn
-	c.conn = nil
-	c.connMu.Unlock()
+// ConnectWithDialer 使用指定拨号器建立连接。
+func (c *Client) ConnectWithDialer(d Dialer) error {
+	c.opts.Dialer = d
+	return c.ConnectContext(context.Background())
+}
 
-	if conn != nil {
-		conn.close(err)
-		conn.wait()
+// ConnectContext 建立连接，并在 AutoReconnect 开启时启动后台重连。
+func (c *Client) ConnectContext(ctx context.Context) error {
+	if c.closed.Load() {
+		return ErrClientClosed
 	}
 
+	if err := c.connectOnce(ctx); err != nil {
+		return err
+	}
+
+	if c.opts.AutoReconnect {
+		c.supWG.Add(1)
+		go c.supervise()
+	}
 	return nil
 }
 
-// Close 关闭客户端并释放所有资源
-func (c *Client) Close() error {
-	// 禁用自动重连
-	c.autoReconnect.Store(false)
-	// 置位后所有对外 API 直接返回 ErrClientClosed，而不是让调用方看到
-	// 底层连接已关闭导致的杂乱错误。
-	c.closed.Store(true)
+func (c *Client) dial() (net.Conn, error) {
+	if c.opts.Dialer != nil {
+		return c.opts.Dialer.Dial()
+	}
+	if hasWSScheme(c.opts.Address) {
+		d := &WSDialer{Address: c.opts.Address, DialTimeout: c.opts.ConnectTimeout}
+		return d.Dial()
+	}
+	d := &TCPDialer{Address: c.opts.Address, DialTimeout: c.opts.ConnectTimeout}
+	return d.Dial()
+}
 
-	err := c.Disconnect()
-	// 关闭整个客户端生命周期，唤醒所有等待 ctx.Done() 的 goroutine
+// connectOnce 完成一次握手。
+func (c *Client) connectOnce(ctx context.Context) error {
+	nc, err := c.dial()
+	if err != nil {
+		return err
+	}
+
+	cn := newConn(c, nc)
+
+	connect := packet.NewConnectPacket(c.opts.ClientID)
+	connect.KeepAlive = c.opts.KeepAlive
+	connect.SessionTimeout = c.opts.SessionTimeout
+	connect.MaxPacketSize = c.opts.MaxPacketSize
+	connect.AuthMethod = c.opts.AuthMethod
+	connect.AuthData = c.opts.AuthData
+	for _, ch := range c.opts.Channels {
+		connect.Channels = append(connect.Channels, packet.ChannelDecl{Channel: ch})
+	}
+
+	if d := c.opts.ConnectTimeout; d > 0 {
+		_ = nc.SetDeadline(time.Now().Add(d))
+	}
+
+	if err := cn.write(connect); err != nil {
+		_ = nc.Close()
+		return NewConnectionError("connect", err)
+	}
+
+	pkt, _, err := packet.ReadPacketWithSize(nc, c.opts.MaxPacketSize)
+	if err != nil {
+		_ = nc.Close()
+		return NewConnectionError("read connack", err)
+	}
+	_ = nc.SetDeadline(time.Time{})
+
+	connack, ok := pkt.(*packet.ConnackPacket)
+	if !ok {
+		_ = nc.Close()
+		return fmt.Errorf("expected CONNACK, got %s", pkt.Type())
+	}
+	if err := reasonToError(connack.ReasonCode); err != nil {
+		_ = nc.Close()
+		return err
+	}
+
+	cn.connack = connack
+	if connack.ServerMaxPacketSize > 0 && connack.ServerMaxPacketSize < cn.maxPacketSize {
+		cn.maxPacketSize = connack.ServerMaxPacketSize
+	}
+	if connack.AssignedClientID != "" {
+		c.opts.ClientID = connack.AssignedClientID
+	}
+
+	prevSession := c.SessionID()
+
+	c.mu.Lock()
+	c.conn = cn
+	c.connack = connack
+	c.mu.Unlock()
+
+	if prevSession != 0 && prevSession != connack.SessionID {
+		// 会话被重建：本地未确认状态作废
+		c.dropLocalUncommitted()
+		if c.onSessionReset != nil {
+			c.onSessionReset(prevSession, connack.SessionID)
+		}
+	}
+
+	go cn.readLoop()
+	pingInterval := time.Duration(c.opts.KeepAlive) * time.Second / 2
+	if pingInterval < time.Second {
+		pingInterval = time.Second
+	}
+	go cn.pingLoop(pingInterval)
+
+	c.logger.Debug("connected",
+		zap.String("clientID", connack.AssignedClientID),
+		zap.Bool("sessionPresent", connack.SessionPresent),
+		zap.Uint32("pending", connack.Pending[0]+connack.Pending[1]+connack.Pending[2]),
+		zap.Uint32("delivered", connack.Delivered))
+	return nil
+}
+
+// supervise 在连接断开后自动重连。
+func (c *Client) supervise() {
+	defer c.supWG.Done()
+
+	for {
+		c.mu.RLock()
+		cn := c.conn
+		c.mu.RUnlock()
+		if cn == nil {
+			return
+		}
+
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-cn.Done():
+		}
+
+		err := cn.Err()
+		if errors.Is(err, ErrSessionTakenOver) || errors.Is(err, ErrKicked) || errors.Is(err, ErrClientClosed) {
+			c.logger.Debug("not reconnecting", zap.Error(err))
+			return
+		}
+		if c.closed.Load() {
+			return
+		}
+
+		backoff := c.opts.ReconnectMin
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+
+			if err := c.connectOnce(c.ctx); err == nil {
+				c.logger.Debug("reconnected")
+				break
+			} else if errors.Is(err, ErrSessionTakenOver) || errors.Is(err, ErrKicked) {
+				c.logger.Debug("reconnect refused", zap.Error(err))
+				return
+			}
+
+			backoff *= 2
+			if backoff > c.opts.ReconnectMax {
+				backoff = c.opts.ReconnectMax
+			}
+		}
+	}
+}
+
+// Close 关闭客户端。
+func (c *Client) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
 	c.cancel()
 
-	// 先禁止新的临时任务，避免与下面的 wg.Wait 竞争（Wait 期间 Add 会 panic）
-	c.taskMu.Lock()
-	c.tasksClosed = true
-	c.taskMu.Unlock()
-
-	// 等待后台 goroutine（reconnectLoop、retransmitLoop、按需重传）退出后再清理资源
-	c.wg.Wait()
-
-	// 若重连协程在关闭期间恰好创建了新连接，等待其完全退出，
-	// 确保不再有任何 goroutine 访问即将关闭的存储（H3/M3 边界）。
-	c.connMu.RLock()
-	conn := c.conn
-	c.connMu.RUnlock()
-	if conn != nil {
-		conn.close(ErrClientClosed)
-		conn.wait()
+	c.mu.RLock()
+	cn := c.conn
+	c.mu.RUnlock()
+	if cn != nil {
+		_ = cn.write(packet.NewDisconnectPacket(packet.ReasonNormalDisconnect))
+		cn.close(ErrClientClosed)
 	}
 
-	return err
+	c.supWG.Wait()
+	return nil
 }
 
-// IsConnected 检查是否已连接
-func (c *Client) IsConnected() bool {
-	return c.connected.Load()
+// Connected 报告当前是否已连接。
+func (c *Client) Connected() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.conn != nil && !c.conn.closed.Load()
 }
 
-// SessionPresent 返回服务端是否恢复了会话
-// 当 CleanSession=false 且服务端有旧会话时返回 true
-func (c *Client) SessionPresent() bool {
-	c.connMu.RLock()
-	defer c.connMu.RUnlock()
-	if c.conn != nil {
-		return c.conn.sessionPresent
-	}
-	return false
-}
-
-// ClientID 返回客户端 ID
-func (c *Client) ClientID() string {
-	c.connMu.RLock()
-	defer c.connMu.RUnlock()
-	if c.conn != nil {
-		return c.conn.clientID
-	}
-	return c.options.ClientID
-}
-
-// MaxPacketSize 返回客户端允许接收的最大包大小
-func (c *Client) MaxPacketSize() uint32 {
-	return c.options.MaxPacketSize
-}
-
-// GetSendWindow 返回 core 的接收窗口大小（客户端的发送窗口）
-func (c *Client) GetSendWindow() uint16 {
-	c.connMu.RLock()
-	defer c.connMu.RUnlock()
-	if c.conn != nil {
-		return c.conn.sendWindow
-	}
-	return defaultReceiveWindow
-}
-
-// GetLogger 返回客户端使用的日志记录器
-func (c *Client) GetLogger() *zap.Logger {
-	return c.logger
-}
-
-// ForceClose 强制关闭连接（不发送 DISCONNECT 包）
-// 用于测试遗嘱消息等场景
-// 注意：这是一个测试辅助方法，生产环境请使用 Disconnect() 或 Close()
-func (c *Client) ForceClose() error {
-	return c.close(nil)
-}
-
-// LastRTT 返回最近一次心跳 RTT（0 表示未知）
-func (c *Client) LastRTT() time.Duration {
-	c.connMu.RLock()
-	defer c.connMu.RUnlock()
-
-	if c.conn == nil {
-		return 0
-	}
-	return c.conn.LastRTT()
-}
-
-// allocatePacketID 分配新的 PacketID（使用 packet.PacketID 以保证全局唯一性和有序性）
-func (c *Client) allocatePacketID() packet.PacketID {
-	return packet.NewPacketID()
-}
-
-// getConn 获取当前活跃的连接
-func (c *Client) getConn() *Conn {
-	c.connMu.RLock()
-	defer c.connMu.RUnlock()
+func (c *Client) currentConn() *conn {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.conn
 }
 
-// writePacket 发送数据包（通过当前连接）
-func (c *Client) writePacket(pkt packet.Packet) error {
-	conn := c.getConn()
-	if conn == nil || conn.closed.Load() {
-		return ErrNotConnected
+// roundTrip 发送请求并等待响应。
+func (c *Client) roundTrip(ctx context.Context, pkt packet.Packet, requestID uint64, timeout time.Duration) (packet.Packet, error) {
+	cn := c.currentConn()
+	if cn == nil || cn.closed.Load() {
+		return nil, ErrNotConnected
 	}
-	return conn.writePacket(pkt)
+
+	ch := make(chan packet.Packet, 1)
+	cn.register(requestID, ch)
+	defer cn.unregister(requestID)
+
+	if err := cn.write(pkt); err != nil {
+		return nil, NewConnectionError("write", err)
+	}
+
+	var timerC <-chan time.Time
+	if timeout > 0 {
+		t := time.NewTimer(timeout)
+		defer t.Stop()
+		timerC = t.C
+	}
+
+	select {
+	case resp, ok := <-ch:
+		if !ok {
+			if err := cn.Err(); err != nil {
+				return nil, err
+			}
+			return nil, ErrNotConnected
+		}
+		return resp, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timerC:
+		return nil, ErrTimeout
+	case <-c.ctx.Done():
+		return nil, ErrClientClosed
+	}
 }
 
-// GetSubscribedTopics 获取当前订阅的主题列表
-func (c *Client) GetSubscribedTopics() []string {
-	c.subscribedTopicsMu.RLock()
-	defer c.subscribedTopicsMu.RUnlock()
+func (c *Client) nextRequestID() uint64 { return c.reqSeq.Add(1) }
 
-	topics := make([]string, 0, len(c.subscribedTopics))
-	for topic := range c.subscribedTopics {
-		topics = append(topics, topic)
+// ============================================================================
+// 本地未确认追踪
+// ============================================================================
+
+// trackUncommitted 把本批需要确认的消息并入未确认集合（按 ID 去重）。
+//
+// 服务端会重发未确认消息，因此同一 ID 可能多次出现；这里按 ID 去重，
+// 保证集合规模只与「真正未确认的条数」有关。
+func (c *Client) trackUncommitted(msgs []*Message) {
+	c.uncommittedMu.Lock()
+	defer c.uncommittedMu.Unlock()
+
+	if len(c.uncommitted) == 0 {
+		for _, m := range msgs {
+			if m.NeedsCommit() {
+				c.uncommitted = append(c.uncommitted, m)
+			}
+		}
+		return
 	}
-	return topics
+
+	known := make(map[packet.PacketID]struct{}, len(c.uncommitted))
+	for _, m := range c.uncommitted {
+		known[m.ID] = struct{}{}
+	}
+	for _, m := range msgs {
+		if !m.NeedsCommit() {
+			continue
+		}
+		if _, ok := known[m.ID]; ok {
+			continue
+		}
+		known[m.ID] = struct{}{}
+		c.uncommitted = append(c.uncommitted, m)
+	}
 }
 
-// HasSubscription 检查是否订阅了指定主题
-func (c *Client) HasSubscription(topic string) bool {
-	c.subscribedTopicsMu.RLock()
-	defer c.subscribedTopicsMu.RUnlock()
+func (c *Client) dropLocalUncommitted() {
+	c.uncommittedMu.Lock()
+	c.uncommitted = nil
+	c.uncommittedMu.Unlock()
 
-	_, ok := c.subscribedTopics[topic]
-	return ok
+	c.bufMu.Lock()
+	c.buf = nil
+	c.bufMu.Unlock()
+}
+
+func (c *Client) hasUncommitted() bool {
+	c.uncommittedMu.Lock()
+	defer c.uncommittedMu.Unlock()
+	return len(c.uncommitted) > 0
 }

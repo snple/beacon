@@ -1,389 +1,169 @@
-# Beacon 管理面 API（进程内）
+# 进程内管理 API
 
-管理程序与 broker 同进程，直接调用 `core` 的 Go 方法；HTTP、鉴权、前端由管理程序实现。
-
-- **观测**：`ListClients`（概要）+ `GetClientInfo`（详情）+ `Info`/`GetStats` + 事件流
-- **写**：只有踢下线；`Publish`/`PublishToClient`/`Broadcast` 属消息面
-- **不提供**：删除会话、保留/主题/订阅枚举、分页、运行时改配置（替代做法见「常见配方」）
+管理程序与 broker 同进程，直接调用 `core` 的 Go 方法。HTTP、鉴权、前端由管理程序实现。
 
 ```go
 import "github.com/snple/beacon/core"
 ```
 
-## 快速开始
+## 观测
+
+### Info
 
 ```go
-c, err := core.NewWithOptions(core.NewCoreOptions().
-    WithBuildInfo("1.2.3", "abc123", "2026-01-01T00:00:00Z"))
-if err != nil {
-    log.Fatal(err)
+type ServerInfo struct {
+    ProtocolVersion uint8
+    StartedAt       time.Time
+    Uptime          time.Duration
+    MaxClients      uint32
+    Connected       int64
+    Sessions        int64
+    Listeners       []ListenerInfo
+    Limits          packet.Limits
+    Storage         string // 固定 "memory"
 }
-if err := c.Start(); err != nil {
-    log.Fatal(err)
-}
-defer c.Stop()
 
-go func() { _ = c.ServeTCP(":5208") }()
+func (c *Core) Info() ServerInfo
+func (c *Core) Listeners() []ListenerInfo
+func (c *Core) Ready() bool
 ```
 
-## 客户端列表
+### 会话列表
 
 ```go
 type ClientSummary struct {
     ClientID    string
-    Connected   bool      // false = 保留中的离线会话
-    RemoteAddr  string    // 离线时为空
-    ConnectedAt time.Time // 最近一次建立连接的时间
-    LastSeenAt  time.Time // 最后一次活动时间
-    ExpiresAt   time.Time // 离线会话过期时间；在线时为零值
+    Connected   bool
+    RemoteAddr  string
+    ConnectedAt time.Time
+    LastSeenAt  time.Time
+    ExpiresAt   time.Time // 离线会话的过期时间；在线时为零值
+    Pending     [3]uint32 // Low / Medium / High 未投递积压
+    Delivered   uint32    // 已投递未确认
 }
 
-func (c *Core) ListClients() []ClientSummary
+func (c *Core) ListClients() []ClientSummary // 按 ClientID 字典序，不分页
 ```
 
+### 会话详情
+
 ```go
-for _, s := range c.ListClients() {
-    fmt.Printf("%s online=%v addr=%s lastSeen=%s\n",
-        s.ClientID, s.Connected, s.RemoteAddr, s.LastSeenAt)
+type ClientInfo struct {
+    ClientID          string
+    Connected         bool
+    RemoteAddr        string
+    ClientSessionID   uint64
+    CreatedAt         time.Time
+    ConnectedAt       time.Time
+    LastSeenAt        time.Time
+    ExpiresAt         time.Time
+    SessionTimeout    uint32
+    Pending           [3]uint32
+    Delivered         uint32
+    OldestUncommitted packet.PacketID
+    Channels          []string
+    Identity          *Identity
+    MessagesSent      int64
+    MessagesDropped   int64
+    MessagesRejected  int64
 }
-```
 
-含离线会话，按 `ClientID` 字典序，**不分页**；只组装概要字段，不读队列/存储。
-
-## 客户端详情
-
-```go
 func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) // 不存在：*ClientNotFoundError
 ```
 
-```go
-info, err := c.GetClientInfo("device-42")
-if err != nil {
-    return err
-}
-fmt.Println(info.Connected, info.QueueSize, info.PendingAck, info.MessagesSent)
-for _, sub := range info.Subscriptions {
-    fmt.Println(sub.Topic, sub.QoS)
-}
-```
-
-`ClientInfo` 字段：
-
-| 分组 | 字段 |
-|---|---|
-| 标识 | `ClientID`、`Transport`（tcp/tls/ws）、`ProtocolVersion`、`RemoteAddr` |
-| 配置 | `KeepAlive`、`SessionTimeout`、`ReceiveWindow` |
-| 状态 | `Connected`、`ConnectedAt`、`LastSeenAt`、`ExpiresAt`、`WillTopic`、`Identity`、`Subscriptions` |
-| 积压/统计 | `QueueSize`、`OldestQueuedAge`、`PendingAck`、`OldestPendingAckAge`、`MessagesSent/Dropped/Rejected`、`BytesSent/Received` |
-
-`Subscriptions` 元素为 `ClientSubscriptionInfo{Topic string; packet.SubscribeOptions}`。
-
-## 服务器信息与统计
+### 统计
 
 ```go
-func (c *Core) Info() ServerInfo
-func (c *Core) Ready() bool                 // 已 Start 且存储可用
-func (c *Core) Listeners() []ListenerInfo
 func (c *Core) GetStats() StatsSnapshot
-func (c *Core) GetLogger() *zap.Logger
 ```
 
-```go
-info := c.Info()
-fmt.Println(info.Version, info.Uptime, info.Listeners, info.Memory.Bytes)
+含计数器（收发/丢弃/拒绝/重复投递/接管次数）、内存水位（`InFlightMessages`、`InFlightBytes`）
+与通配符过滤器数量。
 
-// 使用率 = 当前值 / 上限
-stats, limits := c.GetStats(), c.Info().Limits
-fmt.Printf("clients %d/%d, pending bytes %d/%d\n",
-    stats.ClientsConnected, limits.MaxClients, stats.PendingBytes, limits.MaxPendingBytes)
-```
+## 写操作
 
-- `ServerInfo`：`Version`/`Commit`/`BuildTime`（来自 `WithBuildInfo`）、`Protocol`（`"MX/2"`）、`StartedAt`（Core 构造时间）、`Uptime`、`Listeners`、`Limits`、`Memory`（内存中共享消息的条数与近似占用）。
-- `StatsSnapshot`：`StartedAt`、`Limits`、`EventsDropped`、`ClientsConnected/Total`、`MessagesReceived/Sent/Dropped/Rejected`、`BytesReceived/Sent`、`SubscriptionsCount`、`PendingQueueDepth`、`ClientQueueDepth`、`PendingAckTotal`、`OfflineSessions`、`InFlightMessages`、`PendingBytes`。
-- `Limits`：`MaxClients`、`MaxHandshakeConnections`、`MaxPacketSize`、`ReceiveWindow`、`MaxClientQueueSize`、`MaxPendingMessages`、`MaxPendingBytes`、`MaxOfflineSessions`、`MaxPublishRate`、`WriteTimeout`。
-
-## 主题发布
-
-```go
-type PublishResult struct {
-    MatchedSubscribers int  // 入队瞬间命中的订阅者数（含离线会话，估算值）
-    Retained           bool // 是否写入保留存储
-    Enqueued           bool // 是否进入全局分发队列
-}
-
-type PublishOptions struct {
-    QoS             packet.QoS
-    Retain          bool
-    TraceID         string
-    ContentType     string
-    Expiry          uint32 // 秒；0 用 DefaultMessageExpiry
-    UserProperties  map[string]string
-    ResponseTopic   string
-    CorrelationData []byte
-    PublisherID     string // 发布身份（影响 NoLocal 与审计）；空 = 系统发布
-}
-
-func (c *Core) Publish(topic string, payload []byte, opts PublishOptions) (PublishResult, error)
-```
-
-```go
-res, err := c.Publish("sensors/temperature", []byte(`{"v":25.6}`), core.PublishOptions{
-    QoS:         packet.QoS0,
-    PublisherID: "admin",
-})
-fmt.Println(res.MatchedSubscribers, res.Enqueued) // 只代表已入队
-```
-
-- **异步**：返回 nil ≠ 已投递；`MatchedSubscribers` 是入队瞬间的快照。
-- **不调用 `OnPublish`**（管理面发布是受信来源，发布侧 ACL 不生效）；订阅侧 `OnDeliver` 仍生效。
-- `Publish(topic, nil, PublishOptions{Retain: true})` = 清除保留消息。
-
-| 错误 | 场景 |
-|---|---|
-| `ErrInvalidTopic` | topic 空/超长/含通配符 |
-| `ErrInvalidQoS` | QoS 非 0/1 |
-| `ErrQuotaExceeded` | 全局队列或存储超限 |
-| `ErrCoreNotRunning` | 未启动/已停止 |
-
-## 踢下线
+### 断开连接
 
 ```go
 func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode) error
 func (c *Core) DisconnectClientAndWait(ctx context.Context, clientID string, reason packet.ReasonCode) error
 ```
 
-```go
-if err := c.DisconnectClientAndWait(ctx, "device-42", packet.ReasonBanned); err != nil {
-    var nf *core.ClientNotFoundError
-    if !errors.As(err, &nf) {
-        return err
-    }
-}
-```
+服务端会先向客户端发送 `DISCONNECT(reason)` 再关闭连接。`reason` 建议用
+`packet.ReasonKicked`，客户端据此不会自动重连。
 
-- `DisconnectClient` 异步；需要"确认已断开"用 `DisconnectClientAndWait`（等待发送协程退出，`ctx` 到期返回 `ctx.Err()`）。
-- 踢下线**不删除会话**，客户端可能自动重连；要阻止重连需配合 `AuthHandler` 封禁（见「常见配方」）。
-- 观测：`client.disconnected` 事件（`Reason`/`Duration`）与 `OnDisconnect` 钩子。
-
-## 事件流
+### 推送
 
 ```go
-type EventType string // client.connected / client.disconnected / subscription.added
-                      // subscription.removed / message.published / message.dropped
-                      // message.rejected / session.expired / admin.action
-
-type Event struct {
-    Seq  uint64    // 本订阅者内连续递增；跳号数量 == 丢弃数量
-    Time time.Time
-    Type EventType
-
-    ClientID string // 客户端 / 发布者
-    Actor    string // 管理面操作者（= PublisherID）
-
-    RemoteAddr     string // 连接/断开
-    SessionPresent bool   // 连接：是否恢复旧会话
-
-    Topic    string
-    Bytes    int
-    QoS      packet.QoS
-    Reason   string        // 原因码名或拒绝/丢弃原因
-    Detail   string        // "pending_messages"、"store_bytes"、"api"
-    Retained bool          // 保留消息
-    Duration time.Duration // 断开：连接时长
+type PushOptions struct {
+    Priority packet.Priority // 默认 Medium
+    Headers  map[string]string
 }
 
-type EventOptions struct {
-    Types       []EventType // 空 = 全部；未知类型返回 ErrInvalidEventType
-    ClientID    string      // 空 = 全部
-    TopicPrefix string      // 空 = 全部
-    Buffer      int         // 默认 1024，上限 8192
+type PushResult struct {
+    ID      packet.PacketID
+    Reason  packet.ReasonCode
+    Matched uint32
+    Dropped uint32
 }
 
-func (c *Core) SubscribeEvents(ctx context.Context, opts EventOptions) (*EventStream, error)
-
-func (s *EventStream) Events() <-chan Event // Close/ctx 结束/Core 停止时关闭
-func (s *EventStream) Dropped() uint64      // 本订阅者累计丢弃数
-func (s *EventStream) Close()               // 幂等
+func (c *Core) Push(channel string, payload []byte, opts PushOptions) PushResult
+func (c *Core) PushToClient(clientID, channel string, payload []byte, opts PushOptions) (PushResult, error)
 ```
 
-```go
-// SSE 桥接
-stream, err := c.SubscribeEvents(r.Context(), core.EventOptions{
-    Types:  []core.EventType{core.EventClientConnected, core.EventClientDisconnected},
-    Buffer: 512,
-})
-if err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
-    return
-}
-defer stream.Close()
+- `Push` 以系统身份推送，**不做写权限校验**。
+- `PushToClient` 设置 `Record.Target`，跳过 channel 匹配直接入该客户端队列；
+  目标没有会话时返回 `*ClientNotFoundError`。
+- `Matched` 表示入队成功的客户端数；`Dropped` 表示因队列满被挤出的旧消息数（或新消息被丢弃）。
+- `PushToClient` 在目标不存在、channel 非法等情况下返回 error；channel 非法时 `PushResult.Reason`
+  同样会带上原因码。
+- `PushOptions.Priority` 的零值是 Low，但**未显式设置时按 Medium 处理**；要显式使用 Low 请写成
+  `core.PushOptions{}.WithPriority(packet.PriorityLow)`。
+- payload 与 headers 会被拷贝，调用方可以复用缓冲区。
 
-for ev := range stream.Events() {
-    if !writeSSE(w, ev) { // 客户端断开
-        return
-    }
-}
-```
+## 不提供的操作
 
-各类型使用的字段：
-
-| 类型 | 字段 |
+| 不提供 | 原因 / 替代做法 |
 |---|---|
-| `client.connected` | `ClientID`、`RemoteAddr`、`SessionPresent` |
-| `client.disconnected` | `ClientID`、`RemoteAddr`、`Reason`、`Duration` |
-| `subscription.*` | `ClientID`、`Topic`、`QoS`、`Detail`（`"api"` = 编程接口发起） |
-| `message.published` | `ClientID`（发布者）、`Topic`、`Bytes`、`QoS`、`Retained` |
-| `message.dropped` / `.rejected` | `ClientID`、`Topic`、`Bytes`、`QoS`、`Reason`、`Detail` |
-| `session.expired` | `ClientID`、`Reason` |
-| `admin.action` | `Actor`、`Topic`、`Bytes`、`QoS`、`Reason`（`"publish"`）、`Retained` |
+| 删除会话 | 让 `SessionTimeout` 生效，或断开连接 |
+| 枚举 channel | channel 是路由键，broker 不维护目录 |
+| 清空某客户端队列 | 只能通过消费 + commit 消化，或断开后等会话过期 |
+| 运行时改配置 | 需要重新创建 Core |
+| 事件流 / 推送通知 | 用 `/metrics` + 结构化日志 + 轮询 `ListClients` |
 
-- 顺序保证：同一订阅者严格按 `Seq` 递增；未匹配事件不占号。
-- 缓冲满即丢弃并累加 `Dropped()`（同时计入 `StatsSnapshot.EventsDropped`），不阻塞 broker。
-- 无历史回放；`message.published` 与发布量同阶，按需订阅（消息内容用 `OnPublish` 采集）。
-- 发现跳号或 `Dropped()` 增长时，重拉 `ListClients`/`GetClientInfo` 对账。
+## 事件与审计
 
-## 认证身份
+没有内建事件流。需要审计时使用 `Hooks`：
 
 ```go
-type Identity struct {
-    Subject    string            // 设备序列号 / 用户名
-    Roles      []string
-    Attributes map[string]string
+type MessageHandler interface {
+    OnPush(ctx *PushContext) error        // 返回错误则拒绝该条消息
+    OnDeliver(ctx *DeliverContext) bool   // 返回 false 则丢弃该次投递
+}
+
+type ConnectionHandler interface {
+    OnConnect(ctx *ConnectContext)
+    OnDisconnect(ctx *DisconnectContext)
 }
 ```
 
-```go
-// 写入：认证器设置，仅内存（重启后需重连）
-opts.WithAuthHandler(&core.AuthHandlerFunc{
-    ConnectFunc: func(ctx *core.AuthConnectContext) error {
-        ctx.Identity = &core.Identity{Subject: "device-42", Roles: []string{"sensor"}}
-        return nil
-    },
-})
+`OnPush` 可用于 ACL、计费、审计日志；`OnDeliver` 可用于按客户端过滤消息内容。
+两者都在调用方协程中同步执行，**不要在其中做阻塞 IO**。
 
-// 读取：详情与事件
-info.Identity.Subject
-```
+## 配额一览
 
-- 写入点：`AuthConnectContext.Identity`、`AuthContext.Identity`。
-- ACL 读取点：`SubscribeContext.Identity`、`PublishContext.Identity`、`DeliverContext.Identity`。
-
-```go
-// 认证器指定 CONNACK 原因码
-type AuthError struct {
-    Reason packet.ReasonCode // 如 packet.ReasonBanned
-    Err    error             // 仅服务端日志；支持 errors.As
-}
-
-// 断开原因
-// DisconnectContext.Reason: NormalDisconnect / KeepAliveTimeout / SessionTakenOver
-//                           / ServerShuttingDown / 管理员踢人时传入的 reason
-// DisconnectContext.Err:    异常断开的底层错误（可能为 nil）
-```
-
-## 常见配方
-
-### 封禁 + 踢下线
-
-```go
-opts.WithAuthHandler(&core.AuthHandlerFunc{
-    ConnectFunc: func(ctx *core.AuthConnectContext) error {
-        if bans.blocked(ctx.ClientID) {
-            return &core.AuthError{Reason: packet.ReasonBanned}
-        }
-        return verifyCredential(ctx)
-    },
-})
-
-// 先落库（bans 由管理程序自己维护），再踢下线
-bans.add(id, time.Now().Add(ttl), reason)
-err := c.DisconnectClientAndWait(ctx, id, packet.ReasonBanned)
-var nf *core.ClientNotFoundError
-if err != nil && !errors.As(err, &nf) {
-    return err
-}
-```
-
-### 日志 tail
-
-```go
-type logEntry struct {
-    TS     time.Time
-    Level  zapcore.Level
-    Msg    string
-    Fields map[string]any
-}
-
-type ringCore struct {
-    zapcore.LevelEnabler
-    mu   sync.Mutex
-    buf  []logEntry
-    next int
-}
-
-func (c *ringCore) With([]zapcore.Field) zapcore.Core { return c }
-func (c *ringCore) Sync() error                       { return nil }
-
-func (c *ringCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-    if c.Enabled(e.Level) {
-        return ce.AddCore(e, c)
-    }
-    return ce
-}
-
-func (c *ringCore) Write(e zapcore.Entry, fs []zapcore.Field) error {
-    enc := zapcore.NewMapObjectEncoder()
-    for _, f := range fs {
-        f.AddTo(enc)
-    }
-    c.mu.Lock()
-    c.buf[c.next] = logEntry{TS: e.Time, Level: e.Level, Msg: e.Message, Fields: enc.Fields}
-    c.next = (c.next + 1) % len(c.buf)
-    c.mu.Unlock()
-    return nil
-}
-
-baseLogger := zap.NewProduction()
-ring := &ringCore{LevelEnabler: zapcore.InfoLevel, buf: make([]logEntry, 4096)}
-opts.WithLogger(zap.New(zapcore.NewTee(baseLogger.Core(), ring)))
-```
-
-### 消息采集 / 流量 / 历史
-
-```go
-// OnPublish 在热路径同步执行：只做有界入队，不阻塞、不写库
-type capture struct {
-    ch      chan packet.PublishPacket
-    dropped atomic.Int64
-}
-
-cap := &capture{ch: make(chan packet.PublishPacket, 1024)}
-
-opts.WithMessageHandler(&core.MessageHandlerFunc{
-    PublishFunc: func(ctx *core.PublishContext) error {
-        select {
-        case cap.ch <- ctx.Packet.DeepCopy(): // 必须深拷贝后再异步使用
-        default:
-            cap.dropped.Add(1)
-        }
-        return nil
-    },
-})
-
-// 后台消费：for pkt := range cap.ch { writeDB(pkt.Topic, pkt.Payload) }
-```
-
-被拒绝/丢弃的消息看 `message.rejected` / `message.dropped` 事件。
-
-### 其它
-
-```go
-// 清除保留消息
-_, err := c.Publish(topic, nil, core.PublishOptions{Retain: true})
-
-// 判断某客户端是否会收到某主题
-info, err := c.GetClientInfo(clientID)
-for _, s := range info.Subscriptions {
-    if packet.MatchTopic(s.Topic, topic) { /* 会收到 */ }
-}
-```
+| 选项 | 默认 | 作用 |
+|---|---|---|
+| `WithQueueCap(n)` | 10000 | 单客户端 pending 队列上限（0 = 不限） |
+| `WithMaxRecords(n)` | 1000 | 单次 PULL 条数上限，同时约束 delivered 长度 |
+| `WithMaxBytes(n)` | 1 MiB | 单次 PULL / PUSH 字节上限 |
+| `WithMaxChannelsPerClient(n)` | 1024 | 单客户端声明数量上限 |
+| `WithPushRateLimit(rate, burst)` | 不限 | 每客户端发布速率 |
+| `WithConnectionRateLimit(rate, burst)` | 不限 | 连接建立速率 |
+| `WithMaxHandshakeConnections(n)` | 512 | 认证前并发连接上限 |
+| `WithMaxClients(n)` | 10000 | 在线连接上限 |
+| `WithWaitLimit(max)` | 300s | 长轮询时长上限 |
+| `WithMaxRecordBytes(n)` | 1 MiB | 单条记录 payload 上限 |
+| `WithSessionTimeout(max)` | 86400s | 会话保留时长上限 |
+| `WithNoProgressLimits(soft, hard)` | 4 / 16 | 无进展 pull 的惩罚阈值（0 = 关闭） |
+| `WithUncommittedTimeout(d)` | 关闭 | delivered 长期未确认超时 |

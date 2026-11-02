@@ -1,2742 +1,485 @@
-package core
+package core_test
 
 import (
 	"context"
 	"errors"
 	"net"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snple/beacon/client"
+	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/packet"
-
 	"go.uber.org/zap"
 )
 
-// ============================================================================
-// 测试辅助函数
-// ============================================================================
-
-// testLogger 创建测试用的 logger
-func testIntegrationLogger() *zap.Logger {
-	logger, _ := zap.NewDevelopment()
-	return logger
-}
-
-// testSetupCore 创建测试用的 Core
-func testSetupCore(t *testing.T, opts *CoreOptions) *Core {
+func startCore(t *testing.T, opts *core.CoreOptions) (*core.Core, string) {
 	t.Helper()
 	if opts == nil {
-		opts = NewCoreOptions()
+		opts = core.NewCoreOptions()
 	}
-	opts.WithLogger(testIntegrationLogger()).
-		WithConnectTimeout(5)
+	opts.WithLogger(zap.NewNop())
 
-	core, err := NewWithOptions(opts)
+	b, err := core.NewWithOptions(opts)
 	if err != nil {
-		t.Fatalf("Failed to create core: %v", err)
+		t.Fatalf("new core: %v", err)
+	}
+	if err := b.Start(); err != nil {
+		t.Fatalf("start core: %v", err)
 	}
 
-	if err := core.Start(); err != nil {
-		t.Fatalf("Failed to start core: %v", err)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
 	}
+	go func() { _ = b.Serve(l) }()
 
-	return core
+	t.Cleanup(func() { _ = b.Stop() })
+	return b, l.Addr().String()
 }
 
-// testSetupClient 创建测试用的 Client
-func testSetupClient(t *testing.T, coreAddr string, clientID string, opts *client.ClientOptions) *client.Client {
+func newTestClient(t *testing.T, addr, id string, channels ...string) *client.Client {
 	t.Helper()
-	if opts == nil {
-		opts = client.NewClientOptions()
+	opts := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID(id).
+		WithSessionTimeout(60).
+		WithAutoReconnect(false).
+		WithLogger(zap.NewNop())
+	if len(channels) > 0 {
+		opts.WithChannels(channels...)
 	}
-	opts.WithCore(coreAddr).
-		WithClientID(clientID).
-		WithLogger(testIntegrationLogger()).
-		WithMessageQueueSize(100)
 
 	c, err := client.NewWithOptions(opts)
 	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
+		t.Fatalf("new client: %v", err)
 	}
-
-	dialer := &client.TCPDialer{
-		Address:     coreAddr,
-		DialTimeout: 10 * time.Second,
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.ConnectContext(ctx); err != nil {
+		t.Fatalf("connect: %v", err)
 	}
-	if err := c.ConnectWithDialer(dialer); err != nil {
-		t.Fatalf("Failed to connect client: %v", err)
-	}
-
+	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 
-// ============================================================================
-// 发布订阅测试
-// ============================================================================
+func TestPushPullCommit(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-1", "sensors/**")
+	pub := newTestClient(t, addr, "pub-1")
 
-// TestPubSub_BasicQoS0 测试基本的 QoS0 发布订阅
-func TestPubSub_BasicQoS0(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
+	ctx := context.Background()
+	if err := pub.Push(ctx, "sensors/temp", []byte("21.5"), client.PushOptions{}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
 
-	addr := testServe(t, core)
-
-	// 创建发布者和订阅者
-	publisher := testSetupClient(t, addr, "publisher1", nil)
-	defer publisher.Close()
-
-	subscriber := testSetupClient(t, addr, "subscriber1", nil)
-	defer subscriber.Close()
-
-	// 订阅主题
-	err := subscriber.Subscribe("test/topic")
+	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 1000})
 	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
+		t.Fatalf("pull: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Channel != "sensors/temp" || string(msgs[0].Payload) != "21.5" {
+		t.Fatalf("unexpected message: %+v", msgs[0])
+	}
+	if msgs[0].Source != "pub-1" {
+		t.Fatalf("source should be filled by broker, got %q", msgs[0].Source)
+	}
+	if msgs[0].Priority != packet.PriorityMedium {
+		t.Fatalf("default priority should be medium, got %v", msgs[0].Priority)
 	}
 
-	// 等待订阅生效
-	time.Sleep(100 * time.Millisecond)
+	if n, err := sub.CommitAll(ctx); err != nil || n != 1 {
+		t.Fatalf("commit: n=%d err=%v", n, err)
+	}
 
-	// 发布消息
-	payload := []byte("hello world")
-	err = publisher.Publish("test/topic", payload, nil)
+	// 确认后再拉应为空
+	msgs, err = sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200})
 	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
+		t.Fatalf("pull after commit: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected empty after commit, got %d", len(msgs))
 	}
 
-	// 订阅者接收消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := subscriber.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to poll message: %v", err)
-	}
-
-	if msg.Packet.Topic != "test/topic" {
-		t.Errorf("Expected topic 'test/topic', got '%s'", msg.Packet.Topic)
-	}
-	if string(msg.Packet.Payload) != "hello world" {
-		t.Errorf("Expected payload 'hello world', got '%s'", string(msg.Packet.Payload))
+	stats := b.GetStats()
+	if stats.MessagesReceived != 1 || stats.MessagesSent != 1 {
+		t.Fatalf("stats: received=%d sent=%d", stats.MessagesReceived, stats.MessagesSent)
 	}
 }
 
-// TestPubSub_BasicQoS1 测试基本的 QoS1 发布订阅
-func TestPubSub_BasicQoS1(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
+func TestReliableResentUntilCommit(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
 
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-qos1", nil)
-	defer publisher.Close()
-
-	subscriber := testSetupClient(t, addr, "sub-qos1", nil)
-	defer subscriber.Close()
-
-	// 订阅主题（QoS1）
-	err := subscriber.SubscribeWithOptions([]string{"test/qos1"}, client.NewSubscribeOptions().WithQoS(packet.QoS1))
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
+	ctx := context.Background()
+	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	// 发布 QoS1 消息
-	opts := client.NewPublishOptions().WithQoS(packet.QoS1)
-	err = publisher.Publish("test/qos1", []byte("qos1 message"), opts)
+	first, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
 	if err != nil {
-		t.Fatalf("Failed to publish QoS1: %v", err)
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].Dup {
+		t.Fatalf("first pull should be a fresh message, got %+v", first)
 	}
 
-	// 接收消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := subscriber.PollMessage(ctx, 2*time.Second)
+	// 不 commit 再拉：应收到重复
+	second, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200})
 	if err != nil {
-		t.Fatalf("Failed to poll message: %v", err)
+		t.Fatal(err)
+	}
+	if len(second) != 1 || !second[0].Dup || second[0].ID != first[0].ID {
+		t.Fatalf("expected duplicate, got %+v", second)
 	}
 
-	if string(msg.Packet.Payload) != "qos1 message" {
-		t.Errorf("Expected 'qos1 message', got '%s'", string(msg.Packet.Payload))
+	if _, err := sub.CommitAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	third, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(third) != 0 {
+		t.Fatalf("expected empty after commit, got %d", len(third))
 	}
 }
 
-// TestPubSub_WildcardSingleLevel 测试单层通配符 (*)
-func TestPubSub_WildcardSingleLevel(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
+func TestLowPriorityIsBestEffort(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
 
-	addr := testServe(t, core)
+	ctx := context.Background()
+	opts := client.PushOptions{}.WithPriority(packet.PriorityLow)
+	if err := pub.Push(ctx, "ch/a", []byte("fire-and-forget"), opts); err != nil {
+		t.Fatal(err)
+	}
 
-	publisher := testSetupClient(t, addr, "pub-wild", nil)
-	defer publisher.Close()
-
-	subscriber := testSetupClient(t, addr, "sub-wild", nil)
-	defer subscriber.Close()
-
-	// 订阅通配符主题
-	err := subscriber.Subscribe("sensor/*/temperature")
+	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
 	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].NeedsCommit() {
+		t.Fatalf("low priority message must not need commit: %+v", msgs)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	// 发布匹配的消息
-	topics := []string{
-		"sensor/room1/temperature",
-		"sensor/room2/temperature",
-		"sensor/kitchen/temperature",
+	// 低优先级发出即删除，再拉不会重复
+	again, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 100})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for _, topic := range topics {
-		err = publisher.Publish(topic, []byte(topic), nil)
-		if err != nil {
-			t.Fatalf("Failed to publish to %s: %v", topic, err)
-		}
-	}
-
-	// 接收所有消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	received := make(map[string]bool)
-	for i := 0; i < 3; i++ {
-		msg, err := subscriber.PollMessage(ctx, 2*time.Second)
-		if err != nil {
-			t.Fatalf("Failed to poll message %d: %v", i, err)
-		}
-		received[msg.Packet.Topic] = true
-	}
-
-	for _, topic := range topics {
-		if !received[topic] {
-			t.Errorf("Did not receive message for topic: %s", topic)
-		}
+	if len(again) != 0 {
+		t.Fatalf("low priority message should be gone, got %d", len(again))
 	}
 }
 
-// TestPubSub_WildcardMultiLevel 测试多层通配符 (**)
-func TestPubSub_WildcardMultiLevel(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
+func TestPriorityOrdering(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
 
-	addr := testServe(t, core)
+	lowOpt := client.PushOptions{}.WithPriority(packet.PriorityLow)
+	highOpt := client.PushOptions{}.WithPriority(packet.PriorityHigh)
 
-	publisher := testSetupClient(t, addr, "pub-multi", nil)
-	defer publisher.Close()
+	if err := pub.Push(ctx, "ch/a", []byte("low"), lowOpt); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.Push(ctx, "ch/a", []byte("high"), highOpt); err != nil {
+		t.Fatal(err)
+	}
 
-	subscriber := testSetupClient(t, addr, "sub-multi", nil)
-	defer subscriber.Close()
-
-	// 订阅多层通配符主题
-	err := subscriber.Subscribe("home/**")
+	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
 	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
+		t.Fatal(err)
 	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 发布匹配的消息
-	topics := []string{
-		"home/room1",
-		"home/room1/light",
-		"home/room2/sensor/temperature",
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
-
-	for _, topic := range topics {
-		err = publisher.Publish(topic, []byte(topic), nil)
-		if err != nil {
-			t.Fatalf("Failed to publish to %s: %v", topic, err)
-		}
-	}
-
-	// 接收所有消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	received := make(map[string]bool)
-	for i := 0; i < 3; i++ {
-		msg, err := subscriber.PollMessage(ctx, 2*time.Second)
-		if err != nil {
-			t.Fatalf("Failed to poll message %d: %v", i, err)
-		}
-		received[msg.Packet.Topic] = true
-	}
-
-	for _, topic := range topics {
-		if !received[topic] {
-			t.Errorf("Did not receive message for topic: %s", topic)
-		}
+	if string(msgs[0].Payload) != "high" || string(msgs[1].Payload) != "low" {
+		t.Fatalf("priority order violated: %s then %s", msgs[0].Payload, msgs[1].Payload)
 	}
 }
 
-// TestPubSub_MultipleSubscribers 测试多个订阅者
-func TestPubSub_MultipleSubscribers(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
+func TestTargetDeliveryBypassesMatching(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub1 := newTestClient(t, addr, "sub-1", "other/**")
+	sub2 := newTestClient(t, addr, "sub-2", "other/**")
+	_ = sub2
 
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-multi-sub", nil)
-	defer publisher.Close()
-
-	// 创建多个订阅者
-	const numSubscribers = 3
-	subscribers := make([]*client.Client, numSubscribers)
-	msgChannels := make([]chan *client.Message, numSubscribers)
-	errChannels := make([]chan error, numSubscribers)
-
-	for i := 0; i < numSubscribers; i++ {
-		subscribers[i] = testSetupClient(t, addr, "sub"+string(rune('A'+i)), nil)
-		defer subscribers[i].Close()
-
-		err := subscribers[i].Subscribe("broadcast")
-		if err != nil {
-			t.Fatalf("Subscriber %d failed to subscribe: %v", i, err)
-		}
-
-		// 为每个订阅者启动轮询协程（这会初始化消息队列）
-		msgChannels[i] = make(chan *client.Message, 1)
-		errChannels[i] = make(chan error, 1)
-		go func(sub *client.Client, msgCh chan *client.Message, errCh chan error) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			msg, err := sub.PollMessage(ctx, 4*time.Second)
-			if err != nil {
-				errCh <- err
-			} else {
-				msgCh <- msg
-			}
-		}(subscribers[i], msgChannels[i], errChannels[i])
+	ctx := context.Background()
+	if _, err := b.PushToClient("sub-1", "cmd/x", []byte("only-sub-1"), core.PushOptions{}); err != nil {
+		t.Fatalf("publish to client: %v", err)
 	}
 
-	// 等待所有订阅者的轮询协程启动
-	time.Sleep(200 * time.Millisecond)
-
-	// 发布消息
-	err := publisher.Publish("broadcast", []byte("hello all"), nil)
+	// sub-1 没有声明 cmd/**，仍然能收到定向消息
+	msgs, err := sub1.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
 	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || string(msgs[0].Payload) != "only-sub-1" {
+		t.Fatalf("target client should receive message, got %+v", msgs)
+	}
+}
+
+func TestTargetNotFound(t *testing.T) {
+	b, _ := startCore(t, nil)
+	if _, err := b.PushToClient("ghost", "cmd/x", []byte("x"), core.PushOptions{}); err == nil {
+		t.Fatal("expected error for unknown target")
+	}
+}
+
+func TestWildcardMatchingAndDeclare(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-1")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	results, err := sub.Declare(ctx, "a/**", "b/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if r.Reason != packet.ReasonSuccess {
+			t.Fatalf("declare failed: %+v", r)
+		}
 	}
 
-	// 所有订阅者都应收到消息
-	for i := 0; i < numSubscribers; i++ {
-		select {
-		case msg := <-msgChannels[i]:
-			if string(msg.Packet.Payload) != "hello all" {
-				t.Errorf("Subscriber %d got wrong payload: %s", i, string(msg.Packet.Payload))
-			}
-		case err := <-errChannels[i]:
-			t.Fatalf("Subscriber %d failed to receive: %v", i, err)
-		case <-time.After(5 * time.Second):
-			t.Fatalf("Subscriber %d timed out", i)
+	for _, ch := range []string{"a", "a/x", "a/x/y", "b/1", "b/1/2", "c/1"} {
+		if err := pub.Push(ctx, ch, []byte(ch), client.PushOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, m := range msgs {
+		got[m.Channel] = true
+	}
+	for _, want := range []string{"a", "a/x", "a/x/y", "b/1"} {
+		if !got[want] {
+			t.Errorf("expected %q to match", want)
+		}
+	}
+	for _, notWant := range []string{"b/1/2", "c/1"} {
+		if got[notWant] {
+			t.Errorf("expected %q not to match", notWant)
 		}
 	}
 }
 
-// TestPubSub_Unsubscribe 测试取消订阅
-func TestPubSub_Unsubscribe(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
+func TestLongPollWakesOnPush(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
 
-	addr := testServe(t, core)
+	done := make(chan []*client.Message, 1)
+	errc := make(chan error, 1)
 
-	publisher := testSetupClient(t, addr, "pub-unsub", nil)
-	defer publisher.Close()
-
-	subscriber := testSetupClient(t, addr, "sub-unsub", nil)
-	defer subscriber.Close()
-
-	// 订阅
-	err := subscriber.Subscribe("test/unsub")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// 取消订阅
-	err = subscriber.Unsubscribe("test/unsub")
-	if err != nil {
-		t.Fatalf("Failed to unsubscribe: %v", err)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// 发布消息
-	err = publisher.Publish("test/unsub", []byte("should not receive"), nil)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	// 订阅者不应收到消息
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	_, err = subscriber.PollMessage(ctx, 300*time.Millisecond)
-	if err == nil {
-		t.Error("Should not receive message after unsubscribe")
-	}
-}
-
-// TestPubSub_TargetClientID 测试定向发布
-func TestPubSub_TargetClientID(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-target", nil)
-	defer publisher.Close()
-
-	target := testSetupClient(t, addr, "target-client", nil)
-	defer target.Close()
-
-	other := testSetupClient(t, addr, "other-client", nil)
-	defer other.Close()
-
-	// 两个客户端都订阅同一主题
-	err := target.Subscribe("direct/topic")
-	if err != nil {
-		t.Fatalf("Target failed to subscribe: %v", err)
-	}
-	err = other.Subscribe("direct/topic")
-	if err != nil {
-		t.Fatalf("Other failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 定向发布给 target-client
-	err = publisher.PublishToClient("target-client", "direct/topic", []byte("only for you"), nil)
-	if err != nil {
-		t.Fatalf("Failed to publish to client: %v", err)
-	}
-
-	// target 应该收到消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := target.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Target failed to receive: %v", err)
-	}
-	if string(msg.Packet.Payload) != "only for you" {
-		t.Errorf("Target got wrong payload: %s", string(msg.Packet.Payload))
-	}
-	if msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID != "target-client" {
-		t.Fatalf("Expected TargetClientID=target-client, got %#v", msg.Packet.Properties)
-	}
-
-	// other 不应该收到消息
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel2()
-
-	_, err = other.PollMessage(ctx2, 300*time.Millisecond)
-	if err == nil {
-		t.Error("Other should not receive directed message")
-	}
-}
-
-func TestPubSub_TargetClientID_NotRetainedForGeneralSubscribers(t *testing.T) {
-	core := testSetupCore(t, NewCoreOptions().WithRetainEnabled(true))
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-target-retain", nil)
-	defer publisher.Close()
-
-	target := testSetupClient(t, addr, "target-retain-client", nil)
-	defer target.Close()
-
-	if err := publisher.PublishToClient(
-		"target-retain-client",
-		"direct/retain",
-		[]byte("private retained"),
-		client.NewPublishOptions().WithRetain(true),
-	); err != nil {
-		t.Fatalf("Failed to publish retained targeted message: %v", err)
-	}
-
-	ctxTarget, cancelTarget := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancelTarget()
-
-	msg, err := target.PollMessage(ctxTarget, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Target failed to receive directed retained message: %v", err)
-	}
-	if string(msg.Packet.Payload) != "private retained" {
-		t.Fatalf("Target got wrong payload: %s", string(msg.Packet.Payload))
-	}
-
-	other := testSetupClient(t, addr, "other-retain-client", nil)
-	defer other.Close()
-
-	if err := other.Subscribe("direct/retain"); err != nil {
-		t.Fatalf("Other failed to subscribe: %v", err)
-	}
-
-	ctxOther, cancelOther := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancelOther()
-	_, err = other.PollMessage(ctxOther, 300*time.Millisecond)
-	if err == nil {
-		t.Fatal("general subscriber should not receive retained replay of targeted message")
-	}
-	if !errors.Is(err, client.ErrPollTimeout) {
-		t.Fatalf("expected ErrPollTimeout, got %v", err)
-	}
-}
-
-func TestCorePublishToClient_SetsTargetClientIDProperty(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	target := testSetupClient(t, addr, "core-target-client", nil)
-	defer target.Close()
-
-	if err := core.PublishToClient("core-target-client", "direct/core", []byte("from core"), PublishOptions{}); err != nil {
-		t.Fatalf("Failed to publish from core: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := target.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Target failed to receive: %v", err)
-	}
-	if msg.Packet.Properties == nil || msg.Packet.Properties.TargetClientID != "core-target-client" {
-		t.Fatalf("Expected TargetClientID=core-target-client, got %#v", msg.Packet.Properties)
-	}
-}
-
-func TestCorePublishToClient_PreservesQoSAndRetain(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	target := testSetupClient(t, addr, "core-qos-target", nil)
-	defer target.Close()
-
-	if err := core.PublishToClient("core-qos-target", "direct/core-qos", []byte("from core"), PublishOptions{QoS: packet.QoS1, Retain: true}); err != nil {
-		t.Fatalf("Failed to publish from core: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := target.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Target failed to receive: %v", err)
-	}
-	if msg.Packet.QoS != packet.QoS1 {
-		t.Fatalf("Expected QoS1, got %d", msg.Packet.QoS)
-	}
-	if !msg.Packet.Retain {
-		t.Fatal("Expected retain flag to be preserved")
-	}
-}
-
-func TestCorePublishToClient_PreservesUserProperties(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	target := testSetupClient(t, addr, "core-userprops-target", nil)
-	defer target.Close()
-
-	if err := core.PublishToClient("core-userprops-target", "direct/core-userprops", []byte("from core"), PublishOptions{UserProperties: map[string]string{"x-origin": "core", "x-kind": "system"}}); err != nil {
-		t.Fatalf("Failed to publish from core: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := target.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Target failed to receive: %v", err)
-	}
-	if msg.Packet.Properties == nil {
-		t.Fatal("Expected publish properties to be present")
-	}
-	if got := msg.Packet.Properties.UserProperties["x-origin"]; got != "core" {
-		t.Fatalf("Expected x-origin=core, got %q", got)
-	}
-	if got := msg.Packet.Properties.UserProperties["x-kind"]; got != "system" {
-		t.Fatalf("Expected x-kind=system, got %q", got)
-	}
-}
-
-func TestCorePublishToClient_UsesDefaultMessageExpiry(t *testing.T) {
-	opts := NewCoreOptions().WithDefaultMessageExpiry(5 * time.Second)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	target := testSetupClient(t, addr, "core-expiry-target", nil)
-	defer target.Close()
-
-	before := time.Now().Unix()
-	if err := core.PublishToClient("core-expiry-target", "direct/core-expiry", []byte("from core"), PublishOptions{}); err != nil {
-		t.Fatalf("Failed to publish from core: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := target.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Target failed to receive: %v", err)
-	}
-	if msg.Packet.Properties == nil {
-		t.Fatal("Expected publish properties to be present")
-	}
-	if msg.Packet.Properties.ExpiryTime <= before {
-		t.Fatalf("Expected ExpiryTime to be populated from default expiry, before=%d got=%d", before, msg.Packet.Properties.ExpiryTime)
-	}
-	if msg.Packet.Properties.ExpiryTime > before+6 {
-		t.Fatalf("Expected ExpiryTime to be close to default expiry, before=%d got=%d", before, msg.Packet.Properties.ExpiryTime)
-	}
-}
-
-// ============================================================================
-// 保留消息测试
-// ============================================================================
-
-// TestRetain_Basic 测试基本保留消息
-func TestRetain_Basic(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 发布保留消息
-	publisher := testSetupClient(t, addr, "pub-retain", nil)
-	defer publisher.Close()
-
-	retainOpts := client.NewPublishOptions().WithRetain(true)
-	err := publisher.Publish("retain/topic", []byte("retained message"), retainOpts)
-	if err != nil {
-		t.Fatalf("Failed to publish retain message: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 新订阅者应立即收到保留消息
-	subscriber := testSetupClient(t, addr, "sub-retain", nil)
-	defer subscriber.Close()
-
-	// 启动轮询协程（先初始化消息队列）
-	msgCh := make(chan *client.Message, 1)
-	errCh := make(chan error, 1)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
+		msgs, err := sub.Pull(context.Background(), client.PullOptions{MaxRecords: 10, WaitMs: 3000})
 		if err != nil {
-			errCh <- err
-		} else {
-			msgCh <- msg
-		}
-	}()
-
-	// 等待轮询协程启动
-	time.Sleep(100 * time.Millisecond)
-
-	// 现在订阅，保留消息应该被投递
-	err = subscriber.Subscribe("retain/topic")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	// 等待接收保留消息
-	select {
-	case msg := <-msgCh:
-		if string(msg.Packet.Payload) != "retained message" {
-			t.Errorf("Expected 'retained message', got '%s'", string(msg.Packet.Payload))
-		}
-	case err := <-errCh:
-		t.Fatalf("Failed to receive retain message: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for retain message")
-	}
-}
-
-func TestRetain_BroadcastStoresForFutureSubscribers(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	if got := core.Broadcast("retain/broadcast", []byte("retained from core"), PublishOptions{Retain: true}); got != 0 {
-		t.Fatalf("Expected no online recipients, got %d", got)
-	}
-
-	subscriber := testSetupClient(t, addr, "sub-retain-broadcast", nil)
-	defer subscriber.Close()
-
-	msgCh := make(chan *client.Message, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-		if err != nil {
-			errCh <- err
+			errc <- err
 			return
 		}
-		msgCh <- msg
+		done <- msgs
 	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	if err := subscriber.Subscribe("retain/broadcast"); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	select {
-	case msg := <-msgCh:
-		if string(msg.Packet.Payload) != "retained from core" {
-			t.Fatalf("Expected 'retained from core', got %q", string(msg.Packet.Payload))
-		}
-	case err := <-errCh:
-		t.Fatalf("Failed to receive retain message: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for retained broadcast message")
-	}
-}
-
-// TestRetain_Update 测试更新保留消息
-func TestRetain_Update(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-retain-update", nil)
-	defer publisher.Close()
-
-	retainOpts := client.NewPublishOptions().WithRetain(true)
-
-	// 发布初始保留消息
-	err := publisher.Publish("retain/update", []byte("version1"), retainOpts)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// 更新保留消息
-	err = publisher.Publish("retain/update", []byte("version2"), retainOpts)
-	if err != nil {
-		t.Fatalf("Failed to publish update: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 新订阅者应收到最新版本
-	subscriber := testSetupClient(t, addr, "sub-retain-update", nil)
-	defer subscriber.Close()
-
-	// 启动轮询协程
-	msgCh := make(chan *client.Message, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-		if err != nil {
-			errCh <- err
-		} else {
-			msgCh <- msg
-		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	err = subscriber.Subscribe("retain/update")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	select {
-	case msg := <-msgCh:
-		if string(msg.Packet.Payload) != "version2" {
-			t.Errorf("Expected 'version2', got '%s'", string(msg.Packet.Payload))
-		}
-	case err := <-errCh:
-		t.Fatalf("Failed to receive: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for retain message")
-	}
-}
-
-// TestRetain_WildcardMatch 测试通配符匹配保留消息
-func TestRetain_WildcardMatch(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-retain-wild", nil)
-	defer publisher.Close()
-
-	retainOpts := client.NewPublishOptions().WithRetain(true)
-
-	// 发布多个保留消息
-	topics := []string{"device/sensor1/temp", "device/sensor2/temp", "device/sensor3/temp"}
-	for i, topic := range topics {
-		err := publisher.Publish(topic, []byte("temp"+string(rune('1'+i))), retainOpts)
-		if err != nil {
-			t.Fatalf("Failed to publish to %s: %v", topic, err)
-		}
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 使用通配符订阅
-	subscriber := testSetupClient(t, addr, "sub-retain-wild", nil)
-	defer subscriber.Close()
-
-	// 启动轮询协程
-	msgCh := make(chan *client.Message, 5)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := 0; i < 3; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-			cancel()
-			if err != nil {
-				return
-			}
-			msgCh <- msg
-		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	err := subscriber.Subscribe("device/*/temp")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	// 应收到所有匹配的保留消息
-	received := make(map[string]string)
-	timeout := time.After(5 * time.Second)
-	for len(received) < 3 {
-		select {
-		case msg := <-msgCh:
-			received[msg.Packet.Topic] = string(msg.Packet.Payload)
-		case <-timeout:
-			t.Fatalf("Timeout waiting for messages, received %d of 3", len(received))
-		}
-	}
-
-	for _, topic := range topics {
-		if _, ok := received[topic]; !ok {
-			t.Errorf("Did not receive retain message for: %s", topic)
-		}
-	}
-}
-
-// ============================================================================
-// 遗嘱消息测试
-// ============================================================================
-
-// TestWill_Basic 测试基本遗嘱消息
-func TestWill_Basic(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 创建监听遗嘱消息的订阅者
-	watcher := testSetupClient(t, addr, "will-watcher", nil)
-	defer watcher.Close()
-
-	err := watcher.Subscribe("client/*/status")
-	if err != nil {
-		t.Fatalf("Watcher failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 创建带遗嘱消息的客户端
-	willClient, err := client.NewWithOptions(
-		client.NewClientOptions().
-			WithCore(addr).
-			WithClientID("will-client").
-			WithLogger(testIntegrationLogger()).
-			WithWillSimple("client/will-client/status", []byte("offline"), packet.QoS0, false),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create will client: %v", err)
-	}
-
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	err = willClient.ConnectWithDialer(dialer)
-	if err != nil {
-		t.Fatalf("Failed to connect will client: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 强制断开连接（模拟异常断开）
-	willClient.ForceClose()
-
-	// 监听者应收到遗嘱消息
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	msg, err := watcher.PollMessage(ctx, 4*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to receive will message: %v", err)
-	}
-
-	if msg.Packet.Topic != "client/will-client/status" {
-		t.Errorf("Expected topic 'client/will-client/status', got '%s'", msg.Packet.Topic)
-	}
-	if string(msg.Packet.Payload) != "offline" {
-		t.Errorf("Expected payload 'offline', got '%s'", string(msg.Packet.Payload))
-	}
-}
-
-// TestWill_NormalDisconnect 测试正常断开不发送遗嘱
-func TestWill_NormalDisconnect(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 创建监听者
-	watcher := testSetupClient(t, addr, "will-watcher2", nil)
-	defer watcher.Close()
-
-	err := watcher.Subscribe("client/*/status")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 创建带遗嘱消息的客户端
-	willClient, err := client.NewWithOptions(
-		client.NewClientOptions().
-			WithCore(addr).
-			WithClientID("will-client2").
-			WithLogger(testIntegrationLogger()).
-			WithWillSimple("client/will-client2/status", []byte("offline"), packet.QoS0, false),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create will client: %v", err)
-	}
-
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	err = willClient.ConnectWithDialer(dialer)
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 正常断开连接
-	willClient.Disconnect()
-	willClient.Close()
-
-	// 监听者不应收到遗嘱消息
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	_, err = watcher.PollMessage(ctx, 300*time.Millisecond)
-	if err == nil {
-		t.Error("Should not receive will message on normal disconnect")
-	}
-}
-
-// TestWill_WithQoS1 测试 QoS1 遗嘱消息
-func TestWill_WithQoS1(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 创建监听者（使用 QoS1 订阅）
-	watcher := testSetupClient(t, addr, "will-watcher-qos1", nil)
-	defer watcher.Close()
-
-	err := watcher.SubscribeWithOptions([]string{"client/*/qos1status"}, client.NewSubscribeOptions().WithQoS(packet.QoS1))
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 创建带 QoS1 遗嘱的客户端
-	willClient, err := client.NewWithOptions(
-		client.NewClientOptions().
-			WithCore(addr).
-			WithClientID("will-qos1-client").
-			WithLogger(testIntegrationLogger()).
-			WithWillSimple("client/will-qos1-client/qos1status", []byte("qos1-offline"), packet.QoS1, false),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
-
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	err = willClient.ConnectWithDialer(dialer)
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 强制断开
-	willClient.ForceClose()
-
-	// 接收遗嘱消息
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	msg, err := watcher.PollMessage(ctx, 4*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to receive will message: %v", err)
-	}
-
-	if string(msg.Packet.Payload) != "qos1-offline" {
-		t.Errorf("Expected 'qos1-offline', got '%s'", string(msg.Packet.Payload))
-	}
-}
-
-// ============================================================================
-// 消息过期测试
-// ============================================================================
-
-// TestExpiry_MessageExpires 测试消息过期
-func TestExpiry_MessageExpires(t *testing.T) {
-	// 设置短的默认过期时间（但过期检查间隔最小 10s）
-	opts := NewCoreOptions().
-		WithDefaultMessageExpiry(1 * time.Second).
-		WithExpiredCheckInterval(10 * time.Second)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-expiry", nil)
-	defer publisher.Close()
-
-	// 发布带短过期时间的消息
-	expiryOpts := client.NewPublishOptions().WithExpiry(1) // 1秒过期
-	err := publisher.Publish("expiry/test", []byte("will expire"), expiryOpts)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	// 等待消息过期
-	time.Sleep(2 * time.Second)
-
-	// 新订阅者不应收到过期消息
-	subscriber := testSetupClient(t, addr, "sub-expiry", nil)
-	defer subscriber.Close()
-
-	err = subscriber.Subscribe("expiry/test")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	_, err = subscriber.PollMessage(ctx, 300*time.Millisecond)
-	if err == nil {
-		t.Error("Should not receive expired message")
-	}
-}
-
-// TestExpiry_CustomExpiry 测试自定义过期时间
-func TestExpiry_CustomExpiry(t *testing.T) {
-	opts := NewCoreOptions().
-		WithDefaultMessageExpiry(10 * time.Second) // 默认较长
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-custom-expiry", nil)
-	defer publisher.Close()
-
-	subscriber := testSetupClient(t, addr, "sub-custom-expiry", nil)
-	defer subscriber.Close()
-
-	err := subscriber.Subscribe("custom/expiry")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 发布带自定义长过期时间的消息
-	longExpiry := client.NewPublishOptions().WithExpiry(60) // 60秒
-	err = publisher.Publish("custom/expiry", []byte("long lived"), longExpiry)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	// 应能收到消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := subscriber.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to receive: %v", err)
-	}
-
-	if string(msg.Packet.Payload) != "long lived" {
-		t.Errorf("Expected 'long lived', got '%s'", string(msg.Packet.Payload))
-	}
-}
-
-// ============================================================================
-// Hooks 测试
-// ============================================================================
-
-// TestHooks_OnConnect 测试连接钩子
-func TestHooks_OnConnect(t *testing.T) {
-	var connectedClients []string
-	var disconnectedClients []string
-	var mu sync.Mutex
-
-	coreOpts := NewCoreOptions().
-		WithConnectionHandler(&ConnectionHandlerFunc{
-			ConnectFunc: func(ctx *ConnectContext) {
-				mu.Lock()
-				connectedClients = append(connectedClients, ctx.ClientID)
-				mu.Unlock()
-			},
-			DisconnectFunc: func(ctx *DisconnectContext) {
-				mu.Lock()
-				disconnectedClients = append(disconnectedClients, ctx.ClientID)
-				mu.Unlock()
-			},
-		})
-
-	core := testSetupCore(t, coreOpts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 连接多个客户端
-	clients := make([]*client.Client, 3)
-	for i := 0; i < 3; i++ {
-		clients[i] = testSetupClient(t, addr, "hook-client"+string(rune('A'+i)), nil)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 检查连接钩子被调用
-	mu.Lock()
-	if len(connectedClients) != 3 {
-		t.Errorf("Expected 3 connected clients, got %d", len(connectedClients))
-	}
-	mu.Unlock()
-
-	// 断开连接
-	for _, c := range clients {
-		c.Close()
-	}
 
 	time.Sleep(200 * time.Millisecond)
-
-	// 检查断开钩子被调用
-	mu.Lock()
-	if len(disconnectedClients) != 3 {
-		t.Errorf("Expected 3 disconnected clients, got %d", len(disconnectedClients))
-	}
-	mu.Unlock()
-}
-
-// TestHooks_OnPublish 测试发布钩子
-func TestHooks_OnPublish(t *testing.T) {
-	var publishedCount atomic.Int32
-
-	coreOpts := NewCoreOptions().
-		WithMessageHandler(&MessageHandlerFunc{
-			PublishFunc: func(ctx *PublishContext) error {
-				publishedCount.Add(1)
-				// 拒绝发布到 "forbidden" 主题
-				if ctx.Packet.Topic == "forbidden" {
-					return errors.New("topic forbidden")
-				}
-				return nil
-			},
-		})
-
-	core := testSetupCore(t, coreOpts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "hook-pub", nil)
-	defer publisher.Close()
-
-	subscriber := testSetupClient(t, addr, "hook-sub", nil)
-	defer subscriber.Close()
-
-	err := subscriber.Subscribe("allowed")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-	err = subscriber.Subscribe("forbidden")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 发布到允许的主题
-	err = publisher.Publish("allowed", []byte("ok"), nil)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	// 发布到禁止的主题
-	err = publisher.Publish("forbidden", []byte("no"), nil)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	// 应该只收到 allowed 主题的消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := subscriber.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to receive: %v", err)
-	}
-
-	if msg.Packet.Topic != "allowed" {
-		t.Errorf("Expected topic 'allowed', got '%s'", msg.Packet.Topic)
-	}
-
-	// 不应再收到消息
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel2()
-
-	_, err = subscriber.PollMessage(ctx2, 300*time.Millisecond)
-	if err == nil {
-		t.Error("Should not receive message from forbidden topic")
-	}
-
-	// 钩子应被调用两次
-	if publishedCount.Load() != 2 {
-		t.Errorf("Expected 2 publish hook calls, got %d", publishedCount.Load())
-	}
-}
-
-// TestHooks_OnDeliver 测试投递钩子
-func TestHooks_OnDeliver(t *testing.T) {
-	coreOpts := NewCoreOptions().
-		WithMessageHandler(&MessageHandlerFunc{
-			DeliverFunc: func(ctx *DeliverContext) bool {
-				// 只投递给 "vip-" 前缀的客户端
-				return len(ctx.ClientID) >= 4 && ctx.ClientID[:4] == "vip-"
-			},
-		})
-
-	core := testSetupCore(t, coreOpts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "deliver-pub", nil)
-	defer publisher.Close()
-
-	vipSub := testSetupClient(t, addr, "vip-sub", nil)
-	defer vipSub.Close()
-
-	normalSub := testSetupClient(t, addr, "normal-sub", nil)
-	defer normalSub.Close()
-
-	err := vipSub.Subscribe("news")
-	if err != nil {
-		t.Fatalf("VIP failed to subscribe: %v", err)
-	}
-	err = normalSub.Subscribe("news")
-	if err != nil {
-		t.Fatalf("Normal failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 发布消息
-	err = publisher.Publish("news", []byte("breaking news"), nil)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	// VIP 应收到消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	msg, err := vipSub.PollMessage(ctx, 2*time.Second)
-	if err != nil {
-		t.Fatalf("VIP failed to receive: %v", err)
-	}
-	if string(msg.Packet.Payload) != "breaking news" {
-		t.Errorf("VIP got wrong payload: %s", string(msg.Packet.Payload))
-	}
-
-	// Normal 不应收到消息
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel2()
-
-	_, err = normalSub.PollMessage(ctx2, 300*time.Millisecond)
-	if err == nil {
-		t.Error("Normal should not receive message")
-	}
-}
-
-func TestHooks_OnDeliver_DoesNotLeakPerClientMutations(t *testing.T) {
-	coreOpts := NewCoreOptions().
-		WithMessageHandler(&MessageHandlerFunc{
-			DeliverFunc: func(ctx *DeliverContext) bool {
-				ctx.Packet.Properties.CorrelationData = append(ctx.Packet.Properties.CorrelationData, []byte(ctx.ClientID)...)
-				return true
-			},
-		})
-
-	core := testSetupCore(t, coreOpts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "deliver-mutate-pub", nil)
-	defer publisher.Close()
-
-	subA := testSetupClient(t, addr, "sub-a", nil)
-	defer subA.Close()
-
-	subB := testSetupClient(t, addr, "sub-b", nil)
-	defer subB.Close()
-
-	if err := subA.Subscribe("deliver/mutate"); err != nil {
-		t.Fatalf("subA failed to subscribe: %v", err)
-	}
-	if err := subB.Subscribe("deliver/mutate"); err != nil {
-		t.Fatalf("subB failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	if err := publisher.Publish("deliver/mutate", []byte("payload"), client.NewPublishOptions().WithCorrelationData([]byte("base:"))); err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	ctxA, cancelA := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancelA()
-	msgA, err := subA.PollMessage(ctxA, 2*time.Second)
-	if err != nil {
-		t.Fatalf("subA failed to receive: %v", err)
-	}
-
-	ctxB, cancelB := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancelB()
-	msgB, err := subB.PollMessage(ctxB, 2*time.Second)
-	if err != nil {
-		t.Fatalf("subB failed to receive: %v", err)
-	}
-
-	if got := string(msgA.Packet.Properties.CorrelationData); got != "base:sub-a" {
-		t.Fatalf("subA CorrelationData = %q, want %q", got, "base:sub-a")
-	}
-	if got := string(msgB.Packet.Properties.CorrelationData); got != "base:sub-b" {
-		t.Fatalf("subB CorrelationData = %q, want %q", got, "base:sub-b")
-	}
-}
-
-// TestHooks_OnSubscribe 测试订阅钩子
-func TestHooks_OnSubscribe(t *testing.T) {
-	coreOpts := NewCoreOptions().
-		WithSubscriptionHandler(&SubscriptionHandlerFunc{
-			SubscribeFunc: func(ctx *SubscribeContext) error {
-				// 禁止订阅 "admin/#" 主题
-				if len(ctx.Subscription.Topic) >= 6 && ctx.Subscription.Topic[:6] == "admin/" {
-					return errors.New("admin topics forbidden")
-				}
-				return nil
-			},
-		})
-
-	core := testSetupCore(t, coreOpts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	c := testSetupClient(t, addr, "sub-hook-client", nil)
-	defer c.Close()
-
-	// 订阅普通主题应成功
-	err := c.Subscribe("user/data")
-	if err != nil {
-		t.Errorf("Should allow subscribing to user/data: %v", err)
-	}
-
-	// 订阅管理员主题应失败
-	err = c.Subscribe("admin/settings")
-	if err == nil {
-		t.Error("Should reject subscribing to admin topics")
-	}
-}
-
-// TestHooks_ClientOnMessage 测试客户端消息钩子
-func TestHooks_ClientOnMessage(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "client-hook-pub", nil)
-	defer publisher.Close()
-
-	var receivedCount atomic.Int32
-	var filteredOut atomic.Int32
-
-	// 创建带消息钩子的客户端
-	subOpts := client.NewClientOptions().
-		WithCore(addr).
-		WithClientID("client-hook-sub").
-		WithLogger(testIntegrationLogger()).
-		WithMessageHandler(client.MessageHandlerFunc(func(ctx *client.PublishContext) bool {
-			receivedCount.Add(1)
-			// 过滤掉 payload 为 "filter-me" 的消息
-			if string(ctx.Packet.Payload) == "filter-me" {
-				filteredOut.Add(1)
-				return false
-			}
-			return true
-		}))
-
-	subscriber, err := client.NewWithOptions(subOpts)
-	if err != nil {
-		t.Fatalf("Failed to create subscriber: %v", err)
-	}
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	err = subscriber.ConnectWithDialer(dialer)
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer subscriber.Close()
-
-	err = subscriber.Subscribe("hook/test")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 发布多条消息
-	publisher.Publish("hook/test", []byte("keep-me"), nil)
-	publisher.Publish("hook/test", []byte("filter-me"), nil)
-	publisher.Publish("hook/test", []byte("also-keep"), nil)
-
-	// 接收消息
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	received := make([]string, 0)
-	for i := 0; i < 2; i++ {
-		msg, err := subscriber.PollMessage(ctx, 2*time.Second)
-		if err != nil {
-			break
-		}
-		received = append(received, string(msg.Packet.Payload))
-	}
-
-	// 验证
-	if len(received) != 2 {
-		t.Errorf("Expected 2 messages, got %d", len(received))
-	}
-
-	if receivedCount.Load() != 3 {
-		t.Errorf("Expected 3 hook calls, got %d", receivedCount.Load())
-	}
-
-	if filteredOut.Load() != 1 {
-		t.Errorf("Expected 1 filtered message, got %d", filteredOut.Load())
-	}
-}
-
-// ============================================================================
-// 连接管理测试
-// ============================================================================
-
-// TestConnection_Reconnect 测试重连
-func TestConnection_Reconnect(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 创建客户端（autoReconnect 在 Connect 成功后自动启用）
-	opts := client.NewClientOptions().
-		WithCore(addr).
-		WithClientID("reconnect-client").
-		WithLogger(testIntegrationLogger())
-
-	c, err := client.NewWithOptions(opts)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
-	defer c.Close()
-
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	err = c.ConnectWithDialer(dialer)
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-
-	// 订阅
-	err = c.Subscribe("reconnect/test")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	// 强制断开
-	c.ForceClose()
-
-	// 等待重连
-	time.Sleep(2 * time.Second)
-
-	// 应该已重连
-	if !c.IsConnected() {
-		t.Error("Client should be reconnected")
-	}
-}
-
-// TestConnection_MaxClients 测试最大客户端限制
-func TestConnection_MaxClients(t *testing.T) {
-	opts := NewCoreOptions().WithMaxClients(2)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 连接两个客户端（应该成功）
-	c1 := testSetupClient(t, addr, "max-client1", nil)
-	defer c1.Close()
-
-	c2 := testSetupClient(t, addr, "max-client2", nil)
-	defer c2.Close()
-
-	// 第三个客户端应该失败
-	c3Opts := client.NewClientOptions().
-		WithCore(addr).
-		WithClientID("max-client3").
-		WithLogger(testIntegrationLogger())
-
-	c3, err := client.NewWithOptions(c3Opts)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
-	defer c3.Close()
-
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	err = c3.ConnectWithDialer(dialer)
-	if err == nil {
-		t.Error("Third client should fail to connect")
-	}
-}
-
-// TestConnection_ClientTakeover 测试客户端接管
-func TestConnection_ClientTakeover(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 第一个客户端连接
-	c1, err := client.NewWithOptions(
-		client.NewClientOptions().
-			WithCore(addr).
-			WithClientID("takeover-client").
-			WithLogger(testIntegrationLogger()),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create c1: %v", err)
-	}
-
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	err = c1.ConnectWithDialer(dialer)
-	if err != nil {
-		t.Fatalf("Failed to connect c1: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 第二个客户端使用相同 ID 连接
-	c2, err := client.NewWithOptions(
-		client.NewClientOptions().
-			WithCore(addr).
-			WithClientID("takeover-client").
-			WithLogger(testIntegrationLogger()),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create c2: %v", err)
-	}
-
-	dialer2 := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	err = c2.ConnectWithDialer(dialer2)
-	if err != nil {
-		t.Fatalf("Failed to connect c2: %v", err)
-	}
-	defer c2.Close()
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 第一个客户端应被断开
-	if c1.IsConnected() {
-		t.Error("First client should be disconnected")
-	}
-
-	// 第二个客户端应保持连接
-	if !c2.IsConnected() {
-		t.Error("Second client should stay connected")
-	}
-}
-
-func TestConnection_ClientTakeover_AllowedWhenMaxClientsReached(t *testing.T) {
-	opts := NewCoreOptions().WithMaxClients(1)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	c1 := testSetupClient(t, addr, "takeover-max-client", nil)
-	defer c1.Close()
-
-	time.Sleep(100 * time.Millisecond)
-
-	c2, err := client.NewWithOptions(
-		client.NewClientOptions().
-			WithCore(addr).
-			WithClientID("takeover-max-client").
-			WithLogger(testIntegrationLogger()),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create c2: %v", err)
-	}
-	defer c2.Close()
-
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	if err := c2.ConnectWithDialer(dialer); err != nil {
-		t.Fatalf("takeover should succeed even when max clients reached: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	if c1.IsConnected() {
-		t.Fatal("first client should be disconnected after takeover")
-	}
-	if !c2.IsConnected() {
-		t.Fatal("second client should stay connected after takeover")
-	}
-
-	stats := core.GetStats()
-	if stats.ClientsConnected != 1 {
-		t.Fatalf("expected 1 connected client after takeover at max capacity, got %d", stats.ClientsConnected)
-	}
-}
-
-// ============================================================================
-// 统计信息测试
-// ============================================================================
-
-// TestStats_Basic 测试基本统计信息
-func TestStats_Basic(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 初始状态
-	stats := core.GetStats()
-	if stats.ClientsConnected != 0 {
-		t.Errorf("Initial ClientsConnected should be 0, got %d", stats.ClientsConnected)
-	}
-
-	// 连接客户端
-	c1 := testSetupClient(t, addr, "stats-client1", nil)
-	c2 := testSetupClient(t, addr, "stats-client2", nil)
-
-	time.Sleep(100 * time.Millisecond)
-
-	stats = core.GetStats()
-	if stats.ClientsConnected != 2 {
-		t.Errorf("Expected 2 connected clients, got %d", stats.ClientsConnected)
-	}
-
-	// 订阅
-	c1.Subscribe("stats/topic")
-	c2.Subscribe("stats/topic")
-
-	time.Sleep(50 * time.Millisecond)
-
-	stats = core.GetStats()
-	if stats.SubscriptionsCount < 2 {
-		t.Errorf("Expected at least 2 subscriptions, got %d", stats.SubscriptionsCount)
-	}
-
-	// 断开一个客户端
-	c1.Close()
-
-	time.Sleep(100 * time.Millisecond)
-
-	stats = core.GetStats()
-	if stats.ClientsConnected != 1 {
-		t.Errorf("Expected 1 connected client after disconnect, got %d", stats.ClientsConnected)
-	}
-
-	c2.Close()
-}
-
-// ============================================================================
-// 管理 API 测试
-// ============================================================================
-
-// TestManagement_ListClients 测试列出客户端
-func TestManagement_ListClients(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	c1 := testSetupClient(t, addr, "list-client1", nil)
-	defer c1.Close()
-	c2 := testSetupClient(t, addr, "list-client2", nil)
-	defer c2.Close()
-
-	time.Sleep(100 * time.Millisecond)
-
-	clients := core.ListClients()
-	if len(clients) != 2 {
-		t.Errorf("Expected 2 clients, got %d", len(clients))
-	}
-
-	clientIDs := make(map[string]bool)
-	for _, info := range clients {
-		clientIDs[info.ClientID] = true
-	}
-
-	if !clientIDs["list-client1"] {
-		t.Error("Missing list-client1")
-	}
-	if !clientIDs["list-client2"] {
-		t.Error("Missing list-client2")
-	}
-}
-
-// TestManagement_GetClientInfo 测试获取客户端信息
-func TestManagement_GetClientInfo(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	c := testSetupClient(t, addr, "info-client", nil)
-	defer c.Close()
-
-	err := c.Subscribe("info/topic1", "info/topic2")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	info, err := core.GetClientInfo("info-client")
-	if err != nil {
-		t.Fatalf("Failed to get client info: %v", err)
-	}
-
-	if info.ClientID != "info-client" {
-		t.Errorf("Expected ClientID 'info-client', got '%s'", info.ClientID)
-	}
-
-	if !info.Connected {
-		t.Error("Client should be connected")
-	}
-
-	if len(info.Subscriptions) != 2 {
-		t.Errorf("Expected 2 subscriptions, got %d", len(info.Subscriptions))
-	}
-}
-
-// TestManagement_DisconnectClient 测试断开客户端
-func TestManagement_DisconnectClient(t *testing.T) {
-	core := testSetupCore(t, nil)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	c := testSetupClient(t, addr, "disconnect-client", nil)
-	defer c.Close()
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 管理员断开客户端
-	err := core.DisconnectClient("disconnect-client", packet.ReasonServerBusy)
-	if err != nil {
-		t.Fatalf("Failed to disconnect: %v", err)
-	}
-
-	time.Sleep(200 * time.Millisecond)
-
-	if c.IsConnected() {
-		t.Error("Client should be disconnected")
-	}
-}
-
-// ============================================================================
-// 保留消息高级测试
-// ============================================================================
-
-// TestRetain_EmptyPayloadClear 测试空载荷清除保留消息
-func TestRetain_EmptyPayloadClear(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-retain-clear", nil)
-	defer publisher.Close()
-
-	retainOpts := client.NewPublishOptions().WithRetain(true)
-
-	// 发布保留消息
-	err := publisher.Publish("retain/clear", []byte("data"), retainOpts)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 发布空载荷保留消息（应该清除）
-	err = publisher.Publish("retain/clear", []byte{}, retainOpts)
-	if err != nil {
-		t.Fatalf("Failed to publish empty: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 新订阅者不应收到任何保留消息
-	subscriber := testSetupClient(t, addr, "sub-retain-clear", nil)
-	defer subscriber.Close()
-
-	msgCh := make(chan *client.Message, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		msg, err := subscriber.PollMessage(ctx, 1*time.Second)
-		if err == nil {
-			msgCh <- msg
-		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	err = subscriber.Subscribe("retain/clear")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
+	start := time.Now()
+	if err := pub.Push(context.Background(), "ch/a", []byte("wake"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
 	}
 
-	// 不应收到任何消息
 	select {
-	case msg := <-msgCh:
-		t.Errorf("Should not receive message, got: %s", string(msg.Packet.Payload))
-	case <-time.After(2 * time.Second):
-		// 正确：超时表示没有收到消息
-	}
-}
-
-// TestRetain_MultiLevelWildcard 测试多层通配符
-func TestRetain_MultiLevelWildcard(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-retain-multi", nil)
-	defer publisher.Close()
-
-	retainOpts := client.NewPublishOptions().WithRetain(true)
-
-	// 发布多个层级的保留消息
-	topics := []string{
-		"home/room1/temperature",
-		"home/room1/humidity",
-		"home/room2/temperature",
-		"home/room2/humidity",
-		"home/room3/light/brightness",
-		"home/room3/light/color",
-	}
-
-	for i, topic := range topics {
-		err := publisher.Publish(topic, []byte{byte('a' + i)}, retainOpts)
-		if err != nil {
-			t.Fatalf("Failed to publish to %s: %v", topic, err)
+	case msgs := <-done:
+		if len(msgs) != 1 || string(msgs[0].Payload) != "wake" {
+			t.Fatalf("unexpected messages: %+v", msgs)
 		}
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 使用 ** 订阅所有
-	subscriber := testSetupClient(t, addr, "sub-retain-multi", nil)
-	defer subscriber.Close()
-
-	msgCh := make(chan *client.Message, 10)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := 0; i < 6; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-			cancel()
-			if err != nil {
-				return
-			}
-			msgCh <- msg
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("long poll woke too slowly: %v", elapsed)
 		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	err := subscriber.Subscribe("home/**")
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	// 应收到所有6个保留消息
-	received := 0
-	timeout := time.After(5 * time.Second)
-	for received < 6 {
-		select {
-		case <-msgCh:
-			received++
-		case <-timeout:
-			t.Fatalf("Timeout waiting for messages, received %d of 6", received)
-		}
-	}
-
-	if received != 6 {
-		t.Errorf("Expected 6 messages, got %d", received)
-	}
-}
-
-// TestRetain_QoSDowngrade 测试保留消息的 QoS 降级
-func TestRetain_QoSDowngrade(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-retain-qos", nil)
-	defer publisher.Close()
-
-	// 发布 QoS1 保留消息
-	retainOpts := client.NewPublishOptions().WithRetain(true).WithQoS(packet.QoS1)
-	err := publisher.Publish("retain/qos", []byte("qos1 message"), retainOpts)
-	if err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	// 订阅者使用 QoS0 订阅
-	subscriber := testSetupClient(t, addr, "sub-retain-qos", nil)
-	defer subscriber.Close()
-
-	msgCh := make(chan *client.Message, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-		if err != nil {
-			errCh <- err
-		} else {
-			msgCh <- msg
-		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	// QoS0 订阅
-	subOpts := client.NewSubscribeOptions().WithQoS(packet.QoS0)
-	err = subscriber.SubscribeWithOptions([]string{"retain/qos"}, subOpts)
-	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	// 应收到 QoS0 的消息（降级）
-	select {
-	case msg := <-msgCh:
-		if string(msg.Packet.Payload) != "qos1 message" {
-			t.Errorf("Payload mismatch: got %s", string(msg.Packet.Payload))
-		}
-		// QoS 应该被降级为 0
-		if msg.Packet.QoS != packet.QoS0 {
-			t.Errorf("Expected QoS0, got QoS%d", msg.Packet.QoS)
-		}
-	case err := <-errCh:
-		t.Fatalf("Failed to receive: %v", err)
+	case err := <-errc:
+		t.Fatalf("pull failed: %v", err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for message")
+		t.Fatal("long poll did not wake")
 	}
 }
 
-func TestRetain_ReplayAlwaysSetsRetainFlag(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
+func TestTakeoverFencesOldConnection(t *testing.T) {
+	_, addr := startCore(t, nil)
 
-	addr := testServe(t, core)
+	c1 := newTestClient(t, addr, "dup", "ch/a")
+	oldSID := c1.SessionID()
 
-	publisher := testSetupClient(t, addr, "pub-retain-rap", nil)
-	defer publisher.Close()
+	c2 := newTestClient(t, addr, "dup", "ch/a")
+	defer func() { _ = c2.Close() }()
 
-	if err := publisher.Publish("retain/rap", []byte("retained"), client.NewPublishOptions().WithRetain(true)); err != nil {
-		t.Fatalf("Failed to publish retained message: %v", err)
+	if c2.SessionID() == oldSID {
+		t.Fatal("takeover should rotate SessionID")
+	}
+	if !c2.SessionPresent() {
+		t.Fatal("takeover should report SessionPresent")
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	subscriber := testSetupClient(t, addr, "sub-retain-rap", nil)
-	defer subscriber.Close()
-
-	msgCh := make(chan *client.Message, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		msgCh <- msg
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	// RetainAsPublished 只影响实时转发；因订阅而重放的保留消息必须带 Retain=true，
-	// 否则接收方无法区分历史消息与实时消息。
-	subOpts := client.NewSubscribeOptions().WithRetainAsPublished(false)
-	if err := subscriber.SubscribeWithOptions([]string{"retain/rap"}, subOpts); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	select {
-	case msg := <-msgCh:
-		if !msg.Packet.Retain {
-			t.Fatal("expected retained replay to keep Retain flag even when RetainAsPublished=false")
-		}
-	case err := <-errCh:
-		t.Fatalf("Failed to receive: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for retained replay")
-	}
-}
-
-func TestRetain_LiveForwardClearsRetainWhenNotRetainAsPublished(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	subscriber := testSetupClient(t, addr, "sub-live-rap-false", nil)
-	defer subscriber.Close()
-
-	subOpts := client.NewSubscribeOptions().WithRetainAsPublished(false)
-	if err := subscriber.SubscribeWithOptions([]string{"retain/live"}, subOpts); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	publisher := testSetupClient(t, addr, "pub-live-rap-false", nil)
-	defer publisher.Close()
-
-	if err := publisher.Publish("retain/live", []byte("live"), client.NewPublishOptions().WithRetain(true)); err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to receive: %v", err)
-	}
-	if msg.Packet.Retain {
-		t.Fatal("expected live forwarding to clear Retain flag when RetainAsPublished=false")
-	}
-}
-
-func TestRetain_LiveForwardKeepsRetainWhenRetainAsPublished(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	subscriber := testSetupClient(t, addr, "sub-live-rap-true", nil)
-	defer subscriber.Close()
-
-	subOpts := client.NewSubscribeOptions().WithRetainAsPublished(true)
-	if err := subscriber.SubscribeWithOptions([]string{"retain/live-keep"}, subOpts); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	publisher := testSetupClient(t, addr, "pub-live-rap-true", nil)
-	defer publisher.Close()
-
-	if err := publisher.Publish("retain/live-keep", []byte("live"), client.NewPublishOptions().WithRetain(true)); err != nil {
-		t.Fatalf("Failed to publish: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to receive: %v", err)
-	}
-	if !msg.Packet.Retain {
-		t.Fatal("expected live forwarding to keep Retain flag when RetainAsPublished=true")
-	}
-}
-
-func TestRetain_RetainHandlingNoReplay(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-retain-rh", nil)
-	defer publisher.Close()
-
-	if err := publisher.Publish("retain/no-replay", []byte("retained"), client.NewPublishOptions().WithRetain(true)); err != nil {
-		t.Fatalf("Failed to publish retained message: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	subscriber := testSetupClient(t, addr, "sub-retain-rh", nil)
-	defer subscriber.Close()
-
-	subOpts := client.NewSubscribeOptions().WithRetainHandling(2)
-	if err := subscriber.SubscribeWithOptions([]string{"retain/no-replay"}, subOpts); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	_, err := subscriber.PollMessage(ctx, 300*time.Millisecond)
-	if err == nil {
-		t.Fatal("expected no retained replay when RetainHandling=2")
-	}
-	if !errors.Is(err, client.ErrPollTimeout) {
-		t.Fatalf("expected ErrPollTimeout, got %v", err)
-	}
-}
-
-func TestRetain_NoLocalSkipsOwnRetainedReplay(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-retain-nolocal", nil)
-	defer publisher.Close()
-
-	if err := publisher.Publish("retain/nolocal", []byte("retained"), client.NewPublishOptions().WithRetain(true)); err != nil {
-		t.Fatalf("Failed to publish retained message: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	subOpts := client.NewSubscribeOptions().WithNoLocal(true)
-	if err := publisher.SubscribeWithOptions([]string{"retain/nolocal"}, subOpts); err != nil {
-		t.Fatalf("Failed to subscribe with NoLocal: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	_, err := publisher.PollMessage(ctx, 300*time.Millisecond)
-	if err == nil {
-		t.Fatal("expected no retained replay when NoLocal=true and retained message was published by same client")
-	}
-	if !errors.Is(err, client.ErrPollTimeout) {
-		t.Fatalf("expected ErrPollTimeout, got %v", err)
-	}
-}
-
-// TestQoS1Publish_SubscriberQueueFullBackpressure 验证订阅端接收队列满时消息不会被静默丢弃：
-// 客户端不发送 PUBACK，服务端保留消息并在重传周期内再次投递。
-func TestQoS1Publish_SubscriberQueueFullBackpressure(t *testing.T) {
-	core := testSetupCore(t, NewCoreOptions().WithRetransmitInterval(time.Second))
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "pub-queue-full", nil)
-	defer publisher.Close()
-
-	subOpts := client.NewClientOptions().
-		WithCore(addr).
-		WithClientID("sub-queue-full").
-		WithLogger(testIntegrationLogger()).
-		WithMessageQueueSize(1)
-	subscriber, err := client.NewWithOptions(subOpts)
-	if err != nil {
-		t.Fatalf("Failed to create subscriber: %v", err)
-	}
-	defer subscriber.Close()
-
-	dialer := &client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}
-	if err := subscriber.ConnectWithDialer(dialer); err != nil {
-		t.Fatalf("Failed to connect subscriber: %v", err)
-	}
-
-	if err := subscriber.SubscribeWithOptions([]string{"queue/full"}, client.NewSubscribeOptions().WithQoS(packet.QoS1)); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	if err := publisher.Publish("queue/full", []byte("first"), client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(2*time.Second)); err != nil {
-		t.Fatalf("First publish should succeed: %v", err)
-	}
-
-	time.Sleep(200 * time.Millisecond)
-
-	if err := publisher.Publish("queue/full", []byte("second"), client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(2*time.Second)); err != nil {
-		t.Fatalf("Second publish should still be accepted by core: %v", err)
-	}
-
-	// 第二条消息因客户端接收队列已满未被确认，应留在服务端 pendingAck 中等待重传。
-	core.clientsMu.RLock()
-	svClient := core.clients["sub-queue-full"]
-	core.clientsMu.RUnlock()
-	if svClient == nil {
-		t.Fatal("subscriber session should still exist")
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	pendingAckCount := 0
-	for time.Now().Before(deadline) {
-		pendingAckCount = svClient.session.pendingAck.len()
-		if pendingAckCount > 0 {
-			break
-		}
+	// 旧连接应被关闭
+	deadline := time.Now().Add(3 * time.Second)
+	for c1.Connected() && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if pendingAckCount == 0 {
-		t.Fatal("expected unacknowledged message to stay pending for redelivery, got 0")
+	if c1.Connected() {
+		t.Fatal("old connection should be closed after takeover")
 	}
 
-	// 应用开始消费：第一条来自本地队列，第二条由服务端重传后到达。
-	var got []string
-	deadline = time.Now().Add(10 * time.Second)
-	for len(got) < 2 && time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-		cancel()
+	// 旧连接的请求应失败
+	err := c1.Push(context.Background(), "ch/a", []byte("x"), client.PushOptions{})
+	if err == nil {
+		t.Fatal("push on taken-over connection should fail")
+	}
+}
+
+func TestNoProgressPenalty(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithNoProgressLimits(2, 8))
+	sub := newTestClient(t, addr, "sub-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200}); err != nil {
+		t.Fatal(err)
+	}
+
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		_, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 100})
 		if err != nil {
+			lastErr = err
 			break
 		}
-		got = append(got, string(msg.Packet.Payload))
 	}
-
-	if len(got) != 2 {
-		t.Fatalf("expected both messages to be delivered eventually, got %v", got)
-	}
-	if got[0] != "first" || got[1] != "second" {
-		t.Fatalf("expected ordered delivery [first second], got %v", got)
+	if !errors.Is(lastErr, client.ErrCommitRequired) {
+		t.Fatalf("expected ErrCommitRequired, got %v", lastErr)
 	}
 }
 
-// TestRetain_ReplayToNewSubscriber 测试保留消息会被重放给新订阅者。
-// 保留消息保存在内存中：进程重启即丢失（不再验证跨重启恢复）。
-func TestRetain_ReplayToNewSubscriber(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
+func TestQueueCapDropsLowestPriority(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithQueueCap(2))
+	sub := newTestClient(t, addr, "sub-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
 
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-	addr := testServe(t, core)
+	lowOpt := client.PushOptions{}.WithPriority(packet.PriorityLow)
 
-	publisher := testSetupClient(t, addr, "pub-retain", nil)
-	defer publisher.Close()
-
-	retainOpts := client.NewPublishOptions().WithRetain(true)
-	if err := publisher.Publish("persist/topic", []byte("retained data"), retainOpts); err != nil {
-		t.Fatalf("Failed to publish: %v", err)
+	if err := pub.Push(ctx, "ch/a", []byte("low-1"), lowOpt); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.Push(ctx, "ch/a", []byte("low-2"), lowOpt); err != nil {
+		t.Fatal(err)
+	}
+	// 第三条高优先级应挤出最旧的 low
+	if err := pub.Push(ctx, "ch/a", []byte("high"), client.PushOptions{}.WithPriority(packet.PriorityHigh)); err != nil {
+		t.Fatal(err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	// 新订阅者应收到内存中的保留消息
-	subscriber := testSetupClient(t, addr, "sub-retain", nil)
-	defer subscriber.Close()
-
-	msgCh := make(chan *client.Message, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-		if err != nil {
-			errCh <- err
-		} else {
-			msgCh <- msg
-		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	if err := subscriber.Subscribe("persist/topic"); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-
-	select {
-	case msg := <-msgCh:
-		if string(msg.Packet.Payload) != "retained data" {
-			t.Errorf("Payload mismatch: got %s", string(msg.Packet.Payload))
-		}
-	case err := <-errCh:
-		t.Fatalf("Failed to receive: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timeout waiting for retained message")
-	}
-}
-
-// TestRetain_ConcurrentPublish 测试并发发布保留消息
-func TestRetain_ConcurrentPublish(t *testing.T) {
-	opts := NewCoreOptions().WithRetainEnabled(true)
-	core := testSetupCore(t, opts)
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	// 创建多个发布者
-	numPublishers := 10
-	var wg sync.WaitGroup
-	wg.Add(numPublishers)
-
-	retainOpts := client.NewPublishOptions().WithRetain(true)
-
-	for i := 0; i < numPublishers; i++ {
-		go func(id int) {
-			defer wg.Done()
-			publisher := testSetupClient(t, addr, "pub-concurrent-"+string(rune('a'+id)), nil)
-			defer publisher.Close()
-
-			topic := "concurrent/test/" + string(rune('a'+id))
-			err := publisher.Publish(topic, []byte{byte(id)}, retainOpts)
-			if err != nil {
-				t.Errorf("Publisher %d failed: %v", id, err)
-			}
-
-			time.Sleep(100 * time.Millisecond)
-		}(i)
-	}
-
-	wg.Wait()
-	time.Sleep(200 * time.Millisecond)
-
-	// 订阅所有并验证
-	subscriber := testSetupClient(t, addr, "sub-concurrent", nil)
-	defer subscriber.Close()
-
-	msgCh := make(chan *client.Message, 20)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := 0; i < numPublishers; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-			cancel()
-			if err != nil {
-				return
-			}
-			msgCh <- msg
-		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	err := subscriber.Subscribe("concurrent/**")
+	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
 	if err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages after eviction, got %d", len(msgs))
 	}
 
-	received := 0
-	timeout := time.After(10 * time.Second)
-	for received < numPublishers {
-		select {
-		case <-msgCh:
-			received++
-		case <-timeout:
-			t.Fatalf("Timeout, received %d of %d messages", received, numPublishers)
+	payloads := []string{string(msgs[0].Payload), string(msgs[1].Payload)}
+	if payloads[0] != "high" {
+		t.Fatalf("high priority should be delivered first, got %v", payloads)
+	}
+	for _, p := range payloads {
+		if p == "low-1" {
+			t.Fatalf("oldest low-priority message should have been evicted, got %v", payloads)
 		}
 	}
-
-	if received != numPublishers {
-		t.Errorf("Expected %d messages, got %d", numPublishers, received)
-	}
 }
 
-// ============================================================================
-// P0 回归测试
-// ============================================================================
-
-// TestWill_PreservesQoSAndRetain 验证遗嘱消息的 QoS 与 Retain 标志不会在发布路径上丢失。
-func TestWill_PreservesQoSAndRetain(t *testing.T) {
-	core := testSetupCore(t, NewCoreOptions().WithRetainEnabled(true))
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	subscriber := testSetupClient(t, addr, "will-qos-sub", nil)
-	defer subscriber.Close()
-	if err := subscriber.SubscribeWithOptions([]string{"will/qos"}, client.NewSubscribeOptions().WithQoS(packet.QoS1)); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	willPkt := packet.NewPublishPacket("will/qos", []byte("bye"))
-	willPkt.QoS = packet.QoS1
-	willPkt.Retain = true
-
-	// 使用 ConnectWithConn 禁用自动重连，避免 ForceClose 后自动连回来干扰断言。
-	netConn, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatalf("Failed to dial: %v", err)
-	}
-	publisher, err := client.NewWithOptions(client.NewClientOptions().
-		WithCore(addr).
-		WithClientID("will-qos-pub").
-		WithLogger(testIntegrationLogger()).
-		WithWill(&client.WillMessage{Packet: willPkt}))
-	if err != nil {
-		t.Fatalf("Failed to create publisher: %v", err)
-	}
-	defer publisher.Close()
-	if err := publisher.ConnectWithConn(netConn); err != nil {
-		t.Fatalf("Failed to connect publisher: %v", err)
-	}
-
-	if err := publisher.ForceClose(); err != nil {
-		t.Fatalf("Failed to force close publisher: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	msg, err := subscriber.PollMessage(ctx, 4*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to receive will message: %v", err)
-	}
-	if msg.Packet.QoS != packet.QoS1 {
-		t.Fatalf("expected will QoS=1, got %d", msg.Packet.QoS)
-	}
-
-	retained := retainedMessagesForTest(core, "will/qos")
-	if len(retained) != 1 {
-		t.Fatalf("expected retained will message to be stored, got %d", len(retained))
-	}
-	if string(retained[0].Packet.Payload) != "bye" {
-		t.Fatalf("expected retained payload %q, got %q", "bye", string(retained[0].Packet.Payload))
-	}
-}
-
-// TestDisconnect_KeepAliveTimeoutSendsReason 验证心跳超时时服务端会发送带原因码的 DISCONNECT。
-func TestDisconnect_KeepAliveTimeoutSendsReason(t *testing.T) {
-	core := testSetupCore(t, NewCoreOptions())
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatalf("Failed to dial: %v", err)
-	}
-	defer conn.Close()
-
-	connect := packet.NewConnectPacket()
-	connect.ClientID = "keepalive-timeout"
-	connect.KeepAlive = 1
-	if err := packet.WritePacket(conn, connect, 0); err != nil {
-		t.Fatalf("Failed to send CONNECT: %v", err)
-	}
-	if _, err := packet.ReadPacket(conn, 0); err != nil {
-		t.Fatalf("Failed to read CONNACK: %v", err)
-	}
-
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	pkt, err := packet.ReadPacket(conn, 0)
-	if err != nil {
-		t.Fatalf("expected DISCONNECT before EOF, got %v", err)
-	}
-	disc, ok := pkt.(*packet.DisconnectPacket)
-	if !ok {
-		t.Fatalf("expected DISCONNECT, got %T", pkt)
-	}
-	if disc.ReasonCode != packet.ReasonKeepAliveTimeout {
-		t.Fatalf("expected reason %v, got %v", packet.ReasonKeepAliveTimeout, disc.ReasonCode)
-	}
-}
-
-// TestHooks_OnPublishRejectStopsRetransmission 验证钩子拒绝 QoS1 消息时返回 PUBACK，
-// 发布端不会持续重传。
-func TestHooks_OnPublishRejectStopsRetransmission(t *testing.T) {
-	var attempts atomic.Int32
-
-	core := testSetupCore(t, NewCoreOptions().WithMessageHandler(&MessageHandlerFunc{
-		PublishFunc: func(ctx *PublishContext) error {
-			if ctx.Packet.Topic == "reject/topic" {
-				attempts.Add(1)
-				return errors.New("rejected by hook")
+func TestUnauthorizedPublish(t *testing.T) {
+	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
+		Auth: core.AuthHandlerFunc(func(ctx *core.AuthContext) error {
+			ctx.Identity = &core.Identity{
+				ID:            ctx.ClientID,
+				ReadChannels:  []string{"ro/**"},
+				WriteChannels: []string{"wo/**"},
 			}
 			return nil
-		},
-	}))
-	defer core.Stop()
+		}),
+	})
+	_, addr := startCore(t, opts)
+	pub := newTestClient(t, addr, "pub-1")
 
-	addr := testServe(t, core)
-
-	publisher := testSetupClient(t, addr, "hook-reject-pub",
-		client.NewClientOptions().WithRetransmitInterval(time.Second))
-	defer publisher.Close()
-
-	err := publisher.Publish("reject/topic", []byte("x"),
-		client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(3*time.Second))
+	err := pub.Push(context.Background(), "ro/x", []byte("x"), client.PushOptions{})
 	if err == nil {
-		t.Fatal("expected publish to fail when OnPublish rejects the message")
-	}
-
-	// 超过两个重传周期后仍只应有一次尝试。
-	time.Sleep(2500 * time.Millisecond)
-	if got := attempts.Load(); got != 1 {
-		t.Fatalf("expected exactly 1 publish attempt, got %d (rejected message must not be retransmitted)", got)
+		t.Fatal("publishing to a read-only channel should fail")
 	}
 }
 
-// TestClientQueueQuota_OfflineSubscriberKeepsNewest 验证离线订阅者的持久化队列受配额约束：
-// 超过上限的消息按策略丢弃，重连后只补发保留的消息。
-func TestClientQueueQuota_OfflineSubscriberKeepsNewest(t *testing.T) {
-	core := testSetupCore(t, NewCoreOptions().
-		WithMaxClientQueueSize(2, QueueOverflowDropNewest).
-		WithRetransmitInterval(time.Second))
-	defer core.Stop()
+func TestDeclareUnauthorized(t *testing.T) {
+	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
+		Auth: core.AuthHandlerFunc(func(ctx *core.AuthContext) error {
+			ctx.Identity = &core.Identity{
+				ID:           ctx.ClientID,
+				ReadChannels: []string{"ro/**"},
+			}
+			return nil
+		}),
+	})
+	_, addr := startCore(t, opts)
+	sub := newTestClient(t, addr, "sub-1")
 
-	addr := testServe(t, core)
-
-	subOpts := client.NewClientOptions().WithSessionTimeout(60)
-	subscriber := testSetupClient(t, addr, "quota-offline-sub", subOpts)
-	defer subscriber.Close()
-
-	if err := subscriber.Subscribe("quota/flow"); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
+	results, err := sub.Declare(context.Background(), "other/**")
+	if err != nil {
+		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
-
-	if err := subscriber.Disconnect(); err != nil {
-		t.Fatalf("Failed to disconnect subscriber: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	publisher := testSetupClient(t, addr, "quota-offline-pub", nil)
-	defer publisher.Close()
-
-	for i := 0; i < 5; i++ {
-		payload := []byte{byte('0' + i)}
-		if err := publisher.Publish("quota/flow", payload, client.NewPublishOptions().WithQoS(packet.QoS0)); err != nil {
-			t.Fatalf("publish %d failed: %v", i, err)
-		}
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	// 队列配额应只保留前两条
-	core.clientsMu.RLock()
-	svClient := core.clients["quota-offline-sub"]
-	core.clientsMu.RUnlock()
-	if svClient == nil {
-		t.Fatal("subscriber session should be preserved")
-	}
-	if got := svClient.queue.len(); got != 2 {
-		t.Fatalf("expected 2 queued messages after quota enforcement, got %d", got)
-	}
-	if got := core.GetStats().MessagesDropped; got != 3 {
-		t.Fatalf("expected 3 dropped messages, got %d", got)
-	}
-
-	if err := subscriber.ConnectWithDialer(&client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}); err != nil {
-		t.Fatalf("Failed to reconnect subscriber: %v", err)
-	}
-
-	var got []string
-	deadline := time.Now().Add(5 * time.Second)
-	for len(got) < 2 && time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		msg, err := subscriber.PollMessage(ctx, 2*time.Second)
-		cancel()
-		if err != nil {
-			break
-		}
-		got = append(got, string(msg.Packet.Payload))
-	}
-	if len(got) != 2 || got[0] != "0" || got[1] != "1" {
-		t.Fatalf("expected [0 1] after quota, got %v", got)
+	if len(results) != 1 || results[0].Reason != packet.ReasonNotAuthorized {
+		t.Fatalf("expected NotAuthorized, got %+v", results)
 	}
 }
 
-// collectTestMessages 在超时时间内收集 n 条消息的 payload。
-func collectTestMessages(t *testing.T, c *client.Client, n int, timeout time.Duration) []string {
-	t.Helper()
+func TestStatsAndAdmin(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-1", "ch/a")
 
-	var got []string
-	deadline := time.Now().Add(timeout)
-	for len(got) < n && time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		msg, err := c.PollMessage(ctx, 2*time.Second)
-		cancel()
-		if err != nil {
-			break
-		}
-		got = append(got, string(msg.Packet.Payload))
+	info := b.Info()
+	if info.ProtocolVersion != packet.ProtocolVersion {
+		t.Fatalf("protocol version: %d", info.ProtocolVersion)
 	}
-	return got
-}
-
-// TestQoS1Backlog_RefillsWithoutRetransmitTick 验证服务端积压消息在 ACK 驱动下立即补货：
-// 即使 RetransmitInterval 长达 1 小时，离线期间积压的消息也会在重连后全部送达。
-func TestQoS1Backlog_RefillsWithoutRetransmitTick(t *testing.T) {
-	core := testSetupCore(t, NewCoreOptions().WithRetransmitInterval(time.Hour))
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	subscriber := testSetupClient(t, addr, "backlog-sub",
-		client.NewClientOptions().WithSessionTimeout(60).WithReceiveWindow(2))
-	defer subscriber.Close()
-
-	if err := subscriber.SubscribeWithOptions([]string{"backlog/topic"}, client.NewSubscribeOptions().WithQoS(packet.QoS1)); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	if err := subscriber.Disconnect(); err != nil {
-		t.Fatalf("Failed to disconnect subscriber: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	publisher := testSetupClient(t, addr, "backlog-pub", nil)
-	defer publisher.Close()
-
-	const n = 10
-	want := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		payload := string(rune('a' + i))
-		want = append(want, payload)
-		if err := publisher.Publish("backlog/topic", []byte(payload),
-			client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(2*time.Second)); err != nil {
-			t.Fatalf("publish %d failed: %v", i, err)
-		}
+	if info.Connected != 1 {
+		t.Fatalf("connected: %d", info.Connected)
 	}
 
-	if err := subscriber.ConnectWithDialer(&client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}); err != nil {
-		t.Fatalf("Failed to reconnect subscriber: %v", err)
+	ci, err := b.GetClientInfo("sub-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ci.Channels) != 1 || ci.Channels[0] != "ch/a" {
+		t.Fatalf("channels: %v", ci.Channels)
 	}
 
-	got := collectTestMessages(t, subscriber, n, 10*time.Second)
-	if len(got) != n {
-		t.Fatalf("expected %d messages driven by ACK refill, got %d (%v)", n, len(got), got)
+	if err := b.DisconnectClient("sub-1", packet.ReasonKicked); err != nil {
+		t.Fatalf("disconnect: %v", err)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("message order mismatch at %d: got %q, want %q", i, got[i], want[i])
-		}
+	deadline := time.Now().Add(3 * time.Second)
+	for sub.Connected() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
 	}
-}
-
-// TestClientBacklog_RefillsWithoutRetransmitTick 验证客户端出站积压消息在 PUBACK 驱动下立即补货：
-// 即使客户端 RetransmitInterval 长达 1 小时，重连后积压消息也会全部发出。
-func TestClientBacklog_RefillsWithoutRetransmitTick(t *testing.T) {
-	core := testSetupCore(t, NewCoreOptions().WithReceiveWindow(2))
-	defer core.Stop()
-
-	addr := testServe(t, core)
-
-	subscriber := testSetupClient(t, addr, "client-backlog-sub", nil)
-	defer subscriber.Close()
-
-	if err := subscriber.SubscribeWithOptions([]string{"client/backlog"}, client.NewSubscribeOptions().WithQoS(packet.QoS1)); err != nil {
-		t.Fatalf("Failed to subscribe: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	publisher := testSetupClient(t, addr, "client-backlog-pub",
-		client.NewClientOptions().WithRetransmitInterval(time.Hour))
-	defer publisher.Close()
-
-	if err := publisher.Disconnect(); err != nil {
-		t.Fatalf("Failed to disconnect publisher: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	const n = 10
-	want := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		payload := string(rune('a' + i))
-		want = append(want, payload)
-		if err := publisher.Publish("client/backlog", []byte(payload),
-			client.NewPublishOptions().WithQoS(packet.QoS1).WithTimeout(2*time.Second)); err != nil {
-			t.Fatalf("publish %d failed: %v", i, err)
-		}
-	}
-
-	if err := publisher.ConnectWithDialer(&client.TCPDialer{Address: addr, DialTimeout: 10 * time.Second}); err != nil {
-		t.Fatalf("Failed to reconnect publisher: %v", err)
-	}
-
-	got := collectTestMessages(t, subscriber, n, 10*time.Second)
-	if len(got) != n {
-		t.Fatalf("expected %d messages driven by PUBACK refill, got %d (%v)", n, len(got), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("message order mismatch at %d: got %q, want %q", i, got[i], want[i])
-		}
+	if sub.Connected() {
+		t.Fatal("client should be disconnected")
 	}
 }
