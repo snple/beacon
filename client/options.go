@@ -17,7 +17,7 @@ type ClientOptions struct {
 
 	ClientID       string
 	KeepAlive      uint16 // 秒
-	SessionTimeout uint32 // 秒；0 表示断开即清理
+	CleanSession   bool   // 建连时要求服务端丢弃该 ClientID 的既有会话
 	MaxPacketSize  uint32
 	ConnectTimeout time.Duration
 	WriteTimeout   time.Duration
@@ -119,8 +119,11 @@ func (o *ClientOptions) WithClientID(id string) *ClientOptions { o.ClientID = id
 // WithKeepAlive 设置心跳间隔（秒）。
 func (o *ClientOptions) WithKeepAlive(s uint16) *ClientOptions { o.KeepAlive = s; return o }
 
-// WithSessionTimeout 设置会话保留时长（秒）。
-func (o *ClientOptions) WithSessionTimeout(s uint32) *ClientOptions { o.SessionTimeout = s; return o }
+// WithCleanSession 设置建连时是否清理该 ClientID 的既有会话。
+func (o *ClientOptions) WithCleanSession(clean bool) *ClientOptions {
+	o.CleanSession = clean
+	return o
+}
 
 // WithMaxPacketSize 设置最大包大小。
 func (o *ClientOptions) WithMaxPacketSize(n uint32) *ClientOptions { o.MaxPacketSize = n; return o }

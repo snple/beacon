@@ -20,6 +20,7 @@ type ServerInfo struct {
     Sessions        int64
     Listeners       []ListenerInfo
     Limits          packet.Limits
+    MaxChannelLength int // channel 名/过滤器最大字节数（256–1024）
     Storage         string // 固定 "memory"
 }
 
@@ -114,7 +115,8 @@ func (c *Core) PushToClient(clientID, channel string, payload []byte, opts PushO
 - `Push` 以系统身份推送，**不做写权限校验**。
 - `PushToClient` 设置 `Record.Target`，跳过 channel 匹配直接入该客户端队列；
   目标没有会话时返回 `*ClientNotFoundError`。
-- `Matched` 表示入队成功的客户端数；`Dropped` 表示因队列满被挤出的旧消息数（或新消息被丢弃）。
+- `Matched` 表示入队成功的客户端数；`Dropped` 表示目标离线时的 Low 丢弃、
+  因队列满被挤出的旧消息数（或新消息被丢弃）。
 - `PushToClient` 在目标不存在、channel 非法等情况下返回 error；channel 非法时 `PushResult.Reason`
   同样会带上原因码。
 - `PushOptions.Priority` 的零值是 Low，但**未显式设置时按 Medium 处理**；要显式使用 Low 请写成
@@ -125,7 +127,7 @@ func (c *Core) PushToClient(clientID, channel string, payload []byte, opts PushO
 
 | 不提供 | 原因 / 替代做法 |
 |---|---|
-| 删除会话 | 让 `SessionTimeout` 生效，或断开连接 |
+| 删除会话 | 断开连接后等待服务端 `SessionTimeout` 过期 |
 | 枚举 channel | channel 是路由键，broker 不维护目录 |
 | 清空某客户端队列 | 只能通过消费 + commit 消化，或断开后等会话过期 |
 | 运行时改配置 | 需要重新创建 Core |
@@ -160,6 +162,7 @@ type ConnectionHandler interface {
 | `WithMaxRecords(n)` | 1000 | 单次 PULL 条数上限，同时约束 delivered 长度 |
 | `WithMaxBytes(n)` | 1 MiB | 单次 PULL / PUSH 字节上限 |
 | `WithMaxChannelsPerClient(n)` | 1024 | 单客户端声明数量上限 |
+| `WithMaxChannelLength(n)` | 256 | channel 名/过滤器最大字节数（256–1024） |
 | `WithPushRateLimit(rate, burst)` | 不限 | 每客户端发布速率 |
 | `WithConnectionRateLimit(rate, burst)` | 不限 | 连接建立速率 |
 | `WithMaxHandshakeConnections(n)` | 512 | 认证前并发连接上限 |
@@ -168,6 +171,6 @@ type ConnectionHandler interface {
 | `WithMaxInflightBytes(n)` | 256 MiB | 全局在途消息字节上限（<0 = 不限） |
 | `WithWaitLimit(max)` | 300s | 长轮询时长上限 |
 | `WithMaxRecordBytes(n)` | 1 MiB | 单条记录 payload 上限 |
-| `WithSessionTimeout(max)` | 86400s | 会话保留时长上限 |
+| `WithSessionTimeout(seconds)` | 86400s | 会话保留时长（0 = 断开即清理） |
 | `WithNoProgressLimits(soft, hard)` | 4 / 16 | 无进展 pull 的惩罚阈值（0 = 关闭） |
 | `WithUncommittedTimeout(d)` | 关闭 | delivered 长期未确认超时 |

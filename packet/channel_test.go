@@ -2,6 +2,7 @@ package packet
 
 import (
 	"math/rand/v2"
+	"strings"
 	"testing"
 )
 
@@ -61,9 +62,12 @@ func TestMatchChannel(t *testing.T) {
 }
 
 // 随机生成小规模 channel 空间，验证 subsumes 与 MatchChannel 的一致性。
+//
+// names 必须比 filters 深一层：像 "a/b/**" 这样的请求模式能匹配到
+// 第 4 层，只有在名字空间包含该层时才能发现「allow 是精确前缀」的误判。
 func TestFilterSubsumesProperty(t *testing.T) {
-	segments := []string{"a", "b", "c"}
-	names := genNames(segments, 3)
+	segments := []string{"a", "b"}
+	names := genNames(segments, 4)
 	filters := genFilters(segments, 3)
 
 	for _, allow := range filters {
@@ -83,21 +87,48 @@ func TestFilterSubsumesProperty(t *testing.T) {
 	}
 }
 
+// TestFilterSubsumesExactCannotCoverWildcard 验证 ACL 的关键边界：
+// 只被授权精确 channel 时，不能声明 "name/**" 来获取该前缀下的所有子 channel。
+func TestFilterSubsumesExactCannotCoverWildcard(t *testing.T) {
+	cases := []struct {
+		allow, request string
+		want           bool
+	}{
+		{"a", "a/**", false},
+		{"a", "a/*", false},
+		{"a/b", "a/**", false},
+		{"a/b", "a/b/**", false},
+		{"a/**", "a", true},
+		{"a/**", "a/*", true},
+		{"a/**", "a/**", true},
+		{"*", "a", true},
+		{"a/*", "a/b", true},
+		{"a/b", "a/*", false},
+	}
+	for _, c := range cases {
+		if got := FilterSubsumes(c.allow, c.request); got != c.want {
+			t.Errorf("FilterSubsumes(%q, %q) = %v, want %v", c.allow, c.request, got, c.want)
+		}
+	}
+}
+
 func genNames(segs []string, depth int) []string {
 	out := []string{}
-	var build func(prefix string, d int)
-	build = func(prefix string, d int) {
-		if d == 0 {
-			if prefix != "" {
-				out = append(out, prefix)
-			}
+	var build func(prefix string, left int)
+	build = func(prefix string, left int) {
+		// 记录每一层的前缀：** 能匹配零层，只有包含「浅层」名称时
+		// 才能真正验证 FilterSubsumes 的边界语义。
+		if prefix != "" {
+			out = append(out, prefix)
+		}
+		if left == 0 {
 			return
 		}
 		for _, s := range segs {
 			if prefix == "" {
-				build(s, d-1)
+				build(s, left-1)
 			} else {
-				build(prefix+"/"+s, d-1)
+				build(prefix+"/"+s, left-1)
 			}
 		}
 	}
@@ -168,4 +199,49 @@ func TestPacketIDOrderingApprox(t *testing.T) {
 		prev = id
 	}
 	_ = rand.IntN
+}
+
+func TestChannelLengthLimit(t *testing.T) {
+	if MinChannelLength != 256 || MaxChannelLength != 1024 {
+		t.Fatalf("unexpected channel length bounds: min=%d max=%d", MinChannelLength, MaxChannelLength)
+	}
+
+	nameMin := strings.Repeat("a", MinChannelLength)
+	nameMax := strings.Repeat("a", MaxChannelLength)
+	nameOver := strings.Repeat("a", MaxChannelLength+1)
+
+	if !ValidateChannelNameLimit(nameMin, MinChannelLength) {
+		t.Fatal("name at configured limit should be valid")
+	}
+	if ValidateChannelNameLimit(strings.Repeat("a", MinChannelLength+1), MinChannelLength) {
+		t.Fatal("name over configured limit should be invalid")
+	}
+	if !ValidateChannelNameLimit(nameMax, MaxChannelLength) {
+		t.Fatal("name at hard cap should be valid")
+	}
+	if ValidateChannelName(nameOver) {
+		t.Fatal("name over hard cap should be invalid")
+	}
+
+	// maxLen <= 0 或超过硬上限时回落到协议硬上限。
+	if !ValidateChannelNameLimit(nameMax, 0) || ValidateChannelNameLimit(nameOver, 0) {
+		t.Fatal("non-positive limit should clamp to the protocol hard cap")
+	}
+	if !ValidateChannelNameLimit(nameMax, 1<<20) || ValidateChannelNameLimit(nameOver, 1<<20) {
+		t.Fatal("limit above the hard cap should clamp to the protocol hard cap")
+	}
+
+	filterMin := strings.Repeat("a", MinChannelLength-3) + "/**"
+	if len(filterMin) != MinChannelLength {
+		t.Fatalf("bad fixture length: %d", len(filterMin))
+	}
+	if !ValidateChannelFilterLimit(filterMin, MinChannelLength) {
+		t.Fatal("filter at configured limit should be valid")
+	}
+	if ValidateChannelFilterLimit(filterMin, MinChannelLength-1) {
+		t.Fatal("filter over configured limit should be invalid")
+	}
+	if ValidateChannelFilter(nameOver) {
+		t.Fatal("filter over hard cap should be invalid")
+	}
 }

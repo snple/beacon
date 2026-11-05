@@ -234,8 +234,12 @@ const (
 const (
 	// MaxClientIDLength 客户端 ID 的最大字节数。
 	MaxClientIDLength = 256
-	// MaxChannelLength channel 名称/过滤器的最大字节数。
-	MaxChannelLength = 65535
+	// MinChannelLength 服务端可配置的 channel 名/过滤器长度上限的最小值。
+	MinChannelLength = 256
+	// MaxChannelLength 协议允许的 channel 名/过滤器长度上限（硬上限）。
+	// 服务端实际生效的上限由 CoreOptions.MaxChannelLength 配置，取值必须落在
+	// [MinChannelLength, MaxChannelLength] 区间内。
+	MaxChannelLength = 1024
 	// MaxPacketSize 协议硬上限。
 	MaxPacketSize = 268435456 // 256 MB
 )

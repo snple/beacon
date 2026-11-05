@@ -78,7 +78,9 @@ type PushResult struct {
 	Reason  ReasonCode
 	ID      PacketID
 	Matched uint32 // 入队成功的客户端数
-	Dropped uint32 // 因入队导致旧消息被挤出的客户端数 / 新消息被丢弃的客户端数
+	// Dropped 是未入队的客户端数：目标离线时的 Low 丢弃、入队导致旧消息被挤出、
+	// 或新消息本身因优先级被丢弃。
+	Dropped uint32
 }
 
 // PushOkPacket PUSH_OK：发布结果。

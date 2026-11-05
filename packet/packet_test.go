@@ -25,7 +25,7 @@ func roundTrip(t *testing.T, pkt Packet) Packet {
 func TestConnectRoundTrip(t *testing.T) {
 	in := NewConnectPacket("dev-1")
 	in.KeepAlive = 30
-	in.SessionTimeout = 60
+	in.CleanSession = true
 	in.MaxPacketSize = 4096
 	in.HasWill = true
 	in.WillChannel = "dev/1/offline"
@@ -37,7 +37,7 @@ func TestConnectRoundTrip(t *testing.T) {
 
 	out := roundTrip(t, in).(*ConnectPacket)
 	if out.ClientID != in.ClientID || out.KeepAlive != in.KeepAlive ||
-		out.SessionTimeout != in.SessionTimeout || out.MaxPacketSize != in.MaxPacketSize {
+		out.CleanSession != in.CleanSession || out.MaxPacketSize != in.MaxPacketSize {
 		t.Fatalf("header mismatch: %+v", out)
 	}
 	if !out.HasWill || out.WillChannel != in.WillChannel ||

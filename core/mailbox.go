@@ -202,11 +202,11 @@ func (m *mailbox) takePending(maxRecords int, maxBytes int) (batch []taken, more
 				break
 			}
 
-			if maxBytes > 0 && bytesLeft > 0 {
+			if maxBytes > 0 {
 				size := int(e.msg.Size())
 				if size > bytesLeft {
 					if len(batch) > 0 {
-						// 放不下且已经有内容：放回去，结束
+						// 放不下（含预算恰好用尽）且已经有内容：放回去，结束
 						m.q[p].pushFront(e)
 						return batch, true
 					}
@@ -291,7 +291,7 @@ func (m *mailbox) drainDelivered(served, maxRecords, maxBytes int) (batch []take
 	for i := start; i < n && len(batch) < maxRecords; i++ {
 		d := m.delivered[m.dhead+i]
 		size := int(d.msg.Size())
-		if maxBytes > 0 && bytesLeft > 0 {
+		if maxBytes > 0 {
 			if size > bytesLeft {
 				if len(batch) > 0 {
 					cut = true
@@ -385,6 +385,29 @@ func (m *mailbox) depth() (pending [3]uint32, delivered uint32, oldest packet.Pa
 		oldest = m.delivered[m.dhead].id
 	}
 	return pending, delivered, oldest
+}
+
+// dropLow 丢弃 pending 中全部 Low 优先级消息，返回丢弃条数。
+//
+// 会话转入离线时调用：离线队列只保留 Medium/High。
+func (m *mailbox) dropLow() int {
+	m.mu.Lock()
+	var release []*Message
+	count := 0
+	for {
+		e, ok := m.q[packet.PriorityLow].popFront()
+		if !ok {
+			break
+		}
+		release = append(release, e.msg)
+		count++
+	}
+	m.mu.Unlock()
+
+	for _, msg := range release {
+		m.onRelease(msg)
+	}
+	return count
 }
 
 // releaseAll 释放队列中全部条目（会话销毁时调用）。

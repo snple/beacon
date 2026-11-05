@@ -43,7 +43,6 @@ func newTestClient(t *testing.T, addr, id string, channels ...string) *client.Cl
 	opts := client.NewClientOptions().
 		WithCore(addr).
 		WithClientID(id).
-		WithSessionTimeout(60).
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop())
 	if len(channels) > 0 {

@@ -53,13 +53,18 @@ go run ./cmd/core --addr :5208 --metrics-addr :9101
 | `--queue-cap` | 单客户端 pending 队列上限 |
 | `--max-records` / `--max-bytes` | 单次 PULL 的记录数/字节上限 |
 | `--max-sessions` | 会话总数上限（含离线保留，`-1` = 不限） |
+| `--session-timeout` | 离线会话保留秒数（`0` = 断开即清理） |
 | `--max-inflight-bytes` | 全局在途消息字节上限（`-1` = 不限） |
+| `--max-channel-length` | channel 名/过滤器最大字节数（256–1024，默认 256） |
 
 ### 客户端（CLI）
 
 ```bash
 # 订阅并消费（逐批拉取 + 整批确认）
 go run ./cmd/client -core 127.0.0.1:5208 -client-id c1 -mode pull -channel 'sensors/**'
+
+# 丢弃该 client-id 的既有会话（pending/delivered/声明）后重新连接
+go run ./cmd/client -core 127.0.0.1:5208 -client-id c1 -mode pull -channel 'sensors/**' -clean-session
 
 # 发布
 go run ./cmd/client -core 127.0.0.1:5208 -client-id c2 -mode push -channel sensors/temp -message 21.5
@@ -155,17 +160,24 @@ SDK 已在 `Pull` 内部串行化。
 队列满时按「低优先级优先丢弃、同优先级丢最旧」处理；如果新消息的优先级低于当前最低非空优先级，
 则丢弃新消息本身。被丢弃的数量通过 `PUSH_OK.Results[].Dropped` 返回给发布者。
 
+会话离线时队列**只保留 Medium / High**：Low 消息在入队前直接丢弃，不占用离线队列；
+离线队列满后仍按上述优先级策略淘汰。
+
 ### 定向投递
 
 - 目标是 clientID；`Channel` 仍参与写权限校验，但不参与匹配；
-- 目标离线但会话保留时仍然入队；
+- 目标离线但会话保留时仍然入队（Low 除外）；
 - 目标没有会话时返回 `TargetNotFound`。
 
-### 会话接管
+### 会话接管与清理
 
 同一个 ClientID 再次连接会接管会话：新连接拿到新的 `SessionID`，旧连接收到
 `DISCONNECT(SessionTakenOver)` 后被关闭，且旧连接之后的所有请求都不产生状态变更。
 客户端收到该原因码后**不应自动重连**，否则两个实例会互相踢下线。
+
+`CONNECT` 的 `CleanSession=1` 会先丢弃该 ClientID 的 pending / delivered / channel 声明，
+再以新会话建立连接（`SessionPresent=0`）。会话保留时长由服务端
+`--session-timeout` 统一配置（`0` = 断开即清理）。
 
 ### 遗嘱
 

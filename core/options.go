@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
@@ -41,11 +42,16 @@ type CoreOptions struct {
 
 	MaxChannelsPerClient int // 单客户端可声明的过滤器数量上限
 
+	// MaxChannelLength channel 名/过滤器的最大字节数。
+	// 取值范围 [packet.MinChannelLength, packet.MaxChannelLength]。
+	MaxChannelLength int
+
 	// MaxRecordBytes 单条记录（payload + 元数据）上限
 	MaxRecordBytes uint32
 
 	// ===== 会话 =====
-	MaxSessionTimeout    uint32 // 会话保留时长上限（秒）；客户端的 SessionTimeout=0 表示不保留
+	// SessionTimeout 会话保留时长（秒）；0 表示断开即清理。
+	SessionTimeout       uint32
 	SessionCheckInterval time.Duration
 
 	// ===== 背压与惩罚 =====
@@ -81,9 +87,10 @@ func NewCoreOptions() *CoreOptions {
 
 		MaxWaitMs:            300000,
 		MaxChannelsPerClient: 1024,
+		MaxChannelLength:     packet.MinChannelLength,
 		MaxRecordBytes:       1 << 20,
 
-		MaxSessionTimeout:    86400,
+		SessionTimeout:       86400,
 		SessionCheckInterval: 30 * time.Second,
 
 		NoProgressSoft: 4,
@@ -126,6 +133,9 @@ func (o *CoreOptions) applyDefaults() {
 	if o.MaxChannelsPerClient == 0 {
 		o.MaxChannelsPerClient = def.MaxChannelsPerClient
 	}
+	if o.MaxChannelLength == 0 {
+		o.MaxChannelLength = def.MaxChannelLength
+	}
 	if o.MaxRecordBytes == 0 {
 		o.MaxRecordBytes = def.MaxRecordBytes
 	}
@@ -162,6 +172,10 @@ func (o *CoreOptions) Validate() error {
 	}
 	if o.MaxWaitMs < 1000 {
 		return fmt.Errorf("maxWaitMs must be >= 1000")
+	}
+	if o.MaxChannelLength < packet.MinChannelLength || o.MaxChannelLength > packet.MaxChannelLength {
+		return fmt.Errorf("maxChannelLength must be in [%d, %d], got %d",
+			packet.MinChannelLength, packet.MaxChannelLength, o.MaxChannelLength)
 	}
 	return nil
 }
@@ -230,12 +244,19 @@ func (o *CoreOptions) WithMaxChannelsPerClient(n int) *CoreOptions {
 	return o
 }
 
+// WithMaxChannelLength 设置 channel 名/过滤器的最大字节数。
+// 取值必须落在 [packet.MinChannelLength, packet.MaxChannelLength] 内。
+func (o *CoreOptions) WithMaxChannelLength(n int) *CoreOptions {
+	o.MaxChannelLength = n
+	return o
+}
+
 // WithMaxRecordBytes 设置单条记录大小上限
 func (o *CoreOptions) WithMaxRecordBytes(n uint32) *CoreOptions { o.MaxRecordBytes = n; return o }
 
-// WithSessionTimeout 设置会话保留时长上限（秒）
-func (o *CoreOptions) WithSessionTimeout(max uint32) *CoreOptions {
-	o.MaxSessionTimeout = max
+// WithSessionTimeout 设置会话保留时长（秒）；0 表示断开即清理。
+func (o *CoreOptions) WithSessionTimeout(seconds uint32) *CoreOptions {
+	o.SessionTimeout = seconds
 	return o
 }
 

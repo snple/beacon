@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +23,6 @@ func TestMaxSessionsRejected(t *testing.T) {
 	opts := client.NewClientOptions().
 		WithCore(addr).
 		WithClientID("max-2").
-		WithSessionTimeout(60).
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop())
 	c2, err := client.NewWithOptions(opts)
@@ -183,7 +183,6 @@ func TestOfflineQueueDeliveredOnReconnect(t *testing.T) {
 	c2, err := client.NewWithOptions(client.NewClientOptions().
 		WithCore(addr).
 		WithClientID("device-1").
-		WithSessionTimeout(60).
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop()))
 	if err != nil {
@@ -273,12 +272,13 @@ func TestWebSocketTransport(t *testing.T) {
 }
 
 func TestSessionExpiry(t *testing.T) {
-	b, addr := startCore(t, core.NewCoreOptions().WithSessionCheckInterval(100*time.Millisecond))
+	b, addr := startCore(t, core.NewCoreOptions().
+		WithSessionTimeout(1).
+		WithSessionCheckInterval(100*time.Millisecond))
 
 	c, err := client.NewWithOptions(client.NewClientOptions().
 		WithCore(addr).
 		WithClientID("tmp-1").
-		WithSessionTimeout(1).
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop()))
 	if err != nil {
@@ -531,4 +531,207 @@ func TestAdminPushCopiesPayload(t *testing.T) {
 	if len(msgs) != 1 || string(msgs[0].Payload) != "original" {
 		t.Fatalf("payload not copied: %q", msgs[0].Payload)
 	}
+}
+
+// channel 名/过滤器的长度上限必须按服务端配置生效。
+func TestChannelLengthLimitEnforced(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("default", func(t *testing.T) {
+		_, addr := startCore(t, nil)
+		c := newTestClient(t, addr, "len-default")
+
+		assertPushChannel(t, c, ctx, strings.Repeat("a", packet.MinChannelLength), true)
+		assertPushChannel(t, c, ctx, strings.Repeat("a", packet.MinChannelLength+1), false)
+		assertDeclareChannel(t, c, ctx, strings.Repeat("a", packet.MinChannelLength), packet.ReasonSuccess)
+		assertDeclareChannel(t, c, ctx, strings.Repeat("a", packet.MinChannelLength+1), packet.ReasonChannelFilterInvalid)
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		b, addr := startCore(t, core.NewCoreOptions().WithMaxChannelLength(512))
+		if got := b.Info().MaxChannelLength; got != 512 {
+			t.Fatalf("Info().MaxChannelLength=%d, want 512", got)
+		}
+		c := newTestClient(t, addr, "len-512")
+
+		assertPushChannel(t, c, ctx, strings.Repeat("a", 512), true)
+		assertPushChannel(t, c, ctx, strings.Repeat("a", 513), false)
+		assertDeclareChannel(t, c, ctx, strings.Repeat("a", 512), packet.ReasonSuccess)
+		assertDeclareChannel(t, c, ctx, strings.Repeat("a", 513), packet.ReasonChannelFilterInvalid)
+	})
+}
+
+func assertPushChannel(t *testing.T, c *client.Client, ctx context.Context, channel string, wantOK bool) {
+	t.Helper()
+	err := c.Push(ctx, channel, nil, client.PushOptions{})
+	if wantOK {
+		// 没有订阅者时返回 NoMatch（非错误），说明 channel 本身已通过校验。
+		if err != nil {
+			t.Fatalf("channel len %d should be accepted: %v", len(channel), err)
+		}
+		return
+	}
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Reason != packet.ReasonChannelInvalid {
+		t.Fatalf("channel len %d: got %v, want ChannelInvalid", len(channel), err)
+	}
+}
+
+func assertDeclareChannel(t *testing.T, c *client.Client, ctx context.Context, filter string, want packet.ReasonCode) {
+	t.Helper()
+	res, err := c.Declare(ctx, filter)
+	if err != nil {
+		t.Fatalf("declare len %d: %v", len(filter), err)
+	}
+	if len(res) != 1 || res[0].Reason != want {
+		t.Fatalf("declare len %d: got %+v, want reason %s", len(filter), res, want)
+	}
+}
+
+// 离线会话只保留 Medium/High；Low 直接丢弃。队列满后沿用既有淘汰策略。
+func TestOfflineQueuePolicy(t *testing.T) {
+	b, addr := startCore(t, core.NewCoreOptions().WithQueueCap(2))
+	sub := newTestClient(t, addr, "offline-sub", "off/**")
+	pub := newTestClient(t, addr, "offline-pub")
+	ctx := context.Background()
+
+	_ = sub.Close()
+	waitClientDetached(t, b, "offline-sub")
+
+	push := func(channel string, prio packet.Priority) {
+		t.Helper()
+		err := pub.Push(ctx, channel, []byte(channel), client.PushOptions{}.WithPriority(prio))
+		if err != nil {
+			t.Fatalf("push %s: %v", channel, err)
+		}
+	}
+
+	push("off/m1", packet.PriorityMedium)
+	push("off/h1", packet.PriorityHigh)
+	// Low 在离线时被丢弃，不占用队列。
+	push("off/l1", packet.PriorityLow)
+	// 队列已满（cap=2）：挤掉最旧的 Medium。
+	push("off/m2", packet.PriorityMedium)
+
+	info, err := b.GetClientInfo("offline-sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Pending != [3]uint32{0, 1, 1} {
+		t.Fatalf("pending=%v, want [0 1 1] (Low dropped, oldest Medium evicted)", info.Pending)
+	}
+	if info.MessagesDropped != 2 {
+		t.Fatalf("MessagesDropped=%d, want 2 (1 Low skipped + 1 evicted)", info.MessagesDropped)
+	}
+
+	// 非 CleanSession 重连：复用会话并取回 High → Medium。
+	sub2 := newTestClient(t, addr, "offline-sub")
+	if !sub2.SessionPresent() {
+		t.Fatal("session should be present on reconnect")
+	}
+	msgs, err := sub2.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 || msgs[0].Channel != "off/h1" || msgs[1].Channel != "off/m2" {
+		t.Fatalf("offline queue = %+v, want [off/h1 off/m2]", msgs)
+	}
+}
+
+// CleanSession 必须丢弃既有 pending 并返回 SessionPresent=false。
+func TestCleanSessionClearsState(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "clean-1", "c/**")
+	pub := newTestClient(t, addr, "clean-pub")
+	ctx := context.Background()
+
+	_ = sub.Close()
+	waitClientDetached(t, b, "clean-1")
+
+	if err := pub.Push(ctx, "c/x", []byte("stale"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	clean := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("clean-1").
+		WithCleanSession(true).
+		WithAutoReconnect(false).
+		WithLogger(zap.NewNop())
+	c2, err := client.NewWithOptions(clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.ConnectContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c2.Close() }()
+
+	if c2.SessionPresent() {
+		t.Fatal("CleanSession should report SessionPresent=false")
+	}
+	msgs, err := c2.Pull(ctx, client.PullOptions{MaxRecords: 10, Immediate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("CleanSession should clear pending, got %+v", msgs)
+	}
+}
+
+// CleanSession 在旧连接仍存活时同样生效（接管 + 清理）。
+func TestCleanSessionTakeover(t *testing.T) {
+	b, addr := startCore(t, nil)
+	old := newTestClient(t, addr, "clean-2", "c/**")
+	pub := newTestClient(t, addr, "clean-pub2")
+	ctx := context.Background()
+
+	if err := pub.Push(ctx, "c/1", []byte("stale"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// 先确认旧会话确实收到了积压。
+	if info, err := b.GetClientInfo("clean-2"); err != nil || info.Pending[1] != 1 {
+		t.Fatalf("pending before clean = %+v, err=%v", info, err)
+	}
+
+	clean := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("clean-2").
+		WithCleanSession(true).
+		WithAutoReconnect(false).
+		WithLogger(zap.NewNop())
+	c2, err := client.NewWithOptions(clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.ConnectContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c2.Close() }()
+
+	if c2.SessionPresent() {
+		t.Fatal("CleanSession takeover should report SessionPresent=false")
+	}
+	msgs, err := c2.Pull(ctx, client.PullOptions{MaxRecords: 10, Immediate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("CleanSession takeover should clear pending, got %+v", msgs)
+	}
+	if old.Connected() {
+		t.Fatal("old connection should be taken over")
+	}
+}
+
+func waitClientDetached(t *testing.T, b *core.Core, clientID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if info, err := b.GetClientInfo(clientID); err == nil && !info.Connected {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("client %q did not detach in time", clientID)
 }

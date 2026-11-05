@@ -11,11 +11,13 @@ type ChannelDecl struct {
 
 // ConnectPacket CONNECT：建立连接、单轮认证、首次声明。
 type ConnectPacket struct {
-	Version        uint8
-	ClientID       string
-	KeepAlive      uint16 // 秒
-	SessionTimeout uint32 // 秒；0 表示断开即清理
-	MaxPacketSize  uint32
+	Version uint8
+	// CleanSession 为 true 时服务端丢弃该 ClientID 的既有会话状态
+	// （pending/delivered/声明），以全新会话建立本次连接。
+	CleanSession  bool
+	ClientID      string
+	KeepAlive     uint16 // 秒
+	MaxPacketSize uint32
 
 	HasWill     bool
 	WillChannel string
@@ -43,13 +45,17 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 	if err := WriteByte(w, p.Version); err != nil {
 		return err
 	}
+	var clean uint8
+	if p.CleanSession {
+		clean = 1
+	}
+	if err := WriteByte(w, clean); err != nil {
+		return err
+	}
 	if err := EncodeString(w, p.ClientID); err != nil {
 		return err
 	}
 	if err := EncodeUint16(w, p.KeepAlive); err != nil {
-		return err
-	}
-	if err := EncodeUint32(w, p.SessionTimeout); err != nil {
 		return err
 	}
 	if err := EncodeUint32(w, p.MaxPacketSize); err != nil {
@@ -99,13 +105,15 @@ func (p *ConnectPacket) decode(r io.Reader, _ FixedHeader) error {
 	if p.Version, err = ReadByte(r); err != nil {
 		return err
 	}
+	clean, err := ReadByte(r)
+	if err != nil {
+		return err
+	}
+	p.CleanSession = clean&1 != 0
 	if p.ClientID, err = DecodeString(r); err != nil {
 		return err
 	}
 	if p.KeepAlive, err = DecodeUint16(r); err != nil {
-		return err
-	}
-	if p.SessionTimeout, err = DecodeUint32(r); err != nil {
 		return err
 	}
 	if p.MaxPacketSize, err = DecodeUint32(r); err != nil {

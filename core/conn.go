@@ -267,6 +267,7 @@ type pullPlan struct {
 	delivered  []taken // 仅为发送而 retain、写成功后释放
 	nextServed int
 	empty      bool
+	epoch      uint64 // 构建计划时的会话 resetEpoch
 }
 
 func recordsOf(batch []taken, dup bool) []packet.Record {
@@ -295,7 +296,7 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 
 	pendingDepth, deliveredDepth, oldest := cl.mb.depth()
 
-	plan := &pullPlan{resp: packet.NewPullOkPacket(p.RequestID)}
+	plan := &pullPlan{resp: packet.NewPullOkPacket(p.RequestID), epoch: cl.resetEpoch.Load()}
 
 	// 1) delivered 优先：未确认的消息先重发
 	if deliveredDepth > 0 {
@@ -509,14 +510,35 @@ func (cn *conn) applyPlan(plan *pullPlan) {
 	}
 }
 
-// abortPlan 在写失败后回滚。
+// abortPlan 在写失败或被接管后回滚。
+//
+// 若会话已被 CleanSession 重置，则不回滚：把已取出的消息写回新会话会复活
+// 本应被清理的数据，此时只释放引用。
 func (cn *conn) abortPlan(plan *pullPlan) {
+	if cn.client.resetEpoch.Load() != plan.epoch {
+		cn.discardPlan(plan)
+		return
+	}
 	cl := cn.client
 	if len(plan.delivered) > 0 {
 		cl.mb.releaseBatch(plan.delivered)
 	}
 	if len(plan.pending) > 0 {
 		cl.mb.restore(plan.pending)
+	}
+}
+
+// discardPlan 在连接已失去会话所有权时丢弃计划。
+//
+// 此时会话可能已被接管或 CleanSession 重置，不能再把消息放回队列
+// 或推进 delivered（旧连接不得产生任何状态变更），只释放本批引用。
+func (cn *conn) discardPlan(plan *pullPlan) {
+	cl := cn.client
+	if len(plan.delivered) > 0 {
+		cl.mb.releaseBatch(plan.delivered)
+	}
+	for _, t := range plan.pending {
+		cn.core.releaseMessage(t.msg)
 	}
 }
 
@@ -562,6 +584,12 @@ func (cn *conn) handlePull(p *packet.PullPacket) error {
 		cn.abortPlan(plan)
 		cn.pullInflight.Store(false)
 		return err
+	}
+	// 写出期间会话可能被 CleanSession 重置：旧连接不得把消息写回已清理的会话。
+	if cn.client.resetEpoch.Load() != plan.epoch {
+		cn.discardPlan(plan)
+		cn.pullInflight.Store(false)
+		return errSessionStale
 	}
 	cn.applyPlan(plan)
 	cn.pullInflight.Store(false)
@@ -626,6 +654,10 @@ func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
 			}
 			if err := cn.writePacket(plan.resp); err != nil {
 				cn.abortPlan(plan)
+				return
+			}
+			if cn.client.resetEpoch.Load() != plan.epoch {
+				cn.discardPlan(plan)
 				return
 			}
 			cn.applyPlan(plan)

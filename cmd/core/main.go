@@ -83,6 +83,10 @@ func main() {
 		maxBytes    = flag.Int("max-bytes", 1<<20, "max bytes per PULL/PUSH")
 		maxSessions = flag.Int("max-sessions", 10000, "max sessions including offline (-1 = unlimited)")
 		maxInflight = flag.Int64("max-inflight-bytes", 256<<20, "global in-flight message bytes (-1 = unlimited)")
+		sessTimeout = flag.Int("session-timeout", 86400,
+			"session retention seconds after disconnect (0 = delete immediately)")
+		maxChanLen = flag.Int("max-channel-length", packet.MinChannelLength,
+			"max bytes for channel name/filter (256-1024)")
 		debug       = flag.Bool("debug", false, "enable debug logging")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
@@ -110,6 +114,12 @@ func main() {
 	if *maxBytes < 1 || int64(*maxBytes) > int64(^uint32(0)) {
 		logger.Fatal("max-bytes must be between 1 and 4294967295")
 	}
+	if *maxChanLen < packet.MinChannelLength || *maxChanLen > packet.MaxChannelLength {
+		logger.Fatal("max-channel-length must be between 256 and 1024")
+	}
+	if *sessTimeout < 0 || uint64(*sessTimeout) > uint64(^uint32(0)) {
+		logger.Fatal("session-timeout must be between 0 and 4294967295")
+	}
 
 	opts := core.NewCoreOptions().
 		WithQueueCap(*queueCap).
@@ -117,6 +127,8 @@ func main() {
 		WithMaxBytes(uint32(*maxBytes)).
 		WithMaxSessions(*maxSessions).
 		WithMaxInflightBytes(*maxInflight).
+		WithSessionTimeout(uint32(*sessTimeout)).
+		WithMaxChannelLength(*maxChanLen).
 		WithLogger(logger)
 
 	if *authFile != "" {

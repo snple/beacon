@@ -34,6 +34,14 @@
 
 `CONNECT` 必须是第一个包。版本不是 `4` 时服务端回 `CONNACK(UnsupportedProtocol)` 并关闭。
 
+### 2.1 会话与 CleanSession
+
+- 会话保留时长由**服务端配置**，`CONNECT` 不携带 `SessionTimeout`。
+- `CleanSession=1`：服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，
+  `CONNACK.SessionPresent=0` 并返回新的 `SessionID`。
+- `CleanSession=0`：若会话仍被保留，则复用队列与声明（`SessionPresent=1`）。
+- 会话离线期间队列只保留 **Medium / High**，Low 消息直接丢弃；队列满后按优先级淘汰。
+
 ## 3. Record 编解码
 
 ```
@@ -49,7 +57,10 @@ Payload    4 字节长度 + 字节
 注意：
 
 - **`HasHeaders` 位与 Headers 必须一致**：条目数为 0 时不置位；非 0 时必须置位。
-- 字符串用 `uint16` 长度，因此单条 channel / header 值上限 65535 字节；payload 用 `uint32`。
+- 字符串用 `uint16` 长度，因此 header key/value 上限 65535 字节；payload 用 `uint32`。
+- **channel 名/过滤器另受服务端配置的长度上限约束**：可配置 256–1024 字节，默认 256
+  （线格式仍是 `uint16`）。超限时 `PUSH_OK` 返回 `ChannelInvalid`，
+  `DECLARE_RESP` 返回 `ChannelFilterInvalid`。
 - `Headers` 的键在编码时排序，便于确定性输出；解码不要求有序。
 - `Priority` 位为 0 且 `HasPriority` 未置位时，按 **Medium** 处理。
 
@@ -142,4 +153,5 @@ QueueCap 条（pending）  +  MaxRecords 条（delivered）
 | `PUSH_OK` 全部 `NoMatch` | 没有客户端声明匹配的 channel |
 | `PUSH_OK` 返回 `TargetNotFound` | 定向目标是 clientID，且该客户端没有会话 |
 | `DECLARE_RESP` 返回 `NotAuthorized` | 声明的过滤器超出 ACL 允许范围 |
+| `PUSH_OK` 返回 `ChannelInvalid` / `DECLARE_RESP` 返回 `ChannelFilterInvalid` | channel 名或过滤器超过服务端长度上限（默认 256 字节） |
 | 收不到任何消息 | 检查 `DECLARE` 是否真的成功，以及是否用了 `*` / `**` |

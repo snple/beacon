@@ -88,6 +88,9 @@ v4 中优先级同时决定可靠性，不存在独立开关：
 | Medium（默认） | 是 | 留在队列直到确认 | 其次被丢 |
 | Low | 否 | 立即从队列删除 | 最先被丢 |
 
+会话离线时（服务端 `SessionTimeout > 0`），队列**只保留 Medium / High**：
+Low 消息在入队前直接丢弃，`PUSH_OK.Dropped` 会包含这些客户端；队列满后仍按上表淘汰。
+
 ---
 
 ## 5. 各包字段
@@ -97,9 +100,9 @@ v4 中优先级同时决定可靠性，不存在独立开关：
 ```
 CONNECT {
     Version        uint8      // 必须为 4
+    CleanSession   uint8      // 1 = 丢弃该 ClientID 的既有会话状态
     ClientID       string     // 空 = 服务端分配
     KeepAlive      uint16     // 秒
-    SessionTimeout uint32     // 秒；0 = 断开即清理
     MaxPacketSize  uint32     // 客户端可接收的最大包
     WillFlags      uint8      // bit0 = HasWill
     WillChannel    string
@@ -126,6 +129,10 @@ CONNACK {
 
 认证为**单轮**：`AuthMethod`/`AuthData` 在 `CONNECT` 中一次提交，失败时 `CONNACK` 携带错误原因码并关闭连接。
 
+会话保留时长完全由**服务端配置**，`CONNECT` 不携带该字段。`CleanSession=1` 时，
+服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，以全新会话建立连接
+（`SessionPresent=0`、新的 `SessionID`）。
+
 `CONNACK.KeepAlive` 是服务端最终采用的间隔（可能覆盖客户端在 `CONNECT` 中请求的值）。
 客户端必须用它计算发送 `PING` 的频率，否则在服务端配置更短时会周期性被判超时。
 
@@ -134,6 +141,7 @@ CONNACK {
 | 情况 | SessionPresent | SessionID | 动作 |
 |---|---|---|---|
 | 首次连接 / 新会话 | false | 新生成 | 新建会话 |
+| `CleanSession=1` | false | 新生成 | 清理既有会话后新建 |
 | 重连，旧连接已断开 | true | **沿用** | 恢复会话 |
 | 重连，旧连接仍存活（含半开） | true | **新生成** | 接管，关闭旧连接 |
 
@@ -156,7 +164,7 @@ PUSH_OK {
         Reason  uint8
         ID      PacketID
         Matched uint32   // 入队成功的客户端数
-        Dropped uint32   // 因入队导致旧消息被挤出的客户端数
+        Dropped uint32   // 目标离线且 Low 被丢弃，或因入队挤出旧消息的客户端数
     }
 }
 ```
@@ -279,6 +287,10 @@ DISCONNECT { ReasonCode uint8, Flags uint8 }   // bit0 = SuppressWill
 - 过滤器：`*` 匹配单层（必须独占一层），`**` 匹配零或多层（必须在末尾）
 - `**` 也匹配空后缀：`a/**` 匹配 `a`、`a/b`、`a/b/c`
 - `$` 前缀保留给 broker 内部 channel
+- 长度：发布名与过滤器均不得超过服务端配置的上限，可配置范围 **256–1024 字节**
+  （默认 256；线格式仍为 `uint16`）。超限时 `PUSH_OK` 返回 `ChannelInvalid`，
+  `DECLARE_RESP` 返回 `ChannelFilterInvalid`；`CONNECT` 中的初始声明若超限会被忽略，
+  需要逐项结果时请使用 `DECLARE`
 
 ACL 使用「模式包含」判定：声明过滤器 `F` 时要求存在允许模式 `A` 使得 `A` 覆盖 `F` 的全部可匹配集合。
 
@@ -289,6 +301,7 @@ ACL 使用「模式包含」判定：声明过滤器 `F` 时要求存在允许�
 | 项 | 语义 |
 |---|---|
 | 投递语义 | at-least-once：未 `COMMIT` 的消息会重发（`Dup=1`） |
+| 离线队列 | 只保留 Medium / High；Low 直接丢弃 |
 | 顺序 | 同一优先级内 FIFO；跨优先级无序 |
 | 历史回放 | 不支持（channel 是路由键，不存历史） |
 | 重复流量 | 等于未确认集合规模；客户端应在拉取新数据前提交 |
@@ -308,6 +321,8 @@ ACL 使用「模式包含」判定：声明过滤器 `F` 时要求存在允许�
 | `MaxRecordBytes` | 1 MiB |
 | `MaxWaitMs`（服务端裁剪上限） | 300s |
 | `MaxChannelsPerClient` | 1024 |
+| `MaxChannelLength`（channel 名/过滤器字节数） | 256（可配 256–1024） |
+| `SessionTimeout`（离线会话保留时长） | 86400s（0 = 断开即清理） |
 | `MaxSessions`（含离线保留） | 10000 |
 | `MaxInflightBytes`（全局在途消息） | 256 MiB |
 | `NoProgressSoft` / `Hard` | 4 / 16 |

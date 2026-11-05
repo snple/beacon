@@ -30,7 +30,6 @@ func dialRaw(t *testing.T, addr, clientID string, channels ...string) *rawConn {
 
 	connect := packet.NewConnectPacket(clientID)
 	connect.KeepAlive = 60
-	connect.SessionTimeout = 60
 	connect.MaxPacketSize = 1 << 20
 	for _, ch := range channels {
 		connect.Channels = append(connect.Channels, packet.ChannelDecl{Channel: ch})
@@ -188,7 +187,6 @@ func TestPullHonorsClientMaxPacketSize(t *testing.T) {
 
 	connect := packet.NewConnectPacket("small-buf")
 	connect.KeepAlive = 60
-	connect.SessionTimeout = 60
 	connect.MaxPacketSize = 512
 	connect.Channels = []packet.ChannelDecl{{Channel: "big/ch"}}
 	if err := packet.WritePacket(nc, connect, 0); err != nil {

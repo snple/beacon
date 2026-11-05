@@ -39,6 +39,10 @@ type Client struct {
 	connMu sync.Mutex
 	conn   *conn
 
+	// resetEpoch 在 CleanSession 重置时递增，用于让旧连接的 in-flight PULL
+	// 不再把消息写回已被清理的会话。
+	resetEpoch atomic.Uint64
+
 	createdAt   time.Time
 	connectedAt atomic.Int64
 	lastSeen    atomic.Int64
@@ -52,7 +56,7 @@ type Client struct {
 	rejected atomic.Int64
 }
 
-func newClient(core *Core, clientID string, connect *packet.ConnectPacket) *Client {
+func newClient(core *Core, clientID string) *Client {
 	cl := &Client{
 		ID:        clientID,
 		core:      core,
@@ -60,21 +64,13 @@ func newClient(core *Core, clientID string, connect *packet.ConnectPacket) *Clie
 	}
 	cl.sessionID.Store(newSessionID())
 	cl.mb = newMailbox(core.options.QueueCap, core.releaseMessage)
-	cl.timeout.Store(effectiveSessionTimeout(core.options, connect.SessionTimeout))
-	cl.channels = append([]packet.ChannelDecl(nil), connect.Channels...)
+	cl.timeout.Store(core.options.SessionTimeout)
 
 	if core.options.PushRate > 0 {
 		cl.pushLimiter = newTokenBucket(core.options.PushRate, core.options.PushBurst)
 	}
 
 	return cl
-}
-
-func effectiveSessionTimeout(opts *CoreOptions, requested uint32) uint32 {
-	if opts.MaxSessionTimeout > 0 && requested > opts.MaxSessionTimeout {
-		return opts.MaxSessionTimeout
-	}
-	return requested
 }
 
 func newSessionID() uint64 {
@@ -124,6 +120,33 @@ func (cl *Client) notify() {
 	if cn := cl.currentConn(); cn != nil {
 		cn.notify()
 	}
+}
+
+// enqueue 把消息放入会话队列。
+//
+// 离线会话只保留 Medium/High：Low 是尽力而为的消息，直接丢弃（skipped=true），
+// 避免可丢失的数据占用离线队列。队列满时仍由 mailbox.enqueue 按优先级淘汰。
+func (cl *Client) enqueue(msg *Message) (enqueued, evicted, skipped bool) {
+	cl.connMu.Lock()
+	defer cl.connMu.Unlock()
+
+	if msg.Priority == packet.PriorityLow && cl.conn == nil {
+		return false, false, true
+	}
+	enqueued, evicted = cl.mb.enqueue(msg)
+	return enqueued, evicted, false
+}
+
+// reset 清空会话状态并更换 SessionID（CONNECT 的 CleanSession=true）。
+func (cl *Client) reset() {
+	cl.resetEpoch.Add(1)
+	cl.mb.releaseAll()
+	cl.replaceChannels(nil)
+	cl.deliveredSince.Store(0)
+	cl.dropped.Store(0)
+	cl.sent.Store(0)
+	cl.rejected.Store(0)
+	cl.sessionID.Store(newSessionID())
 }
 
 func (cl *Client) setIdentity(id *Identity) { cl.identity.Store(id.Clone()) }

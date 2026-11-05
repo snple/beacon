@@ -54,7 +54,7 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 		seen[d.Channel] = struct{}{}
 
 		switch {
-		case !packet.ValidateChannelFilter(d.Channel):
+		case !packet.ValidateChannelFilterLimit(d.Channel, opts.MaxChannelLength):
 			resp.Results = append(resp.Results, packet.ChannelResult{
 				Channel: d.Channel,
 				Reason:  packet.ReasonChannelFilterInvalid,

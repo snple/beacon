@@ -21,21 +21,22 @@ var version = "0.4.0"
 
 func main() {
 	var (
-		address  = flag.String("core", "127.0.0.1:5208", "Core address (host:port, ws:// or wss://)")
-		clientID = flag.String("client-id", "", "Client ID (default: auto)")
-		mode     = flag.String("mode", "pull", "Mode: push | pull")
-		channel  = flag.String("channel", "test/channel", "Channel name")
-		message  = flag.String("message", "Hello, Beacon!", "Payload for push mode")
-		count    = flag.Int("count", 1, "Number of messages to push")
-		priority = flag.String("priority", "medium", "Priority: low | medium | high")
-		target   = flag.String("target", "", "Target client ID for directed push")
-		channels = flag.String("channels", "", "Comma separated channel filters to declare")
-		maxRecs  = flag.Int("max-records", 100, "Max records per pull")
-		interval = flag.Duration("interval", 0, "Push interval")
-		waitMs   = flag.Int("wait-ms", 30000, "Pull long-poll wait in ms (0 = immediate)")
-		stdout   = flag.Bool("stdout", true, "Print pulled payloads")
-		debug    = flag.Bool("debug", false, "Enable debug logging")
-		showVer  = flag.Bool("version", false, "Print version and exit")
+		address   = flag.String("core", "127.0.0.1:5208", "Core address (host:port, ws:// or wss://)")
+		clientID  = flag.String("client-id", "", "Client ID (default: auto)")
+		mode      = flag.String("mode", "pull", "Mode: push | pull")
+		channel   = flag.String("channel", "test/channel", "Channel name")
+		message   = flag.String("message", "Hello, Beacon!", "Payload for push mode")
+		count     = flag.Int("count", 1, "Number of messages to push")
+		priority  = flag.String("priority", "medium", "Priority: low | medium | high")
+		target    = flag.String("target", "", "Target client ID for directed push")
+		channels  = flag.String("channels", "", "Comma separated channel filters to declare")
+		maxRecs   = flag.Int("max-records", 100, "Max records per pull")
+		interval  = flag.Duration("interval", 0, "Push interval")
+		waitMs    = flag.Int("wait-ms", 30000, "Pull long-poll wait in ms (0 = immediate)")
+		stdout    = flag.Bool("stdout", true, "Print pulled payloads")
+		cleanSess = flag.Bool("clean-session", false, "Discard existing session state on connect")
+		debug     = flag.Bool("debug", false, "Enable debug logging")
+		showVer   = flag.Bool("version", false, "Print version and exit")
 	)
 	flag.Parse()
 
@@ -60,7 +61,7 @@ func main() {
 	opts := client.NewClientOptions().
 		WithCore(*address).
 		WithClientID(*clientID).
-		WithSessionTimeout(300).
+		WithCleanSession(*cleanSess).
 		WithLogger(logger)
 
 	if *channels != "" {

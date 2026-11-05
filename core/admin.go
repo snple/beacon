@@ -26,15 +26,16 @@ type ListenerInfo struct {
 
 // ServerInfo 是服务端总体信息。
 type ServerInfo struct {
-	ProtocolVersion uint8
-	StartedAt       time.Time
-	Uptime          time.Duration
-	MaxClients      uint32
-	Connected       int64
-	Sessions        int64
-	Listeners       []ListenerInfo
-	Limits          packet.Limits
-	Storage         string
+	ProtocolVersion  uint8
+	StartedAt        time.Time
+	Uptime           time.Duration
+	MaxClients       uint32
+	Connected        int64
+	Sessions         int64
+	Listeners        []ListenerInfo
+	Limits           packet.Limits
+	MaxChannelLength int // channel 名/过滤器最大字节数
+	Storage          string
 }
 
 func (c *Core) registerListener(address, protocol string) uint64 {
@@ -90,15 +91,16 @@ func (c *Core) Info() ServerInfo {
 	c.clientsMu.RUnlock()
 
 	return ServerInfo{
-		ProtocolVersion: packet.ProtocolVersion,
-		StartedAt:       c.startedAt,
-		Uptime:          time.Since(c.startedAt),
-		MaxClients:      c.options.MaxClients,
-		Connected:       c.stats.ClientsConnected.Load(),
-		Sessions:        sessions,
-		Listeners:       c.Listeners(),
-		Limits:          c.limits(),
-		Storage:         "memory",
+		ProtocolVersion:  packet.ProtocolVersion,
+		StartedAt:        c.startedAt,
+		Uptime:           time.Since(c.startedAt),
+		MaxClients:       c.options.MaxClients,
+		Connected:        c.stats.ClientsConnected.Load(),
+		Sessions:         sessions,
+		Listeners:        c.Listeners(),
+		Limits:           c.limits(),
+		MaxChannelLength: c.options.MaxChannelLength,
+		Storage:          "memory",
 	}
 }
 

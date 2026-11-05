@@ -164,7 +164,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 
 	connect := packet.NewConnectPacket(c.opts.ClientID)
 	connect.KeepAlive = c.opts.KeepAlive
-	connect.SessionTimeout = c.opts.SessionTimeout
+	connect.CleanSession = c.opts.CleanSession
 	connect.MaxPacketSize = c.opts.MaxPacketSize
 	connect.AuthMethod = c.opts.AuthMethod
 	connect.AuthData = c.opts.AuthData

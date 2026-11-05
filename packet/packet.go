@@ -9,7 +9,7 @@ import (
 
 // minRemainingLength 各包类型所需的最小 Remaining Length。
 var minRemainingLength = map[PacketType]uint32{
-	CONNECT:      30, // Version(1)+ClientID(2)+KeepAlive(2)+SessionTimeout(4)+MaxPacketSize(4)+WillFlags(1)+WillChannel(2)+WillPayload(4)+WillHeaders(2)+AuthMethod(2)+AuthData(4)+ChannelCount(2)
+	CONNECT:      27, // Version(1)+CleanSession(1)+ClientID(2)+KeepAlive(2)+MaxPacketSize(4)+WillFlags(1)+WillChannel(2)+WillPayload(4)+WillHeaders(2)+AuthMethod(2)+AuthData(4)+ChannelCount(2)
 	CONNACK:      46, // SessionPresent(1)+ReasonCode(1)+ClientID(2)+MaxPacketSize(4)+KeepAlive(2)+SessionID(8)+Pending(12)+Delivered(4)+OldestUncommitted(12)
 	PUSH:         11, // RequestID(8)+Flags(1)+Count(2)
 	PUSH_OK:      10, // RequestID(8)+Count(2)

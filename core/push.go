@@ -10,7 +10,8 @@ import (
 // pushRecord 处理单条记录：校验、建消息、分发。
 //
 // 返回 PUSH_OK 中的一条结果。matched 是入队成功的客户端数，
-// dropped 是「因入队导致旧消息被挤出」或「新消息本身被丢弃」的客户端数。
+// dropped 是「因入队导致旧消息被挤出」「新消息本身被丢弃」或
+// 「目标离线且消息为 Low 而被丢弃」的客户端数。
 func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.PushResult {
 	res := packet.PushResult{ID: rec.ID}
 
@@ -32,7 +33,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 		return res
 	}
 
-	if !packet.ValidateChannelName(rec.Channel) {
+	if !packet.ValidateChannelNameLimit(rec.Channel, c.options.MaxChannelLength) {
 		res.Reason = packet.ReasonChannelInvalid
 		c.stats.MessagesRejected.Add(1)
 		if cl != nil {
@@ -106,11 +107,17 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 		}
 
 		c.takeOwnership(msg)
-		enqueued, evicted := target.mb.enqueue(msg)
+		enqueued, evicted, skipped := target.enqueue(msg)
 		c.releaseMessage(msg)
 		c.notifyClient(target)
 
 		switch {
+		case skipped:
+			// 目标离线且消息为 Low：不占用离线队列，按尽力而为处理。
+			res.Reason = packet.ReasonSuccess
+			res.Dropped = 1
+			c.stats.MessagesDropped.Add(1)
+			target.dropped.Add(1)
 		case !enqueued:
 			res.Reason = packet.ReasonConsumerBacklog
 			res.Dropped = 1
@@ -142,6 +149,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 	}
 
 	c.takeOwnership(msg)
+	backlog := false
 	for clientID := range targets {
 		c.clientsMu.RLock()
 		target := c.clients[clientID]
@@ -150,11 +158,14 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 			continue
 		}
 
-		enqueued, evicted := target.mb.enqueue(msg)
+		enqueued, evicted, skipped := target.enqueue(msg)
 		if enqueued {
 			res.Matched++
 		}
-		if !enqueued || evicted {
+		if !enqueued && !skipped {
+			backlog = true
+		}
+		if skipped || !enqueued || evicted {
 			res.Dropped++
 			c.stats.MessagesDropped.Add(1)
 			target.dropped.Add(1)
@@ -165,7 +176,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 
 	c.stats.MessagesReceived.Add(1)
 	res.Reason = packet.ReasonSuccess
-	if res.Matched == 0 {
+	if res.Matched == 0 && backlog {
 		res.Reason = packet.ReasonConsumerBacklog
 	}
 	return res

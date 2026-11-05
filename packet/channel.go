@@ -19,10 +19,22 @@ func ValidateClientID(id string) bool {
 
 // ValidateChannelName 校验发布用的 channel 名。
 //
+// 长度按协议硬上限 MaxChannelLength 校验；服务端应使用
+// ValidateChannelNameLimit 施加自己配置的更严格上限。
+//
 // 允许 '-'、'_'、'/'、'.'，不允许通配符与 ':'。
 // ':' 被禁止是为了让内部索引拼接（"chan:name" 形式）不会产生前缀包含歧义。
 func ValidateChannelName(name string) bool {
-	if len(name) == 0 || len(name) > MaxChannelLength {
+	return ValidateChannelNameLimit(name, MaxChannelLength)
+}
+
+// ValidateChannelNameLimit 按给定长度上限校验发布用的 channel 名。
+// maxLen <= 0 或超过协议硬上限时按 MaxChannelLength 处理。
+func ValidateChannelNameLimit(name string, maxLen int) bool {
+	if maxLen <= 0 || maxLen > MaxChannelLength {
+		maxLen = MaxChannelLength
+	}
+	if len(name) == 0 || len(name) > maxLen {
 		return false
 	}
 	if !utf8.ValidString(name) {
@@ -43,11 +55,23 @@ func ValidateChannelName(name string) bool {
 
 // ValidateChannelFilter 校验声明/权限用的 channel 过滤器。
 //
+// 长度按协议硬上限 MaxChannelLength 校验；服务端应使用
+// ValidateChannelFilterLimit 施加自己配置的更严格上限。
+//
 // 语法：
 //   - "*"  单层通配符，必须独占一个层级
 //   - "**" 多层通配符，必须独占最后一个层级
 func ValidateChannelFilter(filter string) bool {
-	if len(filter) == 0 || len(filter) > MaxChannelLength {
+	return ValidateChannelFilterLimit(filter, MaxChannelLength)
+}
+
+// ValidateChannelFilterLimit 按给定长度上限校验 channel 过滤器。
+// maxLen <= 0 或超过协议硬上限时按 MaxChannelLength 处理。
+func ValidateChannelFilterLimit(filter string, maxLen int) bool {
+	if maxLen <= 0 || maxLen > MaxChannelLength {
+		maxLen = MaxChannelLength
+	}
+	if len(filter) == 0 || len(filter) > maxLen {
 		return false
 	}
 	if !utf8.ValidString(filter) {
@@ -120,8 +144,9 @@ func FilterSubsumes(allow, request string) bool {
 			return true
 		}
 		if ai == len(a) {
-			// allow 已耗尽：只有 request 剩余部分是单个 "**"（可匹配空）才成立
-			return ri == len(r)-1 && r[ri] == ChannelWildcardMulti
+			// allow 已耗尽：request 还有剩余层级（即使只是 "**"）就无法被完全覆盖。
+			// "**" 虽然能匹配零层，但也能匹配更多层，不能视为已被 allow 覆盖。
+			return false
 		}
 		if ri == len(r) {
 			return ai == len(a)-1 && a[ai] == ChannelWildcardMulti

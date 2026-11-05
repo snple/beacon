@@ -151,7 +151,7 @@ func (c *Core) handleConn(nc net.Conn) {
 
 	// will 校验（在建立会话前做，避免无效 will 占用会话）
 	if connect.HasWill {
-		if !packet.ValidateChannelName(connect.WillChannel) {
+		if !packet.ValidateChannelNameLimit(connect.WillChannel, c.options.MaxChannelLength) {
 			c.rejectConn(nc, packet.ReasonChannelNameInvalid, "invalid will channel")
 			return
 		}
@@ -286,7 +286,9 @@ func (c *Core) attachSession(
 			c.stats.ClientsConnected.Load() >= int64(c.options.MaxClients) {
 			return nil, false, nil, ErrMaxClients
 		}
-		cl.timeout.Store(effectiveSessionTimeout(c.options, connect.SessionTimeout))
+		if connect.CleanSession {
+			sessionPresent = false
+		}
 		cl.setIdentity(identity)
 	} else {
 		if c.options.MaxSessions > 0 && len(c.clients) >= c.options.MaxSessions {
@@ -296,7 +298,7 @@ func (c *Core) attachSession(
 			c.stats.ClientsConnected.Load() >= int64(c.options.MaxClients) {
 			return nil, false, nil, ErrMaxClients
 		}
-		cl = newClient(c, clientID, connect)
+		cl = newClient(c, clientID)
 		cl.setIdentity(identity)
 		c.clientsMu.Lock()
 		c.clients[clientID] = cl
@@ -310,6 +312,11 @@ func (c *Core) attachSession(
 		cl.sessionID.Store(newSessionID())
 	} else if !sessionPresent {
 		cl.sessionID.Store(newSessionID())
+	}
+
+	// CleanSession：在新连接绑定后清空既有队列、声明与统计。
+	if connect.CleanSession && existing != nil {
+		cl.reset()
 	}
 
 	if len(channels) > 0 {
@@ -339,6 +346,12 @@ func (c *Core) detachConn(cl *Client, cn *conn) bool {
 		return false
 	}
 
+	// 会话转入离线：Low 是尽力而为的消息，不保留在离线队列中。
+	if n := cl.mb.dropLow(); n > 0 {
+		c.stats.MessagesDropped.Add(int64(n))
+		cl.dropped.Add(int64(n))
+	}
+
 	cl.markExpiry(time.Now())
 	if cl.sessionTimeout() == 0 {
 		c.destroySession(cl, packet.ReasonNormalDisconnect)
@@ -360,7 +373,7 @@ func (c *Core) filterChannels(identity *Identity, decls []packet.ChannelDecl) []
 		}
 		seen[d.Channel] = struct{}{}
 
-		if !packet.ValidateChannelFilter(d.Channel) {
+		if !packet.ValidateChannelFilterLimit(d.Channel, c.options.MaxChannelLength) {
 			continue
 		}
 		if !c.canRead(identity, d.Channel) {

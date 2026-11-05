@@ -278,3 +278,51 @@ func TestMailboxByteBudget(t *testing.T) {
 		t.Fatalf("n=%d more=%v", len(b2), more2)
 	}
 }
+
+// TestMailboxByteBudgetExactFill 验证预算「恰好用尽」时不会继续超发：
+// 之前 bytesLeft 降为 0 后判断条件失效，会无限追加后续消息。
+func TestMailboxByteBudgetExactFill(t *testing.T) {
+	mb, _ := newTestMailbox(100)
+	a := testMsgSize(t, "a", packet.PriorityMedium, 100)
+	b := testMsgSize(t, "a", packet.PriorityMedium, 100)
+	c := testMsgSize(t, "a", packet.PriorityMedium, 100)
+	mb.enqueue(a)
+	mb.enqueue(b)
+	mb.enqueue(c)
+
+	batch, more := mb.takePending(10, 2*int(a.Size()))
+	if len(batch) != 2 {
+		t.Fatalf("byte budget violated: got %d records, want 2", len(batch))
+	}
+	if !more {
+		t.Fatal("expected more=true when a record was left behind")
+	}
+	pending, _, _ := mb.depth()
+	if pending[1] != 1 {
+		t.Fatalf("expected 1 pending record left, got %v", pending)
+	}
+}
+
+// TestMailboxDeliveredByteBudgetExactFill 验证 delivered 重发路径同样遵守
+// 恰好用尽的字节预算。
+func TestMailboxDeliveredByteBudgetExactFill(t *testing.T) {
+	mb, _ := newTestMailbox(100)
+	a := testMsgSize(t, "a", packet.PriorityHigh, 100)
+	b := testMsgSize(t, "a", packet.PriorityHigh, 100)
+	c := testMsgSize(t, "a", packet.PriorityHigh, 100)
+	mb.enqueue(a)
+	mb.enqueue(b)
+	mb.enqueue(c)
+
+	batch, _ := mb.takePending(10, 0)
+	mb.applySent(batch)
+
+	got, next, more, repeated := mb.drainDelivered(0, 10, 2*int(a.Size()))
+	if len(got) != 2 {
+		t.Fatalf("delivered byte budget violated: got %d records, want 2", len(got))
+	}
+	if next != 2 || !more || repeated {
+		t.Fatalf("nextServed=%d more=%v repeated=%v", next, more, repeated)
+	}
+	mb.releaseBatch(got)
+}
