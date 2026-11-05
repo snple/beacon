@@ -36,6 +36,9 @@ type Client struct {
 	// 也会让本地未确认集合互相覆盖。
 	pullMu sync.Mutex
 
+	// connectMu 串行化建连，避免重复 Connect 泄漏旧连接或启动多个 supervise。
+	connectMu sync.Mutex
+
 	// PollMessage 的本地缓冲
 	bufMu sync.Mutex
 	buf   []*Message
@@ -129,7 +132,11 @@ func (c *Client) dial() (net.Conn, error) {
 		return c.opts.Dialer.Dial()
 	}
 	if hasWSScheme(c.opts.Address) {
-		d := &WSDialer{Address: c.opts.Address, DialTimeout: c.opts.ConnectTimeout}
+		d := &WSDialer{
+			Address:        c.opts.Address,
+			DialTimeout:    c.opts.ConnectTimeout,
+			MaxMessageSize: int64(c.opts.MaxPacketSize),
+		}
 		return d.Dial()
 	}
 	d := &TCPDialer{Address: c.opts.Address, DialTimeout: c.opts.ConnectTimeout}
@@ -138,6 +145,16 @@ func (c *Client) dial() (net.Conn, error) {
 
 // connectOnce 完成一次握手。
 func (c *Client) connectOnce(ctx context.Context) error {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
+	if c.closed.Load() {
+		return ErrClientClosed
+	}
+	if cn := c.currentConn(); cn != nil && !cn.closed.Load() {
+		return ErrAlreadyConnected
+	}
+
 	nc, err := c.dial()
 	if err != nil {
 		return err
@@ -189,12 +206,24 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		c.opts.ClientID = connack.AssignedClientID
 	}
 
+	if c.closed.Load() {
+		cn.close(ErrClientClosed)
+		return ErrClientClosed
+	}
+
 	prevSession := c.SessionID()
 
 	c.mu.Lock()
 	c.conn = cn
 	c.connack = connack
+	closedAfterAssign := c.closed.Load()
 	c.mu.Unlock()
+
+	// Close 可能发生在握手期间；不要留下一个无人关闭的新连接。
+	if closedAfterAssign {
+		cn.close(ErrClientClosed)
+		return ErrClientClosed
+	}
 
 	if prevSession != 0 && prevSession != connack.SessionID {
 		// 会话被重建：本地未确认状态作废
@@ -205,7 +234,12 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	}
 
 	go cn.readLoop()
-	pingInterval := time.Duration(c.opts.KeepAlive) * time.Second / 2
+	// 服务端可在 CONNACK 中要求更短/更长的心跳间隔，必须采用它的值。
+	keepAlive := c.opts.KeepAlive
+	if connack.KeepAlive > 0 {
+		keepAlive = connack.KeepAlive
+	}
+	pingInterval := time.Duration(keepAlive) * time.Second / 2
 	if pingInterval < time.Second {
 		pingInterval = time.Second
 	}
@@ -257,7 +291,8 @@ func (c *Client) supervise() {
 			if err := c.connectOnce(c.ctx); err == nil {
 				c.logger.Debug("reconnected")
 				break
-			} else if errors.Is(err, ErrSessionTakenOver) || errors.Is(err, ErrKicked) {
+			} else if errors.Is(err, ErrSessionTakenOver) || errors.Is(err, ErrKicked) ||
+				errors.Is(err, ErrAlreadyConnected) {
 				c.logger.Debug("reconnect refused", zap.Error(err))
 				return
 			}
@@ -358,7 +393,7 @@ func (c *Client) trackUncommitted(msgs []*Message) {
 
 	if len(c.uncommitted) == 0 {
 		for _, m := range msgs {
-			if m.NeedsCommit() {
+			if m.NeedsCommit() && !m.acked.Load() {
 				c.uncommitted = append(c.uncommitted, m)
 			}
 		}
@@ -370,7 +405,7 @@ func (c *Client) trackUncommitted(msgs []*Message) {
 		known[m.ID] = struct{}{}
 	}
 	for _, m := range msgs {
-		if !m.NeedsCommit() {
+		if !m.NeedsCommit() || m.acked.Load() {
 			continue
 		}
 		if _, ok := known[m.ID]; ok {

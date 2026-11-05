@@ -1,9 +1,11 @@
 package core
 
 import (
+	"fmt"
 	"maps"
 
 	"github.com/snple/beacon/packet"
+	"go.uber.org/zap"
 )
 
 // Identity 是认证器给出的身份。
@@ -153,26 +155,53 @@ type Hooks struct {
 	Auth       AuthHandler
 	Message    MessageHandler
 	Connection ConnectionHandler
+
+	// Logger 用于记录钩子 panic；由 Core 自动填充。
+	Logger *zap.Logger
 }
 
-func (h *Hooks) callAuth(ctx *AuthContext) error {
+func (h *Hooks) logPanic(name string, r any) {
+	if h != nil && h.Logger != nil {
+		h.Logger.Error("hook panicked", zap.String("hook", name), zap.Any("panic", r))
+	}
+}
+
+func (h *Hooks) callAuth(ctx *AuthContext) (err error) {
 	if h == nil || h.Auth == nil {
 		return nil
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			h.logPanic("OnAuth", r)
+			err = fmt.Errorf("auth hook panic: %v", r)
+		}
+	}()
 	return h.Auth.Authenticate(ctx)
 }
 
-func (h *Hooks) callOnPush(ctx *PushContext) error {
+func (h *Hooks) callOnPush(ctx *PushContext) (err error) {
 	if h == nil || h.Message == nil {
 		return nil
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			h.logPanic("OnPush", r)
+			err = fmt.Errorf("push hook panic: %v", r)
+		}
+	}()
 	return h.Message.OnPush(ctx)
 }
 
-func (h *Hooks) callOnDeliver(ctx *DeliverContext) bool {
+func (h *Hooks) callOnDeliver(ctx *DeliverContext) (ok bool) {
 	if h == nil || h.Message == nil {
 		return true
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			h.logPanic("OnDeliver", r)
+			ok = false
+		}
+	}()
 	return h.Message.OnDeliver(ctx)
 }
 
@@ -185,6 +214,11 @@ func (h *Hooks) callOnConnect(ctx *ConnectContext) {
 	if h == nil || h.Connection == nil {
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			h.logPanic("OnConnect", r)
+		}
+	}()
 	h.Connection.OnConnect(ctx)
 }
 
@@ -192,5 +226,10 @@ func (h *Hooks) callOnDisconnect(ctx *DisconnectContext) {
 	if h == nil || h.Connection == nil {
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			h.logPanic("OnDisconnect", r)
+		}
+	}()
 	h.Connection.OnDisconnect(ctx)
 }

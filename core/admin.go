@@ -192,7 +192,7 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 		Delivered:         delivered,
 		OldestUncommitted: oldest,
 		Channels:          c.matcher.filters(cl.ID),
-		Identity:          cl.getIdentity(),
+		Identity:          cl.getIdentity().Clone(),
 		MessagesSent:      cl.sent.Load(),
 		MessagesDropped:   cl.dropped.Load(),
 		MessagesRejected:  cl.rejected.Load(),
@@ -244,6 +244,7 @@ func (c *Core) DisconnectClientAndWait(ctx context.Context, clientID string, rea
 	done := make(chan struct{})
 	go func() {
 		cn.close()
+		cn.wait()
 		close(done)
 	}()
 
@@ -327,7 +328,8 @@ func (c *Core) pushTo(target, channel string, payload []byte, opts PushOptions) 
 	switch res.Reason {
 	case packet.ReasonTargetNotFound:
 		return out, &ClientNotFoundError{ClientID: target}
-	case packet.ReasonChannelInvalid, packet.ReasonPacketTooLarge, packet.ReasonNotAuthorized:
+	case packet.ReasonChannelInvalid, packet.ReasonPacketTooLarge, packet.ReasonNotAuthorized,
+		packet.ReasonQuotaExceeded, packet.ReasonMalformedPacket:
 		return out, fmt.Errorf("push rejected: %s", res.Reason)
 	default:
 		return out, nil

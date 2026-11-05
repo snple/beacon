@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -11,13 +13,23 @@ import (
 	"go.uber.org/zap"
 )
 
-// upgrader 是 WebSocket 升级器。
-// CheckOrigin 返回 true：beacon 协议自带认证（CONNECT/AUTH），
-// 浏览器跨域限制由应用层自行决定是否启用。
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+}
+
+// defaultWSCheckOrigin 只允许同源浏览器连接（无 Origin 的非浏览器客户端放行）。
+// 需要跨域时显式配置 WithWSCheckOrigin。
+func defaultWSCheckOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 // ServeWS 启动 HTTP 服务并在指定路径上提供 WebSocket 接入。
@@ -78,7 +90,12 @@ func (c *Core) ServeWSListener(listener net.Listener, path string) error {
 
 // handleWebSocket 处理一次 WebSocket 升级请求
 func (c *Core) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	ws, err := upgrader.Upgrade(w, r, nil)
+	u := upgrader
+	u.CheckOrigin = c.options.WSCheckOrigin
+	if u.CheckOrigin == nil {
+		u.CheckOrigin = defaultWSCheckOrigin
+	}
+	ws, err := u.Upgrade(w, r, nil)
 	if err != nil {
 		c.logger.Debug("WebSocket upgrade failed",
 			zap.String("remote", r.RemoteAddr),

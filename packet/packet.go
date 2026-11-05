@@ -10,7 +10,7 @@ import (
 // minRemainingLength 各包类型所需的最小 Remaining Length。
 var minRemainingLength = map[PacketType]uint32{
 	CONNECT:      30, // Version(1)+ClientID(2)+KeepAlive(2)+SessionTimeout(4)+MaxPacketSize(4)+WillFlags(1)+WillChannel(2)+WillPayload(4)+WillHeaders(2)+AuthMethod(2)+AuthData(4)+ChannelCount(2)
-	CONNACK:      44, // SessionPresent(1)+ReasonCode(1)+ClientID(2)+MaxPacketSize(4)+SessionID(8)+Pending(12)+Delivered(4)+OldestUncommitted(12)
+	CONNACK:      46, // SessionPresent(1)+ReasonCode(1)+ClientID(2)+MaxPacketSize(4)+KeepAlive(2)+SessionID(8)+Pending(12)+Delivered(4)+OldestUncommitted(12)
 	PUSH:         11, // RequestID(8)+Flags(1)+Count(2)
 	PUSH_OK:      10, // RequestID(8)+Count(2)
 	PULL:         18, // RequestID(8)+MaxRecords(2)+MaxBytes(4)+WaitMs(4)
@@ -53,13 +53,7 @@ func ReadPacketWithSize(r io.Reader, maxPacketSize uint32) (Packet, uint32, erro
 			ErrMalformedPacket, header.Type, minLen, header.Remaining)
 	}
 
-	data := make([]byte, header.Remaining)
-	if header.Remaining > 0 {
-		if _, err := io.ReadFull(r, data); err != nil {
-			return nil, 0, err
-		}
-	}
-
+	// 先确认包类型已知，再按声明长度分配包体，避免未知类型也能触发大分配。
 	var pkt Packet
 	switch header.Type {
 	case CONNECT:
@@ -90,6 +84,13 @@ func ReadPacketWithSize(r io.Reader, maxPacketSize uint32) (Packet, uint32, erro
 		pkt = &DeclareRespPacket{}
 	default:
 		return nil, 0, ErrInvalidPacketType
+	}
+
+	data := make([]byte, header.Remaining)
+	if header.Remaining > 0 {
+		if _, err := io.ReadFull(r, data); err != nil {
+			return nil, 0, err
+		}
 	}
 
 	buf := bytes.NewReader(data)

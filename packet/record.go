@@ -158,6 +158,9 @@ func decodeRecord(r io.Reader) (*Record, error) {
 	if rec.Payload, err = DecodeBytes32(r); err != nil {
 		return nil, err
 	}
+	if rec.HasPriority() && !rec.Priority().IsValid() {
+		return nil, fmt.Errorf("%w: invalid priority %d", ErrMalformedPacket, rec.Priority())
+	}
 
 	return rec, nil
 }

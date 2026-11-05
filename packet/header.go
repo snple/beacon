@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -76,6 +77,11 @@ func DecodeString(r io.Reader) (string, error) {
 	}
 	if length == 0 {
 		return "", nil
+	}
+	// 长度来自对端：先确认不超过缓冲区剩余字节，避免小包触发大分配。
+	if br, ok := r.(*bytes.Reader); ok && int(length) > br.Len() {
+		return "", fmt.Errorf("%w: string length %d exceeds remaining %d bytes",
+			ErrMalformedPacket, length, br.Len())
 	}
 
 	data := make([]byte, length)
@@ -239,6 +245,11 @@ func DecodeStringMap(r io.Reader) (map[string]string, error) {
 	}
 	if count == 0 {
 		return nil, nil
+	}
+	// 每个条目至少 4 字节（两个空字符串的长度前缀）。
+	if br, ok := r.(*bytes.Reader); ok && int(count)*4 > br.Len() {
+		return nil, fmt.Errorf("%w: map count %d exceeds remaining %d bytes",
+			ErrMalformedPacket, count, br.Len())
 	}
 
 	m := make(map[string]string, count)

@@ -33,9 +33,6 @@ type Client struct {
 
 	identity atomic.Pointer[Identity]
 
-	willMu sync.Mutex
-	will   *willMessage
-
 	timeout   atomic.Uint32
 	expiresAt atomic.Int64 // Unix 毫秒；0 表示在线
 
@@ -127,18 +124,6 @@ func (cl *Client) notify() {
 	if cn := cl.currentConn(); cn != nil {
 		cn.notify()
 	}
-}
-
-func (cl *Client) setWill(w *willMessage) {
-	cl.willMu.Lock()
-	cl.will = w
-	cl.willMu.Unlock()
-}
-
-func (cl *Client) clearWill() {
-	cl.willMu.Lock()
-	cl.will = nil
-	cl.willMu.Unlock()
 }
 
 func (cl *Client) setIdentity(id *Identity) { cl.identity.Store(id.Clone()) }

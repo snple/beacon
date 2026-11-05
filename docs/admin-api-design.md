@@ -148,7 +148,9 @@ type ConnectionHandler interface {
 ```
 
 `OnPush` 可用于 ACL、计费、审计日志；`OnDeliver` 可用于按客户端过滤消息内容。
-两者都在调用方协程中同步执行，**不要在其中做阻塞 IO**。
+两者都在调用方协程中同步执行，**不要在其中做阻塞 IO**，也不要在 `OnDeliver`
+中调用 `DisconnectClient`/`DisconnectClientAndWait` 处理同一个客户端（会等待自身退出）。
+钩子 panic 会被捕获并记录，不会带崩进程。
 
 ## 配额一览
 
@@ -162,6 +164,8 @@ type ConnectionHandler interface {
 | `WithConnectionRateLimit(rate, burst)` | 不限 | 连接建立速率 |
 | `WithMaxHandshakeConnections(n)` | 512 | 认证前并发连接上限 |
 | `WithMaxClients(n)` | 10000 | 在线连接上限 |
+| `WithMaxSessions(n)` | 10000 | 会话总数上限（含离线保留；<0 = 不限） |
+| `WithMaxInflightBytes(n)` | 256 MiB | 全局在途消息字节上限（<0 = 不限） |
 | `WithWaitLimit(max)` | 300s | 长轮询时长上限 |
 | `WithMaxRecordBytes(n)` | 1 MiB | 单条记录 payload 上限 |
 | `WithSessionTimeout(max)` | 86400s | 会话保留时长上限 |

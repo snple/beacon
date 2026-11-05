@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/snple/beacon/stream/packet"
 
@@ -33,6 +35,7 @@ type Core struct {
 
 	// 配置
 	maxWaitingConns   int
+	maxStreams        int
 	maxHandshakeConns int
 	handshakeSlots    chan struct{} // 握手阶段并发名额（nil 表示不限制）
 	writeTimeout      time.Duration
@@ -57,6 +60,16 @@ type Core struct {
 	// 避免 wg.Add 与 wg.Wait 竞争（会导致 panic 或 goroutine 泄漏）。
 	taskMu      sync.Mutex
 	tasksClosed bool
+}
+
+// validClientID 校验流协议客户端 ID（长度、UTF-8、控制字符）。
+func validClientID(id string) bool {
+	if len(id) == 0 || len(id) > 256 || !utf8.ValidString(id) {
+		return false
+	}
+	return !strings.ContainsFunc(id, func(r rune) bool {
+		return r < 0x20 || r == 0x7f
+	})
 }
 
 // WaitingConn 等待中的连接
@@ -106,6 +119,7 @@ func NewCore(opts ...CoreOption) (*Core, error) {
 		waitingConns:      make(map[string][]*WaitingConn),
 		streams:           make(map[uint32]*StreamSession),
 		maxWaitingConns:   10000,
+		maxStreams:        10000,
 		maxHandshakeConns: 1024,
 		writeTimeout:      10 * time.Second,
 		conns:             make(map[net.Conn]struct{}),
@@ -132,6 +146,10 @@ func NewCore(opts ...CoreOption) (*Core, error) {
 	if b.maxWaitingConns < 0 {
 		cancel()
 		return nil, fmt.Errorf("maxWaitingConns must be >= 0, got %d", b.maxWaitingConns)
+	}
+	if b.maxStreams < 0 {
+		cancel()
+		return nil, fmt.Errorf("maxStreams must be >= 0, got %d", b.maxStreams)
 	}
 	if b.writeTimeout < 0 {
 		cancel()
@@ -376,6 +394,15 @@ func (b *Core) handleConnection(conn net.Conn) {
 		b.logger.Warn("Expected CONNECT packet", zap.String("got", fmt.Sprintf("%T", pkt)))
 		return
 	}
+	if !validClientID(connectPkt.ClientID) {
+		ack := &packet.ConnackPacket{
+			ReasonCode: packet.NotAuthorized,
+			Message:    "invalid client id",
+			Properties: make(map[string]string),
+		}
+		_ = b.writeControl(conn, ack)
+		return
+	}
 
 	// 认证
 	if err := b.authHandler(connectPkt.ClientID, connectPkt.AuthMethod, connectPkt.AuthData); err != nil {
@@ -547,6 +574,20 @@ func (b *Core) handleStreamOpen(sourceConn net.Conn, sourceClientID string, open
 	// 防止伪造：以 CONNECT 的 clientID 为准
 	openPkt.SourceClientID = sourceClientID
 	targetClientID := openPkt.TargetClientID
+
+	b.streamsMu.RLock()
+	active := len(b.streams)
+	b.streamsMu.RUnlock()
+	if b.maxStreams > 0 && active >= b.maxStreams {
+		ack := &packet.StreamAckPacket{
+			StreamID:   streamID,
+			ReasonCode: packet.ServerUnavailable,
+			Message:    "too many active streams",
+			Properties: make(map[string]string),
+		}
+		_ = b.writeControl(sourceConn, ack)
+		return false
+	}
 
 	b.logger.Info("Handling STREAM_OPEN", zap.Uint32("streamID", streamID),
 		zap.String("source", sourceClientID), zap.String("target", targetClientID), zap.String("topic", openPkt.Topic))

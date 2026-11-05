@@ -107,7 +107,7 @@ func DecodeString(r io.Reader) (string, error) {
 
 // EncodeBinary 编码二进制数据（4字节长度 + 内容）
 func EncodeBinary(w io.Writer, data []byte) error {
-	if len(data) > 1<<32-1 {
+	if uint64(len(data)) > uint64(^uint32(0)) {
 		return fmt.Errorf("binary data too long: %d", len(data))
 	}
 	if err := EncodeUint32(w, uint32(len(data))); err != nil {
@@ -145,6 +145,9 @@ func DecodeBinary(r io.Reader) ([]byte, error) {
 
 // EncodeProperties 编码属性字典
 func EncodeProperties(w io.Writer, props map[string]string) error {
+	if len(props) > 65535 {
+		return fmt.Errorf("too many properties: %d", len(props))
+	}
 	if err := EncodeUint16(w, uint16(len(props))); err != nil {
 		return err
 	}

@@ -32,7 +32,7 @@ func main() {
 		channels = flag.String("channels", "", "Comma separated channel filters to declare")
 		maxRecs  = flag.Int("max-records", 100, "Max records per pull")
 		interval = flag.Duration("interval", 0, "Push interval")
-		waitMs   = flag.Int("wait-ms", 0, "Pull long-poll wait in ms")
+		waitMs   = flag.Int("wait-ms", 30000, "Pull long-poll wait in ms (0 = immediate)")
 		stdout   = flag.Bool("stdout", true, "Print pulled payloads")
 		debug    = flag.Bool("debug", false, "Enable debug logging")
 		showVer  = flag.Bool("version", false, "Print version and exit")

@@ -102,9 +102,10 @@ Low 的消息 ID 不需要提交；提交了也没有副作用（服务端幂等
 
 ## 7. 心跳
 
-服务端在 `1.5 × KeepAlive` 内没有收到任何包就会断开。因此：
+服务端采用 `CONNACK.KeepAlive` 作为最终心跳间隔（可能覆盖 `CONNECT` 中的值），
+并在 `1.5 × KeepAlive` 内没有收到任何包时断开。因此：
 
-- 空闲时每 `KeepAlive/2` 发一次 `PING`；
+- 以 `CONNACK.KeepAlive` 为准，空闲时每 `KeepAlive/2` 发一次 `PING`；
 - 长轮询的 `PULL` 不算「已发送」，仍需要 `PING`。
 
 ## 8. 断线处理

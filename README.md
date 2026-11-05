@@ -56,6 +56,8 @@ go run ./cmd/core --addr :5208 --metrics-addr :9101
 | `--auth-file` | 设备密钥 TOML（`[[nodes]] serial=... secret=...`） |
 | `--queue-cap` | 单客户端 pending 队列上限 |
 | `--max-records` / `--max-bytes` | 单次 PULL 的记录数/字节上限 |
+| `--max-sessions` | 会话总数上限（含离线保留，`-1` = 不限） |
+| `--max-inflight-bytes` | 全局在途消息字节上限（`-1` = 不限） |
 
 ### 客户端（CLI）
 
@@ -208,6 +210,9 @@ b.GetStats()                  // 计数快照
 - TCP：`core.ServeTCP(addr)`
 - TLS：`core.ServeTLS(addr, tlsConfig)`
 - WebSocket：`core.ServeWS(addr, path)`；客户端用 `client.WSDialer` 或 `ws://` / `wss://` 地址
+
+WebSocket 默认只接受同源（无 `Origin` 的非浏览器客户端不受影响）。需要跨域时显式配置
+`core.NewCoreOptions().WithWSCheckOrigin(fn)`。
 
 所有传输共用同一线格式，行为完全一致。
 

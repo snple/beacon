@@ -20,6 +20,11 @@ var (
 	// ErrClientNotConnected 客户端当前没有活动连接
 	ErrClientNotConnected = errors.New("client is not connected")
 
+	// ErrMaxClients 在线连接数已达上限
+	ErrMaxClients = errors.New("max clients reached")
+	// ErrMaxSessions 会话总数已达上限
+	ErrMaxSessions = errors.New("max sessions reached")
+
 	// ErrInvalidConnectPacket 第一个包不是 CONNECT
 	ErrInvalidConnectPacket = errors.New("first packet is not CONNECT")
 	// ErrUnsupportedProtocol 不支持的协议版本

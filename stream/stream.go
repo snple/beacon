@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"sync/atomic"
 	"time"
@@ -83,40 +84,50 @@ func (s *Stream) WritePacket(pkt *packet.StreamDataPacket) error {
 }
 
 // ReadPacket 接收一个数据包
-// 返回数据包，如果连接关闭返回 io.EOF
+// 返回数据包；对端优雅关闭（STREAM_CLOSE）或连接关闭时返回 io.EOF
 func (s *Stream) ReadPacket() (*packet.StreamDataPacket, error) {
 	pkt, err := packet.ReadPacket(s.conn)
 	if err != nil {
 		return nil, err
 	}
 
-	dataPkt, ok := pkt.(*packet.StreamDataPacket)
-	if !ok {
+	switch p := pkt.(type) {
+	case *packet.StreamDataPacket:
+		return p, nil
+	case *packet.StreamClosePacket:
+		return nil, io.EOF
+	default:
 		return nil, fmt.Errorf("unexpected packet type: %T", pkt)
 	}
-
-	return dataPkt, nil
 }
 
-// Write 实现 io.Writer 接口，将数据作为一个数据包发送
-// 注意：每次 Write 调用都会发送一个完整的数据包，保持消息边界
+// maxWriteChunk 是单次 Write 拆分出的最大数据包负载。
+// 留足余量以保证编码后的包不超过协议上限。
+const maxWriteChunk = 1 << 20
+
+// Write 实现 io.Writer 接口。
+// 超过单包上限的数据会被拆成多个数据包，保持字节流语义。
 func (s *Stream) Write(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
+	total := 0
+	for len(p) > 0 {
+		n := len(p)
+		if n > maxWriteChunk {
+			n = maxWriteChunk
+		}
 
-	pkt := &packet.StreamDataPacket{
-		StreamID:   s.id,
-		Flags:      0,
-		Data:       p,
-		Properties: make(map[string]string),
+		pkt := &packet.StreamDataPacket{
+			StreamID:   s.id,
+			Flags:      0,
+			Data:       p[:n],
+			Properties: make(map[string]string),
+		}
+		if err := s.WritePacket(pkt); err != nil {
+			return total, err
+		}
+		total += n
+		p = p[n:]
 	}
-
-	if err := s.WritePacket(pkt); err != nil {
-		return 0, err
-	}
-
-	return len(p), nil
+	return total, nil
 }
 
 // Read 实现 io.Reader 接口，从数据包中读取数据
@@ -126,33 +137,43 @@ func (s *Stream) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	// 如果缓冲区为空，读取下一个数据包
-	if len(s.readBuf) == 0 || s.readOffset >= len(s.readBuf) {
-		pkt, err := s.ReadPacket()
-		if err != nil {
-			return 0, err
+	for {
+		// 如果缓冲区为空，读取下一个数据包
+		if len(s.readBuf) == 0 || s.readOffset >= len(s.readBuf) {
+			pkt, err := s.ReadPacket()
+			if err != nil {
+				return 0, err
+			}
+			s.readBuf = pkt.Data
+			s.readOffset = 0
+			if len(s.readBuf) == 0 {
+				// 空数据包：继续读下一个，避免返回 (0, nil)。
+				continue
+			}
 		}
 
-		s.readBuf = pkt.Data
-		s.readOffset = 0
+		// 从缓冲区复制数据到 p
+		n := copy(p, s.readBuf[s.readOffset:])
+		s.readOffset += n
+
+		// 如果已经读完当前包，清空缓冲区
+		if s.readOffset >= len(s.readBuf) {
+			s.readBuf = nil
+			s.readOffset = 0
+		}
+
+		return n, nil
 	}
-
-	// 从缓冲区复制数据到 p
-	n := copy(p, s.readBuf[s.readOffset:])
-	s.readOffset += n
-
-	// 如果已经读完当前包，清空缓冲区
-	if s.readOffset >= len(s.readBuf) {
-		s.readBuf = nil
-		s.readOffset = 0
-	}
-
-	return n, nil
 }
 
-// Close 关闭流
+// Close 关闭流。会尽力发送 STREAM_CLOSE，让对端 Read 得到 io.EOF。
 func (s *Stream) Close() error {
 	s.cancel()
+	_ = s.conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_ = packet.WritePacket(s.conn, &packet.StreamClosePacket{
+		StreamID:   s.id,
+		ReasonCode: packet.Success,
+	})
 	return s.conn.Close()
 }
 

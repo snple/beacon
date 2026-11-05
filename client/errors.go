@@ -12,6 +12,8 @@ var (
 	ErrNotConnected = errors.New("client not connected")
 	// ErrClientClosed 客户端已关闭
 	ErrClientClosed = errors.New("client is closed")
+	// ErrAlreadyConnected 客户端已有活动连接
+	ErrAlreadyConnected = errors.New("client already connected")
 	// ErrTimeout 请求超时
 	ErrTimeout = errors.New("request timeout")
 	// ErrPollTimeout 轮询超时
@@ -22,6 +24,8 @@ var (
 	ErrKicked = errors.New("kicked by server")
 	// ErrCommitRequired 服务端要求先确认再拉取
 	ErrCommitRequired = errors.New("commit required before pulling more")
+	// ErrRateLimited 服务端限流（例如已有在途 PULL）
+	ErrRateLimited = errors.New("request rate limited")
 )
 
 // ConnectionError 表示连接层错误。
@@ -64,6 +68,8 @@ func reasonToError(reason packet.ReasonCode) error {
 		return ErrKicked
 	case packet.ReasonCommitRequired:
 		return ErrCommitRequired
+	case packet.ReasonRateLimited:
+		return ErrRateLimited
 	default:
 		return NewServerError(reason)
 	}

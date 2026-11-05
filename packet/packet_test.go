@@ -57,13 +57,14 @@ func TestConnackRoundTrip(t *testing.T) {
 	in.SessionPresent = true
 	in.AssignedClientID = "c1"
 	in.ServerMaxPacketSize = 1024
+	in.KeepAlive = 25
 	in.SessionID = 42
 	in.Pending = [3]uint32{1, 2, 3}
 	in.Delivered = 4
 	in.OldestUncommitted = NewPacketID()
 
 	out := roundTrip(t, in).(*ConnackPacket)
-	if !out.SessionPresent || out.AssignedClientID != "c1" || out.SessionID != 42 {
+	if !out.SessionPresent || out.AssignedClientID != "c1" || out.SessionID != 42 || out.KeepAlive != 25 {
 		t.Fatalf("mismatch: %+v", out)
 	}
 	if out.Pending != in.Pending || out.Delivered != 4 || out.OldestUncommitted != in.OldestUncommitted {
@@ -190,6 +191,40 @@ func FuzzReadPacket(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _, _ = ReadPacketWithSize(bytes.NewReader(data), 1<<20)
 	})
+}
+
+// 回归：非法优先级位（3）必须在解码阶段被拒绝，不能流入 mailbox 的数组下标。
+func TestInvalidPriorityRejected(t *testing.T) {
+	frame, err := EncodePacket(NewPushPacket(1, Record{Channel: "a", Payload: []byte("x")}), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const recordFlagsOffset = 5 + 8 + 1 + 2
+	frame[recordFlagsOffset] = recordFlagHasPriority | 0x03<<1
+
+	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
+		t.Fatal("expected error for invalid priority bits")
+	}
+}
+
+// 回归：声明超长字符串的小包不能触发大分配。
+func TestDeclaredStringLengthRejected(t *testing.T) {
+	body := []byte{}
+	body = append(body, 0, 0, 0, 0, 0, 0, 0, 1)        // RequestID
+	body = append(body, 0)                             // Flags
+	body = append(body, 0, 1)                          // Count = 1
+	body = append(body, 0)                             // Record flags
+	body = append(body, make([]byte, PacketIDSize)...) // ID
+	body = append(body, 0xFF, 0xFF)                    // Channel length = 65535
+
+	frame := make([]byte, 5+len(body))
+	frame[0] = byte(PUSH)
+	binary.BigEndian.PutUint32(frame[1:5], uint32(len(body)))
+	copy(frame[5:], body)
+
+	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
+		t.Fatal("expected error for impossible string length")
+	}
 }
 
 // 回归：声明超大 payload 长度的小包不能触发巨型内存分配。

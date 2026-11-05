@@ -27,11 +27,17 @@ type Message struct {
 func (m *Message) NeedsCommit() bool { return m.Priority.RequiresCommit() }
 
 // Ack 立即确认单条消息。
+//
+// 只有 COMMIT 成功后才标记为已确认；失败时调用方可以安全重试。
 func (m *Message) Ack(ctx context.Context) error {
-	if !m.NeedsCommit() || m.acked.Swap(true) {
+	if !m.NeedsCommit() || m.acked.Load() {
 		return nil
 	}
-	return m.client.Commit(ctx, m.ID)
+	if err := m.client.Commit(ctx, m.ID); err != nil {
+		return err
+	}
+	m.acked.Store(true)
+	return nil
 }
 
 func newMessage(c *Client, rec *packet.Record) *Message {
@@ -83,31 +89,52 @@ func (c *Client) Pull(ctx context.Context, opts PullOptions) ([]*Message, error)
 	defer c.pullMu.Unlock()
 
 	waitMs := c.effectiveWait(opts)
-	req := packet.NewPullPacket(c.nextRequestID(), opts.MaxRecords, opts.MaxBytes, waitMs)
 
 	// 长轮询可能在服务端停留 waitMs，客户端等待窗口需要覆盖它。
 	timeout := time.Duration(waitMs)*time.Millisecond + 5*time.Second
 
-	resp, err := c.roundTrip(ctx, req, req.RequestID, timeout)
-	if err != nil {
-		return nil, err
-	}
+	// 服务端可能因上一条 PULL 仍在途而返回 RateLimited；按 RetryAfterMs 重试。
+	const maxRateLimitedRetries = 3
+	for attempt := 0; ; attempt++ {
+		req := packet.NewPullPacket(c.nextRequestID(), opts.MaxRecords, opts.MaxBytes, waitMs)
+		resp, err := c.roundTrip(ctx, req, req.RequestID, timeout)
+		if err != nil {
+			return nil, err
+		}
 
-	ok, valid := resp.(*packet.PullOkPacket)
-	if !valid {
-		return nil, ErrNotConnected
-	}
-	if err := reasonToError(ok.Reason); err != nil {
-		return nil, err
-	}
+		ok, valid := resp.(*packet.PullOkPacket)
+		if !valid {
+			return nil, ErrNotConnected
+		}
 
-	msgs := make([]*Message, len(ok.Records))
-	for i := range ok.Records {
-		msgs[i] = newMessage(c, &ok.Records[i])
-	}
+		if ok.Reason == packet.ReasonRateLimited {
+			if attempt >= maxRateLimitedRetries {
+				return nil, ErrRateLimited
+			}
+			delay := time.Duration(ok.RetryAfterMs) * time.Millisecond
+			if delay <= 0 {
+				delay = time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+				continue
+			}
+		}
 
-	c.trackUncommitted(msgs)
-	return msgs, nil
+		if err := reasonToError(ok.Reason); err != nil {
+			return nil, err
+		}
+
+		msgs := make([]*Message, len(ok.Records))
+		for i := range ok.Records {
+			msgs[i] = newMessage(c, &ok.Records[i])
+		}
+
+		c.trackUncommitted(msgs)
+		return msgs, nil
+	}
 }
 
 // Commit 确认指定的消息 ID。
@@ -116,13 +143,72 @@ func (c *Client) Commit(ctx context.Context, ids ...packet.PacketID) error {
 		return nil
 	}
 	req := packet.NewCommitPacket(c.nextRequestID(), ids...)
-	_, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
-	return err
+	if _, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second); err != nil {
+		return err
+	}
+	c.markCommitted(ids)
+	return nil
+}
+
+// markCommitted 从本地未确认集合中移除成功提交的消息。
+func (c *Client) markCommitted(ids []packet.PacketID) {
+	if len(ids) == 0 {
+		return
+	}
+	set := make(map[packet.PacketID]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+
+	c.uncommittedMu.Lock()
+	defer c.uncommittedMu.Unlock()
+
+	if len(c.uncommitted) == 0 {
+		return
+	}
+	kept := c.uncommitted[:0]
+	for _, m := range c.uncommitted {
+		if _, ok := set[m.ID]; ok {
+			m.acked.Store(true)
+			continue
+		}
+		kept = append(kept, m)
+	}
+	clear(c.uncommitted[len(kept):])
+	c.uncommitted = kept
+}
+
+// mergeUncommitted 把额外的未确认消息放回集合，按 ID 去重并保持原顺序。
+func (c *Client) mergeUncommitted(extra []*Message) {
+	if len(extra) == 0 {
+		return
+	}
+
+	c.uncommittedMu.Lock()
+	defer c.uncommittedMu.Unlock()
+
+	known := make(map[packet.PacketID]struct{}, len(extra)+len(c.uncommitted))
+	merged := make([]*Message, 0, len(extra)+len(c.uncommitted))
+	for _, m := range extra {
+		if _, ok := known[m.ID]; ok {
+			continue
+		}
+		known[m.ID] = struct{}{}
+		merged = append(merged, m)
+	}
+	for _, m := range c.uncommitted {
+		if _, ok := known[m.ID]; ok {
+			continue
+		}
+		known[m.ID] = struct{}{}
+		merged = append(merged, m)
+	}
+	c.uncommitted = merged
 }
 
 // CommitAll 确认当前批次中所有需要确认的消息。
 //
-// 返回实际提交的条数。
+// 返回实际提交的条数。提交失败时未确认集合保持可重试状态。
 func (c *Client) CommitAll(ctx context.Context) (int, error) {
 	c.uncommittedMu.Lock()
 	pending := c.uncommitted
@@ -131,7 +217,7 @@ func (c *Client) CommitAll(ctx context.Context) (int, error) {
 
 	ids := make([]packet.PacketID, 0, len(pending))
 	for _, m := range pending {
-		if m.NeedsCommit() && !m.acked.Swap(true) {
+		if m.NeedsCommit() && !m.acked.Load() {
 			ids = append(ids, m.ID)
 		}
 	}
@@ -140,11 +226,20 @@ func (c *Client) CommitAll(ctx context.Context) (int, error) {
 	}
 
 	if err := c.Commit(ctx, ids...); err != nil {
-		// 提交失败时放回，便于重试
-		c.uncommittedMu.Lock()
-		c.uncommitted = append(c.uncommitted, pending...)
-		c.uncommittedMu.Unlock()
+		// 提交失败：放回，调用方可以重试。
+		c.mergeUncommitted(pending)
 		return 0, err
+	}
+
+	// Commit 只能标记仍在集合中的消息；本次快照已被移出，这里补上。
+	set := make(map[packet.PacketID]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	for _, m := range pending {
+		if _, ok := set[m.ID]; ok {
+			m.acked.Store(true)
+		}
 	}
 	return len(ids), nil
 }

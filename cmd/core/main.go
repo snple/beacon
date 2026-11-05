@@ -81,6 +81,8 @@ func main() {
 		queueCap    = flag.Int("queue-cap", 10000, "per-client pending queue capacity (0 = unlimited)")
 		maxRecords  = flag.Int("max-records", 1000, "max records per PULL")
 		maxBytes    = flag.Int("max-bytes", 1<<20, "max bytes per PULL/PUSH")
+		maxSessions = flag.Int("max-sessions", 10000, "max sessions including offline (-1 = unlimited)")
+		maxInflight = flag.Int64("max-inflight-bytes", 256<<20, "global in-flight message bytes (-1 = unlimited)")
 		debug       = flag.Bool("debug", false, "enable debug logging")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
@@ -102,10 +104,19 @@ func main() {
 	}
 	defer func() { _ = logger.Sync() }()
 
+	if *maxRecords < 1 || *maxRecords > 65535 {
+		logger.Fatal("max-records must be between 1 and 65535")
+	}
+	if *maxBytes < 1 || int64(*maxBytes) > int64(^uint32(0)) {
+		logger.Fatal("max-bytes must be between 1 and 4294967295")
+	}
+
 	opts := core.NewCoreOptions().
 		WithQueueCap(*queueCap).
 		WithMaxRecords(uint16(*maxRecords)).
 		WithMaxBytes(uint32(*maxBytes)).
+		WithMaxSessions(*maxSessions).
+		WithMaxInflightBytes(*maxInflight).
 		WithLogger(logger)
 
 	if *authFile != "" {

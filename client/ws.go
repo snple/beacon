@@ -23,6 +23,9 @@ type WSDialer struct {
 	Address     string        // 服务器 WebSocket 地址 (例如 "ws://127.0.0.1:8080/ws")
 	TLSConfig   *tls.Config   // wss:// 时的 TLS 配置（可选）
 	DialTimeout time.Duration // 连接超时（默认 10s）
+	// MaxMessageSize 限制单个 WebSocket 消息大小（默认 16 MiB），
+	// 防止恶意服务端用超大帧耗尽客户端内存。
+	MaxMessageSize int64
 }
 
 // Dial 建立 WebSocket 连接并包装为 net.Conn
@@ -52,6 +55,12 @@ func (d *WSDialer) Dial() (net.Conn, error) {
 	if err != nil {
 		return nil, NewConnectionError("websocket connect", err)
 	}
+
+	limit := d.MaxMessageSize
+	if limit <= 0 {
+		limit = 16 << 20
+	}
+	ws.SetReadLimit(limit)
 
 	return wsconn.New(ws), nil
 }

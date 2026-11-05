@@ -13,6 +13,67 @@ import (
 	"go.uber.org/zap"
 )
 
+// 会话总数上限必须覆盖离线保留会话。
+func TestMaxSessionsRejected(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxSessions(1))
+	c1 := newTestClient(t, addr, "max-1", "ch/a")
+	defer func() { _ = c1.Close() }()
+
+	opts := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("max-2").
+		WithSessionTimeout(60).
+		WithAutoReconnect(false).
+		WithLogger(zap.NewNop())
+	c2, err := client.NewWithOptions(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c2.Close() }()
+
+	err = c2.ConnectContext(context.Background())
+	if err == nil {
+		t.Fatal("second session should be rejected")
+	}
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Reason != packet.ReasonServerBusy {
+		t.Fatalf("expected ServerBusy, got %v", err)
+	}
+}
+
+// 全局在途字节上限必须阻止无界内存增长。
+func TestMaxInflightBytesRejected(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxInflightBytes(1))
+	sub := newTestClient(t, addr, "inflight-sub", "ch/a")
+	defer func() { _ = sub.Close() }()
+	pub := newTestClient(t, addr, "inflight-pub")
+	defer func() { _ = pub.Close() }()
+
+	ctx := context.Background()
+	if err := pub.Push(ctx, "ch/a", []byte("first"), client.PushOptions{}); err != nil {
+		t.Fatalf("first push should be accepted: %v", err)
+	}
+	err := pub.Push(ctx, "ch/a", []byte("second"), client.PushOptions{})
+	if err == nil {
+		t.Fatal("second push should exceed the in-flight limit")
+	}
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Reason != packet.ReasonQuotaExceeded {
+		t.Fatalf("expected QuotaExceeded, got %v", err)
+	}
+}
+
+// 重复 Connect 必须显式失败，不能泄漏旧连接或启动多个 supervise。
+func TestDuplicateConnectRejected(t *testing.T) {
+	_, addr := startCore(t, nil)
+	c := newTestClient(t, addr, "dup-connect", "ch/a")
+	defer func() { _ = c.Close() }()
+
+	if err := c.ConnectContext(context.Background()); !errors.Is(err, client.ErrAlreadyConnected) {
+		t.Fatalf("expected ErrAlreadyConnected, got %v", err)
+	}
+}
+
 func TestPollMessage(t *testing.T) {
 	_, addr := startCore(t, nil)
 	sub := newTestClient(t, addr, "sub-1", "ch/a")

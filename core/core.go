@@ -298,7 +298,6 @@ func (c *Core) destroySession(cl *Client, reason packet.ReasonCode) {
 	}
 
 	cl.mb.releaseAll()
-	cl.clearWill()
 	c.logger.Debug("session destroyed",
 		zap.String("clientID", cl.ID),
 		zap.String("reason", reason.String()))

@@ -32,8 +32,7 @@ type conn struct {
 	readMaxPacketSize uint32 // 入站限制
 	keepAlive         uint16
 
-	remoteAddr  string
-	connectedAt time.Time
+	remoteAddr string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -65,7 +64,6 @@ func newConn(core *Core, nc net.Conn) *conn {
 		writeTimeout:      core.options.WriteTimeout,
 		readMaxPacketSize: core.options.MaxPacketSize,
 		keepAlive:         core.options.KeepAlive,
-		connectedAt:       time.Now(),
 		ctx:               ctx,
 		cancel:            cancel,
 		wakeCh:            make(chan struct{}, 1),
@@ -115,9 +113,11 @@ func (cn *conn) writePacket(pkt packet.Packet) error {
 	if maxSize == 0 {
 		maxSize = cn.core.options.MaxPacketSize
 	}
-	if _, err := packet.WritePacketWithSize(cn.nc, pkt, maxSize); err != nil {
+	n, err := packet.WritePacketWithSize(cn.nc, pkt, maxSize)
+	if err != nil {
 		return err
 	}
+	cn.core.stats.BytesSent.Add(int64(n))
 	if cn.writeTimeout > 0 {
 		_ = cn.nc.SetWriteDeadline(time.Time{})
 	}
@@ -236,7 +236,8 @@ func (cn *conn) terminate(reason packet.ReasonCode, suppressWill bool) {
 	cn.close()
 }
 
-// close 关闭底层连接并等待后台协程退出。
+// close 关闭底层连接。后台协程由 wait 等待，避免在 waitLoop 自身
+// （例如投递钩子调用管理面断开）中等待自己导致死锁。
 func (cn *conn) close() {
 	cn.closeOnce.Do(func() {
 		cn.closed.Store(true)
@@ -249,9 +250,11 @@ func (cn *conn) close() {
 		if cn.nc != nil {
 			_ = cn.nc.Close()
 		}
-		cn.wg.Wait()
 	})
 }
+
+// wait 等待本连接的后台协程退出。
+func (cn *conn) wait() { cn.wg.Wait() }
 
 // ============================================================================
 // PULL
@@ -287,9 +290,8 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 	if maxBytes <= 0 || maxBytes > int(opts.MaxBytes) {
 		maxBytes = int(opts.MaxBytes)
 	}
-
-	cn.pullMu.Lock()
-	defer cn.pullMu.Unlock()
+	// 客户端在 CONNECT 中声明的接收上限同样必须满足，否则写包阶段才会失败并断连。
+	maxBytes = cn.payloadBudget(maxBytes)
 
 	pendingDepth, deliveredDepth, oldest := cl.mb.depth()
 
@@ -297,6 +299,7 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 
 	// 1) delivered 优先：未确认的消息先重发
 	if deliveredDepth > 0 {
+		cn.pullMu.Lock()
 		batch, next, more, repeated := cl.mb.drainDelivered(cn.served, maxRecords, maxBytes)
 		if len(batch) > 0 {
 			if repeated {
@@ -305,6 +308,7 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 
 			if hard := opts.NoProgressHard; hard > 0 && cn.noProgress > hard {
 				cl.mb.releaseBatch(batch)
+				cn.pullMu.Unlock()
 				return &pullPlan{resp: nil, empty: true}
 			}
 			if soft := opts.NoProgressSoft; soft > 0 && cn.noProgress > soft {
@@ -316,7 +320,14 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 				resp.Delivered = deliveredDepth
 				resp.OldestUncommitted = oldest
 				cn.core.stats.CommitRequired.Add(1)
+				cn.pullMu.Unlock()
 				return &pullPlan{resp: resp}
+			}
+			cn.pullMu.Unlock()
+
+			if !cn.fitsClientPacket(batch) {
+				cl.mb.releaseBatch(batch)
+				return cn.packetTooLargePlan(p.RequestID, pendingDepth, deliveredDepth, oldest)
 			}
 
 			plan.resp.More = more
@@ -328,6 +339,7 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 			plan.nextServed = next
 			return plan
 		}
+		cn.pullMu.Unlock()
 	}
 
 	// 2) 从 pending 取
@@ -349,8 +361,15 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 			}
 			cn.core.releaseMessage(t.msg)
 			cn.core.stats.MessagesDropped.Add(1)
+			cl.dropped.Add(1)
 		}
 		batch = kept
+	}
+
+	// 单条记录可能大于客户端声明的接收上限：恢复队列并明确返回错误，而不是写完才断连。
+	if len(batch) > 0 && !cn.fitsClientPacket(batch) {
+		cl.mb.restore(batch)
+		return cn.packetTooLargePlan(p.RequestID, pendingDepth, deliveredDepth, oldest)
 	}
 
 	if len(batch) == 0 {
@@ -391,6 +410,52 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 	plan.pending = batch
 	plan.nextServed = 0
 	return plan
+}
+
+// pullResponseOverhead 是 PULL_OK 的固定头 + 最小包体大小。
+const pullResponseOverhead = 5 + 44
+
+// payloadBudget 把批次字节预算限制在客户端声明的最大包大小之内。
+func (cn *conn) payloadBudget(maxBytes int) int {
+	limit := int(cn.maxPacketSize)
+	if limit <= 0 {
+		return maxBytes
+	}
+	limit -= pullResponseOverhead
+	if limit < 1 {
+		limit = 1
+	}
+	if maxBytes <= 0 || maxBytes > limit {
+		return limit
+	}
+	return maxBytes
+}
+
+// pullRecordsSize 返回该批记录编码进 PULL_OK 后的近似总字节数。
+func pullRecordsSize(batch []taken) int {
+	total := pullResponseOverhead
+	for _, t := range batch {
+		rec := t.msg.record(false)
+		total += packet.RecordSize(&rec)
+	}
+	return total
+}
+
+func (cn *conn) fitsClientPacket(batch []taken) bool {
+	if cn.maxPacketSize == 0 {
+		return true
+	}
+	return pullRecordsSize(batch) <= int(cn.maxPacketSize)
+}
+
+func (cn *conn) packetTooLargePlan(requestID uint64, pending [3]uint32, delivered uint32, oldest packet.PacketID) *pullPlan {
+	resp := packet.NewPullOkPacket(requestID)
+	resp.Reason = packet.ReasonPacketTooLarge
+	resp.Pending = pending
+	resp.Delivered = delivered
+	resp.OldestUncommitted = oldest
+	cn.core.stats.MessagesRejected.Add(1)
+	return &pullPlan{resp: resp}
 }
 
 func countPrio(batch []taken, p packet.Priority) int {
@@ -474,6 +539,13 @@ func (cn *conn) handlePull(p *packet.PullPacket) error {
 		return errNoProgress
 	}
 
+	// buildPlan 可能执行用户钩子；期间连接可能已被接管。
+	if !cn.client.owns(cn) {
+		cn.abortPlan(plan)
+		cn.pullInflight.Store(false)
+		return errSessionStale
+	}
+
 	if plan.empty {
 		if waitMs := cn.waitMillis(p.WaitMs); waitMs > 0 {
 			// 长轮询：把响应交给后台协程，读循环可以继续处理 PING/COMMIT。
@@ -537,7 +609,7 @@ func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
 			cn.writeEmptyPull(p)
 			return
 		case <-cn.wakeCh:
-			if cn.closed.Load() {
+			if cn.closed.Load() || !cn.client.owns(cn) {
 				return
 			}
 			plan := cn.buildPlan(p)
@@ -546,6 +618,11 @@ func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
 			}
 			if plan.empty {
 				continue
+			}
+			// 构建期间可能发生接管：不要再用旧连接推进会话状态。
+			if !cn.client.owns(cn) {
+				cn.abortPlan(plan)
+				return
 			}
 			if err := cn.writePacket(plan.resp); err != nil {
 				cn.abortPlan(plan)
@@ -558,6 +635,9 @@ func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
 }
 
 func (cn *conn) writeEmptyPull(p *packet.PullPacket) {
+	if !cn.client.owns(cn) {
+		return
+	}
 	cl := cn.client
 	pending, delivered, oldest := cl.mb.depth()
 

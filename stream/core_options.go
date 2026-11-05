@@ -43,6 +43,14 @@ func WithMaxHandshakeConns(n int) CoreOption {
 	}
 }
 
+// WithMaxStreams 设置同时活跃的流会话上限（默认 10000，0 表示不限制）。
+// 超限时新的 STREAM_OPEN 会收到 ServerUnavailable。
+func WithMaxStreams(n int) CoreOption {
+	return func(b *Core) {
+		b.maxStreams = n
+	}
+}
+
 // WithWriteTimeout 设置控制包（CONNACK/PONG/STREAM_ACK 等）的单次写超时，
 // 默认 10 秒。数据转发路径不受此限制（需要背压）。
 func WithWriteTimeout(d time.Duration) CoreOption {

@@ -116,6 +116,7 @@ CONNACK {
     ReasonCode          uint8
     AssignedClientID    string
     ServerMaxPacketSize uint32
+    KeepAlive           uint16   // 服务端要求的心跳间隔（秒），客户端必须以它为准
     SessionID           uint64   // 会话租约标识
     Pending             [3]uint32 // Low / Medium / High 的未投递积压
     Delivered           uint32    // 已投递未确认条数
@@ -124,6 +125,9 @@ CONNACK {
 ```
 
 认证为**单轮**：`AuthMethod`/`AuthData` 在 `CONNECT` 中一次提交，失败时 `CONNACK` 携带错误原因码并关闭连接。
+
+`CONNACK.KeepAlive` 是服务端最终采用的间隔（可能覆盖客户端在 `CONNECT` 中请求的值）。
+客户端必须用它计算发送 `PING` 的频率，否则在服务端配置更短时会周期性被判超时。
 
 `SessionID` 的规则：
 
@@ -158,7 +162,7 @@ PUSH_OK {
 ```
 
 - 批量**不做整批原子**，逐条返回结果。
-- `WantAck=0` 时服务端仍回 `PUSH_OK`，但省略 `Results`。
+- `WantAck=0` 时服务端**不发送** `PUSH_OK`（发送即可，无需等待）。
 - 单条结果原因码：`Success`、`ChannelInvalid`、`NotAuthorized`、`PacketTooLarge`、
   `TargetNotFound`、`NoMatch`、`ConsumerBacklog`、`RateLimited`、`QuotaExceeded`。
 
@@ -209,7 +213,7 @@ PULL_OK {
 COMMIT {
     RequestID uint64
     Count     uint16
-    IDs       []PacketID   // ≤ 4096
+    IDs       []PacketID   // 数量受 MaxPacketSize 约束
 }
 
 COMMIT_OK {
@@ -304,5 +308,7 @@ ACL 使用「模式包含」判定：声明过滤器 `F` 时要求存在允许�
 | `MaxRecordBytes` | 1 MiB |
 | `MaxWaitMs`（服务端裁剪上限） | 300s |
 | `MaxChannelsPerClient` | 1024 |
+| `MaxSessions`（含离线保留） | 10000 |
+| `MaxInflightBytes`（全局在途消息） | 256 MiB |
 | `NoProgressSoft` / `Hard` | 4 / 16 |
 | `UncommittedTimeout` | 关闭 |

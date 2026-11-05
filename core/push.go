@@ -23,6 +23,15 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 		rec.Source = cl.ID
 	}
 
+	if !rec.Priority().IsValid() {
+		res.Reason = packet.ReasonMalformedPacket
+		c.stats.MessagesRejected.Add(1)
+		if cl != nil {
+			cl.rejected.Add(1)
+		}
+		return res
+	}
+
 	if !packet.ValidateChannelName(rec.Channel) {
 		res.Reason = packet.ReasonChannelInvalid
 		c.stats.MessagesRejected.Add(1)
@@ -92,6 +101,9 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 			res.Reason = packet.ReasonTargetNotFound
 			return res
 		}
+		if c.overInflightLimit() {
+			return c.rejectOverInflight(cl, res)
+		}
 
 		c.takeOwnership(msg)
 		enqueued, evicted := target.mb.enqueue(msg)
@@ -103,11 +115,13 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 			res.Reason = packet.ReasonConsumerBacklog
 			res.Dropped = 1
 			c.stats.MessagesDropped.Add(1)
+			target.dropped.Add(1)
 		case evicted:
 			res.Reason = packet.ReasonSuccess
 			res.Matched = 1
 			res.Dropped = 1
 			c.stats.MessagesDropped.Add(1)
+			target.dropped.Add(1)
 		default:
 			res.Reason = packet.ReasonSuccess
 			res.Matched = 1
@@ -122,6 +136,9 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 		c.stats.MessagesNoMatch.Add(1)
 		res.Reason = packet.ReasonNoMatch
 		return res
+	}
+	if c.overInflightLimit() {
+		return c.rejectOverInflight(cl, res)
 	}
 
 	c.takeOwnership(msg)
@@ -140,6 +157,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 		if !enqueued || evicted {
 			res.Dropped++
 			c.stats.MessagesDropped.Add(1)
+			target.dropped.Add(1)
 		}
 		c.notifyClient(target)
 	}
@@ -149,6 +167,20 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 	res.Reason = packet.ReasonSuccess
 	if res.Matched == 0 {
 		res.Reason = packet.ReasonConsumerBacklog
+	}
+	return res
+}
+
+// overInflightLimit 报告全局在途消息是否已达上限。
+func (c *Core) overInflightLimit() bool {
+	return c.options.MaxInflightBytes > 0 && c.inflightBytes.Load() >= c.options.MaxInflightBytes
+}
+
+func (c *Core) rejectOverInflight(cl *Client, res packet.PushResult) packet.PushResult {
+	res.Reason = packet.ReasonQuotaExceeded
+	c.stats.MessagesRejected.Add(1)
+	if cl != nil {
+		cl.rejected.Add(1)
 	}
 	return res
 }
@@ -200,8 +232,9 @@ func (cn *conn) handlePush(p *packet.PushPacket) error {
 		resp.Results = append(resp.Results, cn.core.pushRecord(cl, &p.Records[i], false))
 	}
 
+	// WantAck=0：客户端不等待结果，不回包以节省一个 RTT 与带宽。
 	if p.Flags&packet.PushFlagWantAck == 0 {
-		resp.Results = nil
+		return nil
 	}
 	return cn.writePacket(resp)
 }

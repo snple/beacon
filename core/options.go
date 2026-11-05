@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 
 	"go.uber.org/zap"
@@ -11,10 +12,14 @@ import (
 type CoreOptions struct {
 	// ===== 连接 =====
 	MaxClients     uint32        // 最大并发连接数
+	MaxSessions    int           // 会话总数上限（含离线保留；<0 表示不限制）
 	MaxPacketSize  uint32        // 服务端允许的最大包大小
 	ConnectTimeout uint32        // 握手超时（秒）
 	KeepAlive      uint16        // 服务端要求的心跳间隔（秒），0 表示沿用客户端值
-	WriteTimeout   time.Duration // 单次写超时（默认 10s，0 表示不设置）
+	WriteTimeout   time.Duration // 单次写超时（0 表示使用默认值 10s）
+
+	// WSCheckOrigin 校验 WebSocket 握手来源；nil 时只允许同源（或无 Origin 的非浏览器客户端）。
+	WSCheckOrigin func(*http.Request) bool
 
 	// MaxHandshakeConnections 认证前的并发连接上限（0 表示不限制）
 	MaxHandshakeConnections int
@@ -27,7 +32,10 @@ type CoreOptions struct {
 	QueueCap int // 单个客户端 pending 队列条数上限（0 表示不限制）
 
 	MaxRecords uint16 // 单次 PULL 的记录数上限（同时约束 delivered 长度）
-	MaxBytes   uint32 // 单次 PULL / PUSH 的字节上限（0 表示仅受 MaxPacketSize 约束）
+	MaxBytes   uint32 // 单次 PULL / PUSH 的字节上限（0 表示使用默认值 1 MiB）
+
+	// MaxInflightBytes 全局在途消息字节上限（<0 表示不限制）
+	MaxInflightBytes int64
 
 	MaxWaitMs uint32 // 长轮询上限
 
@@ -60,14 +68,16 @@ type CoreOptions struct {
 func NewCoreOptions() *CoreOptions {
 	return &CoreOptions{
 		MaxClients:              10000,
+		MaxSessions:             10000,
 		MaxPacketSize:           16777216,
 		ConnectTimeout:          10,
 		WriteTimeout:            10 * time.Second,
 		MaxHandshakeConnections: 512,
 
-		QueueCap:   10000,
-		MaxRecords: 1000,
-		MaxBytes:   1 << 20,
+		QueueCap:         10000,
+		MaxInflightBytes: 256 << 20,
+		MaxRecords:       1000,
+		MaxBytes:         1 << 20,
 
 		MaxWaitMs:            300000,
 		MaxChannelsPerClient: 1024,
@@ -86,6 +96,15 @@ func NewCoreOptions() *CoreOptions {
 func (o *CoreOptions) applyDefaults() {
 	def := NewCoreOptions()
 
+	if o.MaxClients == 0 {
+		o.MaxClients = def.MaxClients
+	}
+	if o.MaxSessions == 0 {
+		o.MaxSessions = def.MaxSessions
+	}
+	if o.MaxInflightBytes == 0 {
+		o.MaxInflightBytes = def.MaxInflightBytes
+	}
 	if o.MaxPacketSize == 0 {
 		o.MaxPacketSize = def.MaxPacketSize
 	}
@@ -119,13 +138,13 @@ func (o *CoreOptions) applyDefaults() {
 	if o.Hooks == nil {
 		o.Hooks = &Hooks{}
 	}
+	if o.Hooks.Logger == nil {
+		o.Hooks.Logger = o.Logger
+	}
 }
 
 // Validate 校验配置
 func (o *CoreOptions) Validate() error {
-	if o.MaxClients == 0 {
-		return fmt.Errorf("maxClients must be > 0")
-	}
 	if o.MaxPacketSize < 64 {
 		return fmt.Errorf("maxPacketSize must be >= 64, got %d", o.MaxPacketSize)
 	}
@@ -149,6 +168,21 @@ func (o *CoreOptions) Validate() error {
 
 // WithMaxClients 设置最大并发连接数
 func (o *CoreOptions) WithMaxClients(n uint32) *CoreOptions { o.MaxClients = n; return o }
+
+// WithMaxSessions 设置会话总数上限（含离线保留）；n < 0 表示不限制。
+func (o *CoreOptions) WithMaxSessions(n int) *CoreOptions { o.MaxSessions = n; return o }
+
+// WithMaxInflightBytes 设置全局在途消息字节上限；n < 0 表示不限制。
+func (o *CoreOptions) WithMaxInflightBytes(n int64) *CoreOptions {
+	o.MaxInflightBytes = n
+	return o
+}
+
+// WithWSCheckOrigin 设置 WebSocket Origin 校验函数；nil 使用默认同源策略。
+func (o *CoreOptions) WithWSCheckOrigin(fn func(*http.Request) bool) *CoreOptions {
+	o.WSCheckOrigin = fn
+	return o
+}
 
 // WithMaxPacketSize 设置最大包大小
 func (o *CoreOptions) WithMaxPacketSize(n uint32) *CoreOptions { o.MaxPacketSize = n; return o }
