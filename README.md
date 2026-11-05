@@ -1,10 +1,9 @@
 # Beacon
 
-Beacon 是一个**面向 IoT 的拉取式消息服务**：生产者推送（`PUSH`），broker 按 channel 匹配后放入
-每个客户端各自的队列，消费者按自己的节奏拉取（`PULL`）并确认（`COMMIT`）。
+Beacon 是一个**面向 IoT 的拉取式消息服务**：生产者 `PUSH` 到 channel，broker 匹配后写入
+每个客户端独立的队列；消费者按自己的节奏 `PULL` 并 `COMMIT`。
 
-与 MQTT 最大的不同：**服务端从不主动推送消息**。除了对请求的响应和连接终止通知，
-broker 不会向客户端发送任何数据包。
+**服务端从不主动推送消息**：除了请求响应和连接终止通知，broker 不向客户端发送任何数据包。
 
 - 协议规格：[`docs/protocol-v4.md`](./docs/protocol-v4.md)
 - 嵌入式客户端实现要点：[`docs/embedded-client-guide.md`](./docs/embedded-client-guide.md)
@@ -12,13 +11,10 @@ broker 不会向客户端发送任何数据包。
 
 ## 为什么是 pull
 
-| 维度 | push（MQTT 风格） | pull（Beacon v4） |
-|---|---|---|
-| 消费节奏 | 服务端推，客户端被动接收 | 客户端决定何时取、取多少 |
-| broker 内存 | 每客户端待发送队列无界增长 | `pending` 受 `QueueCap`、`delivered` 受 `MaxRecords`，两个独立预算 |
-| 确认机制 | 需要 ack 表 + 重传定时器 | `delivered` 是一条 FIFO，`COMMIT` 就是前缀压缩 |
-| 慢消费者 | 拖住 broker 的发送协程 | 只影响它自己的队列 |
-| 低延迟 | 天然接近实时 | 用长轮询（`WaitMs`）拉回同等延迟 |
+- **消费节奏由客户端决定**：按自身处理能力拉取，慢消费者只影响自己的队列。
+- **队列有界**：`pending` 受 `QueueCap` 约束，`delivered` 受 `MaxRecords` 约束。
+- **确认即前缀压缩**：`COMMIT` 直接推进 `delivered` 的 FIFO 头，无需独立 ack 表与重传定时器。
+- **低延迟**：空队列时用长轮询（`WaitMs`）等待，有数据立即返回。
 
 ## 核心模型
 
