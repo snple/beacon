@@ -88,8 +88,11 @@ func main() {
 			"session retention seconds after disconnect (0 = delete immediately)")
 		maxChanLen = flag.Int("max-channel-length", packet.MinChannelLength,
 			"max bytes for channel name/filter (256-1024)")
-		debug       = flag.Bool("debug", false, "enable debug logging")
-		showVersion = flag.Bool("version", false, "print version and exit")
+		streamAddr      = flag.String("stream-addr", "", "stream data-plane TCP listen address (empty to disable)")
+		streamEnabled   = flag.Bool("stream-enabled", false, "enable point-to-point stream capability")
+		streamAdvertise = flag.String("stream-advertise", "", "stream address advertised to clients (default: stream-addr)")
+		debug           = flag.Bool("debug", false, "enable debug logging")
+		showVersion     = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
 
@@ -134,6 +137,8 @@ func main() {
 		WithMaxInflightBytes(*maxInflight).
 		WithSessionTimeout(uint32(*sessTimeout)).
 		WithMaxChannelLength(*maxChanLen).
+		WithStreamEnabled(*streamEnabled).
+		WithStreamAdvertiseAddr(*streamAdvertise).
 		WithLogger(logger)
 
 	if *authFile != "" {
@@ -154,7 +159,7 @@ func main() {
 		logger.Fatal("start core", zap.Error(err))
 	}
 
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
 
 	go func() {
 		logger.Info("TCP listener", zap.String("addr", *addr))
@@ -171,6 +176,17 @@ func main() {
 			logger.Info("metrics listener", zap.String("addr", *metricsAddr))
 			errCh <- b.ServeMetrics(*metricsAddr)
 		}()
+	}
+	if *streamAddr != "" {
+		if !*streamEnabled {
+			logger.Warn("stream listener configured but stream capability is disabled")
+		}
+		go func() {
+			logger.Info("stream listener", zap.String("addr", *streamAddr), zap.Bool("enabled", *streamEnabled))
+			errCh <- b.ServeStreamTCP(*streamAddr)
+		}()
+	} else if *streamEnabled {
+		logger.Warn("stream capability enabled but no stream-addr configured; clients will see stream disabled")
 	}
 
 	sigCh := make(chan os.Signal, 1)

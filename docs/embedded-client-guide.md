@@ -41,10 +41,25 @@
 - 会话保留时长由**服务端配置**，`CONNECT` 不携带 `SessionTimeout`。
 - 订阅声明**不在 `CONNECT` 中**：连接建立后必须用 `DECLARE` 全量声明。
   重连后如依赖既有订阅，建议无条件重发 `DECLARE`（服务端会按新身份重新校验）。
-- `CleanSession=1`：服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，
+- `CleanSession`（`CONNECT.Flags` bit0）置位：服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，
   `CONNACK.SessionPresent=0` 并返回新的 `SessionID`。
-- `CleanSession=0`：若会话仍被保留，则复用队列与声明（`SessionPresent=1`）。
+- `CleanSession` 未置位：若会话仍被保留，则复用队列与声明（`SessionPresent=1`）。
 - 会话离线期间队列只保留 **Medium / High**，Low 消息直接丢弃；队列满后按优先级淘汰。
+
+### 2.2 可选的 stream 能力
+
+stream 能力直接在 `CONNECT`/`CONNACK` 中协商，**没有额外的 HELLO 往返**：
+
+- `CONNECT.Flags` 字节的 **bit0** = `CleanSession`，**bit1** = `StreamCapable`（客户端支持 stream）；
+- `CONNACK.Flags` 字节的 **bit0** = `SessionPresent`，**bit1** = `StreamEnabled`（服务端为本次连接启用），**bit2** = `StreamSupported`（服务端实现该能力）。
+
+旧实现只读取 bit0，因此线格式保持兼容。`StreamEnabled=0` 表示连接时服务端未启用
+（未配置监听器或能力关闭）；只要 `StreamSupported=1`，服务端运行期开启后 `OpenStream`
+仍可直接尝试，以服务端返回的 `StreamDisabled` 为准。`StreamSupported=0` 表示旧服务端，
+不要发送 `STREAM_OPEN`。
+
+建流流程见 [protocol-v4.md](./protocol-v4.md) 的 `STREAM_*`，数据面见
+[stream-protocol.md](./stream-protocol.md)。
 
 ## 3. Record 编解码
 

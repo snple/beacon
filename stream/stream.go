@@ -1,215 +1,93 @@
 package stream
 
 import (
-	"context"
-	"fmt"
-	"io"
 	"net"
-	"sync/atomic"
 	"time"
-
-	"github.com/snple/beacon/stream/packet"
-
-	"go.uber.org/zap"
 )
 
-// Stream 表示一个已建立的流连接
+// Stream 是建立在 core stream 端口上的一条点对点双向字节流。
+//
+// 它包装数据面连接：Read/Write/Close 与 SetDeadline 等语义与 net.Conn 一致。
+// 流的生命周期与双方主连接绑定：任一方会话断开或被接管，服务端会关闭这条流。
 type Stream struct {
-	id             uint32
-	topic          string
-	metadata       []byte
-	properties     map[string]string
-	sourceClientID string
-	targetClientID string
-	conn           net.Conn
-	ctx            context.Context
-	cancel         context.CancelFunc
-	logger         *zap.Logger
+	net.Conn
 
-	// 读缓冲：存储部分读取的数据包
-	readBuf    []byte
-	readOffset int
-
-	// 写序列号
-	writeSeq atomic.Uint32
+	id            uint64
+	topic         string
+	localClientID string
+	peerClientID  string
+	metadata      []byte
+	properties    map[string]string
+	createdAt     time.Time
 }
 
-// ID 返回流ID
-func (s *Stream) ID() uint32 {
-	return s.id
+// New 创建 Stream（由客户端库在数据面握手完成后调用）。
+func New(
+	id uint64,
+	topic string,
+	localClientID string,
+	peerClientID string,
+	metadata []byte,
+	properties map[string]string,
+	conn net.Conn,
+) *Stream {
+	return &Stream{
+		Conn:          conn,
+		id:            id,
+		topic:         topic,
+		localClientID: localClientID,
+		peerClientID:  peerClientID,
+		metadata:      cloneBytes(metadata),
+		properties:    cloneMap(properties),
+		createdAt:     time.Now(),
+	}
 }
 
-// Topic 返回流主题
-func (s *Stream) Topic() string {
-	return s.topic
+// ID 返回流 ID。
+func (s *Stream) ID() uint64 { return s.id }
+
+// Topic 返回建流时声明的主题。
+func (s *Stream) Topic() string { return s.topic }
+
+// LocalClientID 返回本端 clientID。
+func (s *Stream) LocalClientID() string { return s.localClientID }
+
+// PeerClientID 返回对端 clientID。
+func (s *Stream) PeerClientID() string { return s.peerClientID }
+
+// Metadata 返回对端在建流时携带的元数据。
+func (s *Stream) Metadata() []byte { return cloneBytes(s.metadata) }
+
+// Properties 返回对端在建流时携带的属性。
+func (s *Stream) Properties() map[string]string { return cloneMap(s.properties) }
+
+// CreatedAt 返回流建立时间。
+func (s *Stream) CreatedAt() time.Time { return s.createdAt }
+
+// CloseWrite 关闭写方向（尽力而为），对端 Read 会得到 io.EOF。
+func (s *Stream) CloseWrite() error {
+	if cw, ok := s.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return s.Conn.Close()
 }
 
-// Metadata 返回对端在 STREAM_OPEN 中携带的元数据（主动方为自己传入的 metadata）
-func (s *Stream) Metadata() []byte {
-	if len(s.metadata) == 0 {
+func cloneBytes(b []byte) []byte {
+	if len(b) == 0 {
 		return nil
 	}
-	out := make([]byte, len(s.metadata))
-	copy(out, s.metadata)
+	out := make([]byte, len(b))
+	copy(out, b)
 	return out
 }
 
-// Properties 返回对端在 STREAM_OPEN 中携带的属性（主动方为自己传入的 properties）
-func (s *Stream) Properties() map[string]string {
-	if len(s.properties) == 0 {
+func cloneMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
 		return map[string]string{}
 	}
-	out := make(map[string]string, len(s.properties))
-	for k, v := range s.properties {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
 		out[k] = v
 	}
 	return out
 }
-
-// SourceClientID 返回源客户端ID
-func (s *Stream) SourceClientID() string {
-	return s.sourceClientID
-}
-
-// TargetClientID 返回目标客户端ID
-func (s *Stream) TargetClientID() string {
-	return s.targetClientID
-}
-
-// WritePacket 发送一个数据包
-func (s *Stream) WritePacket(pkt *packet.StreamDataPacket) error {
-	pkt.StreamID = s.id
-	pkt.SequenceID = s.writeSeq.Add(1)
-	return packet.WritePacket(s.conn, pkt)
-}
-
-// ReadPacket 接收一个数据包
-// 返回数据包；对端优雅关闭（STREAM_CLOSE）或连接关闭时返回 io.EOF
-func (s *Stream) ReadPacket() (*packet.StreamDataPacket, error) {
-	pkt, err := packet.ReadPacket(s.conn)
-	if err != nil {
-		return nil, err
-	}
-
-	switch p := pkt.(type) {
-	case *packet.StreamDataPacket:
-		return p, nil
-	case *packet.StreamClosePacket:
-		return nil, io.EOF
-	default:
-		return nil, fmt.Errorf("unexpected packet type: %T", pkt)
-	}
-}
-
-// maxWriteChunk 是单次 Write 拆分出的最大数据包负载。
-// 留足余量以保证编码后的包不超过协议上限。
-const maxWriteChunk = 1 << 20
-
-// Write 实现 io.Writer 接口。
-// 超过单包上限的数据会被拆成多个数据包，保持字节流语义。
-func (s *Stream) Write(p []byte) (int, error) {
-	total := 0
-	for len(p) > 0 {
-		n := len(p)
-		if n > maxWriteChunk {
-			n = maxWriteChunk
-		}
-
-		pkt := &packet.StreamDataPacket{
-			StreamID:   s.id,
-			Flags:      0,
-			Data:       p[:n],
-			Properties: make(map[string]string),
-		}
-		if err := s.WritePacket(pkt); err != nil {
-			return total, err
-		}
-		total += n
-		p = p[n:]
-	}
-	return total, nil
-}
-
-// Read 实现 io.Reader 接口，从数据包中读取数据
-// 注意：如果 p 太小无法装下整个数据包，会分多次读取
-func (s *Stream) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-
-	for {
-		// 如果缓冲区为空，读取下一个数据包
-		if len(s.readBuf) == 0 || s.readOffset >= len(s.readBuf) {
-			pkt, err := s.ReadPacket()
-			if err != nil {
-				return 0, err
-			}
-			s.readBuf = pkt.Data
-			s.readOffset = 0
-			if len(s.readBuf) == 0 {
-				// 空数据包：继续读下一个，避免返回 (0, nil)。
-				continue
-			}
-		}
-
-		// 从缓冲区复制数据到 p
-		n := copy(p, s.readBuf[s.readOffset:])
-		s.readOffset += n
-
-		// 如果已经读完当前包，清空缓冲区
-		if s.readOffset >= len(s.readBuf) {
-			s.readBuf = nil
-			s.readOffset = 0
-		}
-
-		return n, nil
-	}
-}
-
-// Close 关闭流。会尽力发送 STREAM_CLOSE，让对端 Read 得到 io.EOF。
-func (s *Stream) Close() error {
-	s.cancel()
-	_ = s.conn.SetWriteDeadline(time.Now().Add(time.Second))
-	_ = packet.WritePacket(s.conn, &packet.StreamClosePacket{
-		StreamID:   s.id,
-		ReasonCode: packet.Success,
-	})
-	return s.conn.Close()
-}
-
-// LocalAddr 返回本地网络地址
-func (s *Stream) LocalAddr() net.Addr {
-	return s.conn.LocalAddr()
-}
-
-// RemoteAddr 返回远程网络地址
-func (s *Stream) RemoteAddr() net.Addr {
-	return s.conn.RemoteAddr()
-}
-
-// SetDeadline 设置读写超时
-func (s *Stream) SetDeadline(t time.Time) error {
-	return s.conn.SetDeadline(t)
-}
-
-// SetReadDeadline 设置读超时
-func (s *Stream) SetReadDeadline(t time.Time) error {
-	return s.conn.SetReadDeadline(t)
-}
-
-// SetWriteDeadline 设置写超时
-func (s *Stream) SetWriteDeadline(t time.Time) error {
-	return s.conn.SetWriteDeadline(t)
-}
-
-// Context 返回流的context
-func (s *Stream) Context() context.Context {
-	return s.ctx
-}
-
-// Conn 返回底层连接（用于特殊情况）
-func (s *Stream) Conn() net.Conn {
-	return s.conn
-}
-
-var _ net.Conn = (*Stream)(nil)

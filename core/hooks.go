@@ -140,6 +140,29 @@ type ConnectionHandlerFunc struct {
 	DisconnectFn func(ctx *DisconnectContext)
 }
 
+// StreamOpenContext 是建流申请的授权上下文。
+type StreamOpenContext struct {
+	ClientID   string
+	Identity   *Identity
+	Target     string
+	Topic      string
+	Metadata   []byte
+	Properties map[string]string
+}
+
+// StreamHandler 是 stream 建流策略钩子。
+type StreamHandler interface {
+	// OnStreamOpen 在服务端把请求转发给目标客户端之前调用；
+	// 返回错误则拒绝本次建流（STREAM_OPEN_OK 携带错误原因）。
+	OnStreamOpen(ctx *StreamOpenContext) error
+}
+
+// StreamHandlerFunc 适配函数式 stream 钩子。
+type StreamHandlerFunc func(ctx *StreamOpenContext) error
+
+// OnStreamOpen 实现 StreamHandler。
+func (f StreamHandlerFunc) OnStreamOpen(ctx *StreamOpenContext) error { return f(ctx) }
+
 // OnConnect 实现 ConnectionHandler。
 func (f ConnectionHandlerFunc) OnConnect(ctx *ConnectContext) {
 	if f.ConnectFn != nil {
@@ -159,6 +182,7 @@ type Hooks struct {
 	Auth       AuthHandler
 	Message    MessageHandler
 	Connection ConnectionHandler
+	Stream     StreamHandler
 
 	// Logger 用于记录钩子 panic；由 Core 自动填充。
 	Logger *zap.Logger
@@ -236,4 +260,17 @@ func (h *Hooks) callOnDisconnect(ctx *DisconnectContext) {
 		}
 	}()
 	h.Connection.OnDisconnect(ctx)
+}
+
+func (h *Hooks) callOnStreamOpen(ctx *StreamOpenContext) (err error) {
+	if h == nil || h.Stream == nil {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			h.logPanic("OnStreamOpen", r)
+			err = fmt.Errorf("stream hook panic: %v", r)
+		}
+	}()
+	return h.Stream.OnStreamOpen(ctx)
 }

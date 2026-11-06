@@ -22,6 +22,10 @@ type ServerInfo struct {
     Limits          packet.Limits
     MaxChannelLength int // channel 名/过滤器最大字节数（256–1024）
     Storage         string // 固定 "memory"
+
+    StreamEnabled bool   // stream 能力是否开启
+    StreamAddress string // 告知客户端的 stream 数据面地址
+    StreamsActive int64  // 当前活跃流数
 }
 
 func (c *Core) Info() ServerInfo
@@ -78,8 +82,27 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) // 不存在�
 func (c *Core) GetStats() StatsSnapshot
 ```
 
-含计数器（收发/丢弃/拒绝/重复投递/接管次数）、内存水位（`InFlightMessages`、`InFlightBytes`）
-与通配符过滤器数量。
+含计数器（收发/丢弃/拒绝/重复投递/接管次数）、内存水位（`InFlightMessages`、`InFlightBytes`）、
+通配符过滤器数量，以及 stream 统计：`StreamsActive`、`StreamsPending`、`StreamsTotal`、
+`StreamsRejected`、`StreamBytesAToB`、`StreamBytesBToA`。
+
+### 流的列表与开关
+
+```go
+type StreamInfo struct {
+    StreamID      uint64
+    Topic         string
+    Source        string
+    Target        string
+    EstablishedAt time.Time
+    BytesAToB     int64
+    BytesBToA     int64
+}
+
+func (c *Core) Streams() []StreamInfo       // 按 StreamID 升序
+func (c *Core) StreamEnabled() bool
+func (c *Core) SetStreamEnabled(enabled bool) // 关闭只拒绝新流，存量流继续
+```
 
 ## 写操作
 

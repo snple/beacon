@@ -2,31 +2,40 @@ package packet
 
 import (
 	"bytes"
-	"encoding/binary"
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestReadPacket_RejectsTrailingBytes(t *testing.T) {
-	pkt := &ConnectPacket{ClientID: "stream-trailing"}
-
-	var buf bytes.Buffer
-	if err := WritePacket(&buf, pkt); err != nil {
-		t.Fatalf("failed to encode packet: %v", err)
+func TestHandshakePacketRoundTrip(t *testing.T) {
+	cases := []Packet{
+		&BindPacket{
+			Version:   Version,
+			StreamID:  42,
+			Role:      RoleInitiator,
+			Ticket:    []byte("ticket"),
+			Challenge: []byte("challenge"),
+		},
+		&BindOkPacket{StreamID: 42, Role: RoleInitiator, ReasonCode: Success},
 	}
 
-	data := append([]byte(nil), buf.Bytes()...)
-	bodyLen := binary.BigEndian.Uint32(data[1:5])
-	binary.BigEndian.PutUint32(data[1:5], bodyLen+1)
-	data = append(data, 0x42)
+	for _, want := range cases {
+		var buf bytes.Buffer
+		require.NoError(t, WritePacket(&buf, want), want.Type().String())
 
-	_, err := ReadPacket(bytes.NewReader(data))
-	if err == nil {
-		t.Fatal("expected trailing bytes to be rejected")
+		got, err := ReadPacket(&buf)
+		require.NoError(t, err, want.Type().String())
+		require.Equal(t, want, got, want.Type().String())
 	}
+}
 
-	var protoErr *StreamProtocolError
-	if !errors.As(err, &protoErr) || protoErr.Code != MalformedPacket {
-		t.Fatalf("expected malformed StreamProtocolError, got %v", err)
-	}
+func TestHandshakeRejectsOversizedAndUnknown(t *testing.T) {
+	// 声明的长度超过上限。
+	frame := []byte{byte(BIND), 0, 1, 0, 1}
+	_, err := ReadPacket(bytes.NewReader(frame))
+	require.Error(t, err)
+
+	// 未知类型。
+	_, err = ReadPacket(bytes.NewReader([]byte{0xFF, 0, 0, 0, 0}))
+	require.Error(t, err)
 }

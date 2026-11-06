@@ -75,6 +75,7 @@ func (c *Core) handleConn(nc net.Conn) {
 	)
 
 	defer func() {
+		c.closeStreamsForConn(cn)
 		c.untrackHandshakeConn(nc)
 		c.releaseHandshakeSlot()
 		cn.close()
@@ -117,6 +118,11 @@ func (c *Core) handleConn(nc net.Conn) {
 		return
 	}
 
+	if connect.Flags.Unknown() != 0 {
+		c.rejectConn(nc, packet.ReasonProtocolError, "unknown connect flags")
+		return
+	}
+
 	if connect.Version != packet.ProtocolVersion {
 		// 不向后兼容：非 v4 的包不做任何协商，直接静默关闭（不发 CONNACK）。
 		// 真正的旧版 CONNECT 通常在此之前就已因布局不同而解码失败。
@@ -124,6 +130,8 @@ func (c *Core) handleConn(nc net.Conn) {
 			zap.String("remote", cn.remoteAddr), zap.Uint8("version", connect.Version))
 		return
 	}
+
+	cn.streamCapable.Store(connect.StreamCapable())
 
 	clientID = connect.ClientID
 	if clientID == "" {
@@ -211,7 +219,10 @@ func (c *Core) handleConn(nc net.Conn) {
 
 	pending, delivered, oldest := cl.mb.depth()
 	connack := packet.NewConnackPacket(packet.ReasonSuccess)
-	connack.SessionPresent = sessionPresent
+	connack.SetSessionPresent(sessionPresent)
+	connack.SetStreamSupported(true) // 本实现支持 stream 控制包
+	_, _, hasStreamListener := c.streamAdvertise()
+	connack.SetStreamEnabled(connect.StreamCapable() && c.streamEnabled.Load() && hasStreamListener)
 	connack.AssignedClientID = clientID
 	connack.ServerMaxPacketSize = c.options.MaxPacketSize
 	connack.KeepAlive = keepAlive
@@ -284,7 +295,7 @@ func (c *Core) attachSession(
 	if existing != nil {
 		cl = existing
 		sessionPresent = true
-		if connect.CleanSession {
+		if connect.CleanSession() {
 			sessionPresent = false
 		}
 		needSlot = cl.currentConn() == nil
@@ -323,7 +334,7 @@ func (c *Core) attachSession(
 	}
 
 	// CleanSession：在新连接绑定后清空既有队列、声明与统计。
-	if connect.CleanSession && existing != nil {
+	if connect.CleanSession() && existing != nil {
 		cl.reset()
 	}
 

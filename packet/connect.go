@@ -9,15 +9,56 @@ type ChannelDecl struct {
 	Channel string
 }
 
+// ConnectFlags 是 CONNECT 的会话与能力开关。
+//
+// 用一个字节承载全部开关，后续新增能力时无需再扩展 CONNECT 布局。
+type ConnectFlags uint8
+
+const (
+	// ConnectFlagCleanSession 丢弃该 ClientID 的既有会话状态
+	// （pending/delivered/声明），以全新会话建立本次连接。
+	ConnectFlagCleanSession ConnectFlags = 1 << 0
+	// ConnectFlagStream 声明客户端支持点对点流。
+	ConnectFlagStream ConnectFlags = 1 << 1
+)
+
+const connectFlagsKnown = ConnectFlagCleanSession | ConnectFlagStream
+
+// Unknown 返回未定义的标志位，供服务端拒绝无法理解的 CONNECT。
+func (f ConnectFlags) Unknown() ConnectFlags { return f &^ connectFlagsKnown }
+
+// HasFlag 报告某个开关是否置位。
+func (p *ConnectPacket) HasFlag(flag ConnectFlags) bool { return p.Flags&flag != 0 }
+
+// SetFlag 设置或清除某个开关。
+func (p *ConnectPacket) SetFlag(flag ConnectFlags, on bool) {
+	if on {
+		p.Flags |= flag
+	} else {
+		p.Flags &^= flag
+	}
+}
+
+// CleanSession 报告是否要求新建会话。
+func (p *ConnectPacket) CleanSession() bool { return p.HasFlag(ConnectFlagCleanSession) }
+
+// SetCleanSession 设置是否要求新建会话。
+func (p *ConnectPacket) SetCleanSession(on bool) { p.SetFlag(ConnectFlagCleanSession, on) }
+
+// StreamCapable 报告客户端是否声明支持 stream。
+func (p *ConnectPacket) StreamCapable() bool { return p.HasFlag(ConnectFlagStream) }
+
+// SetStreamCapable 设置是否声明支持 stream。
+func (p *ConnectPacket) SetStreamCapable(on bool) { p.SetFlag(ConnectFlagStream, on) }
+
 // ConnectPacket CONNECT：建立连接与单轮认证。
 //
 // 订阅声明不属于 CONNECT：连接建立后由 DECLARE 全量替换，因此重连时
 // 既不会携带过期声明，也必须在恢复的会话上重新声明或沿用服务端保留的声明。
 type ConnectPacket struct {
 	Version uint8
-	// CleanSession 为 true 时服务端丢弃该 ClientID 的既有会话状态
-	// （pending/delivered/声明），以全新会话建立本次连接。
-	CleanSession  bool
+	// Flags 承载会话与能力开关，见 ConnectFlag*。
+	Flags         ConnectFlags
 	ClientID      string
 	KeepAlive     uint16 // 秒
 	MaxPacketSize uint32
@@ -46,11 +87,7 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 	if err := WriteByte(w, p.Version); err != nil {
 		return err
 	}
-	var clean uint8
-	if p.CleanSession {
-		clean = 1
-	}
-	if err := WriteByte(w, clean); err != nil {
+	if err := WriteByte(w, byte(p.Flags)); err != nil {
 		return err
 	}
 	if err := EncodeString(w, p.ClientID); err != nil {
@@ -91,11 +128,11 @@ func (p *ConnectPacket) decode(r io.Reader, _ FixedHeader) error {
 	if p.Version, err = ReadByte(r); err != nil {
 		return err
 	}
-	clean, err := ReadByte(r)
+	flags, err := ReadByte(r)
 	if err != nil {
 		return err
 	}
-	p.CleanSession = clean&1 != 0
+	p.Flags = ConnectFlags(flags)
 	if p.ClientID, err = DecodeString(r); err != nil {
 		return err
 	}
@@ -128,9 +165,52 @@ func (p *ConnectPacket) decode(r io.Reader, _ FixedHeader) error {
 	return err
 }
 
+// ConnackFlags 是 CONNACK 的会话与能力开关。
+type ConnackFlags uint8
+
+const (
+	// ConnackFlagSessionPresent 表示复用了既有会话。
+	ConnackFlagSessionPresent ConnackFlags = 1 << 0
+	// ConnackFlagStreamEnabled 表示服务端为本次连接启用了点对点流。
+	ConnackFlagStreamEnabled ConnackFlags = 1 << 1
+	// ConnackFlagStreamSupported 表示服务端实现了 stream 控制包。
+	ConnackFlagStreamSupported ConnackFlags = 1 << 2
+)
+
+// HasFlag 报告某个开关是否置位。
+func (p *ConnackPacket) HasFlag(flag ConnackFlags) bool { return p.Flags&flag != 0 }
+
+// SetFlag 设置或清除某个开关。
+func (p *ConnackPacket) SetFlag(flag ConnackFlags, on bool) {
+	if on {
+		p.Flags |= flag
+	} else {
+		p.Flags &^= flag
+	}
+}
+
+// SessionPresent 报告是否复用了既有会话。
+func (p *ConnackPacket) SessionPresent() bool { return p.HasFlag(ConnackFlagSessionPresent) }
+
+// SetSessionPresent 设置是否复用既有会话。
+func (p *ConnackPacket) SetSessionPresent(on bool) { p.SetFlag(ConnackFlagSessionPresent, on) }
+
+// StreamEnabled 报告服务端是否为本次连接启用 stream。
+func (p *ConnackPacket) StreamEnabled() bool { return p.HasFlag(ConnackFlagStreamEnabled) }
+
+// SetStreamEnabled 设置是否启用 stream。
+func (p *ConnackPacket) SetStreamEnabled(on bool) { p.SetFlag(ConnackFlagStreamEnabled, on) }
+
+// StreamSupported 报告服务端是否实现 stream 控制包。
+func (p *ConnackPacket) StreamSupported() bool { return p.HasFlag(ConnackFlagStreamSupported) }
+
+// SetStreamSupported 设置是否实现 stream 控制包。
+func (p *ConnackPacket) SetStreamSupported(on bool) { p.SetFlag(ConnackFlagStreamSupported, on) }
+
 // ConnackPacket CONNACK：连接响应。
 type ConnackPacket struct {
-	SessionPresent      bool
+	// Flags 承载会话与能力开关，见 ConnackFlag*。
+	Flags               ConnackFlags
 	ReasonCode          ReasonCode
 	AssignedClientID    string
 	ServerMaxPacketSize uint32
@@ -150,11 +230,7 @@ func NewConnackPacket(reason ReasonCode) *ConnackPacket {
 func (p *ConnackPacket) Type() PacketType { return CONNACK }
 
 func (p *ConnackPacket) encode(w io.Writer) error {
-	var present uint8
-	if p.SessionPresent {
-		present = 1
-	}
-	if err := WriteByte(w, present); err != nil {
+	if err := WriteByte(w, byte(p.Flags)); err != nil {
 		return err
 	}
 	if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
@@ -184,11 +260,11 @@ func (p *ConnackPacket) encode(w io.Writer) error {
 }
 
 func (p *ConnackPacket) decode(r io.Reader, _ FixedHeader) error {
-	present, err := ReadByte(r)
+	flags, err := ReadByte(r)
 	if err != nil {
 		return err
 	}
-	p.SessionPresent = present&1 != 0
+	p.Flags = ConnackFlags(flags)
 
 	reason, err := ReadByte(r)
 	if err != nil {

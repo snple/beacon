@@ -1,14 +1,9 @@
-// Package stream 实现 Beacon 之外的另一套“点对点流中继”协议。
+// Package stream 提供 core stream 功能的客户端数据类型。
 //
-// Beacon（core/client）是发布-订阅消息总线；stream 则是独立的字节流协议：
-// 客户端通过 stream.Core 中继，与目标客户端建立双向流。
-// 两者的线格式、包类型与语义互不兼容，也不共享 packet 包。
+// stream 是可选能力：客户端在连接后通过主连接声明支持，服务端可按需开启
+// （默认关闭）。协商成功后，双方通过 core 的独立 stream 端口建立一条
+// 点对点 TCP 通道；通道建立后只做字节转发，不经过消息队列。
 //
-// 角色：
-//   - Core：中继服务，负责认证、等待配对与双向转发；
-//   - Client：主动方 OpenStream / 被动方 AcceptStream；
-//   - Stream：实现 net.Conn 的字节流。
-//
-// 握手阶段并发上限、等待连接上限与停机行为见 WithMaxHandshakeConns、
-// WithMaxWaitingConns、WithWriteTimeout。
+// 服务端的协商与转发逻辑在 core 包，客户端 API 在 client 包。
+// 数据面握手包定义在 stream/packet。
 package stream

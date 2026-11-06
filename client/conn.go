@@ -131,6 +131,12 @@ func (cn *conn) readLoop() {
 		switch p := pkt.(type) {
 		case *packet.PongPacket:
 			// 心跳响应，无需处理
+		case *packet.StreamRequestPacket:
+			cn.client.dispatchStreamRequest(cn, p)
+			continue
+		case *packet.StreamAbortPacket:
+			cn.client.handleStreamAbort(p)
+			continue
 		case *packet.DisconnectPacket:
 			err = reasonToError(p.ReasonCode)
 			if err == nil {
@@ -168,6 +174,8 @@ func requestIDOf(pkt packet.Packet) uint64 {
 	case *packet.CommitOkPacket:
 		return p.RequestID
 	case *packet.DeclareRespPacket:
+		return p.RequestID
+	case *packet.StreamOpenOkPacket:
 		return p.RequestID
 	case *packet.ConnackPacket:
 		return 0

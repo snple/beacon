@@ -50,6 +50,35 @@ type CoreOptions struct {
 	// MaxRecordBytes 单条记录（payload + 元数据）上限
 	MaxRecordBytes uint32
 
+	// ===== stream =====
+	// StreamEnabled 是否启用点对点字节流能力。默认 false。
+	// 关闭时 CONNACK.StreamEnabled=0，新的 STREAM_OPEN 返回 StreamDisabled。
+	StreamEnabled bool
+	// StreamAdvertiseAddr 是告知客户端的 stream 端口地址；为空时使用监听器实际地址。
+	StreamAdvertiseAddr string
+	// StreamAcceptTimeout 目标客户端决定是否接受的最长时间。
+	StreamAcceptTimeout time.Duration
+	// StreamBindTimeout 数据面票据与绑定的有效期。
+	StreamBindTimeout time.Duration
+	// StreamHandshakeTimeout stream 端口等待首包的超时。
+	StreamHandshakeTimeout time.Duration
+	// StreamIdleTimeout 流空闲超时；0 表示不限。
+	StreamIdleTimeout time.Duration
+	// StreamWriteTimeout 单次转发写超时；0 表示只依赖 TCP 背压。
+	StreamWriteTimeout time.Duration
+	// StreamMaxPending 待建流上限（0 表示使用默认值，<0 表示不限制）。
+	StreamMaxPending int
+	// StreamMaxActive 活跃流上限（0 表示使用默认值，<0 表示不限制）。
+	StreamMaxActive int
+	// StreamMaxPerClient 单客户端参与（发起或接受）的待建+活跃流上限
+	// （0 表示使用默认值，<0 表示不限制）。
+	StreamMaxPerClient int
+	// StreamMaxHandshakeConnections stream 端口并发握手上限（0 表示使用默认值，<0 表示不限制）。
+	StreamMaxHandshakeConnections int
+	// StreamAllowAnySourceIP 允许数据面连接的源 IP 与主连接不同。默认 false，
+	// 即要求两者一致；主连接经过代理而数据面直连时才需要开启。
+	StreamAllowAnySourceIP bool
+
 	// ===== 会话 =====
 	// SessionTimeout 会话保留时长（秒）；0 表示断开即清理。
 	SessionTimeout       uint32
@@ -91,6 +120,15 @@ func NewCoreOptions() *CoreOptions {
 		MaxChannelsPerClient: 1024,
 		MaxChannelLength:     packet.MinChannelLength,
 		MaxRecordBytes:       1 << 20,
+
+		StreamEnabled:                 false,
+		StreamAcceptTimeout:           30 * time.Second,
+		StreamBindTimeout:             30 * time.Second,
+		StreamHandshakeTimeout:        10 * time.Second,
+		StreamMaxPending:              1024,
+		StreamMaxActive:               10000,
+		StreamMaxPerClient:            64,
+		StreamMaxHandshakeConnections: 512,
 
 		SessionTimeout:       86400,
 		SessionCheckInterval: 30 * time.Second,
@@ -144,6 +182,27 @@ func (o *CoreOptions) applyDefaults() {
 	if o.MaxRecordBytes == 0 {
 		o.MaxRecordBytes = def.MaxRecordBytes
 	}
+	if o.StreamAcceptTimeout == 0 {
+		o.StreamAcceptTimeout = def.StreamAcceptTimeout
+	}
+	if o.StreamBindTimeout == 0 {
+		o.StreamBindTimeout = def.StreamBindTimeout
+	}
+	if o.StreamHandshakeTimeout == 0 {
+		o.StreamHandshakeTimeout = def.StreamHandshakeTimeout
+	}
+	if o.StreamMaxPending == 0 {
+		o.StreamMaxPending = def.StreamMaxPending
+	}
+	if o.StreamMaxActive == 0 {
+		o.StreamMaxActive = def.StreamMaxActive
+	}
+	if o.StreamMaxPerClient == 0 {
+		o.StreamMaxPerClient = def.StreamMaxPerClient
+	}
+	if o.StreamMaxHandshakeConnections == 0 {
+		o.StreamMaxHandshakeConnections = def.StreamMaxHandshakeConnections
+	}
 	if o.SessionCheckInterval == 0 {
 		o.SessionCheckInterval = def.SessionCheckInterval
 	}
@@ -184,6 +243,14 @@ func (o *CoreOptions) Validate() error {
 	if o.MaxChannelLength < packet.MinChannelLength || o.MaxChannelLength > packet.MaxChannelLength {
 		return fmt.Errorf("maxChannelLength must be in [%d, %d], got %d",
 			packet.MinChannelLength, packet.MaxChannelLength, o.MaxChannelLength)
+	}
+	if o.StreamAcceptTimeout < 0 || o.StreamBindTimeout < 0 ||
+		o.StreamHandshakeTimeout < 0 || o.StreamIdleTimeout < 0 ||
+		o.StreamWriteTimeout < 0 {
+		return fmt.Errorf("stream timeouts must be >= 0")
+	}
+	if o.StreamMaxHandshakeConnections < 0 {
+		return fmt.Errorf("streamMaxHandshakeConnections must be >= 0, got %d", o.StreamMaxHandshakeConnections)
 	}
 	return nil
 }
@@ -267,6 +334,45 @@ func (o *CoreOptions) WithMaxChannelLength(n int) *CoreOptions {
 
 // WithMaxRecordBytes 设置单条记录大小上限
 func (o *CoreOptions) WithMaxRecordBytes(n uint32) *CoreOptions { o.MaxRecordBytes = n; return o }
+
+// WithStreamEnabled 设置是否启用 stream 能力（默认关闭）。
+func (o *CoreOptions) WithStreamEnabled(enabled bool) *CoreOptions {
+	o.StreamEnabled = enabled
+	return o
+}
+
+// WithStreamAdvertiseAddr 设置告知客户端的 stream 端口地址（为空时使用监听器实际地址）。
+func (o *CoreOptions) WithStreamAdvertiseAddr(addr string) *CoreOptions {
+	o.StreamAdvertiseAddr = addr
+	return o
+}
+
+// WithStreamTimeout 设置 stream 的接受、绑定、握手与空闲超时。
+func (o *CoreOptions) WithStreamTimeout(accept, bind, handshake, idle time.Duration) *CoreOptions {
+	o.StreamAcceptTimeout, o.StreamBindTimeout = accept, bind
+	o.StreamHandshakeTimeout, o.StreamIdleTimeout = handshake, idle
+	return o
+}
+
+// WithStreamWriteTimeout 设置单次转发写超时（0 表示只依赖 TCP 背压）。
+func (o *CoreOptions) WithStreamWriteTimeout(d time.Duration) *CoreOptions {
+	o.StreamWriteTimeout = d
+	return o
+}
+
+// WithStreamAllowAnySourceIP 允许数据面源 IP 与主连接不一致（默认要求一致）。
+func (o *CoreOptions) WithStreamAllowAnySourceIP(allow bool) *CoreOptions {
+	o.StreamAllowAnySourceIP = allow
+	return o
+}
+
+// WithStreamLimits 设置待建流、活跃流、单客户端流与握手上限。
+// 负数表示不限制（maxPending/maxActive）。
+func (o *CoreOptions) WithStreamLimits(maxPending, maxActive, maxPerClient, maxHandshake int) *CoreOptions {
+	o.StreamMaxPending, o.StreamMaxActive = maxPending, maxActive
+	o.StreamMaxPerClient, o.StreamMaxHandshakeConnections = maxPerClient, maxHandshake
+	return o
+}
 
 // WithSessionTimeout 设置会话保留时长（秒）；0 表示断开即清理。
 func (o *CoreOptions) WithSessionTimeout(seconds uint32) *CoreOptions {
