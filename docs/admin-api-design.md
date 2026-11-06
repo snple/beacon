@@ -119,8 +119,12 @@ func (c *Core) PushToClient(clientID, channel string, payload []byte, opts PushO
   因队列满被挤出的旧消息数（或新消息被丢弃）。
 - `PushToClient` 在目标不存在、channel 非法等情况下返回 error；channel 非法时 `PushResult.Reason`
   同样会带上原因码。
-- `PushOptions.Priority` 的零值是 Low，但**未显式设置时按 Medium 处理**；要显式使用 Low 请写成
+- 优先级只能通过 `WithPriority` 设置：未设置时按 Medium；要显式使用 Low 请写成
   `core.PushOptions{}.WithPriority(packet.PriorityLow)`。
+- `PushToClient` 要求目标已声明匹配该 channel 的过滤器，否则返回
+  `ErrTargetNotSubscribed`（`PushResult.Reason = NoMatch`）。
+- `Identity.AllowTargeted` 控制客户端是否允许定向投递；管理面 `Push`/`PushToClient`
+  走系统身份，不受该限制。
 - payload 与 headers 会被拷贝，调用方可以复用缓冲区。
 
 ## 不提供的操作
@@ -166,11 +170,12 @@ type ConnectionHandler interface {
 | `WithPushRateLimit(rate, burst)` | 不限 | 每客户端发布速率 |
 | `WithConnectionRateLimit(rate, burst)` | 不限 | 连接建立速率 |
 | `WithMaxHandshakeConnections(n)` | 512 | 认证前并发连接上限 |
-| `WithMaxClients(n)` | 10000 | 在线连接上限 |
+| `WithMaxClients(n)` | 10000 | 在线连接上限（握手阶段原子预占，不会超卖） |
 | `WithMaxSessions(n)` | 10000 | 会话总数上限（含离线保留；<0 = 不限） |
 | `WithMaxInflightBytes(n)` | 256 MiB | 全局在途消息字节上限（<0 = 不限） |
 | `WithWaitLimit(max)` | 300s | 长轮询时长上限 |
-| `WithMaxRecordBytes(n)` | 1 MiB | 单条记录 payload 上限 |
+| `WithMaxBatch(n)` | 16 | 单次 PUSH 记录数上限（1..128） |
+| `WithMaxRecordBytes(n)` | 1 MiB | 单条记录上限（payload + channel/target/source/headers） |
 | `WithSessionTimeout(seconds)` | 86400s | 会话保留时长（0 = 断开即清理） |
 | `WithNoProgressLimits(soft, hard)` | 4 / 16 | 无进展 pull 的惩罚阈值（0 = 关闭） |
 | `WithUncommittedTimeout(d)` | 关闭 | delivered 长期未确认超时 |

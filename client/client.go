@@ -21,6 +21,10 @@ type Client struct {
 	mu      sync.RWMutex
 	conn    *conn
 	connack *packet.ConnackPacket
+	// assignedID 是服务端在 CONNACK 中分配的 ClientID（可能覆盖配置值）。
+	assignedID string
+	// limits 是最近一次 DECLARE_RESP 公布的配额。
+	limits *packet.Limits
 
 	reqSeq atomic.Uint64
 
@@ -72,13 +76,27 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 func New() (*Client, error) { return NewWithOptions(NewClientOptions()) }
 
 // OnSessionReset 设置会话重置回调（SessionID 变化时触发）。
-func (c *Client) OnSessionReset(fn func(prev, next uint64)) { c.onSessionReset = fn }
+func (c *Client) OnSessionReset(fn func(prev, next uint64)) {
+	c.mu.Lock()
+	c.onSessionReset = fn
+	c.mu.Unlock()
+}
+
+// sessionResetCallback 返回当前回调（并发安全）。
+func (c *Client) sessionResetCallback() func(prev, next uint64) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.onSessionReset
+}
 
 // ClientID 返回服务端分配的客户端 ID。
 func (c *Client) ClientID() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.connack != nil {
+	if c.assignedID != "" {
+		return c.assignedID
+	}
+	if c.connack != nil && c.connack.AssignedClientID != "" {
 		return c.connack.AssignedClientID
 	}
 	return c.opts.ClientID
@@ -106,7 +124,9 @@ func (c *Client) Connect() error { return c.ConnectContext(context.Background())
 
 // ConnectWithDialer 使用指定拨号器建立连接。
 func (c *Client) ConnectWithDialer(d Dialer) error {
+	c.mu.Lock()
 	c.opts.Dialer = d
+	c.mu.Unlock()
 	return c.ConnectContext(context.Background())
 }
 
@@ -128,8 +148,11 @@ func (c *Client) ConnectContext(ctx context.Context) error {
 }
 
 func (c *Client) dial() (net.Conn, error) {
-	if c.opts.Dialer != nil {
-		return c.opts.Dialer.Dial()
+	c.mu.RLock()
+	custom := c.opts.Dialer
+	c.mu.RUnlock()
+	if custom != nil {
+		return custom.Dial()
 	}
 	if hasWSScheme(c.opts.Address) {
 		d := &WSDialer{
@@ -168,9 +191,6 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	connect.MaxPacketSize = c.opts.MaxPacketSize
 	connect.AuthMethod = c.opts.AuthMethod
 	connect.AuthData = c.opts.AuthData
-	for _, ch := range c.opts.Channels {
-		connect.Channels = append(connect.Channels, packet.ChannelDecl{Channel: ch})
-	}
 
 	if d := c.opts.ConnectTimeout; d > 0 {
 		_ = nc.SetDeadline(time.Now().Add(d))
@@ -202,10 +222,6 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	if connack.ServerMaxPacketSize > 0 && connack.ServerMaxPacketSize < cn.maxPacketSize {
 		cn.maxPacketSize = connack.ServerMaxPacketSize
 	}
-	if connack.AssignedClientID != "" {
-		c.opts.ClientID = connack.AssignedClientID
-	}
-
 	if c.closed.Load() {
 		cn.close(ErrClientClosed)
 		return ErrClientClosed
@@ -216,6 +232,10 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	c.mu.Lock()
 	c.conn = cn
 	c.connack = connack
+	if connack.AssignedClientID != "" {
+		// 不修改 opts（构造后视为只读），避免与并发读取竞争。
+		c.assignedID = connack.AssignedClientID
+	}
 	closedAfterAssign := c.closed.Load()
 	c.mu.Unlock()
 
@@ -228,8 +248,8 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	if prevSession != 0 && prevSession != connack.SessionID {
 		// 会话被重建：本地未确认状态作废
 		c.dropLocalUncommitted()
-		if c.onSessionReset != nil {
-			c.onSessionReset(prevSession, connack.SessionID)
+		if fn := c.sessionResetCallback(); fn != nil {
+			fn(prevSession, connack.SessionID)
 		}
 	}
 
@@ -250,6 +270,15 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		zap.Bool("sessionPresent", connack.SessionPresent),
 		zap.Uint32("pending", connack.Pending[0]+connack.Pending[1]+connack.Pending[2]),
 		zap.Uint32("delivered", connack.Delivered))
+
+	// 订阅声明统一由 DECLARE 承担（CONNECT 不再携带）：每次建连后重新声明，
+	// 这样 CleanSession 清空或被按新身份过滤掉的声明都会在重连后恢复。
+	if len(c.opts.Channels) > 0 {
+		if _, err := c.Declare(c.ctx, c.opts.Channels...); err != nil {
+			cn.close(err)
+			return err
+		}
+	}
 	return nil
 }
 

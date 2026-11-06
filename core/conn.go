@@ -19,6 +19,20 @@ var errNoProgress = errors.New("client keeps pulling without commit")
 // errSessionStale 表示连接已不是会话的当前连接（被接管）。
 var errSessionStale = ErrSessionTakenOver
 
+// protocolError 表示对端违反了协议（非法包类型、非法时序）。
+//
+// serve 会据此向对端发送 DISCONNECT(reason) 再关闭，而不是静默断开。
+type protocolError struct {
+	reason packet.ReasonCode
+	msg    string
+}
+
+func (e *protocolError) Error() string { return e.msg }
+
+func newProtocolError(reason packet.ReasonCode, msg string) error {
+	return &protocolError{reason: reason, msg: msg}
+}
+
 // conn 表示单次网络连接。
 type conn struct {
 	core   *Core
@@ -50,6 +64,9 @@ type conn struct {
 	registered   atomic.Bool
 
 	disconnect atomic.Pointer[packet.DisconnectPacket]
+
+	// endReason 记录连接结束的原因码，用于 OnDisconnect 钩子与统计。
+	endReason atomic.Uint32
 
 	pullMu     sync.Mutex
 	served     int
@@ -136,10 +153,7 @@ func (cn *conn) serve() error {
 
 		pkt, size, err := packet.ReadPacketWithSize(cn.nc, cn.readMaxPacketSize)
 		if err != nil {
-			var tooLarge *packet.PacketTooLargeError
-			if errors.As(err, &tooLarge) {
-				cn.terminate(packet.ReasonPacketTooLarge, true)
-			}
+			cn.classifyReadError(err)
 			return err
 		}
 
@@ -149,15 +163,56 @@ func (cn *conn) serve() error {
 		}
 
 		if err := cn.handlePacket(pkt); err != nil {
+			var pe *protocolError
 			switch {
+			case errors.As(err, &pe):
+				// 协议错误：显式通知对端后关闭，而不是让对端只看到 EOF。
+				cn.setEndReason(pe.reason)
+				cn.terminate(pe.reason, true)
 			case errors.Is(err, errSessionStale):
+				cn.setEndReason(packet.ReasonSessionTakenOver)
 				cn.terminate(packet.ReasonSessionTakenOver, true)
 			case errors.Is(err, errNoProgress):
+				cn.setEndReason(packet.ReasonCommitRequired)
 				cn.terminate(packet.ReasonCommitRequired, true)
+			default:
+				// 写失败等非协议错误：记录原因，避免被当成心跳超时。
+				if cn.endReasonCode() == 0 {
+					cn.setEndReason(packet.ReasonUnspecifiedError)
+				}
 			}
 			return err
 		}
 	}
+}
+
+// classifyReadError 区分读取失败的原因：分帧/解码错误需要显式通知对端，
+// 心跳超时与对端正常关闭则只记录原因。
+func (cn *conn) classifyReadError(err error) {
+	if cn.closed.Load() {
+		return
+	}
+
+	var tooLarge *packet.PacketTooLargeError
+	if errors.As(err, &tooLarge) {
+		// 帧级超限：整条连接不可继续（包边界不可信），属于连接级错误。
+		cn.setEndReason(packet.ReasonPacketTooLarge)
+		cn.terminate(packet.ReasonPacketTooLarge, true)
+		return
+	}
+
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		cn.setEndReason(packet.ReasonKeepAliveTimeout)
+		return
+	}
+
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return
+	}
+
+	cn.setEndReason(packet.ReasonMalformedPacket)
+	cn.terminate(packet.ReasonMalformedPacket, true)
 }
 
 func (cn *conn) readTimeout() time.Duration {
@@ -184,11 +239,14 @@ func (cn *conn) handlePacket(pkt packet.Packet) error {
 		return cn.handlePing(p)
 	case *packet.DisconnectPacket:
 		return cn.handleDisconnect(p)
-	case *packet.ConnectPacket:
-		return packet.ErrInvalidPacketType
 	default:
-		cn.core.logger.Debug("unexpected packet", zap.String("type", pkt.Type().String()))
-		return nil
+		// 客户端发送了服务端方向的包（CONNACK/PUSH_OK/...）或重复的 CONNECT：
+		// 这是协议错误，必须显式 DISCONNECT 而不是静默忽略。
+		cn.core.logger.Debug("unexpected packet",
+			zap.String("type", pkt.Type().String()),
+			zap.String("remote", cn.remoteAddr))
+		return newProtocolError(packet.ReasonProtocolError,
+			"unexpected packet type: "+pkt.Type().String())
 	}
 }
 
@@ -208,7 +266,7 @@ func (cn *conn) handlePing(p *packet.PingPacket) error {
 	if err := cn.checkOwner(); err != nil {
 		return err
 	}
-	return cn.writePacket(packet.NewPongPacket(p.Seq, p.Timestamp, 0))
+	return cn.writePacket(packet.NewPongPacket(p.Seq, p.Timestamp))
 }
 
 func (cn *conn) handleDisconnect(p *packet.DisconnectPacket) error {
@@ -221,9 +279,20 @@ func (cn *conn) lastDisconnect() *packet.DisconnectPacket {
 	return cn.disconnect.Load()
 }
 
+// setEndReason 记录连接结束原因。
+func (cn *conn) setEndReason(reason packet.ReasonCode) {
+	cn.endReason.Store(uint32(reason))
+}
+
+// endReasonCode 返回记录的连接结束原因（0 表示未记录）。
+func (cn *conn) endReasonCode() packet.ReasonCode {
+	return packet.ReasonCode(cn.endReason.Load())
+}
+
 // terminate 由服务端主动关闭连接：先发 DISCONNECT 再关闭。
 func (cn *conn) terminate(reason packet.ReasonCode, suppressWill bool) {
 	cn.serverBy.Store(true)
+	cn.setEndReason(reason)
 	select {
 	case <-cn.ctx.Done():
 	default:
@@ -413,6 +482,61 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 	return plan
 }
 
+// responseBudget 返回本连接可发送的最大响应帧字节数（0 表示不限制）。
+func (cn *conn) responseBudget() int {
+	if cn.maxPacketSize == 0 {
+		return 0
+	}
+	return int(cn.maxPacketSize)
+}
+
+// pushResultSize 是 PUSH_OK 中单条结果的编码大小。
+const pushResultSize = 1 + packet.PacketIDSize + 4 + 4
+
+// pushOkOverhead 是 PUSH_OK 的固定头 + RequestID + Count。
+const pushOkOverhead = 5 + 8 + 2
+
+// trimPushResults 把结果裁剪到不超过对端声明的大小，至少保留一条。
+//
+// 失败项极多时（例如整批 rejected）逐条回显会超过小缓冲客户端的 MaxPacketSize，
+// 此时写包失败将被迫断连；裁剪后仍能传达"本批失败"以及首条原因。
+func trimPushResults(results []packet.PushResult, budget int) []packet.PushResult {
+	if budget <= 0 || len(results) <= 1 {
+		return results
+	}
+	max := (budget - pushOkOverhead) / pushResultSize
+	if max < 1 {
+		max = 1
+	}
+	if len(results) <= max {
+		return results
+	}
+	return results[:max]
+}
+
+// declareRespOverhead 是 DECLARE_RESP 的固定头 + 固定字段（不含 Results）。
+const declareRespOverhead = 5 + 8 + 2 + 2 + 12 + 4 + 4 + 2 + 4 + 4 + 2
+
+// trimDeclareResults 把失败项裁剪到不超过对端声明的大小，至少保留一条。
+func trimDeclareResults(results []packet.ChannelResult, budget int) []packet.ChannelResult {
+	if budget <= 0 || len(results) <= 1 {
+		return results
+	}
+	size := declareRespOverhead
+	keep := 0
+	for _, r := range results {
+		size += 2 + len(r.Channel) + 1
+		if size > budget && keep > 0 {
+			break
+		}
+		keep++
+	}
+	if keep < 1 {
+		keep = 1
+	}
+	return results[:keep]
+}
+
 // pullResponseOverhead 是 PULL_OK 的固定头 + 最小包体大小。
 const pullResponseOverhead = 5 + 44
 
@@ -510,12 +634,26 @@ func (cn *conn) applyPlan(plan *pullPlan) {
 	}
 }
 
+// stalePlan 校验计划是否仍属于当前会话状态。
+//
+// 写出是异步的：期间连接可能被同 ClientID 的新连接接管（fencing），
+// 或会话被 CleanSession 重置。任一情况都不允许旧连接再推进 served/delivered。
+func (cn *conn) stalePlan(plan *pullPlan) error {
+	if !cn.client.owns(cn) {
+		return errSessionStale
+	}
+	if cn.client.resetEpoch.Load() != plan.epoch {
+		return errSessionStale
+	}
+	return nil
+}
+
 // abortPlan 在写失败或被接管后回滚。
 //
 // 若会话已被 CleanSession 重置，则不回滚：把已取出的消息写回新会话会复活
 // 本应被清理的数据，此时只释放引用。
 func (cn *conn) abortPlan(plan *pullPlan) {
-	if cn.client.resetEpoch.Load() != plan.epoch {
+	if cn.stalePlan(plan) != nil {
 		cn.discardPlan(plan)
 		return
 	}
@@ -585,11 +723,11 @@ func (cn *conn) handlePull(p *packet.PullPacket) error {
 		cn.pullInflight.Store(false)
 		return err
 	}
-	// 写出期间会话可能被 CleanSession 重置：旧连接不得把消息写回已清理的会话。
-	if cn.client.resetEpoch.Load() != plan.epoch {
+	// 写出期间可能被接管或被 CleanSession 重置：旧连接不得再推进会话状态。
+	if err := cn.stalePlan(plan); err != nil {
 		cn.discardPlan(plan)
 		cn.pullInflight.Store(false)
-		return errSessionStale
+		return err
 	}
 	cn.applyPlan(plan)
 	cn.pullInflight.Store(false)
@@ -656,7 +794,7 @@ func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
 				cn.abortPlan(plan)
 				return
 			}
-			if cn.client.resetEpoch.Load() != plan.epoch {
+			if err := cn.stalePlan(plan); err != nil {
 				cn.discardPlan(plan)
 				return
 			}

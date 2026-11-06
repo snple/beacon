@@ -245,3 +245,43 @@ func TestChannelLengthLimit(t *testing.T) {
 		t.Fatal("filter over hard cap should be invalid")
 	}
 }
+
+// "$" 前缀保留给 broker：通配符过滤器不得覆盖它，只有显式 "$" 过滤器命中。
+func TestReservedChannelNamespace(t *testing.T) {
+	cases := []struct {
+		filter, name string
+		want         bool
+	}{
+		{"**", "$sys/event", false},
+		{"*", "$sys", false},
+		{"*/*", "$sys/event", false},
+		{"**", "normal/x", true},
+		{"$sys/**", "$sys/event", true},
+		{"$sys/*", "$sys/event", true},
+		{"$sys/event", "$sys/event", true},
+		{"a/**", "$sys/event", false},
+	}
+	for _, c := range cases {
+		if got := MatchChannel(c.filter, c.name); got != c.want {
+			t.Errorf("MatchChannel(%q, %q) = %v, want %v", c.filter, c.name, got, c.want)
+		}
+	}
+
+	// ACL：通配符授权不覆盖保留命名空间。
+	if FilterSubsumes("**", "$sys/event") {
+		t.Error(`FilterSubsumes("**", "$sys/event") must be false`)
+	}
+	if !FilterSubsumes("$sys/**", "$sys/event") {
+		t.Error(`FilterSubsumes("$sys/**", "$sys/event") must be true`)
+	}
+
+	if !IsReservedChannel("$sys/x") || IsReservedChannel("sys/x") {
+		t.Error("IsReservedChannel misclassified a channel")
+	}
+	if ValidateClientChannelName("$sys/x", MaxChannelLength) {
+		t.Error("client must not publish to reserved channels")
+	}
+	if !ValidateClientChannelName("sys/x", MaxChannelLength) {
+		t.Error("normal channel should be accepted")
+	}
+}

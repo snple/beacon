@@ -38,12 +38,11 @@ func (p *PingPacket) decode(r io.Reader, header FixedHeader) error {
 type PongPacket struct {
 	Seq  uint32 // 序号，回显 Ping 的序号
 	Echo uint64 // 回显 Ping 的时间戳
-	Load uint8  // 服务器负载 (0-100%)
 }
 
 // NewPongPacket 创建新的 PONG 包
-func NewPongPacket(seq uint32, echo uint64, load uint8) *PongPacket {
-	return &PongPacket{Seq: seq, Echo: echo, Load: load}
+func NewPongPacket(seq uint32, echo uint64) *PongPacket {
+	return &PongPacket{Seq: seq, Echo: echo}
 }
 
 func (p *PongPacket) Type() PacketType { return PONG }
@@ -52,24 +51,18 @@ func (p *PongPacket) encode(w io.Writer) error {
 	if err := EncodeUint32(w, p.Seq); err != nil {
 		return err
 	}
-	if err := EncodeUint64(w, p.Echo); err != nil {
-		return err
-	}
-	return WriteByte(w, p.Load)
+	return EncodeUint64(w, p.Echo)
 }
 
 func (p *PongPacket) decode(r io.Reader, header FixedHeader) error {
-	if header.Remaining != 13 {
+	if header.Remaining != 12 {
 		return ErrMalformedPacket
 	}
 	var err error
 	if p.Seq, err = DecodeUint32(r); err != nil {
 		return err
 	}
-	if p.Echo, err = DecodeUint64(r); err != nil {
-		return err
-	}
-	p.Load, err = ReadByte(r)
+	p.Echo, err = DecodeUint64(r)
 	return err
 }
 

@@ -17,6 +17,32 @@ func ValidateClientID(id string) bool {
 	})
 }
 
+// ReservedChannelPrefix 是 broker 内部 channel 的保留前缀。
+const ReservedChannelPrefix = "$"
+
+// IsReservedChannel 报告 name 是否落在 broker 内部保留的 "$" 命名空间。
+//
+// 客户端不得发布到或声明该前缀的 channel：它们由 broker 内部产生
+// （例如系统事件），允许客户端参与会破坏其可信性。
+func IsReservedChannel(name string) bool {
+	return strings.HasPrefix(name, ReservedChannelPrefix)
+}
+
+// ValidateClientChannelName 校验客户端可发布/可声明的 channel 名：
+// 在 ValidateChannelNameLimit 基础上额外禁止保留前缀。
+func ValidateClientChannelName(name string, maxLen int) bool {
+	return !IsReservedChannel(name) && ValidateChannelNameLimit(name, maxLen)
+}
+
+// ValidateClientChannelFilter 校验客户端可声明的过滤器：
+// 在 ValidateChannelFilterLimit 基础上额外禁止保留前缀。
+//
+// "*" / "**" 这类通配符本身不落在保留命名空间，但仍可用于声明全部
+// 公开 channel；是否覆盖 "$" 由 ACL 决定。
+func ValidateClientChannelFilter(filter string, maxLen int) bool {
+	return !IsReservedChannel(filter) && ValidateChannelFilterLimit(filter, maxLen)
+}
+
 // ValidateChannelName 校验发布用的 channel 名。
 //
 // 长度按协议硬上限 MaxChannelLength 校验；服务端应使用
@@ -100,6 +126,9 @@ func ValidateChannelFilterLimit(filter string, maxLen int) bool {
 
 // MatchChannel 检查 channel 名是否匹配过滤器。
 // filter 可含通配符；name 不允许含通配符。
+//
+// 与 MQTT 一致：首层是通配符（"*" 或 "**"）的过滤器不匹配 "$" 开头的
+// 保留 channel，只有显式以 "$" 开头的过滤器才能命中它们。
 func MatchChannel(filter, name string) bool {
 	if filter == name {
 		return true
@@ -107,6 +136,10 @@ func MatchChannel(filter, name string) bool {
 
 	filterParts := strings.Split(filter, "/")
 	nameParts := strings.Split(name, "/")
+
+	if len(filterParts) > 0 && isFirstLevelWildcard(filterParts[0]) && isReservedName(nameParts) {
+		return false
+	}
 
 	for i, fp := range filterParts {
 		if fp == ChannelWildcardMulti {
@@ -126,13 +159,27 @@ func MatchChannel(filter, name string) bool {
 	return len(filterParts) == len(nameParts)
 }
 
+func isFirstLevelWildcard(level string) bool {
+	return level == ChannelWildcardSingle || level == ChannelWildcardMulti
+}
+
+func isReservedName(parts []string) bool {
+	return len(parts) > 0 && strings.HasPrefix(parts[0], ReservedChannelPrefix)
+}
+
 // FilterSubsumes 报告允许模式 allow 是否覆盖请求模式 request 所能匹配的全部 channel。
 //
 // 用于 ACL：声明 "device/**" 时必须确认调用方被授权覆盖 "device/**"。
 // 注意 "a/**" 也会匹配 "a" 本身（** 可匹配零层）。
+//
+// 与 MatchChannel 一致：以通配符开头的 allow 不覆盖 "$" 保留命名空间。
 func FilterSubsumes(allow, request string) bool {
 	a := strings.Split(allow, "/")
 	r := strings.Split(request, "/")
+
+	if isFirstLevelWildcard(a[0]) && isReservedName(r) {
+		return false
+	}
 
 	var subsume func(ai, ri int) bool
 	subsume = func(ai, ri int) bool {

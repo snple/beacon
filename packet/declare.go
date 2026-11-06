@@ -63,9 +63,11 @@ func (p *DeclarePacket) decode(r io.Reader, _ FixedHeader) error {
 
 // Limits 服务端对单连接/单会话施加的上限。
 type Limits struct {
-	MaxPacketSize        uint32
-	MaxRecords           uint16
-	MaxWaitMs            uint32
+	MaxPacketSize uint32
+	// MaxRecords 单次 PULL 返回的最大记录数。
+	MaxRecords uint16
+	MaxWaitMs  uint32
+	// MaxBatch 单次 PUSH 允许的最大记录数。
 	MaxBatch             uint32
 	MaxChannelsPerClient uint16
 }
@@ -77,8 +79,12 @@ type ChannelResult struct {
 }
 
 // DeclareRespPacket DECLARE_RESP：声明结果与服务端信息。
+//
+// Results 只包含被拒绝的声明项；Accepted 是被接受的项数。
+// 整批因数量超限被拒绝时 Results 为空且 Accepted=0。
 type DeclareRespPacket struct {
 	RequestID uint64
+	Accepted  uint16
 	Results   []ChannelResult
 	Pending   [3]uint32
 	Delivered uint32
@@ -94,6 +100,9 @@ func (p *DeclareRespPacket) Type() PacketType { return DECLARE_RESP }
 
 func (p *DeclareRespPacket) encode(w io.Writer) error {
 	if err := EncodeUint64(w, p.RequestID); err != nil {
+		return err
+	}
+	if err := EncodeUint16(w, p.Accepted); err != nil {
 		return err
 	}
 	if len(p.Results) > MaxStringLength {
@@ -136,6 +145,9 @@ func (p *DeclareRespPacket) encode(w io.Writer) error {
 func (p *DeclareRespPacket) decode(r io.Reader, _ FixedHeader) error {
 	var err error
 	if p.RequestID, err = DecodeUint64(r); err != nil {
+		return err
+	}
+	if p.Accepted, err = DecodeUint16(r); err != nil {
 		return err
 	}
 	count, err := DecodeUint16(r)

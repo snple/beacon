@@ -7,7 +7,6 @@ import (
 
 var (
 	ErrMalformedPacket   = errors.New("malformed packet")
-	ErrInvalidQoS        = errors.New("invalid QoS level")
 	ErrInvalidPacketType = errors.New("invalid packet type")
 )
 

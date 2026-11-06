@@ -6,9 +6,6 @@ package packet
 // 与 v2/v3 完全二进制不兼容。
 const ProtocolVersion uint8 = 4
 
-// ProtocolName 协议名称
-const ProtocolName = "MX"
-
 // PacketType 数据包类型
 type PacketType uint8
 
@@ -117,7 +114,7 @@ const (
 	ReasonDisconnectWithWill ReasonCode = 0x02 // 带遗嘱消息断开
 
 	// ========== 路由类 (0x10-0x1F) ==========
-	ReasonNoMatch ReasonCode = 0x10 // 没有匹配的客户端
+	ReasonNoMatch ReasonCode = 0x10 // 没有匹配的客户端（含定向目标未订阅该 channel）
 
 	// ========== 通用错误 (0x80-0x83) ==========
 	ReasonUnspecifiedError    ReasonCode = 0x80 // 未指定错误
@@ -126,7 +123,8 @@ const (
 	ReasonImplementationError ReasonCode = 0x83 // 实现错误
 
 	// ========== 连接/认证错误 (0x84-0x87) ==========
-	ReasonUnsupportedProtocol     ReasonCode = 0x84 // 不支持的协议版本
+	// ReasonUnsupportedProtocol 仅为保留码：当前实现遇到非 v4 版本直接静默关闭。
+	ReasonUnsupportedProtocol     ReasonCode = 0x84 // 不支持的协议版本（保留）
 	ReasonClientIDNotValid        ReasonCode = 0x85 // 客户端 ID 无效
 	ReasonBadAuthMethodOrAuthData ReasonCode = 0x86 // 错误的认证方法或数据
 	ReasonNotAuthorized           ReasonCode = 0x87 // 未授权
@@ -148,12 +146,12 @@ const (
 	ReasonRateLimited    ReasonCode = 0x96 // 速率超限
 	ReasonQuotaExceeded  ReasonCode = 0x97 // 配额超限
 
-	// ========== 投递语义 (0xA0-0xA3) ==========
+	// ========== 投递语义 (0xA0-0xA4) ==========
 	ReasonTargetNotFound  ReasonCode = 0xA0 // 定向目标没有会话
 	ReasonCommitRequired  ReasonCode = 0xA1 // 需先 COMMIT 才能继续拉取
 	ReasonKicked          ReasonCode = 0xA2 // 被管理面踢下线
 	ReasonConsumerBacklog ReasonCode = 0xA3 // 消费端积压导致发布被拒
-	ReasonChannelInvalid  ReasonCode = 0xA4 // 消息中的 channel 非法
+	ReasonChannelInvalid  ReasonCode = 0xA4 // 消息中的 channel 非法（含保留前缀）
 )
 
 func (r ReasonCode) String() string {
@@ -240,6 +238,9 @@ const (
 	// 服务端实际生效的上限由 CoreOptions.MaxChannelLength 配置，取值必须落在
 	// [MinChannelLength, MaxChannelLength] 区间内。
 	MaxChannelLength = 1024
+	// MaxPushBatch 单次 PUSH 允许的最大记录数（协议硬上限）。
+	// 服务端可通过 MaxBatch 配置更小的值，默认 16。
+	MaxPushBatch = 128
 	// MaxPacketSize 协议硬上限。
 	MaxPacketSize = 268435456 // 256 MB
 )

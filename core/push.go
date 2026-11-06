@@ -33,7 +33,12 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 		return res
 	}
 
-	if !packet.ValidateChannelNameLimit(rec.Channel, c.options.MaxChannelLength) {
+	validChannel := packet.ValidateChannelNameLimit(rec.Channel, c.options.MaxChannelLength)
+	if validChannel && !system && packet.IsReservedChannel(rec.Channel) {
+		// "$" 前缀保留给 broker 内部 channel，客户端不可发布。
+		validChannel = false
+	}
+	if !validChannel {
 		res.Reason = packet.ReasonChannelInvalid
 		c.stats.MessagesRejected.Add(1)
 		if cl != nil {
@@ -55,7 +60,20 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 		return res
 	}
 
-	if size := int64(len(rec.Payload)); c.options.MaxRecordBytes > 0 && size > int64(c.options.MaxRecordBytes) {
+	// 定向投递需要单独的写权限：否则任何能写某 channel 的发布者都能
+	// 绕过目标的订阅与读权限直接投递。
+	if rec.Target != "" && !system && !c.canTarget(identity) {
+		res.Reason = packet.ReasonNotAuthorized
+		c.stats.MessagesRejected.Add(1)
+		if cl != nil {
+			cl.rejected.Add(1)
+		}
+		return res
+	}
+
+	// 单条记录上限覆盖元数据（channel/target/source/headers），
+	// 只检查 payload 会被超大 headers 绕过。
+	if size := int64(packet.RecordSize(rec)); c.options.MaxRecordBytes > 0 && size > int64(c.options.MaxRecordBytes) {
 		res.Reason = packet.ReasonPacketTooLarge
 		c.stats.MessagesRejected.Add(1)
 		if cl != nil {
@@ -100,6 +118,12 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 			c.stats.TargetMisses.Add(1)
 			c.stats.MessagesNoMatch.Add(1)
 			res.Reason = packet.ReasonTargetNotFound
+			return res
+		}
+		// 目标必须声明过能匹配该 channel 的过滤器，定向投递不是订阅后门。
+		if !target.matchesChannel(rec.Channel) {
+			c.stats.MessagesNoMatch.Add(1)
+			res.Reason = packet.ReasonNoMatch
 			return res
 		}
 		if c.overInflightLimit() {
@@ -201,52 +225,72 @@ func (c *Core) notifyClient(cl *Client) {
 }
 
 // handlePush 处理 PUSH 请求。
+//
+// PUSH_OK 只回显未完全成功的记录（失败或发生丢弃），全部成功时 Results 为空；
+// 这样响应大小与失败数量相关，而不是与批量大小相关。
 func (cn *conn) handlePush(p *packet.PushPacket) error {
 	if err := cn.checkOwner(); err != nil {
 		return err
 	}
 
 	cl := cn.client
+	opts := cn.core.options
 
-	if len(p.Records) > 0 && cn.core.options.MaxBytes > 0 {
+	if len(p.Records) > 0 && opts.MaxBatch > 0 && uint32(len(p.Records)) > opts.MaxBatch {
+		return cn.rejectBatch(p, packet.ReasonQuotaExceeded)
+	}
+
+	if len(p.Records) > 0 && opts.MaxBytes > 0 {
 		var total uint32
 		for i := range p.Records {
 			total += uint32(packet.RecordSize(&p.Records[i]))
 		}
-		if total > cn.core.options.MaxBytes {
-			resp := packet.NewPushOkPacket(p.RequestID)
-			for range p.Records {
-				resp.Results = append(resp.Results, packet.PushResult{
-					Reason: packet.ReasonQuotaExceeded,
-				})
-			}
-			cn.core.stats.MessagesRejected.Add(int64(len(p.Records)))
-			return cn.writePacket(resp)
+		if total > opts.MaxBytes {
+			return cn.rejectBatch(p, packet.ReasonQuotaExceeded)
 		}
 	}
 
 	// 发布速率限制
 	if cl.pushLimiter != nil && !cl.pushLimiter.Allow() {
-		resp := packet.NewPushOkPacket(p.RequestID)
-		for range p.Records {
-			resp.Results = append(resp.Results, packet.PushResult{
-				Reason: packet.ReasonRateLimited,
-			})
+		return cn.rejectBatch(p, packet.ReasonRateLimited)
+	}
+
+	wantAck := p.Flags&packet.PushFlagWantAck != 0
+	resp := packet.NewPushOkPacket(p.RequestID)
+	resp.Results = make([]packet.PushResult, 0, len(p.Records))
+	for i := range p.Records {
+		res := cn.core.pushRecord(cl, &p.Records[i], false)
+		// 全部成功且无丢弃时不回显，压缩响应体积。
+		if res.Reason == packet.ReasonSuccess && res.Dropped == 0 {
+			continue
 		}
-		cn.core.stats.MessagesRejected.Add(int64(len(p.Records)))
-		return cn.writePacket(resp)
+		resp.Results = append(resp.Results, res)
+	}
+
+	// WantAck=0：客户端不等待结果，不回包以节省一个 RTT 与带宽。
+	if !wantAck {
+		return nil
+	}
+	resp.Results = trimPushResults(resp.Results, cn.responseBudget())
+	return cn.writePacket(resp)
+}
+
+// rejectBatch 以指定原因拒绝整批记录，并逐条填充服务端生成的 ID。
+func (cn *conn) rejectBatch(p *packet.PushPacket, reason packet.ReasonCode) error {
+	cn.core.stats.MessagesRejected.Add(int64(len(p.Records)))
+	if p.Flags&packet.PushFlagWantAck == 0 {
+		return nil
 	}
 
 	resp := packet.NewPushOkPacket(p.RequestID)
 	resp.Results = make([]packet.PushResult, 0, len(p.Records))
-	for i := range p.Records {
-		resp.Results = append(resp.Results, cn.core.pushRecord(cl, &p.Records[i], false))
+	for range p.Records {
+		resp.Results = append(resp.Results, packet.PushResult{
+			Reason: reason,
+			ID:     packet.NewPacketID(),
+		})
 	}
-
-	// WantAck=0：客户端不等待结果，不回包以节省一个 RTT 与带宽。
-	if p.Flags&packet.PushFlagWantAck == 0 {
-		return nil
-	}
+	resp.Results = trimPushResults(resp.Results, cn.responseBudget())
 	return cn.writePacket(resp)
 }
 

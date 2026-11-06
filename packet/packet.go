@@ -9,7 +9,7 @@ import (
 
 // minRemainingLength 各包类型所需的最小 Remaining Length。
 var minRemainingLength = map[PacketType]uint32{
-	CONNECT:      27, // Version(1)+CleanSession(1)+ClientID(2)+KeepAlive(2)+MaxPacketSize(4)+WillFlags(1)+WillChannel(2)+WillPayload(4)+WillHeaders(2)+AuthMethod(2)+AuthData(4)+ChannelCount(2)
+	CONNECT:      25, // Version(1)+CleanSession(1)+ClientID(2)+KeepAlive(2)+MaxPacketSize(4)+WillFlags(1)+WillChannel(2)+WillPayload(4)+WillHeaders(2)+AuthMethod(2)+AuthData(4)
 	CONNACK:      46, // SessionPresent(1)+ReasonCode(1)+ClientID(2)+MaxPacketSize(4)+KeepAlive(2)+SessionID(8)+Pending(12)+Delivered(4)+OldestUncommitted(12)
 	PUSH:         11, // RequestID(8)+Flags(1)+Count(2)
 	PUSH_OK:      10, // RequestID(8)+Count(2)
@@ -18,10 +18,10 @@ var minRemainingLength = map[PacketType]uint32{
 	COMMIT:       10, // RequestID(8)+Count(2)
 	COMMIT_OK:    26, // RequestID(8)+Committed(2)+Pending(12)+Delivered(4)
 	PING:         12, // Seq(4)+Timestamp(8)
-	PONG:         13, // Seq(4)+Echo(8)+Load(1)
+	PONG:         12, // Seq(4)+Echo(8)
 	DISCONNECT:   2,  // ReasonCode(1)+Flags(1)
 	DECLARE:      10, // RequestID(8)+Count(2)
-	DECLARE_RESP: 42, // RequestID(8)+Count(2)+Pending(12)+Delivered(4)+limits(16)
+	DECLARE_RESP: 44, // RequestID(8)+Accepted(2)+Count(2)+Pending(12)+Delivered(4)+limits(16)
 }
 
 // Packet 数据包接口

@@ -150,10 +150,12 @@ func decodeRecord(r io.Reader) (*Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(headers) > 0 {
-		rec.Headers = headers
-		rec.Flags |= recordFlagHasHeaders
+	// HasHeaders 位必须与实际 headers 一致，否则不同实现可能对同一字节流
+	// 产生不同解释（例如把 map 内容当作 payload 前缀）。
+	if flags&recordFlagHasHeaders != 0 != (len(headers) > 0) {
+		return nil, fmt.Errorf("%w: HasHeaders flag does not match headers", ErrMalformedPacket)
 	}
+	rec.Headers = headers
 
 	if rec.Payload, err = DecodeBytes32(r); err != nil {
 		return nil, err

@@ -19,6 +19,9 @@ type Identity struct {
 	ReadChannels []string
 	// WriteChannels 允许发布的 channel 过滤器。
 	WriteChannels []string
+	// AllowTargeted 允许定向投递（Record.Target 非空）。
+	// 定向投递跳过 channel 匹配，直接写入目标队列，默认应保持关闭。
+	AllowTargeted bool
 }
 
 // Clone 深拷贝身份。
@@ -29,6 +32,7 @@ func (i *Identity) Clone() *Identity {
 	out := &Identity{
 		ID:            i.ID,
 		Name:          i.Name,
+		AllowTargeted: i.AllowTargeted,
 		ReadChannels:  append([]string(nil), i.ReadChannels...),
 		WriteChannels: append([]string(nil), i.WriteChannels...),
 	}

@@ -45,10 +45,11 @@ func main() {
 	defer func() { _ = worker.Close() }()
 
 	// 服务端推送（系统身份，不做写权限校验）
-	res := b.Push("jobs/image", []byte("resize"), core.PushOptions{Priority: packet.PriorityHigh})
+	res := b.Push("jobs/image", []byte("resize"), core.PushOptions{}.WithPriority(packet.PriorityHigh))
 	fmt.Printf("published id=%s matched=%d dropped=%d\n", res.ID.Hex()[:8], res.Matched, res.Dropped)
 
 	// 定向投递：跳过 channel 匹配，直接进入目标客户端的队列
+	// （目标必须已声明匹配 jobs/direct 的过滤器）
 	if _, err := b.PushToClient("worker-1", "jobs/direct", []byte("just for you"), core.PushOptions{}); err != nil {
 		log.Fatal(err)
 	}

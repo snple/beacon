@@ -20,6 +20,10 @@
 
 包体上限由 `MaxPacketSize`（服务端配置，默认 16 MiB）约束，协议硬上限 256 MiB。
 
+**帧级超限是连接级错误**：`Remaining Length` 超过本端上限时，包边界已不可信，
+无法继续解析后续字节，因此直接终止连接（服务端发 `DISCONNECT(PacketTooLarge)`），
+不会逐条返回 `PUSH_OK` 记录级的 `PacketTooLarge`。
+
 ---
 
 ## 2. 包类型
@@ -74,6 +78,9 @@ Flags 位：
 | 3 | HasHeaders | 携带 headers |
 | 4 | HasPriority | 发送方显式指定了优先级 |
 
+`HasHeaders` 必须与实际 `Headers` 一致：有 headers 时置位且条目数 > 0，
+无 headers 时不置位且条目数为 0。不一致的包按 `MalformedPacket` 处理。
+
 未设置 `HasPriority` 时，接收方按 **Medium** 处理。
 
 ---
@@ -110,8 +117,6 @@ CONNECT {
     WillHeaders    stringmap
     AuthMethod     string
     AuthData       bytes
-    ChannelCount   uint16
-    Channels       []string   // 初始声明（可选）
 }
 
 CONNACK {
@@ -133,6 +138,17 @@ CONNACK {
 服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，以全新会话建立连接
 （`SessionPresent=0`、新的 `SessionID`）。
 
+订阅声明**不属于 `CONNECT`**，统一由 `DECLARE` 全量替换：
+
+- 重连时不会携带过期声明；
+- 恢复会话时服务端保留既有声明，但会按**本次认证得到的身份重新校验**，
+  超出新身份授权范围的过滤器会被丢弃（`DECLARE_RESP` 不会回显这些项，
+  需要确认时重新 `DECLARE` 即可拿到失败原因）。
+
+**版本协商**：协议不做向后兼容。版本不是 `4`（或旧版布局根本无法解码）时，
+服务端**静默关闭连接**，不返回 `CONNACK`。`ReasonUnsupportedProtocol` 仅为保留码，
+当前实现不会发送。
+
 `CONNACK.KeepAlive` 是服务端最终采用的间隔（可能覆盖客户端在 `CONNECT` 中请求的值）。
 客户端必须用它计算发送 `PING` 的频率，否则在服务端配置更短时会周期性被判超时。
 
@@ -153,7 +169,7 @@ CONNACK {
 PUSH {
     RequestID uint64
     Flags     uint8   // bit0 = WantAck
-    Count     uint16
+    Count     uint16  // 不得超过服务端 MaxBatch（默认 16，上限 128）
     Records   []Record
 }
 
@@ -171,8 +187,25 @@ PUSH_OK {
 
 - 批量**不做整批原子**，逐条返回结果。
 - `WantAck=0` 时服务端**不发送** `PUSH_OK`（发送即可，无需等待）。
+- **`Results` 只回显未完全成功的记录**（失败或发生丢弃）：全部成功时 `Count=0`。
+  这样响应体积与失败数量相关，而不是与批量大小相关。
+- 记录数超过服务端 `MaxBatch`、批次编码后超过 `MaxBytes`、或触发发布限流时，
+  整批以 `QuotaExceeded` / `RateLimited` 拒绝，每条结果都带服务端生成的 `ID`。
+- 若失败项多到编码后超过对端 `CONNECT.MaxPacketSize`，服务端会**裁剪** `Results`
+  （至少保留一条，首条原因可信），避免因写包超限而断连。
 - 单条结果原因码：`Success`、`ChannelInvalid`、`NotAuthorized`、`PacketTooLarge`、
   `TargetNotFound`、`NoMatch`、`ConsumerBacklog`、`RateLimited`、`QuotaExceeded`。
+- `PacketTooLarge` 是**记录级**结果（单条记录超过 `MaxRecordBytes`）；帧级超限在
+  读取阶段就终止连接，见 §1。
+
+发布者权限：
+
+- 客户端不得发布到 `$` 开头的保留 channel（返回 `ChannelInvalid`），只有 broker 内部
+  可以产生这类消息。
+- **定向投递**（`Target` 非空）需要额外的发布权限；未配置认证器时默认允许，
+  配置认证器后要求 `Identity.AllowTargeted`。
+- 定向投递还要求**目标已声明匹配该 `Channel` 的过滤器**，否则返回 `NoMatch`：
+  定向投递不是绕过订阅/读权限的后门。
 
 ### 5.3 PULL / PULL_OK
 
@@ -247,15 +280,16 @@ DECLARE {
 
 DECLARE_RESP {
     RequestID uint64
-    Count     uint16
+    Accepted  uint16   // 被接受的声明数量
+    Count     uint16   // Results 条数（只含失败项）
     Results   []{ Channel string, Reason uint8 }
     Pending   [3]uint32
     Delivered uint32
     Limits {
         MaxPacketSize        uint32
-        MaxRecords           uint16
+        MaxRecords           uint16  // 单次 PULL 最大记录数
         MaxWaitMs            uint32
-        MaxBatch             uint32
+        MaxBatch             uint32  // 单次 PUSH 最大记录数
         MaxChannelsPerClient uint16
     }
 }
@@ -264,18 +298,30 @@ DECLARE_RESP {
 `DECLARE` 是**全量替换**且幂等。它**只影响之后的匹配**：已入队消息不会被清理，
 因此不能用它「退订」已有积压。
 
+响应压缩：`Results` **只回显被拒绝的项**，`Accepted` 给出接受数量（重复项按接受计）。
+这样可以避免回显大量成功项把响应撑过对端声明的 `MaxPacketSize`。
+声明数量超过 `MaxChannelsPerClient` 时**整批拒绝**（不部分生效），
+此时 `Accepted=0` 且 `Results` 只有一条 `QuotaExceeded`（`Channel` 为空）。
+失败项同样会按对端 `MaxPacketSize` 裁剪（至少保留一条）。
+
 ### 5.6 PING / PONG / DISCONNECT
 
 ```
 PING       { Seq uint32, Timestamp uint64 }
-PONG       { Seq uint32, Echo uint64, Load uint8 }
+PONG       { Seq uint32, Echo uint64 }
 DISCONNECT { ReasonCode uint8, Flags uint8 }   // bit0 = SuppressWill
 ```
 
 `DISCONNECT` 双向：
 
 - C→S：优雅关闭；`ReasonNormalDisconnect` 或 `DisconnectWithWill`，并抑制遗嘱。
-- S→C：终止通知；`SessionTakenOver`、`ServerShuttingDown`、`Kicked`、`CommitRequired`。
+- S→C：终止通知；`SessionTakenOver`、`ServerShuttingDown`、`Kicked`、`CommitRequired`、
+  `MalformedPacket`、`ProtocolError`、`PacketTooLarge`、`KeepAliveTimeout`。
+
+服务端在因**协议错误**（非法包类型、记录解码失败、包体超限）关闭连接前，
+一律先发送带对应原因码的 `DISCONNECT`，客户端据此区分「自己发错了」与「网络断开」。
+客户端向服务端发送服务端方向的包（如 `CONNACK`、`PULL_OK`）同样触发
+`DISCONNECT(ProtocolError)`。
 
 客户端收到 `SessionTakenOver` 时**不得自动重连**，否则两个同 ClientID 的实例会无限互踢。
 
@@ -286,11 +332,12 @@ DISCONNECT { ReasonCode uint8, Flags uint8 }   // bit0 = SuppressWill
 - 发布名：不含 `*`、`#`、`+`、`:`
 - 过滤器：`*` 匹配单层（必须独占一层），`**` 匹配零或多层（必须在末尾）
 - `**` 也匹配空后缀：`a/**` 匹配 `a`、`a/b`、`a/b/c`
-- `$` 前缀保留给 broker 内部 channel
+- `$` 前缀保留给 broker 内部 channel：客户端不得发布或声明 `$` 开头的名字
+  （发布返回 `ChannelInvalid`）；以通配符开头的过滤器（`*` / `**`）**不匹配**
+  `$` 开头的 channel，只有显式以 `$` 开头的过滤器才能命中
 - 长度：发布名与过滤器均不得超过服务端配置的上限，可配置范围 **256–1024 字节**
   （默认 256；线格式仍为 `uint16`）。超限时 `PUSH_OK` 返回 `ChannelInvalid`，
-  `DECLARE_RESP` 返回 `ChannelFilterInvalid`；`CONNECT` 中的初始声明若超限会被忽略，
-  需要逐项结果时请使用 `DECLARE`
+  `DECLARE_RESP` 返回 `ChannelFilterInvalid`
 
 ACL 使用「模式包含」判定：声明过滤器 `F` 时要求存在允许模式 `A` 使得 `A` 覆盖 `F` 的全部可匹配集合。
 
@@ -318,10 +365,13 @@ ACL 使用「模式包含」判定：声明过滤器 `F` 时要求存在允许�
 | `QueueCap`（pending 条数） | 10000 |
 | `MaxRecords` | 1000 |
 | `MaxBytes` | 1 MiB |
-| `MaxRecordBytes` | 1 MiB |
+| `MaxRecordBytes`（单条记录：payload + channel/target/source/headers） | 1 MiB |
 | `MaxWaitMs`（服务端裁剪上限） | 300s |
 | `MaxChannelsPerClient` | 1024 |
 | `MaxChannelLength`（channel 名/过滤器字节数） | 256（可配 256–1024） |
+| `MaxBatch`（单次 PUSH 记录数） | 16（上限 128） |
+| `MaxClients`（在线连接数） | 10000 |
+| `MaxHandshakeConnections`（认证前并发连接） | 512 |
 | `SessionTimeout`（离线会话保留时长） | 86400s（0 = 断开即清理） |
 | `MaxSessions`（含离线保留） | 10000 |
 | `MaxInflightBytes`（全局在途消息） | 256 MiB |

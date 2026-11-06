@@ -3,8 +3,11 @@ package core_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -430,7 +433,7 @@ func TestQueueFullDoesNotLeakInflight(t *testing.T) {
 	sub := newTestClient(t, addr, "sub-1", "ch/a")
 	ctx := context.Background()
 
-	res := b.Push("ch/a", []byte("high"), core.PushOptions{Priority: packet.PriorityHigh})
+	res := b.Push("ch/a", []byte("high"), core.PushOptions{}.WithPriority(packet.PriorityHigh))
 	if res.Matched != 1 {
 		t.Fatalf("first push should match: %+v", res)
 	}
@@ -439,7 +442,7 @@ func TestQueueFullDoesNotLeakInflight(t *testing.T) {
 	}
 
 	// 队列已满且新消息优先级更低 → 新消息被丢弃
-	res = b.Push("ch/a", []byte("low"), core.PushOptions{Priority: packet.PriorityLow})
+	res = b.Push("ch/a", []byte("low"), core.PushOptions{}.WithPriority(packet.PriorityLow))
 	if res.Matched != 0 || res.Dropped != 1 {
 		t.Fatalf("low-priority push should be dropped: %+v", res)
 	}
@@ -582,6 +585,13 @@ func assertDeclareChannel(t *testing.T, c *client.Client, ctx context.Context, f
 	res, err := c.Declare(ctx, filter)
 	if err != nil {
 		t.Fatalf("declare len %d: %v", len(filter), err)
+	}
+	// DECLARE_RESP 只回显失败项；接受时结果为空。
+	if want == packet.ReasonSuccess {
+		if len(res) != 0 {
+			t.Fatalf("declare len %d: expected no failures, got %+v", len(filter), res)
+		}
+		return
 	}
 	if len(res) != 1 || res[0].Reason != want {
 		t.Fatalf("declare len %d: got %+v, want reason %s", len(filter), res, want)
@@ -734,4 +744,160 @@ func waitClientDetached(t *testing.T, b *core.Core, clientID string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("client %q did not detach in time", clientID)
+}
+
+// MaxClients 必须在握手阶段原子预占，并发建连不能超卖。
+func TestMaxClientsNotOversold(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxClients(1))
+
+	const dials = 8
+	results := make(chan error, dials)
+	var wg sync.WaitGroup
+	var keepMu sync.Mutex
+	var keep []net.Conn
+	t.Cleanup(func() {
+		keepMu.Lock()
+		defer keepMu.Unlock()
+		for _, nc := range keep {
+			_ = nc.Close()
+		}
+	})
+
+	for i := 0; i < dials; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			nc, err := net.DialTimeout("tcp", addr, 3*time.Second)
+			if err != nil {
+				results <- err
+				return
+			}
+			// 成功的连接保持打开：关闭会释放在线名额，让后续握手被接受。
+			keepMu.Lock()
+			keep = append(keep, nc)
+			keepMu.Unlock()
+			_ = nc.SetDeadline(time.Now().Add(5 * time.Second))
+
+			connect := packet.NewConnectPacket(fmt.Sprintf("limit-%d", i))
+			connect.KeepAlive = 60
+			if err := packet.WritePacket(nc, connect, 0); err != nil {
+				results <- err
+				return
+			}
+			pkt, err := packet.ReadPacket(nc, 1<<20)
+			if err != nil {
+				results <- err
+				return
+			}
+			connack := pkt.(*packet.ConnackPacket)
+			if connack.ReasonCode == packet.ReasonSuccess {
+				results <- nil
+				return
+			}
+			results <- fmt.Errorf("rejected: %s", connack.ReasonCode)
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+
+	ok := 0
+	for err := range results {
+		if err == nil {
+			ok++
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("MaxClients=1 but %d connections were accepted", ok)
+	}
+}
+
+// 定向投递需要独立授权：未授予 AllowTargeted 的身份必须被拒绝。
+func TestTargetedPublishRequiresPermission(t *testing.T) {
+	var allow atomic.Bool
+	hooks := &core.Hooks{
+		Auth: core.AuthHandlerFunc(func(ctx *core.AuthContext) error {
+			ctx.Identity = &core.Identity{
+				ID:            ctx.ClientID,
+				ReadChannels:  []string{"**"},
+				WriteChannels: []string{"**"},
+				AllowTargeted: allow.Load(),
+			}
+			return nil
+		}),
+	}
+	_, addr := startCore(t, core.NewCoreOptions().WithHooks(hooks))
+
+	sub := newTestClient(t, addr, "acl-sub", "cmd/**")
+	pub := newTestClient(t, addr, "acl-pub")
+	ctx := context.Background()
+
+	err := pub.PushTo(ctx, "acl-sub", "cmd/x", []byte("v"), client.PushOptions{})
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Reason != packet.ReasonNotAuthorized {
+		t.Fatalf("expected NotAuthorized for targeted publish, got %v", err)
+	}
+
+	allow.Store(true)
+	// 身份在建连时确定，授权变化后必须重新建连。
+	pubAllowed := newTestClient(t, addr, "acl-pub-2")
+	if err := pubAllowed.PushTo(ctx, "acl-sub", "cmd/x", []byte("v"), client.PushOptions{}); err != nil {
+		t.Fatalf("targeted publish should be allowed: %v", err)
+	}
+	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("target should receive message, got %+v err=%v", msgs, err)
+	}
+}
+
+// 会话恢复时必须按本次身份重新校验保留的声明。
+func TestSessionDeclarationsRevalidatedOnReconnect(t *testing.T) {
+	var restricted atomic.Bool
+	hooks := &core.Hooks{
+		Auth: core.AuthHandlerFunc(func(ctx *core.AuthContext) error {
+			read := []string{"a/**"}
+			if restricted.Load() {
+				read = []string{"b/**"}
+			}
+			ctx.Identity = &core.Identity{
+				ID:            ctx.ClientID,
+				ReadChannels:  read,
+				WriteChannels: []string{"**"},
+			}
+			return nil
+		}),
+	}
+	b, addr := startCore(t, core.NewCoreOptions().WithHooks(hooks))
+
+	c := newTestClient(t, addr, "dev-1", "a/**")
+	info, err := b.GetClientInfo("dev-1")
+	if err != nil || len(info.Channels) != 1 {
+		t.Fatalf("channels before reconnect = %+v err=%v", info, err)
+	}
+	_ = c.Close()
+	waitClientDetached(t, b, "dev-1")
+
+	restricted.Store(true)
+	_ = newTestClient(t, addr, "dev-1")
+
+	info, err = b.GetClientInfo("dev-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Channels) != 0 {
+		t.Fatalf("declarations must be re-filtered by the new identity, got %v", info.Channels)
+	}
+}
+
+// DECLARE 数量超限时整批拒绝，返回单条紧凑错误。
+func TestDeclareOverLimitRejectedCompactly(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxChannelsPerClient(2))
+	c := newTestClient(t, addr, "dc-1")
+
+	res, err := c.Declare(context.Background(), "a/1", "a/2", "a/3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Reason != packet.ReasonQuotaExceeded {
+		t.Fatalf("expected single QuotaExceeded result, got %+v", res)
+	}
 }

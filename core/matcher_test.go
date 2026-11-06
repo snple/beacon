@@ -250,8 +250,8 @@ func BenchmarkMatcherExactOnly(b *testing.B) {
 		m.declare(fmt.Sprintf("dev/%d", i), decls(fmt.Sprintf("dev/%d", i)))
 	}
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		m.match("dev/5000")
 	}
 }
@@ -270,8 +270,8 @@ func BenchmarkMatcherWithWildcards(b *testing.B) {
 	m.declare("single", decls("dev/*/temp"))
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		m.match("dev/5000/temp")
 	}
 }

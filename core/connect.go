@@ -118,7 +118,10 @@ func (c *Core) handleConn(nc net.Conn) {
 	}
 
 	if connect.Version != packet.ProtocolVersion {
-		c.rejectConn(nc, packet.ReasonUnsupportedProtocol, "unsupported protocol version")
+		// 不向后兼容：非 v4 的包不做任何协商，直接静默关闭（不发 CONNACK）。
+		// 真正的旧版 CONNECT 通常在此之前就已因布局不同而解码失败。
+		c.logger.Debug("unsupported protocol version",
+			zap.String("remote", cn.remoteAddr), zap.Uint8("version", connect.Version))
 		return
 	}
 
@@ -151,7 +154,7 @@ func (c *Core) handleConn(nc net.Conn) {
 
 	// will 校验（在建立会话前做，避免无效 will 占用会话）
 	if connect.HasWill {
-		if !packet.ValidateChannelNameLimit(connect.WillChannel, c.options.MaxChannelLength) {
+		if !packet.ValidateClientChannelName(connect.WillChannel, c.options.MaxChannelLength) {
 			c.rejectConn(nc, packet.ReasonChannelNameInvalid, "invalid will channel")
 			return
 		}
@@ -168,15 +171,9 @@ func (c *Core) handleConn(nc net.Conn) {
 		}
 	}
 
-	// 无效的初始声明会被忽略，客户端可用 DECLARE 获取逐项结果。
-	var initialChannels []packet.ChannelDecl
-	if len(connect.Channels) > 0 {
-		initialChannels = c.filterChannels(identity, connect.Channels)
-	}
-
 	// 绑定会话（必要时接管）。会话状态在 registerMu 内一次性设置，
 	// 避免本连接在后续步骤中丢失所有权后仍覆盖新连接的状态。
-	cl, sessionPresent, oldConn, err := c.attachSession(clientID, connect, cn, identity, initialChannels)
+	cl, sessionPresent, oldConn, err := c.attachSession(clientID, connect, cn, identity)
 	if err != nil {
 		c.rejectConn(nc, packet.ReasonServerBusy, err.Error())
 		return
@@ -242,7 +239,8 @@ func (c *Core) handleConn(nc net.Conn) {
 		zap.Bool("sessionPresent", sessionPresent))
 
 	err = cn.serve()
-	if errors.Is(err, io.EOF) {
+	switch {
+	case errors.Is(err, io.EOF):
 		reason = packet.ReasonNormalDisconnect
 		if dp := cn.lastDisconnect(); dp != nil {
 			reason = dp.ReasonCode
@@ -250,8 +248,13 @@ func (c *Core) handleConn(nc net.Conn) {
 				suppressWill = true
 			}
 		}
-	} else if err != nil {
-		reason = packet.ReasonKeepAliveTimeout
+	default:
+		// 服务端主动终止（接管/超时/协议错误）时 serve 已记录真实原因。
+		if r := cn.endReasonCode(); r != 0 {
+			reason = r
+		} else if err != nil {
+			reason = packet.ReasonKeepAliveTimeout
+		}
 	}
 }
 
@@ -264,7 +267,6 @@ func (c *Core) attachSession(
 	connect *packet.ConnectPacket,
 	cn *conn,
 	identity *Identity,
-	channels []packet.ChannelDecl,
 ) (*Client, bool, *conn, error) {
 	c.registerMu.Lock()
 	defer c.registerMu.Unlock()
@@ -276,35 +278,41 @@ func (c *Core) attachSession(
 	var (
 		cl             *Client
 		sessionPresent bool
+		needSlot       bool
 	)
 
 	if existing != nil {
 		cl = existing
 		sessionPresent = true
-		// 仅当新增一个在线连接时才检查 MaxClients；接管不会增加在线数。
-		if c.options.MaxClients > 0 && cl.currentConn() == nil &&
-			c.stats.ClientsConnected.Load() >= int64(c.options.MaxClients) {
-			return nil, false, nil, ErrMaxClients
-		}
 		if connect.CleanSession {
 			sessionPresent = false
 		}
-		cl.setIdentity(identity)
+		needSlot = cl.currentConn() == nil
 	} else {
 		if c.options.MaxSessions > 0 && len(c.clients) >= c.options.MaxSessions {
 			return nil, false, nil, ErrMaxSessions
 		}
-		if c.options.MaxClients > 0 &&
-			c.stats.ClientsConnected.Load() >= int64(c.options.MaxClients) {
-			return nil, false, nil, ErrMaxClients
-		}
+		needSlot = true
 		cl = newClient(c, clientID)
-		cl.setIdentity(identity)
 		c.clientsMu.Lock()
 		c.clients[clientID] = cl
 		c.clientsMu.Unlock()
 		c.stats.ClientsTotal.Add(1)
 	}
+
+	// 在线名额在 registerMu 内预留，避免并发握手同时通过检查后超卖。
+	if needSlot {
+		if c.options.MaxClients > 0 && c.onlineConns >= int(c.options.MaxClients) {
+			if existing == nil {
+				c.removeClientLocked(cl)
+			}
+			return nil, false, nil, ErrMaxClients
+		}
+		c.onlineConns++
+	}
+
+	// 认证身份与本次连接绑定；即使恢复会话也以本次认证结果为准。
+	cl.setIdentity(identity)
 
 	old := cl.swapConn(cn)
 	if old != nil {
@@ -319,9 +327,9 @@ func (c *Core) attachSession(
 		cl.reset()
 	}
 
-	if len(channels) > 0 {
-		cl.replaceChannels(channels)
-	}
+	// 恢复会话时按本次认证得到的身份重新校验保留的声明：
+	// 上次连接允许的过滤器可能超出本次身份的授权范围。
+	cl.replaceChannels(c.filterChannels(identity, cl.declaredChannels()))
 
 	now := time.Now().UnixMilli()
 	cl.connectedAt.Store(now)
@@ -329,6 +337,16 @@ func (c *Core) attachSession(
 	cl.expiresAt.Store(0)
 
 	return cl, sessionPresent, old, nil
+}
+
+// removeClientLocked 移除刚创建但未能完成握手的会话。
+func (c *Core) removeClientLocked(cl *Client) {
+	c.clientsMu.Lock()
+	if cur, ok := c.clients[cl.ID]; ok && cur == cl {
+		delete(c.clients, cl.ID)
+	}
+	c.clientsMu.Unlock()
+	c.matcher.remove(cl.ID)
 }
 
 // detachConn 在连接结束时解绑会话，返回本连接是否仍是会话的所有者。
@@ -346,6 +364,13 @@ func (c *Core) detachConn(cl *Client, cn *conn) bool {
 		return false
 	}
 
+	// 释放 attachSession 预留的在线名额。
+	c.registerMu.Lock()
+	if c.onlineConns > 0 {
+		c.onlineConns--
+	}
+	c.registerMu.Unlock()
+
 	// 会话转入离线：Low 是尽力而为的消息，不保留在离线队列中。
 	if n := cl.mb.dropLow(); n > 0 {
 		c.stats.MessagesDropped.Add(int64(n))
@@ -361,6 +386,9 @@ func (c *Core) detachConn(cl *Client, cn *conn) bool {
 
 // filterChannels 过滤非法与未授权的声明。
 func (c *Core) filterChannels(identity *Identity, decls []packet.ChannelDecl) []packet.ChannelDecl {
+	if len(decls) == 0 {
+		return nil
+	}
 	if c.options.MaxChannelsPerClient > 0 && len(decls) > c.options.MaxChannelsPerClient {
 		decls = decls[:c.options.MaxChannelsPerClient]
 	}

@@ -254,9 +254,17 @@ func (n *trieNode) empty() bool {
 // collect 把匹配 name[pos:] 的客户端并入 out。
 //
 // pos > len(name) 表示所有层级都已消费完，此时该节点的 terminal 也命中。
+//
+// 与 packet.MatchChannel 一致：根节点的 "*" / "**" 分支不匹配 "$" 开头的
+// 保留 channel，只有显式以 "$" 开头的过滤器才命中。
 func (n *trieNode) collect(name string, pos int, out map[string]struct{}) map[string]struct{} {
+	root := pos == 0
+	reserved := root && name != "" && name[0] == packet.ReservedChannelPrefix[0]
+
 	// "**" 匹配零层或多层：匹配路径上的每个节点都可能挂着 multi 订阅。
-	out = mergeClients(out, n.multi)
+	if !reserved {
+		out = mergeClients(out, n.multi)
+	}
 
 	if pos > len(name) {
 		return mergeClients(out, n.terminal)
@@ -271,7 +279,7 @@ func (n *trieNode) collect(name string, pos int, out map[string]struct{}) map[st
 	if child := n.children[seg]; child != nil {
 		out = child.collect(name, next, out)
 	}
-	if n.single != nil {
+	if n.single != nil && !reserved {
 		out = n.single.collect(name, next, out)
 	}
 	return out

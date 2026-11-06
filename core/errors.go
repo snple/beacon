@@ -35,6 +35,8 @@ var (
 
 	// ErrTargetNotFound 定向投递的目标没有会话
 	ErrTargetNotFound = errors.New("target client not found")
+	// ErrTargetNotSubscribed 定向投递的目标没有声明匹配该 channel 的过滤器
+	ErrTargetNotSubscribed = errors.New("target has not subscribed to the channel")
 
 	// ErrNotAuthorized 未通过 ACL
 	ErrNotAuthorized = errors.New("not authorized")

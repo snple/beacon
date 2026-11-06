@@ -33,6 +33,7 @@ type CoreOptions struct {
 	QueueCap int // 单个客户端 pending 队列条数上限（0 表示不限制）
 
 	MaxRecords uint16 // 单次 PULL 的记录数上限（同时约束 delivered 长度）
+	MaxBatch   uint32 // 单次 PUSH 的记录数上限（1..packet.MaxPushBatch）
 	MaxBytes   uint32 // 单次 PULL / PUSH 的字节上限（0 表示使用默认值 1 MiB）
 
 	// MaxInflightBytes 全局在途消息字节上限（<0 表示不限制）
@@ -83,6 +84,7 @@ func NewCoreOptions() *CoreOptions {
 		QueueCap:         10000,
 		MaxInflightBytes: 256 << 20,
 		MaxRecords:       1000,
+		MaxBatch:         16,
 		MaxBytes:         1 << 20,
 
 		MaxWaitMs:            300000,
@@ -123,6 +125,9 @@ func (o *CoreOptions) applyDefaults() {
 	}
 	if o.MaxRecords == 0 {
 		o.MaxRecords = def.MaxRecords
+	}
+	if o.MaxBatch == 0 {
+		o.MaxBatch = def.MaxBatch
 	}
 	if o.MaxBytes == 0 {
 		o.MaxBytes = def.MaxBytes
@@ -166,6 +171,9 @@ func (o *CoreOptions) Validate() error {
 	}
 	if o.MaxRecords == 0 {
 		return fmt.Errorf("maxRecords must be > 0")
+	}
+	if o.MaxBatch > packet.MaxPushBatch {
+		return fmt.Errorf("maxBatch must be <= %d, got %d", packet.MaxPushBatch, o.MaxBatch)
 	}
 	if o.QueueCap < 0 {
 		return fmt.Errorf("queueCap must be >= 0")
@@ -228,6 +236,12 @@ func (o *CoreOptions) WithQueueCap(n int) *CoreOptions { o.QueueCap = n; return 
 
 // WithMaxRecords 设置单次 PULL 的记录数上限
 func (o *CoreOptions) WithMaxRecords(n uint16) *CoreOptions { o.MaxRecords = n; return o }
+
+// WithMaxBatch 设置单次 PUSH 的最大记录数（1..packet.MaxPushBatch，默认 16）。
+func (o *CoreOptions) WithMaxBatch(n uint32) *CoreOptions {
+	o.MaxBatch = n
+	return o
+}
 
 // WithMaxBytes 设置单次 PULL / PUSH 的字节上限
 func (o *CoreOptions) WithMaxBytes(n uint32) *CoreOptions { o.MaxBytes = n; return o }

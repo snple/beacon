@@ -1,6 +1,7 @@
 package core_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net"
 	"testing"
@@ -31,9 +32,6 @@ func dialRaw(t *testing.T, addr, clientID string, channels ...string) *rawConn {
 	connect := packet.NewConnectPacket(clientID)
 	connect.KeepAlive = 60
 	connect.MaxPacketSize = 1 << 20
-	for _, ch := range channels {
-		connect.Channels = append(connect.Channels, packet.ChannelDecl{Channel: ch})
-	}
 	r.send(connect)
 
 	resp, err := r.recv()
@@ -47,7 +45,36 @@ func dialRaw(t *testing.T, addr, clientID string, channels ...string) *rawConn {
 	if connack.ReasonCode != packet.ReasonSuccess {
 		t.Fatalf("connack reason: %s", connack.ReasonCode)
 	}
+
+	if len(channels) > 0 {
+		r.declare(channels...)
+	}
 	return r
+}
+
+// declare 发送 DECLARE 并等待 DECLARE_RESP（订阅声明不再随 CONNECT 发送）。
+func (r *rawConn) declare(channels ...string) *packet.DeclareRespPacket {
+	r.t.Helper()
+
+	decls := make([]packet.ChannelDecl, len(channels))
+	for i, ch := range channels {
+		decls[i] = packet.ChannelDecl{Channel: ch}
+	}
+	req := packet.NewDeclarePacket(uint64(time.Now().UnixNano()), decls)
+	r.send(req)
+
+	resp, err := r.recv()
+	if err != nil {
+		r.t.Fatalf("read declare resp: %v", err)
+	}
+	ok, valid := resp.(*packet.DeclareRespPacket)
+	if !valid {
+		r.t.Fatalf("expected DECLARE_RESP, got %s", resp.Type())
+	}
+	if len(ok.Results) > 0 {
+		r.t.Fatalf("declare rejected: %+v", ok.Results)
+	}
+	return ok
 }
 
 func (r *rawConn) send(pkt packet.Packet) {
@@ -166,8 +193,17 @@ func TestInvalidPriorityIsRejected(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	_ = rc.nc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// 服务端必须显式告知断开原因，而不是静默关闭。
+	pkt, err := rc.recv()
+	if err != nil {
+		t.Fatalf("expected DISCONNECT before close: %v", err)
+	}
+	dp, ok := pkt.(*packet.DisconnectPacket)
+	if !ok || dp.ReasonCode != packet.ReasonMalformedPacket {
+		t.Fatalf("expected DISCONNECT(MalformedPacket), got %s %+v", pkt.Type(), pkt)
+	}
 	if _, err := rc.recv(); err == nil {
-		t.Fatal("expected connection to be closed for malformed priority")
+		t.Fatal("expected connection to be closed after DISCONNECT")
 	}
 
 	// 服务端仍然存活，可接受新连接。
@@ -188,7 +224,6 @@ func TestPullHonorsClientMaxPacketSize(t *testing.T) {
 	connect := packet.NewConnectPacket("small-buf")
 	connect.KeepAlive = 60
 	connect.MaxPacketSize = 512
-	connect.Channels = []packet.ChannelDecl{{Channel: "big/ch"}}
 	if err := packet.WritePacket(nc, connect, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +235,11 @@ func TestPullHonorsClientMaxPacketSize(t *testing.T) {
 		t.Fatalf("connack: %s", connack.ReasonCode)
 	}
 
-	b.Push("big/ch", make([]byte, 2048), core.PushOptions{Priority: packet.PriorityMedium})
+	// 定向投递要求目标声明过该 channel，这里显式声明。
+	rc := &rawConn{nc: nc, t: t}
+	rc.declare("big/ch")
+
+	b.Push("big/ch", make([]byte, 2048), core.PushOptions{}.WithPriority(packet.PriorityMedium))
 
 	if err := packet.WritePacket(nc, packet.NewPullPacket(1, 10, 0, 100), 0); err != nil {
 		t.Fatal(err)
@@ -261,7 +300,7 @@ func TestLongPollWakesWithData(t *testing.T) {
 	rc.send(packet.NewPullPacket(1, 10, 0, 5000))
 	time.Sleep(150 * time.Millisecond)
 
-	b.Push("ch/a", []byte("hello"), core.PushOptions{Priority: packet.PriorityHigh})
+	b.Push("ch/a", []byte("hello"), core.PushOptions{}.WithPriority(packet.PriorityHigh))
 
 	pkt := rc.expect(t, packet.PULL_OK)
 	ok := pkt.(*packet.PullOkPacket)
@@ -270,5 +309,184 @@ func TestLongPollWakesWithData(t *testing.T) {
 	}
 	if ok.Records[0].Dup() {
 		t.Fatal("first delivery should not be dup")
+	}
+}
+
+// 不向后兼容：版本不是 4 时静默关闭，不返回 CONNACK。
+func TestUnsupportedVersionClosesSilently(t *testing.T) {
+	_, addr := startCore(t, nil)
+
+	nc, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	_ = nc.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	connect := packet.NewConnectPacket("old-proto")
+	connect.Version = 3
+	if err := packet.WritePacket(nc, connect, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if pkt, err := packet.ReadPacket(nc, 1<<20); err == nil {
+		t.Fatalf("expected silent close, got %s", pkt.Type())
+	}
+}
+
+// 客户端发送服务端方向的包属于协议错误，必须收到 DISCONNECT(ProtocolError)。
+func TestUnexpectedPacketSendsProtocolError(t *testing.T) {
+	_, addr := startCore(t, nil)
+	rc := dialRaw(t, addr, "raw-proto", "ch/a")
+
+	rc.send(packet.NewConnackPacket(packet.ReasonSuccess))
+
+	_ = rc.nc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := rc.recv()
+	if err != nil {
+		t.Fatalf("expected DISCONNECT: %v", err)
+	}
+	dp, ok := pkt.(*packet.DisconnectPacket)
+	if !ok || dp.ReasonCode != packet.ReasonProtocolError {
+		t.Fatalf("expected DISCONNECT(ProtocolError), got %s %+v", pkt.Type(), pkt)
+	}
+}
+
+// 超过 MaxBatch 的 PUSH 整批被拒，且每条结果都带服务端生成的 ID。
+func TestPushBatchLimitRejectedWithIDs(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxBatch(2))
+	rc := dialRaw(t, addr, "raw-batch", "ch/a")
+
+	rec := func() packet.Record {
+		r := packet.Record{Channel: "ch/a", Payload: []byte("x")}
+		r.SetPriority(packet.PriorityMedium)
+		return r
+	}
+	pkt := packet.NewPushPacket(7, rec(), rec(), rec())
+	pkt.Flags |= packet.PushFlagWantAck
+	rc.send(pkt)
+
+	resp := rc.expect(t, packet.PUSH_OK).(*packet.PushOkPacket)
+	if len(resp.Results) != 3 {
+		t.Fatalf("expected 3 rejected results, got %d", len(resp.Results))
+	}
+	for _, r := range resp.Results {
+		if r.Reason != packet.ReasonQuotaExceeded {
+			t.Fatalf("reason = %s, want QuotaExceeded", r.Reason)
+		}
+		if r.ID.IsZero() {
+			t.Fatal("rejected result must carry a server-generated ID")
+		}
+	}
+}
+
+// 全部成功的 PUSH_OK 不回显记录（紧凑响应）。
+func TestPushOkOmitsSuccessfulRecords(t *testing.T) {
+	_, addr := startCore(t, nil)
+	rc := dialRaw(t, addr, "raw-ok", "ch/a")
+
+	rec := packet.Record{Channel: "ch/a", Payload: []byte("x")}
+	rec.SetPriority(packet.PriorityMedium)
+	pkt := packet.NewPushPacket(9, rec)
+	pkt.Flags |= packet.PushFlagWantAck
+	rc.send(pkt)
+
+	resp := rc.expect(t, packet.PUSH_OK).(*packet.PushOkPacket)
+	if len(resp.Results) != 0 {
+		t.Fatalf("successful push should not echo results, got %+v", resp.Results)
+	}
+}
+
+// 小缓冲客户端发送整批失败记录时，PUSH_OK 必须裁剪到 MaxPacketSize 内，
+// 而不是因为写包超限而断连。
+func TestPushOkTrimmedForSmallClient(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxBatch(50))
+
+	nc, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	_ = nc.SetDeadline(time.Now().Add(10 * time.Second))
+
+	connect := packet.NewConnectPacket("tiny-buf")
+	connect.KeepAlive = 60
+	connect.MaxPacketSize = 128
+	if err := packet.WritePacket(nc, connect, 0); err != nil {
+		t.Fatal(err)
+	}
+	if pkt, err := packet.ReadPacket(nc, 1<<20); err != nil {
+		t.Fatal(err)
+	} else if connack := pkt.(*packet.ConnackPacket); connack.ReasonCode != packet.ReasonSuccess {
+		t.Fatalf("connack: %s", connack.ReasonCode)
+	}
+
+	// 未声明任何 channel：整批记录都返回 NoMatch（失败项）。
+	pkt := packet.NewPushPacket(3)
+	pkt.Flags |= packet.PushFlagWantAck
+	for i := 0; i < 50; i++ {
+		rec := packet.Record{Channel: "ch/a", Payload: []byte("x")}
+		rec.SetPriority(packet.PriorityMedium)
+		pkt.Records = append(pkt.Records, rec)
+	}
+	if err := packet.WritePacket(nc, pkt, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 1<<20)
+	n, err := nc.Read(buf)
+	if err != nil {
+		t.Fatalf("server closed instead of returning a trimmed PUSH_OK: %v", err)
+	}
+	if n > 128 {
+		t.Fatalf("response %d bytes exceeds client MaxPacketSize 128", n)
+	}
+	parsed, err := packet.ReadPacket(bytes.NewReader(buf[:n]), 1<<20)
+	if err != nil {
+		t.Fatalf("parse trimmed PUSH_OK: %v", err)
+	}
+	ok := parsed.(*packet.PushOkPacket)
+	if len(ok.Results) == 0 {
+		t.Fatal("trimmed response must keep at least one result")
+	}
+	if ok.Results[0].Reason != packet.ReasonNoMatch {
+		t.Fatalf("first result reason = %s, want NoMatch", ok.Results[0].Reason)
+	}
+}
+
+// 默认 MaxBatch=16：17 条记录的 PUSH 整批被拒。
+func TestPushBatchDefaultLimit(t *testing.T) {
+	_, addr := startCore(t, nil)
+	rc := dialRaw(t, addr, "raw-batch-default", "ch/a")
+
+	pkt := packet.NewPushPacket(11)
+	pkt.Flags |= packet.PushFlagWantAck
+	for i := 0; i < 17; i++ {
+		rec := packet.Record{Channel: "ch/a", Payload: []byte("x")}
+		rec.SetPriority(packet.PriorityMedium)
+		pkt.Records = append(pkt.Records, rec)
+	}
+	rc.send(pkt)
+
+	resp := rc.expect(t, packet.PUSH_OK).(*packet.PushOkPacket)
+	if len(resp.Results) != 17 {
+		t.Fatalf("expected 17 rejected results, got %d", len(resp.Results))
+	}
+	if resp.Results[0].Reason != packet.ReasonQuotaExceeded {
+		t.Fatalf("reason = %s, want QuotaExceeded", resp.Results[0].Reason)
+	}
+
+	// 16 条记录可以被接受。
+	rc2 := dialRaw(t, addr, "raw-batch-ok", "ch/a")
+	ok := packet.NewPushPacket(12)
+	ok.Flags |= packet.PushFlagWantAck
+	for i := 0; i < 16; i++ {
+		rec := packet.Record{Channel: "ch/a", Payload: []byte("x")}
+		rec.SetPriority(packet.PriorityMedium)
+		ok.Records = append(ok.Records, rec)
+	}
+	rc2.send(ok)
+	if got := rc2.expect(t, packet.PUSH_OK).(*packet.PushOkPacket); len(got.Results) != 0 {
+		t.Fatalf("16-record batch should succeed, got %+v", got.Results)
 	}
 }

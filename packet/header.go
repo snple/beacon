@@ -10,7 +10,6 @@ import (
 
 const (
 	MaxStringLength = 65535 // uint16 最大值
-	MaxBinaryLength = 65535 // uint16 最大值
 )
 
 // FixedHeader 固定头部
@@ -91,39 +90,6 @@ func DecodeString(r io.Reader) (string, error) {
 	return string(data), nil
 }
 
-// EncodeBinary 编码二进制数据
-func EncodeBinary(w io.Writer, data []byte) error {
-	if len(data) > MaxBinaryLength {
-		return fmt.Errorf("binary length %d exceeds maximum %d", len(data), MaxBinaryLength)
-	}
-	length := uint16(len(data))
-	if err := binary.Write(w, binary.BigEndian, length); err != nil {
-		return err
-	}
-	if length > 0 {
-		_, err := w.Write(data)
-		return err
-	}
-	return nil
-}
-
-// DecodeBinary 解码二进制数据
-func DecodeBinary(r io.Reader) ([]byte, error) {
-	var length uint16
-	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
-		return nil, err
-	}
-	if length == 0 {
-		return nil, nil
-	}
-
-	data := make([]byte, length)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
 // EncodeUint16 编码 uint16
 func EncodeUint16(w io.Writer, v uint16) error {
 	return binary.Write(w, binary.BigEndian, v)
@@ -175,11 +141,6 @@ func DecodeUint64(r io.Reader) (uint64, error) {
 // StringSize 返回编码后字符串的大小
 func StringSize(s string) int {
 	return 2 + len(s)
-}
-
-// BinarySize 返回编码后二进制数据的大小
-func BinarySize(data []byte) int {
-	return 2 + len(data)
 }
 
 // EncodePacketID 编码 PacketID

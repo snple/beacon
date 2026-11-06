@@ -12,7 +12,9 @@ Beacon 是一个**面向 IoT 的拉取式消息服务**：生产者 `PUSH` 到 c
 ## 为什么是 pull
 
 - **消费节奏由客户端决定**：按自身处理能力拉取，慢消费者只影响自己的队列。
-- **队列有界**：`pending` 受 `QueueCap` 约束，`delivered` 受 `MaxRecords` 约束。
+- **队列有界**：`pending` 受 `QueueCap` 约束，`delivered` 受 `MaxRecords` 约束
+  （`delivered` 非空时 PULL 只重发未确认消息，不取新数据，因此长度天然不超过一次
+  拉取量）。
 - **确认即前缀压缩**：`COMMIT` 直接推进 `delivered` 的 FIFO 头，无需独立 ack 表与重传定时器。
 - **低延迟**：空队列时用长轮询（`WaitMs`）等待，有数据立即返回。
 
@@ -52,6 +54,7 @@ go run ./cmd/core --addr :5208 --metrics-addr :9101
 | `--auth-file` | 设备密钥 TOML（`[[nodes]] serial=... secret=...`） |
 | `--queue-cap` | 单客户端 pending 队列上限 |
 | `--max-records` / `--max-bytes` | 单次 PULL 的记录数/字节上限 |
+| `--max-batch` | 单次 PUSH 的记录数上限（默认 16，上限 128） |
 | `--max-sessions` | 会话总数上限（含离线保留，`-1` = 不限） |
 | `--session-timeout` | 离线会话保留秒数（`0` = 断开即清理） |
 | `--max-inflight-bytes` | 全局在途消息字节上限（`-1` = 不限） |
@@ -150,6 +153,13 @@ SDK 已在 `Pull` 内部串行化。
 
 `client.CommitAll()` / `Message.Ack()` 负责提交。
 
+### 响应只回显失败项
+
+为了不让响应超过对端声明的 `MaxPacketSize`：
+
+- `PUSH_OK.Results` 只包含失败或发生丢弃的记录，全部成功时为空；
+- `DECLARE_RESP.Results` 只包含被拒绝的声明，`Accepted` 给出接受数量。
+
 ### 消息 ID
 
 `PacketID` 12 字节，前 6 字节是毫秒时间戳，因此**大致**按时间有序（时钟回拨除外）。
@@ -166,8 +176,17 @@ SDK 已在 `Pull` 内部串行化。
 ### 定向投递
 
 - 目标是 clientID；`Channel` 仍参与写权限校验，但不参与匹配；
+- **发布者需要定向投递权限**：未配置认证器时默认允许，配置认证器后要求身份带
+  `AllowTargeted`（`core.Identity`），否则返回 `NotAuthorized`；
+- **目标必须声明过匹配该 `Channel` 的过滤器**，否则返回 `NoMatch`——定向投递
+  不能绕过目标的订阅与读权限；
 - 目标离线但会话保留时仍然入队（Low 除外）；
 - 目标没有会话时返回 `TargetNotFound`。
+
+### 保留 channel
+
+`$` 前缀保留给 broker 内部 channel：客户端不能发布或声明 `$` 开头的名字；
+以通配符开头的过滤器（`*` / `**`）不会匹配 `$` 开头的 channel（与 MQTT 一致）。
 
 ### 会话接管与清理
 
@@ -178,6 +197,10 @@ SDK 已在 `Pull` 内部串行化。
 `CONNECT` 的 `CleanSession=1` 会先丢弃该 ClientID 的 pending / delivered / channel 声明，
 再以新会话建立连接（`SessionPresent=0`）。会话保留时长由服务端
 `--session-timeout` 统一配置（`0` = 断开即清理）。
+
+订阅声明**只由 `DECLARE` 承担**（`CONNECT` 不携带）。恢复会话时服务端保留既有声明，
+但会按本次认证身份重新校验，越权的过滤器被丢弃；SDK 在有 `WithChannels` 时
+每次建连后都会重新 `DECLARE`，因此重连也能恢复订阅。
 
 ### 遗嘱
 

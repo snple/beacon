@@ -33,7 +33,6 @@ func TestConnectRoundTrip(t *testing.T) {
 	in.WillHeaders = map[string]string{"k": "v"}
 	in.AuthMethod = "plain"
 	in.AuthData = []byte("secret")
-	in.Channels = []ChannelDecl{{Channel: "dev/**"}, {Channel: "cmd/1"}}
 
 	out := roundTrip(t, in).(*ConnectPacket)
 	if out.ClientID != in.ClientID || out.KeepAlive != in.KeepAlive ||
@@ -46,9 +45,6 @@ func TestConnectRoundTrip(t *testing.T) {
 	}
 	if out.AuthMethod != "plain" || string(out.AuthData) != "secret" {
 		t.Fatalf("auth mismatch")
-	}
-	if len(out.Channels) != 2 || out.Channels[0].Channel != "dev/**" {
-		t.Fatalf("channels mismatch: %+v", out.Channels)
 	}
 }
 

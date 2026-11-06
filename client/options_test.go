@@ -19,6 +19,11 @@ func TestOptionsDefaults(t *testing.T) {
 }
 
 func TestOptionsValidate(t *testing.T) {
+	// 空 ClientID 合法：由服务端分配。
+	if err := NewClientOptions().Validate(); err != nil {
+		t.Fatalf("empty clientID should be allowed: %v", err)
+	}
+
 	o := NewClientOptions().WithClientID("ok")
 	if err := o.Validate(); err != nil {
 		t.Fatalf("valid options rejected: %v", err)

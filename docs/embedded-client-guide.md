@@ -14,7 +14,8 @@
 5. `PUSH` 编码 / `PUSH_OK` 解析（只做消费者可以不实现）
 6. `PING` / `PONG`
 
-可选：`DECLARE`（改变关注的 channel）、`DISCONNECT`（优雅关闭）。
+必需（消费者）：`DECLARE`（唯一声明订阅的途径，`CONNECT` 不携带）。
+可选：`DISCONNECT`（优雅关闭）。
 
 ## 2. 握手顺序
 
@@ -23,7 +24,7 @@
   │ ── CONNECT ──────────────────────────────▶ │
   │ ◀───────────────────────────── CONNACK ── │
   │                                            │
-  │ ── DECLARE（可选，也可放在 CONNECT 里）──▶ │
+  │ ── DECLARE（订阅声明，必需）──────────────▶ │
   │ ◀────────────────────────── DECLARE_RESP ─ │
   │                                            │
   │ ── PULL ─────────────────────────────────▶ │
@@ -32,11 +33,14 @@
   │ ◀───────────────────────────── COMMIT_OK ─ │
 ```
 
-`CONNECT` 必须是第一个包。版本不是 `4` 时服务端回 `CONNACK(UnsupportedProtocol)` 并关闭。
+`CONNECT` 必须是第一个包。版本不是 `4` 时**服务端静默关闭连接**，不返回 `CONNACK`
+（协议不向后兼容）。
 
 ### 2.1 会话与 CleanSession
 
 - 会话保留时长由**服务端配置**，`CONNECT` 不携带 `SessionTimeout`。
+- 订阅声明**不在 `CONNECT` 中**：连接建立后必须用 `DECLARE` 全量声明。
+  重连后如依赖既有订阅，建议无条件重发 `DECLARE`（服务端会按新身份重新校验）。
 - `CleanSession=1`：服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，
   `CONNACK.SessionPresent=0` 并返回新的 `SessionID`。
 - `CleanSession=0`：若会话仍被保留，则复用队列与声明（`SessionPresent=1`）。
@@ -57,6 +61,7 @@ Payload    4 字节长度 + 字节
 注意：
 
 - **`HasHeaders` 位与 Headers 必须一致**：条目数为 0 时不置位；非 0 时必须置位。
+  不一致会被服务端判定为 `MalformedPacket`（并收到 `DISCONNECT`）。
 - 字符串用 `uint16` 长度，因此 header key/value 上限 65535 字节；payload 用 `uint32`。
 - **channel 名/过滤器另受服务端配置的长度上限约束**：可配置 256–1024 字节，默认 256
   （线格式仍是 `uint16`）。超限时 `PUSH_OK` 返回 `ChannelInvalid`，
@@ -152,6 +157,11 @@ QueueCap 条（pending）  +  MaxRecords 条（delivered）
 | 连接被服务端关闭且收到 `CommitRequired` | 超过硬上限 |
 | `PUSH_OK` 全部 `NoMatch` | 没有客户端声明匹配的 channel |
 | `PUSH_OK` 返回 `TargetNotFound` | 定向目标是 clientID，且该客户端没有会话 |
+| `PUSH_OK` 返回 `NoMatch`（定向） | 目标存在但未声明匹配该 channel 的过滤器 |
+| `PUSH_OK` 返回 `NotAuthorized`（定向） | 发布方没有定向投递权限 |
+| `PUSH_OK` 返回 `ChannelInvalid`（`$` 前缀） | `$` 前缀保留给 broker，客户端不可发布 |
 | `DECLARE_RESP` 返回 `NotAuthorized` | 声明的过滤器超出 ACL 允许范围 |
 | `PUSH_OK` 返回 `ChannelInvalid` / `DECLARE_RESP` 返回 `ChannelFilterInvalid` | channel 名或过滤器超过服务端长度上限（默认 256 字节） |
+| 收到 `DISCONNECT(MalformedPacket)` | 包体解码失败（长度、优先级位、HasHeaders 不一致等） |
+| 收到 `DISCONNECT(ProtocolError)` | 发送了服务端方向的包或重复 `CONNECT` |
 | 收不到任何消息 | 检查 `DECLARE` 是否真的成功，以及是否用了 `*` / `**` |

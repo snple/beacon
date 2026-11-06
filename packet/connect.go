@@ -9,7 +9,10 @@ type ChannelDecl struct {
 	Channel string
 }
 
-// ConnectPacket CONNECT：建立连接、单轮认证、首次声明。
+// ConnectPacket CONNECT：建立连接与单轮认证。
+//
+// 订阅声明不属于 CONNECT：连接建立后由 DECLARE 全量替换，因此重连时
+// 既不会携带过期声明，也必须在恢复的会话上重新声明或沿用服务端保留的声明。
 type ConnectPacket struct {
 	Version uint8
 	// CleanSession 为 true 时服务端丢弃该 ClientID 的既有会话状态
@@ -26,8 +29,6 @@ type ConnectPacket struct {
 
 	AuthMethod string
 	AuthData   []byte
-
-	Channels []ChannelDecl
 }
 
 // NewConnectPacket 创建 CONNECT 包。
@@ -82,22 +83,7 @@ func (p *ConnectPacket) encode(w io.Writer) error {
 	if err := EncodeString(w, p.AuthMethod); err != nil {
 		return err
 	}
-	if err := EncodeBytes32(w, p.AuthData); err != nil {
-		return err
-	}
-
-	if len(p.Channels) > MaxStringLength {
-		return ErrMalformedPacket
-	}
-	if err := EncodeUint16(w, uint16(len(p.Channels))); err != nil {
-		return err
-	}
-	for _, ch := range p.Channels {
-		if err := EncodeString(w, ch.Channel); err != nil {
-			return err
-		}
-	}
-	return nil
+	return EncodeBytes32(w, p.AuthData)
 }
 
 func (p *ConnectPacket) decode(r io.Reader, _ FixedHeader) error {
@@ -138,28 +124,8 @@ func (p *ConnectPacket) decode(r io.Reader, _ FixedHeader) error {
 	if p.AuthMethod, err = DecodeString(r); err != nil {
 		return err
 	}
-	if p.AuthData, err = DecodeBytes32(r); err != nil {
-		return err
-	}
-
-	count, err := DecodeUint16(r)
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		if err := checkCount(r, count, 1); err != nil {
-			return err
-		}
-		p.Channels = make([]ChannelDecl, 0, count)
-		for i := 0; i < int(count); i++ {
-			ch, err := DecodeString(r)
-			if err != nil {
-				return err
-			}
-			p.Channels = append(p.Channels, ChannelDecl{Channel: ch})
-		}
-	}
-	return nil
+	p.AuthData, err = DecodeBytes32(r)
+	return err
 }
 
 // ConnackPacket CONNACK：连接响应。

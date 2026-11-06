@@ -27,7 +27,8 @@ type ClientOptions struct {
 	ReconnectMin  time.Duration
 	ReconnectMax  time.Duration
 
-	// 默认 channel 声明（建连时随 CONNECT 一起发送）
+	// Channels 是建连后自动 DECLARE 的过滤器（含重连）。
+	// CONNECT 本身不携带订阅声明。
 	Channels []string
 
 	// 拉取默认值（PollMessage 使用）
@@ -91,12 +92,17 @@ func (o *ClientOptions) applyDefaults() {
 }
 
 // Validate 校验配置。
+//
+// ClientID 允许为空（服务端会在 CONNACK 中分配 AssignedClientID）；
+// 非空时必须符合协议约束。
 func (o *ClientOptions) Validate() error {
-	if len(o.ClientID) > packet.MaxClientIDLength {
-		return fmt.Errorf("clientID too long")
-	}
-	if !packet.ValidateClientID(o.ClientID) {
-		return fmt.Errorf("invalid clientID %q", o.ClientID)
+	if o.ClientID != "" {
+		if len(o.ClientID) > packet.MaxClientIDLength {
+			return fmt.Errorf("clientID too long")
+		}
+		if !packet.ValidateClientID(o.ClientID) {
+			return fmt.Errorf("invalid clientID %q", o.ClientID)
+		}
 	}
 	if o.KeepAlive == 0 {
 		return fmt.Errorf("keepAlive must be > 0")
@@ -152,7 +158,7 @@ func (o *ClientOptions) WithReconnectBackoff(min, max time.Duration) *ClientOpti
 	return o
 }
 
-// WithChannels 设置建连时随 CONNECT 发送的 channel 声明。
+// WithChannels 设置建连后自动声明的过滤器（每次连接/重连都会重新 DECLARE）。
 func (o *ClientOptions) WithChannels(channels ...string) *ClientOptions {
 	o.Channels = channels
 	return o

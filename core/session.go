@@ -162,6 +162,31 @@ func (cl *Client) replaceChannels(decls []packet.ChannelDecl) {
 	cl.core.matcher.declare(cl.ID, decls)
 }
 
+// declaredChannels 返回当前声明的快照。
+func (cl *Client) declaredChannels() []packet.ChannelDecl {
+	cl.chMu.RLock()
+	defer cl.chMu.RUnlock()
+	if len(cl.channels) == 0 {
+		return nil
+	}
+	return append([]packet.ChannelDecl(nil), cl.channels...)
+}
+
+// matchesChannel 报告该会话是否声明了能匹配 channel 的过滤器。
+//
+// 用于定向投递：目标必须主动声明过该 channel，否则定向投递就是绕过
+// 订阅/读权限的后门。
+func (cl *Client) matchesChannel(channel string) bool {
+	cl.chMu.RLock()
+	defer cl.chMu.RUnlock()
+	for _, d := range cl.channels {
+		if packet.MatchChannel(d.Channel, channel) {
+			return true
+		}
+	}
+	return false
+}
+
 // sessionTimeout 返回会话保留时长（秒）。
 func (cl *Client) sessionTimeout() uint32 { return cl.timeout.Load() }
 

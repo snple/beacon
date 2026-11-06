@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -143,8 +144,12 @@ func (c *Client) Commit(ctx context.Context, ids ...packet.PacketID) error {
 		return nil
 	}
 	req := packet.NewCommitPacket(c.nextRequestID(), ids...)
-	if _, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second); err != nil {
+	resp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
+	if err != nil {
 		return err
+	}
+	if _, ok := resp.(*packet.CommitOkPacket); !ok {
+		return fmt.Errorf("unexpected response %s", resp.Type())
 	}
 	c.markCommitted(ids)
 	return nil
@@ -314,6 +319,10 @@ type DeclareResult struct {
 }
 
 // Declare 全量替换 channel 声明。
+// Declare 全量替换 channel 声明。
+//
+// 返回的切片只包含被拒绝的项（服务端为压缩响应只回显失败项）。
+// 同时记录服务端公布的 Limits，供 PushBatch 拆分使用。
 func (c *Client) Declare(ctx context.Context, channels ...string) ([]DeclareResult, error) {
 	decls := make([]packet.ChannelDecl, len(channels))
 	for i, ch := range channels {
@@ -335,6 +344,10 @@ func (c *Client) Declare(ctx context.Context, channels ...string) ([]DeclareResu
 		out[i] = DeclareResult{Channel: r.Channel, Reason: r.Reason}
 	}
 
-	c.opts.Channels = append([]string(nil), channels...)
+	limits := ok.Limits
+	c.mu.Lock()
+	c.limits = &limits
+	c.mu.Unlock()
+
 	return out, nil
 }

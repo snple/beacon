@@ -26,6 +26,9 @@ type Core struct {
 
 	// registerMu 串行化会话注册与接管
 	registerMu sync.Mutex
+	// onlineConns 是已占用在线名额的连接数，受 registerMu 保护。
+	// 用它而不是 CONNACK 之后才自增的统计值做 MaxClients 判定，避免并发握手超卖。
+	onlineConns int
 
 	matcher *matcher
 
@@ -333,6 +336,17 @@ func (c *Core) canWrite(id *Identity, channel string) bool {
 		}
 	}
 	return false
+}
+
+// canTarget 校验某身份是否允许定向投递（Record.Target 非空）。
+//
+// 定向投递会跳过 channel 匹配，直接写入目标队列，因此需要单独授权；
+// 未配置认证器时不做限制。
+func (c *Core) canTarget(id *Identity) bool {
+	if !c.authEnabled() {
+		return true
+	}
+	return id != nil && id.AllowTargeted
 }
 
 // authEnabled 报告是否配置了认证器（未配置时不做 ACL 校验）。

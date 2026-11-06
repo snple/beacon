@@ -205,23 +205,30 @@ func TestPriorityOrdering(t *testing.T) {
 	}
 }
 
-func TestTargetDeliveryBypassesMatching(t *testing.T) {
+func TestTargetDeliveryRequiresDeclaration(t *testing.T) {
 	b, addr := startCore(t, nil)
 	sub1 := newTestClient(t, addr, "sub-1", "other/**")
-	sub2 := newTestClient(t, addr, "sub-2", "other/**")
+	sub2 := newTestClient(t, addr, "sub-2", "cmd/**")
+	_ = sub1
 	_ = sub2
 
 	ctx := context.Background()
-	if _, err := b.PushToClient("sub-1", "cmd/x", []byte("only-sub-1"), core.PushOptions{}); err != nil {
-		t.Fatalf("publish to client: %v", err)
+
+	// 目标未声明该 channel：定向投递被拒绝，不会进入目标队列。
+	res, err := b.PushToClient("sub-1", "cmd/x", []byte("only-sub-1"), core.PushOptions{})
+	if !errors.Is(err, core.ErrTargetNotSubscribed) {
+		t.Fatalf("expected ErrNoMatch for undeclared target channel, got %v (%+v)", err, res)
 	}
 
-	// sub-1 没有声明 cmd/**，仍然能收到定向消息
-	msgs, err := sub1.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
+	// 目标声明后即可收到，且不会命中其他声明 other/** 的客户端。
+	if _, err := b.PushToClient("sub-2", "cmd/x", []byte("only-sub-2"), core.PushOptions{}); err != nil {
+		t.Fatalf("publish to client: %v", err)
+	}
+	msgs, err := sub2.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || string(msgs[0].Payload) != "only-sub-1" {
+	if len(msgs) != 1 || string(msgs[0].Payload) != "only-sub-2" {
 		t.Fatalf("target client should receive message, got %+v", msgs)
 	}
 }

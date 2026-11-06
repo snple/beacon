@@ -79,7 +79,7 @@ func (c *Core) limits() packet.Limits {
 		MaxPacketSize:        c.options.MaxPacketSize,
 		MaxRecords:           c.options.MaxRecords,
 		MaxWaitMs:            c.options.MaxWaitMs,
-		MaxBatch:             c.options.MaxBytes,
+		MaxBatch:             c.options.MaxBatch,
 		MaxChannelsPerClient: uint16(min(c.options.MaxChannelsPerClient, 65535)),
 	}
 }
@@ -260,18 +260,18 @@ func (c *Core) DisconnectClientAndWait(ctx context.Context, clientID string, rea
 
 // PushOptions 服务端推送选项。
 //
-// Priority 的零值为 Low（尽力而为）。不显式设置时按 Medium 处理；
-// 需要 Low 时请使用 WithPriority(packet.PriorityLow)。
+// 优先级只能通过 WithPriority 设置，未设置时按 Medium 处理；
+// 需要 Low（尽力而为）时请显式调用 WithPriority(packet.PriorityLow)。
 type PushOptions struct {
-	Priority packet.Priority
-	Headers  map[string]string
+	Headers map[string]string
 
+	priority    packet.Priority
 	prioritySet bool
 }
 
 // WithPriority 显式设置优先级（允许显式指定 Low）。
 func (o PushOptions) WithPriority(p packet.Priority) PushOptions {
-	o.Priority = p
+	o.priority = p
 	o.prioritySet = true
 	return o
 }
@@ -284,10 +284,7 @@ func (o PushOptions) WithHeaders(h map[string]string) PushOptions {
 
 func (o PushOptions) effectivePriority() packet.Priority {
 	if o.prioritySet {
-		return o.Priority
-	}
-	if o.Priority != packet.PriorityLow {
-		return o.Priority
+		return o.priority
 	}
 	return packet.PriorityMedium
 }
@@ -330,6 +327,9 @@ func (c *Core) pushTo(target, channel string, payload []byte, opts PushOptions) 
 	switch res.Reason {
 	case packet.ReasonTargetNotFound:
 		return out, &ClientNotFoundError{ClientID: target}
+	case packet.ReasonNoMatch:
+		// 目标存在但未声明匹配该 channel 的过滤器。
+		return out, fmt.Errorf("%w: %s", ErrTargetNotSubscribed, res.Reason)
 	case packet.ReasonChannelInvalid, packet.ReasonPacketTooLarge, packet.ReasonNotAuthorized,
 		packet.ReasonQuotaExceeded, packet.ReasonMalformedPacket:
 		return out, fmt.Errorf("push rejected: %s", res.Reason)
