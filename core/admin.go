@@ -36,10 +36,6 @@ type ServerInfo struct {
 	Limits           packet.Limits
 	MaxChannelLength int // channel 名/过滤器最大字节数
 	Storage          string
-
-	StreamEnabled bool
-	StreamAddress string
-	StreamsActive int64
 }
 
 func (c *Core) registerListener(address, protocol string) uint64 {
@@ -94,8 +90,6 @@ func (c *Core) Info() ServerInfo {
 	sessions := int64(len(c.clients))
 	c.clientsMu.RUnlock()
 
-	streamAddr, _, _ := c.streamAdvertise()
-
 	return ServerInfo{
 		ProtocolVersion:  packet.ProtocolVersion,
 		StartedAt:        c.startedAt,
@@ -107,10 +101,6 @@ func (c *Core) Info() ServerInfo {
 		Limits:           c.limits(),
 		MaxChannelLength: c.options.MaxChannelLength,
 		Storage:          "memory",
-
-		StreamEnabled: c.options.StreamEnabled,
-		StreamAddress: streamAddr,
-		StreamsActive: c.stats.StreamsActive.Load(),
 	}
 }
 

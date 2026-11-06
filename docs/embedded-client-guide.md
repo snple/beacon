@@ -46,21 +46,6 @@
 - `CleanSession` 未置位：若会话仍被保留，则复用队列与声明（`SessionPresent=1`）。
 - 会话离线期间队列只保留 **Medium / High**，Low 消息直接丢弃；队列满后按优先级淘汰。
 
-### 2.2 可选的 stream 能力
-
-stream 能力直接在 `CONNECT`/`CONNACK` 中协商，**没有额外的 HELLO 往返**：
-
-- `CONNECT.Flags` 字节的 **bit0** = `CleanSession`，**bit1** = `StreamCapable`（客户端支持 stream）；
-- `CONNACK.Flags` 字节的 **bit0** = `SessionPresent`，**bit1** = `StreamEnabled`（服务端为本次连接启用），**bit2** = `StreamSupported`（服务端实现该能力）。
-
-旧实现只读取 bit0，因此线格式保持兼容。`StreamEnabled=0` 表示连接时服务端未启用
-（未配置监听器或能力关闭）；只要 `StreamSupported=1`，客户端仍可直接尝试 `OpenStream`，
-以服务端返回的 `StreamDisabled` 为准。`StreamSupported=0` 表示旧服务端，
-不要发送 `STREAM_OPEN`。
-
-建流流程见 [protocol-v4.md](./protocol-v4.md) 的 `STREAM_*`，数据面见
-[stream-protocol.md](./stream-protocol.md)。
-
 ## 3. Record 编解码
 
 ```

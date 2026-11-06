@@ -96,12 +96,6 @@ func (c *Core) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeMetric(w, "beacon_inflight_messages", "gauge", "内存中未完成投递的消息条数", float64(snap.InFlightMessages))
 	writeMetric(w, "beacon_inflight_bytes", "gauge", "内存中未完成投递消息的近似字节数", float64(snap.InFlightBytes))
 	writeMetric(w, "beacon_wildcard_filters", "gauge", "通配符过滤器数量", float64(snap.WildcardFilters))
-	writeMetric(w, "beacon_streams_active", "gauge", "当前活跃的点对点流数量", float64(snap.StreamsActive))
-	writeMetric(w, "beacon_streams_pending", "gauge", "已协商待绑定的流数量", float64(snap.StreamsPending))
-	writeMetric(w, "beacon_streams_total", "counter", "累计建立的流数量", float64(snap.StreamsTotal))
-	writeMetric(w, "beacon_streams_rejected_total", "counter", "被拒绝的建流请求数", float64(snap.StreamsRejected))
-	writeMetric(w, "beacon_stream_bytes_a_to_b_total", "counter", "流中发起方到接受方的字节数", float64(snap.StreamBytesAToB))
-	writeMetric(w, "beacon_stream_bytes_b_to_a_total", "counter", "流中接受方到发起方的字节数", float64(snap.StreamBytesBToA))
 }
 
 func writeMetric(w http.ResponseWriter, name, kind, help string, value float64) {

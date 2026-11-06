@@ -75,7 +75,6 @@ func (c *Core) handleConn(nc net.Conn) {
 	)
 
 	defer func() {
-		c.closeStreamsForConn(cn)
 		c.untrackHandshakeConn(nc)
 		c.releaseHandshakeSlot()
 		cn.close()
@@ -130,8 +129,6 @@ func (c *Core) handleConn(nc net.Conn) {
 			zap.String("remote", cn.remoteAddr), zap.Uint8("version", connect.Version))
 		return
 	}
-
-	cn.streamCapable.Store(connect.StreamCapable())
 
 	clientID = connect.ClientID
 	if clientID == "" {
@@ -220,9 +217,6 @@ func (c *Core) handleConn(nc net.Conn) {
 	pending, delivered, oldest := cl.mb.depth()
 	connack := packet.NewConnackPacket(packet.ReasonSuccess)
 	connack.SetSessionPresent(sessionPresent)
-	connack.SetStreamSupported(true) // 本实现支持 stream 控制包
-	_, _, hasStreamListener := c.streamAdvertise()
-	connack.SetStreamEnabled(connect.StreamCapable() && c.options.StreamEnabled && hasStreamListener)
 	connack.AssignedClientID = clientID
 	connack.ServerMaxPacketSize = c.options.MaxPacketSize
 	connack.KeepAlive = keepAlive

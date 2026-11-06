@@ -43,14 +43,8 @@
 | 11 | `DISCONNECT` | 双向 |
 | 12 | `DECLARE` | C→S |
 | 13 | `DECLARE_RESP` | S→C |
-| 16 | `STREAM_OPEN` | C→S |
-| 17 | `STREAM_OPEN_OK` | S→C |
-| 18 | `STREAM_REQUEST` | S→C |
-| 19 | `STREAM_ACCEPT` | C→S |
-| 21 | `STREAM_ABORT` | S→C |
 
-> 14/15 曾用于 stream HELLO，20 曾用于 `STREAM_ACCEPT_OK`，均已移除：
-> 能力改由 `CONNECT`/`CONNACK` 的 spare bit 协商，接受结果直接由数据面 `BIND` 表达。
+> 14–21 保留，不得复用。
 
 服务端唯一可能主动发送的包是 `CONNACK`、`PONG`、各请求的响应，以及**连接终止时的 `DISCONNECT`**。
 
@@ -115,7 +109,7 @@ Low 消息在入队前直接丢弃，`PUSH_OK.Dropped` 会包含这些客户端�
 ```
 CONNECT {
     Version        uint8      // 必须为 4
-    Flags          uint8      // bit0 = CleanSession；bit1 = StreamCapable；其余保留
+    Flags          uint8      // bit0 = CleanSession；其余保留，必须为 0
     ClientID       string     // 空 = 服务端分配
     KeepAlive      uint16     // 秒
     MaxPacketSize  uint32     // 客户端可接收的最大包
@@ -128,7 +122,7 @@ CONNECT {
 }
 
 CONNACK {
-    Flags               uint8   // bit0 = SessionPresent；bit1 = StreamEnabled；bit2 = StreamSupported
+    Flags               uint8   // bit0 = SessionPresent；其余保留
     ReasonCode          uint8
     AssignedClientID    string
     ServerMaxPacketSize uint32
@@ -147,17 +141,14 @@ CONNACK {
 | 位 | 名称 | 说明 |
 |---|---|---|
 | 0 | `CleanSession` | 丢弃该 ClientID 的既有会话状态 |
-| 1 | `StreamCapable` | 客户端支持点对点流 |
-| 2-7 | 保留 | 后续能力开关 |
+| 1-7 | 保留 | 必须为 0 |
 
 `CONNACK.Flags` 目前定义：
 
 | 位 | 名称 | 说明 |
 |---|---|---|
 | 0 | `SessionPresent` | 复用了既有会话 |
-| 1 | `StreamEnabled` | 服务端为本次连接启用 stream |
-| 2 | `StreamSupported` | 服务端实现 stream 控制包 |
-| 3-7 | 保留 | 后续能力开关 |
+| 1-7 | 保留 | 后续能力开关 |
 
 会话保留时长完全由**服务端配置**，`CONNECT` 不携带该字段。`CleanSession` 置位时，
 服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，以全新会话建立连接
@@ -351,64 +342,6 @@ DISCONNECT { ReasonCode uint8, Flags uint8 }   // bit0 = SuppressWill
 客户端收到 `SessionTakenOver` 时**不得自动重连**，否则两个同 ClientID 的实例会无限互踢。
 
 
-### 5.7 STREAM_*（可选能力）
-
-stream 是**可选能力，服务端默认关闭**。控制面复用已认证的主连接；建立后的字节流走
-core 的独立端口（见 [stream-protocol.md](./stream-protocol.md)），不复用主连接。
-
-能力与开关复用 CONNECT/CONNACK 的 spare bit，**没有独立的 HELLO 包，也没有连接时的额外往返**：
-
-| 包 | 字节 | bit | 含义 |
-|---|---|---|---|
-| `CONNECT` | `Flags` | 1 | `StreamCapable`：客户端支持 stream |
-| `CONNACK` | `Flags` | 1 | `StreamEnabled`：服务端为本次连接启用 stream |
-| `CONNACK` | `Flags` | 2 | `StreamSupported`：服务端实现了 stream 控制包 |
-
-旧实现只读取 bit0，因此线格式完全兼容。服务端未开启、没有 stream 监听器或客户端未声明时，
-`StreamEnabled=0`。`StreamSupported` 由新服务端始终置位；客户端看到它为 0 时应直接判定
-不支持，避免向旧服务端发送它不认识的包。
-
-建流流程（A=发起方，B=接受方，S=服务端）：
-
-```
-A → S  STREAM_OPEN { RequestID, Target, Topic, Metadata, Properties }
-S → B  STREAM_REQUEST { StreamID, Source, Topic, Metadata, Properties,
-                        Ticket, StreamAddress, TLS, BindTimeoutMs }
-B → S  STREAM_ACCEPT { StreamID, Accepted, ReasonCode, Message,
-                       Challenge, Metadata, Properties }
-S → A  STREAM_OPEN_OK { RequestID, ReasonCode, Message, StreamID, StreamAddress,
-                        TLS, Ticket, Challenge, Metadata, Properties, BindTimeoutMs }
-```
-
-- 拒绝时 B 发送 `Accepted=0` 的 `STREAM_ACCEPT`，S 让 A 的 `STREAM_OPEN_OK` 返回
-  `StreamRejected`；拒绝不需要服务端确认。
-- 任一方主连接断开、会话被接管、目标离线、协商/绑定超时，S 向相关方发送
-  `STREAM_ABORT { StreamID, ReasonCode, Message }`；尚未接受的请求则由
-  `STREAM_OPEN_OK` 直接返回失败。
-- **票据与校验**：`Ticket` 由服务端在受理 `STREAM_OPEN` 时生成（32 字节随机），
-  随 `STREAM_REQUEST` 下发给 B；`Challenge` 由 B 生成（16–64 字节随机）。
-  二者一次性、只在 `BindTimeout` 内有效，数据面 `BIND` 必须同时回显；
-  服务端常量时间比较，并校验双方仍是当前会话的所有者。
-- B 发送 `STREAM_ACCEPT` 后即可连接数据面。`ACCEPT` 与 `BIND` 走两条连接，BIND 可能先到；
-  服务端会为 ACCEPT 保留最多 1 秒的追赶窗口，之后仍未接受则返回 `BindFailed`。
-- 服务端只向在 `CONNECT` 中声明 `StreamCapable` 且当前在线的客户端转发 `STREAM_REQUEST`。
-- stream 能力在 core 构造时由 `WithStreamEnabled` 固定，运行期不可切换；需要变更时重建 core。
-- `CONNACK.StreamEnabled=0` 只是连接时的状态：只要 `StreamSupported=1`，客户端仍可直接尝试
-  `STREAM_OPEN`，以服务端返回结果为准。
-
-stream 相关原因码：
-
-| 值 | 名称 | 说明 |
-|---|---|---|
-| `0xB0` | `StreamDisabled` | 服务端未开启 stream |
-| `0xB1` | `StreamRejected` | 目标客户端拒绝 |
-| `0xB2` | `StreamTargetUnavailable` | 目标离线或不支持 stream |
-| `0xB3` | `StreamNotFound` | 流不存在或已过期 |
-| `0xB4` | `StreamLimitExceeded` | 达到配额 |
-| `0xB5` | `StreamBindFailed` | 数据面绑定/握手失败 |
-| `0xB6` | `StreamUnauthorized` | 建流被策略钩子拒绝 |
-| `0xB7` | `StreamTimeout` | 协商或绑定超时 |
-
 ---
 
 ## 6. channel 语法
@@ -461,10 +394,3 @@ ACL 使用「模式包含」判定：声明过滤器 `F` 时要求存在允许�
 | `MaxInflightBytes`（全局在途消息） | 256 MiB |
 | `NoProgressSoft` / `Hard` | 4 / 16 |
 | `UncommittedTimeout` | 关闭 |
-| `StreamEnabled` | `false` |
-| `StreamAcceptTimeout` / `StreamBindTimeout` | 30s / 30s |
-| `StreamHandshakeTimeout` | 10s |
-| `StreamMaxPending` / `StreamMaxActive` / `StreamMaxPerClient` | 1024 / 10000 / 64 |
-| `StreamMaxHandshakeConnections` | 512 |
-| `StreamAllowAnySourceIP` | `false`（默认要求数据面源 IP 与主连接一致） |
-| `StreamWriteTimeout` | 关闭（仅依赖 TCP 背压） |

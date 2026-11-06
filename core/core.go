@@ -51,24 +51,6 @@ type Core struct {
 	handshakeConns   map[net.Conn]struct{}
 	handshakeConnsMu sync.Mutex
 
-	// ===== stream =====
-	streamIDGen atomic.Uint64
-
-	streamMu      sync.Mutex
-	streamPending map[uint64]*streamPending
-	streams       map[uint64]*streamSession
-	// streamPerClient 记录每个客户端参与的 pending+active 流数量（受 streamMu 保护）。
-	streamPerClient map[string]int
-
-	streamHandshakeSlots chan struct{}
-
-	streamListenersMu sync.Mutex
-	streamListeners   map[uint64]streamListenerEntry
-	streamListenerSeq uint64
-
-	streamConnsMu sync.Mutex
-	streamConns   map[net.Conn]struct{}
-
 	statsCacheMu sync.Mutex
 	statsCache   StatsSnapshot
 	statsCacheAt time.Time
@@ -98,13 +80,6 @@ type Stats struct {
 	CommitRequired   atomic.Int64
 	SessionTakeovers atomic.Int64
 	TargetMisses     atomic.Int64
-
-	// stream
-	StreamsActive   atomic.Int64
-	StreamsTotal    atomic.Int64
-	StreamsRejected atomic.Int64
-	StreamBytesAToB atomic.Int64
-	StreamBytesBToA atomic.Int64
 }
 
 // NewWithOptions 使用 Builder 模式创建新的 core
@@ -130,19 +105,10 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		startedAt:      time.Now(),
 		ctx:            ctx,
 		cancel:         cancel,
-
-		streamPending:   make(map[uint64]*streamPending),
-		streams:         make(map[uint64]*streamSession),
-		streamPerClient: make(map[string]int),
-		streamListeners: make(map[uint64]streamListenerEntry),
-		streamConns:     make(map[net.Conn]struct{}),
 	}
 
 	if opts.MaxHandshakeConnections > 0 {
 		c.handshakeSlots = make(chan struct{}, opts.MaxHandshakeConnections)
-	}
-	if opts.StreamMaxHandshakeConnections > 0 {
-		c.streamHandshakeSlots = make(chan struct{}, opts.StreamMaxHandshakeConnections)
 	}
 	if opts.ConnectionRateLimit > 0 {
 		c.connLimiter = newTokenBucket(opts.ConnectionRateLimit, opts.ConnectionRateBurst)
@@ -176,9 +142,6 @@ func (c *Core) Start() error {
 		go c.sessionCleanupLoop()
 	}
 
-	c.wg.Add(1)
-	go c.streamCleanupLoop()
-
 	c.logger.Info("core started",
 		zap.Uint32("maxClients", c.options.MaxClients),
 		zap.Int("queueCap", c.options.QueueCap),
@@ -204,8 +167,6 @@ func (c *Core) Stop() error {
 
 	c.cancel()
 	c.closeHandshakeConns()
-	c.closeStreamListeners()
-	c.closeStreamConns()
 
 	c.clientsMu.Lock()
 	clients := make([]*Client, 0, len(c.clients))
@@ -230,12 +191,6 @@ func (c *Core) Stop() error {
 	notifyWG.Wait()
 
 	c.wg.Wait()
-
-	c.streamMu.Lock()
-	c.streamPending = make(map[uint64]*streamPending)
-	c.streams = make(map[uint64]*streamSession)
-	c.streamPerClient = make(map[string]int)
-	c.streamMu.Unlock()
 
 	c.logger.Info("core stopped")
 	return nil
@@ -420,13 +375,6 @@ type StatsSnapshot struct {
 	InFlightMessages int64
 	InFlightBytes    int64
 	WildcardFilters  int
-
-	StreamsActive   int64
-	StreamsPending  int64
-	StreamsTotal    int64
-	StreamsRejected int64
-	StreamBytesAToB int64
-	StreamBytesBToA int64
 }
 
 // GetStats 返回统计快照。
@@ -434,10 +382,6 @@ func (c *Core) GetStats() StatsSnapshot {
 	c.clientsMu.RLock()
 	sessions := int64(len(c.clients))
 	c.clientsMu.RUnlock()
-
-	c.streamMu.Lock()
-	pending := int64(len(c.streamPending))
-	c.streamMu.Unlock()
 
 	return StatsSnapshot{
 		StartedAt:        c.startedAt,
@@ -458,12 +402,5 @@ func (c *Core) GetStats() StatsSnapshot {
 		InFlightMessages: c.inflightMsgs.Load(),
 		InFlightBytes:    c.inflightBytes.Load(),
 		WildcardFilters:  c.matcher.wildcardCount(),
-
-		StreamsActive:   c.stats.StreamsActive.Load(),
-		StreamsPending:  pending,
-		StreamsTotal:    c.stats.StreamsTotal.Load(),
-		StreamsRejected: c.stats.StreamsRejected.Load(),
-		StreamBytesAToB: c.stats.StreamBytesAToB.Load(),
-		StreamBytesBToA: c.stats.StreamBytesBToA.Load(),
 	}
 }

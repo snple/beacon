@@ -50,12 +50,6 @@ type Client struct {
 	// 会话变化回调
 	onSessionReset func(prev, next uint64)
 
-	// ===== stream =====
-	streamMu      sync.Mutex
-	streamHandler func(*StreamRequest)
-	streamQueue   chan *StreamRequest
-	streamWaits   map[uint64]*streamWait
-
 	supWG sync.WaitGroup
 }
 
@@ -71,12 +65,10 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
-		opts:        opts,
-		logger:      opts.Logger,
-		ctx:         ctx,
-		cancel:      cancel,
-		streamQueue: make(chan *StreamRequest, 64),
-		streamWaits: make(map[uint64]*streamWait),
+		opts:   opts,
+		logger: opts.Logger,
+		ctx:    ctx,
+		cancel: cancel,
 	}, nil
 }
 
@@ -199,7 +191,6 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	connect.MaxPacketSize = c.opts.MaxPacketSize
 	connect.AuthMethod = c.opts.AuthMethod
 	connect.AuthData = c.opts.AuthData
-	connect.SetStreamCapable(c.opts.StreamCapable)
 
 	if d := c.opts.ConnectTimeout; d > 0 {
 		_ = nc.SetDeadline(time.Now().Add(d))

@@ -58,11 +58,10 @@ type conn struct {
 	closed    atomic.Bool
 	closeOnce sync.Once
 
-	wakeCh        chan struct{}
-	pullInflight  atomic.Bool
-	serverBy      atomic.Bool
-	registered    atomic.Bool
-	streamCapable atomic.Bool
+	wakeCh       chan struct{}
+	pullInflight atomic.Bool
+	serverBy     atomic.Bool
+	registered   atomic.Bool
 
 	disconnect atomic.Pointer[packet.DisconnectPacket]
 
@@ -240,10 +239,6 @@ func (cn *conn) handlePacket(pkt packet.Packet) error {
 		return cn.handlePing(p)
 	case *packet.DisconnectPacket:
 		return cn.handleDisconnect(p)
-	case *packet.StreamOpenPacket:
-		return cn.handleStreamOpen(p)
-	case *packet.StreamAcceptPacket:
-		return cn.handleStreamAccept(p)
 	default:
 		// 客户端发送了服务端方向的包（CONNACK/PUSH_OK/...）或重复的 CONNECT：
 		// 这是协议错误，必须显式 DISCONNECT 而不是静默忽略。

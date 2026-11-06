@@ -22,12 +22,6 @@ var minRemainingLength = map[PacketType]uint32{
 	DISCONNECT:   2,  // ReasonCode(1)+Flags(1)
 	DECLARE:      10, // RequestID(8)+Count(2)
 	DECLARE_RESP: 44, // RequestID(8)+Accepted(2)+Count(2)+Pending(12)+Delivered(4)+limits(16)
-
-	STREAM_OPEN:    18, // RequestID(8)+Target(2)+Topic(2)+Metadata(4)+Properties(2)
-	STREAM_OPEN_OK: 40, // RequestID(8)+Reason(1)+Message(2)+StreamID(8)+Address(2)+TLS(1)+Ticket(4)+Challenge(4)+Metadata(4)+Properties(2)+BindTimeout(4)
-	STREAM_REQUEST: 29, // StreamID(8)+Source(2)+Topic(2)+Metadata(4)+Properties(2)+Ticket(4)+Address(2)+TLS(1)+BindTimeout(4)
-	STREAM_ACCEPT:  22, // StreamID(8)+Accepted(1)+Reason(1)+Message(2)+Challenge(4)+Metadata(4)+Properties(2)
-	STREAM_ABORT:   11, // StreamID(8)+Reason(1)+Message(2)
 }
 
 // Packet 数据包接口
@@ -88,16 +82,6 @@ func ReadPacketWithSize(r io.Reader, maxPacketSize uint32) (Packet, uint32, erro
 		pkt = &DeclarePacket{}
 	case DECLARE_RESP:
 		pkt = &DeclareRespPacket{}
-	case STREAM_OPEN:
-		pkt = &StreamOpenPacket{}
-	case STREAM_OPEN_OK:
-		pkt = &StreamOpenOkPacket{}
-	case STREAM_REQUEST:
-		pkt = &StreamRequestPacket{}
-	case STREAM_ACCEPT:
-		pkt = &StreamAcceptPacket{}
-	case STREAM_ABORT:
-		pkt = &StreamAbortPacket{}
 	default:
 		return nil, 0, ErrInvalidPacketType
 	}

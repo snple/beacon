@@ -1,7 +1,6 @@
 package client
 
 import (
-	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -41,19 +40,6 @@ type ClientOptions struct {
 	AuthMethod string
 	AuthData   []byte
 
-	// ===== stream（可选能力）=====
-	// StreamCapable 为 true 时，在 CONNECT 中声明支持 stream。
-	// 服务端默认关闭该能力，只有双方都开启时才能建流。
-	StreamCapable bool
-	// StreamAddress 覆盖服务端下发的 stream 端口地址（一般不需要设置）。
-	StreamAddress string
-	// StreamTLSConfig 用于连接 TLS stream 端口；为 nil 时使用系统根证书。
-	StreamTLSConfig *tls.Config
-	// StreamOpenTimeout 等待目标客户端接受 + 建流的最长时间。
-	StreamOpenTimeout time.Duration
-	// StreamDialTimeout 连接 stream 数据面端口的超时。
-	StreamDialTimeout time.Duration
-
 	Logger *zap.Logger
 }
 
@@ -70,8 +56,6 @@ func NewClientOptions() *ClientOptions {
 		DefaultMaxRecords: 100,
 		DefaultMaxBytes:   1 << 20,
 		DefaultWaitMs:     30000,
-		StreamOpenTimeout: 60 * time.Second,
-		StreamDialTimeout: 10 * time.Second,
 		Logger:            zap.NewNop(),
 	}
 }
@@ -95,12 +79,6 @@ func (o *ClientOptions) applyDefaults() {
 	}
 	if o.ReconnectMax == 0 {
 		o.ReconnectMax = def.ReconnectMax
-	}
-	if o.StreamOpenTimeout == 0 {
-		o.StreamOpenTimeout = def.StreamOpenTimeout
-	}
-	if o.StreamDialTimeout == 0 {
-		o.StreamDialTimeout = def.StreamDialTimeout
 	}
 	if o.Dialer == nil && o.Address == "" {
 		o.Address = "127.0.0.1:5208"
@@ -195,30 +173,6 @@ func (o *ClientOptions) WithPullDefaults(maxRecords uint16, maxBytes, waitMs uin
 // WithAuth 设置认证信息。
 func (o *ClientOptions) WithAuth(method string, data []byte) *ClientOptions {
 	o.AuthMethod, o.AuthData = method, data
-	return o
-}
-
-// WithStream 设置连接时是否声明支持 stream。
-func (o *ClientOptions) WithStream(capable bool) *ClientOptions {
-	o.StreamCapable = capable
-	return o
-}
-
-// WithStreamAddress 覆盖服务端下发的 stream 端口地址。
-func (o *ClientOptions) WithStreamAddress(addr string) *ClientOptions {
-	o.StreamAddress = addr
-	return o
-}
-
-// WithStreamTLSConfig 设置连接 TLS stream 端口使用的配置。
-func (o *ClientOptions) WithStreamTLSConfig(cfg *tls.Config) *ClientOptions {
-	o.StreamTLSConfig = cfg
-	return o
-}
-
-// WithStreamTimeout 设置建流与数据面拨号超时。
-func (o *ClientOptions) WithStreamTimeout(open, dial time.Duration) *ClientOptions {
-	o.StreamOpenTimeout, o.StreamDialTimeout = open, dial
 	return o
 }
 

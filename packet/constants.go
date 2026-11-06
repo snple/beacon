@@ -24,16 +24,7 @@ const (
 	DISCONNECT   PacketType = 11 // 断开（双向：客户端优雅关闭 / 服务端终止通知）
 	DECLARE      PacketType = 12 // 全量替换 channel 声明
 	DECLARE_RESP PacketType = 13 // 声明结果
-
-	// stream 控制面（数据面走独立的 stream 端口，见 stream/packet）。
-	// 14/15 曾用于已移除的 STREAM_HELLO/STREAM_HELLO_OK；能力改由
-	// CONNECT/CONNACK 的 spare bit 协商。
-	STREAM_OPEN    PacketType = 16 // 发起方向服务端申请建立流
-	STREAM_OPEN_OK PacketType = 17 // 申请结果（含票据与 stream 端口）
-	STREAM_REQUEST PacketType = 18 // 服务端转发给目标客户端
-	STREAM_ACCEPT  PacketType = 19 // 目标客户端接受/拒绝
-	STREAM_ABORT   PacketType = 21 // 服务端通知流已中止
-	// 20 曾用于已移除的 STREAM_ACCEPT_OK：接受结果直接由数据面 BIND 结果表达。
+	// 14-21 保留，不得复用。
 )
 
 func (t PacketType) String() string {
@@ -64,16 +55,6 @@ func (t PacketType) String() string {
 		return "DECLARE"
 	case DECLARE_RESP:
 		return "DECLARE_RESP"
-	case STREAM_OPEN:
-		return "STREAM_OPEN"
-	case STREAM_OPEN_OK:
-		return "STREAM_OPEN_OK"
-	case STREAM_REQUEST:
-		return "STREAM_REQUEST"
-	case STREAM_ACCEPT:
-		return "STREAM_ACCEPT"
-	case STREAM_ABORT:
-		return "STREAM_ABORT"
 	default:
 		return "UNKNOWN"
 	}
@@ -82,8 +63,7 @@ func (t PacketType) String() string {
 // IsRequest 报告该类型是否是客户端发起的请求（需要响应）。
 func (t PacketType) IsRequest() bool {
 	switch t {
-	case CONNECT, PUSH, PULL, COMMIT, DECLARE, PING,
-		STREAM_OPEN, STREAM_ACCEPT:
+	case CONNECT, PUSH, PULL, COMMIT, DECLARE, PING:
 		return true
 	default:
 		return false
@@ -173,16 +153,7 @@ const (
 	ReasonKicked          ReasonCode = 0xA2 // 被管理面踢下线
 	ReasonConsumerBacklog ReasonCode = 0xA3 // 消费端积压导致发布被拒
 	ReasonChannelInvalid  ReasonCode = 0xA4 // 消息中的 channel 非法（含保留前缀）
-
-	// ========== stream (0xB0-0xB7) ==========
-	ReasonStreamDisabled          ReasonCode = 0xB0 // 服务端未开启 stream
-	ReasonStreamRejected          ReasonCode = 0xB1 // 目标客户端拒绝
-	ReasonStreamTargetUnavailable ReasonCode = 0xB2 // 目标不在线或不支持 stream
-	ReasonStreamNotFound          ReasonCode = 0xB3 // 流不存在或已过期
-	ReasonStreamLimitExceeded     ReasonCode = 0xB4 // 达到流配额
-	ReasonStreamBindFailed        ReasonCode = 0xB5 // 数据面绑定/握手失败
-	ReasonStreamUnauthorized      ReasonCode = 0xB6 // 未授权建立该流
-	ReasonStreamTimeout           ReasonCode = 0xB7 // 建流协商或绑定超时
+	// 0xB0-0xBF 保留，不得复用。
 )
 
 func (r ReasonCode) String() string {
@@ -243,22 +214,6 @@ func (r ReasonCode) String() string {
 		return "Consumer backlog"
 	case ReasonChannelInvalid:
 		return "Channel invalid"
-	case ReasonStreamDisabled:
-		return "Stream disabled"
-	case ReasonStreamRejected:
-		return "Stream rejected"
-	case ReasonStreamTargetUnavailable:
-		return "Stream target unavailable"
-	case ReasonStreamNotFound:
-		return "Stream not found"
-	case ReasonStreamLimitExceeded:
-		return "Stream limit exceeded"
-	case ReasonStreamBindFailed:
-		return "Stream bind failed"
-	case ReasonStreamUnauthorized:
-		return "Stream unauthorized"
-	case ReasonStreamTimeout:
-		return "Stream timeout"
 	default:
 		return "Unknown reason"
 	}

@@ -6,7 +6,6 @@ Beacon 是一个**面向 IoT 的拉取式消息服务**：生产者 `PUSH` 到 c
 **服务端从不主动推送消息**：除了请求响应和连接终止通知，broker 不向客户端发送任何数据包。
 
 - 协议规格：[`docs/protocol-v4.md`](./docs/protocol-v4.md)
-- stream 数据面协议：[`docs/stream-protocol.md`](./docs/stream-protocol.md)
 - 嵌入式客户端实现要点：[`docs/embedded-client-guide.md`](./docs/embedded-client-guide.md)
 - 进程内管理 API：[`docs/admin-api-design.md`](./docs/admin-api-design.md)
 
@@ -60,9 +59,6 @@ go run ./cmd/core --addr :5208 --metrics-addr :9101
 | `--session-timeout` | 离线会话保留秒数（`0` = 断开即清理） |
 | `--max-inflight-bytes` | 全局在途消息字节上限（`-1` = 不限） |
 | `--max-channel-length` | channel 名/过滤器最大字节数（256–1024，默认 256） |
-| `--stream-addr` | stream 数据面 TCP 监听地址（空 = 不启动） |
-| `--stream-enabled` | 是否开启 stream 能力（默认关闭） |
-| `--stream-advertise` | 告知客户端的 stream 地址（默认使用监听器地址） |
 
 ### 客户端（CLI）
 
@@ -250,54 +246,6 @@ WebSocket 默认只接受同源（无 `Origin` 的非浏览器客户端不受影
 `core.NewCoreOptions().WithWSCheckOrigin(fn)`。
 
 所有传输共用同一线格式，行为完全一致。
-
-## 点对点流（可选能力）
-
-stream 用于在两个已认证客户端之间打通一条 TCP 通道。控制面复用主连接完成协商，
-数据面走 core 的独立端口；建立后只做字节转发，不进入消息队列。
-
-能力默认关闭，双方都需要显式开启。能力声明复用 `CONNECT`/`CONNACK` 的 spare bit，
-没有额外的 HELLO 往返；旧客户端/旧服务端忽略该位，线格式保持兼容。
-
-```go
-// 服务端
-opts := core.NewCoreOptions().
-    WithStreamEnabled(true)          // 默认 false，core 构造时固定
-opts.WithStreamAdvertiseAddr("beacon.example.com:5209")
-go b.ServeStreamTCP(":5209")          // 或 ServeStreamTLS(addr, tlsConfig)
-
-// 客户端
-opts := client.NewClientOptions().
-    WithCore("beacon.example.com:5208").
-    WithClientID("device-a").
-    WithStream(true)                  // 在 CONNECT 中声明支持 stream
-```
-
-接收方：
-
-```go
-b.OnStreamRequest(func(req *client.StreamRequest) {
-    s, err := req.Accept(ctx, nil, nil)   // s 实现 net.Conn / io.ReadWriteCloser
-    if err != nil {
-        return
-    }
-    defer s.Close()
-    io.Copy(s, s)
-})
-
-// 或者阻塞式
-s, err := b.AcceptStream(ctx)
-```
-
-发起方：
-
-```go
-s, err := a.OpenStream(ctx, "device-b", "chat/1", []byte("meta"), map[string]string{"k": "v"})
-```
-
-数据面票据一次性、默认 30s 有效；任一方主连接断开或被接管，关联的流会立即关闭。
-服务端只统计活跃流数与双向字节数，见 `GetStats().Streams*` / `Core.Streams()`。
-协议细节：[`docs/stream-protocol.md`](./docs/stream-protocol.md)。
 
 ## 开发
 

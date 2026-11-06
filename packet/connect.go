@@ -18,11 +18,9 @@ const (
 	// ConnectFlagCleanSession 丢弃该 ClientID 的既有会话状态
 	// （pending/delivered/声明），以全新会话建立本次连接。
 	ConnectFlagCleanSession ConnectFlags = 1 << 0
-	// ConnectFlagStream 声明客户端支持点对点流。
-	ConnectFlagStream ConnectFlags = 1 << 1
 )
 
-const connectFlagsKnown = ConnectFlagCleanSession | ConnectFlagStream
+const connectFlagsKnown = ConnectFlagCleanSession
 
 // Unknown 返回未定义的标志位，供服务端拒绝无法理解的 CONNECT。
 func (f ConnectFlags) Unknown() ConnectFlags { return f &^ connectFlagsKnown }
@@ -44,12 +42,6 @@ func (p *ConnectPacket) CleanSession() bool { return p.HasFlag(ConnectFlagCleanS
 
 // SetCleanSession 设置是否要求新建会话。
 func (p *ConnectPacket) SetCleanSession(on bool) { p.SetFlag(ConnectFlagCleanSession, on) }
-
-// StreamCapable 报告客户端是否声明支持 stream。
-func (p *ConnectPacket) StreamCapable() bool { return p.HasFlag(ConnectFlagStream) }
-
-// SetStreamCapable 设置是否声明支持 stream。
-func (p *ConnectPacket) SetStreamCapable(on bool) { p.SetFlag(ConnectFlagStream, on) }
 
 // ConnectPacket CONNECT：建立连接与单轮认证。
 //
@@ -171,10 +163,6 @@ type ConnackFlags uint8
 const (
 	// ConnackFlagSessionPresent 表示复用了既有会话。
 	ConnackFlagSessionPresent ConnackFlags = 1 << 0
-	// ConnackFlagStreamEnabled 表示服务端为本次连接启用了点对点流。
-	ConnackFlagStreamEnabled ConnackFlags = 1 << 1
-	// ConnackFlagStreamSupported 表示服务端实现了 stream 控制包。
-	ConnackFlagStreamSupported ConnackFlags = 1 << 2
 )
 
 // HasFlag 报告某个开关是否置位。
@@ -194,18 +182,6 @@ func (p *ConnackPacket) SessionPresent() bool { return p.HasFlag(ConnackFlagSess
 
 // SetSessionPresent 设置是否复用既有会话。
 func (p *ConnackPacket) SetSessionPresent(on bool) { p.SetFlag(ConnackFlagSessionPresent, on) }
-
-// StreamEnabled 报告服务端是否为本次连接启用 stream。
-func (p *ConnackPacket) StreamEnabled() bool { return p.HasFlag(ConnackFlagStreamEnabled) }
-
-// SetStreamEnabled 设置是否启用 stream。
-func (p *ConnackPacket) SetStreamEnabled(on bool) { p.SetFlag(ConnackFlagStreamEnabled, on) }
-
-// StreamSupported 报告服务端是否实现 stream 控制包。
-func (p *ConnackPacket) StreamSupported() bool { return p.HasFlag(ConnackFlagStreamSupported) }
-
-// SetStreamSupported 设置是否实现 stream 控制包。
-func (p *ConnackPacket) SetStreamSupported(on bool) { p.SetFlag(ConnackFlagStreamSupported, on) }
 
 // ConnackPacket CONNACK：连接响应。
 type ConnackPacket struct {
