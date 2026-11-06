@@ -121,7 +121,6 @@ acceptor 角色 BIND，避免无关连接占用窗口。
 | 会话被同 ClientID 接管 | 旧连接关联的流全部关闭 |
 | 目标拒绝 | 发起方收到 `STREAM_OPEN_OK(StreamRejected)` |
 | 接受后未在 `BindTimeout` 内完成双端绑定 | 两端收到 `STREAM_ABORT(StreamTimeout)` |
-| 运行期关闭 stream 能力 | 只拒绝新 `STREAM_OPEN`，存量流继续 |
 | core 停止 | 关闭 stream 监听器与所有数据面连接 |
 
 流不跨重连恢复：客户端重连后需要重新发起 `OpenStream`。

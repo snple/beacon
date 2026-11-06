@@ -392,9 +392,9 @@ S → A  STREAM_OPEN_OK { RequestID, ReasonCode, Message, StreamID, StreamAddres
 - B 发送 `STREAM_ACCEPT` 后即可连接数据面。`ACCEPT` 与 `BIND` 走两条连接，BIND 可能先到；
   服务端会为 ACCEPT 保留最多 1 秒的追赶窗口，之后仍未接受则返回 `BindFailed`。
 - 服务端只向在 `CONNECT` 中声明 `StreamCapable` 且当前在线的客户端转发 `STREAM_REQUEST`。
-- `SetStreamEnabled(false)` 只拒绝新的 `STREAM_OPEN`；已建立和已接受待绑定的流不受影响。
-- `CONNACK.StreamEnabled=0` 只是连接时的状态：只要 `StreamSupported=1`，服务端运行期
-  重新开启后客户端仍可直接尝试 `STREAM_OPEN`，以服务端返回结果为准。
+- stream 能力在 core 构造时由 `WithStreamEnabled` 固定，运行期不可切换；需要变更时重建 core。
+- `CONNACK.StreamEnabled=0` 只是连接时的状态：只要 `StreamSupported=1`，客户端仍可直接尝试
+  `STREAM_OPEN`，以服务端返回结果为准。
 
 stream 相关原因码：
 

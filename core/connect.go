@@ -222,7 +222,7 @@ func (c *Core) handleConn(nc net.Conn) {
 	connack.SetSessionPresent(sessionPresent)
 	connack.SetStreamSupported(true) // 本实现支持 stream 控制包
 	_, _, hasStreamListener := c.streamAdvertise()
-	connack.SetStreamEnabled(connect.StreamCapable() && c.streamEnabled.Load() && hasStreamListener)
+	connack.SetStreamEnabled(connect.StreamCapable() && c.options.StreamEnabled && hasStreamListener)
 	connack.AssignedClientID = clientID
 	connack.ServerMaxPacketSize = c.options.MaxPacketSize
 	connack.KeepAlive = keepAlive

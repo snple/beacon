@@ -23,7 +23,7 @@ type ServerInfo struct {
     MaxChannelLength int // channel 名/过滤器最大字节数（256–1024）
     Storage         string // 固定 "memory"
 
-    StreamEnabled bool   // stream 能力是否开启
+    StreamEnabled bool   // 构造时是否启用 stream 能力
     StreamAddress string // 告知客户端的 stream 数据面地址
     StreamsActive int64  // 当前活跃流数
 }
@@ -100,8 +100,7 @@ type StreamInfo struct {
 }
 
 func (c *Core) Streams() []StreamInfo       // 按 StreamID 升序
-func (c *Core) StreamEnabled() bool
-func (c *Core) SetStreamEnabled(enabled bool) // 关闭只拒绝新流，存量流继续
+func (c *Core) StreamEnabled() bool         // 构造时的 stream 能力开关
 ```
 
 ## 写操作

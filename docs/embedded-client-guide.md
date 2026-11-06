@@ -54,8 +54,8 @@ stream 能力直接在 `CONNECT`/`CONNACK` 中协商，**没有额外的 HELLO �
 - `CONNACK.Flags` 字节的 **bit0** = `SessionPresent`，**bit1** = `StreamEnabled`（服务端为本次连接启用），**bit2** = `StreamSupported`（服务端实现该能力）。
 
 旧实现只读取 bit0，因此线格式保持兼容。`StreamEnabled=0` 表示连接时服务端未启用
-（未配置监听器或能力关闭）；只要 `StreamSupported=1`，服务端运行期开启后 `OpenStream`
-仍可直接尝试，以服务端返回的 `StreamDisabled` 为准。`StreamSupported=0` 表示旧服务端，
+（未配置监听器或能力关闭）；只要 `StreamSupported=1`，客户端仍可直接尝试 `OpenStream`，
+以服务端返回的 `StreamDisabled` 为准。`StreamSupported=0` 表示旧服务端，
 不要发送 `STREAM_OPEN`。
 
 建流流程见 [protocol-v4.md](./protocol-v4.md) 的 `STREAM_*`，数据面见

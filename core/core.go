@@ -52,8 +52,7 @@ type Core struct {
 	handshakeConnsMu sync.Mutex
 
 	// ===== stream =====
-	streamEnabled atomic.Bool
-	streamIDGen   atomic.Uint64
+	streamIDGen atomic.Uint64
 
 	streamMu      sync.Mutex
 	streamPending map[uint64]*streamPending
@@ -138,7 +137,6 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 		streamListeners: make(map[uint64]streamListenerEntry),
 		streamConns:     make(map[net.Conn]struct{}),
 	}
-	c.streamEnabled.Store(opts.StreamEnabled)
 
 	if opts.MaxHandshakeConnections > 0 {
 		c.handshakeSlots = make(chan struct{}, opts.MaxHandshakeConnections)

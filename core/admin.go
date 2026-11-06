@@ -108,7 +108,7 @@ func (c *Core) Info() ServerInfo {
 		MaxChannelLength: c.options.MaxChannelLength,
 		Storage:          "memory",
 
-		StreamEnabled: c.streamEnabled.Load(),
+		StreamEnabled: c.options.StreamEnabled,
 		StreamAddress: streamAddr,
 		StreamsActive: c.stats.StreamsActive.Load(),
 	}

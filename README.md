@@ -262,10 +262,9 @@ stream 用于在两个已认证客户端之间打通一条 TCP 通道。控制�
 ```go
 // 服务端
 opts := core.NewCoreOptions().
-    WithStreamEnabled(true)          // 默认 false
+    WithStreamEnabled(true)          // 默认 false，core 构造时固定
 opts.WithStreamAdvertiseAddr("beacon.example.com:5209")
 go b.ServeStreamTCP(":5209")          // 或 ServeStreamTLS(addr, tlsConfig)
-b.SetStreamEnabled(false)             // 运行期开关：只拒绝新流，存量流继续
 
 // 客户端
 opts := client.NewClientOptions().

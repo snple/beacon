@@ -118,18 +118,8 @@ type streamSession struct {
 	closed    atomic.Bool
 }
 
-// StreamEnabled 报告 stream 能力当前是否开启。
-func (c *Core) StreamEnabled() bool { return c.streamEnabled.Load() }
-
-// SetStreamEnabled 在运行期开启或关闭 stream 能力。
-//
-// 关闭只影响之后的新建流：已建立与已接受待绑定的流不会被强制中断。
-func (c *Core) SetStreamEnabled(enabled bool) {
-	old := c.streamEnabled.Swap(enabled)
-	if old != enabled {
-		c.logger.Info("stream capability changed", zap.Bool("enabled", enabled))
-	}
-}
+// StreamEnabled 报告构造时是否启用了 stream 能力。
+func (c *Core) StreamEnabled() bool { return c.options.StreamEnabled }
 
 // StreamInfo 是活跃流的公开视图。
 type StreamInfo struct {
@@ -828,7 +818,7 @@ func (cn *conn) handleStreamOpen(p *packet.StreamOpenPacket) error {
 		return c.sendStreamOpenError(cn, p.RequestID, packet.ReasonStreamDisabled,
 			"client did not declare stream support")
 	}
-	if !c.streamEnabled.Load() {
+	if !c.options.StreamEnabled {
 		return c.sendStreamOpenError(cn, p.RequestID, packet.ReasonStreamDisabled,
 			"stream capability is disabled")
 	}
