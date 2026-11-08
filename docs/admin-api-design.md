@@ -163,8 +163,6 @@ type ConnectionHandler interface {
 | 选项 | 默认 | 作用 |
 |---|---|---|
 | `WithQueueCap(n)` | 10000 | 单客户端 pending 队列上限（0 = 不限） |
-| `WithMaxRecords(n)` | 1000 | 单次 PULL 条数上限，同时约束 delivered 长度 |
-| `WithMaxBytes(n)` | 1 MiB | 单次 PULL / PUSH 字节上限 |
 | `WithMaxChannelsPerClient(n)` | 1024 | 单客户端声明数量上限 |
 | `WithMaxChannelLength(n)` | 256 | channel 名/过滤器最大字节数（256–1024） |
 | `WithPushRateLimit(rate, burst)` | 不限 | 每客户端发布速率 |
@@ -174,8 +172,9 @@ type ConnectionHandler interface {
 | `WithMaxSessions(n)` | 10000 | 会话总数上限（含离线保留；<0 = 不限） |
 | `WithMaxInflightBytes(n)` | 256 MiB | 全局在途消息字节上限（<0 = 不限） |
 | `WithWaitLimit(max)` | 300s | 长轮询时长上限 |
-| `WithMaxBatch(n)` | 16 | 单次 PUSH 记录数上限（1..128） |
 | `WithMaxRecordBytes(n)` | 1 MiB | 单条记录上限（payload + channel/target/source/headers） |
 | `WithSessionTimeout(seconds)` | 86400s | 会话保留时长（0 = 断开即清理） |
 | `WithNoProgressLimits(soft, hard)` | 4 / 16 | 无进展 pull 的惩罚阈值（0 = 关闭） |
 | `WithUncommittedTimeout(d)` | 关闭 | delivered 长期未确认超时 |
+
+`PUSH` / `PULL` / `COMMIT` 每次只处理一条记录，`delivered` 最多保留 2 条未确认消息（Medium / High 各一）。

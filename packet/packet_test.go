@@ -56,14 +56,12 @@ func TestConnackRoundTrip(t *testing.T) {
 	in.KeepAlive = 25
 	in.SessionID = 42
 	in.Pending = [3]uint32{1, 2, 3}
-	in.Delivered = 4
-	in.OldestUncommitted = NewPacketID()
 
 	out := roundTrip(t, in).(*ConnackPacket)
 	if !out.SessionPresent() || out.AssignedClientID != "c1" || out.SessionID != 42 || out.KeepAlive != 25 {
 		t.Fatalf("mismatch: %+v", out)
 	}
-	if out.Pending != in.Pending || out.Delivered != 4 || out.OldestUncommitted != in.OldestUncommitted {
+	if out.Pending != in.Pending {
 		t.Fatalf("depth mismatch: %+v", out)
 	}
 }
@@ -79,10 +77,7 @@ func TestPushRoundTrip(t *testing.T) {
 	if out.RequestID != 7 || out.Flags&PushFlagWantAck == 0 {
 		t.Fatalf("header mismatch")
 	}
-	if len(out.Records) != 1 {
-		t.Fatalf("records: %d", len(out.Records))
-	}
-	got := out.Records[0]
+	got := out.Record
 	if got.Channel != "a/b" || string(got.Payload) != "hello" || got.Priority() != PriorityHigh {
 		t.Fatalf("record mismatch: %+v", got)
 	}
@@ -97,25 +92,32 @@ func TestPullRoundTrip(t *testing.T) {
 	rec.SetDup(true)
 
 	in := NewPullOkPacket(9)
-	in.More = true
-	in.Records = []Record{rec}
+	in.SetRecord(rec)
 	in.Pending = [3]uint32{5, 0, 0}
-	in.Delivered = 2
-	in.RetryAfterMs = 250
 
 	out := roundTrip(t, in).(*PullOkPacket)
-	if out.RequestID != 9 || !out.More || out.RetryAfterMs != 250 || out.Delivered != 2 {
+	if out.RequestID != 9 || !out.HasRecord() || out.Pending != in.Pending {
 		t.Fatalf("mismatch: %+v", out)
 	}
-	if len(out.Records) != 1 || !out.Records[0].Dup() || out.Records[0].Priority() != PriorityLow {
-		t.Fatalf("record mismatch: %+v", out.Records)
+	if !out.Record.Dup() || out.Record.Priority() != PriorityLow {
+		t.Fatalf("record mismatch: %+v", out.Record)
+	}
+}
+
+func TestPullOkEmptyRoundTrip(t *testing.T) {
+	in := NewPullOkPacket(10)
+	in.Pending = [3]uint32{1, 2, 3}
+
+	out := roundTrip(t, in).(*PullOkPacket)
+	if out.HasRecord() || out.Pending != in.Pending {
+		t.Fatalf("mismatch: %+v", out)
 	}
 }
 
 func TestCommitAndDeclareRoundTrip(t *testing.T) {
 	id := NewPacketID()
-	c := roundTrip(t, NewCommitPacket(3, id, id)).(*CommitPacket)
-	if c.RequestID != 3 || len(c.IDs) != 2 {
+	c := roundTrip(t, NewCommitPacket(3, id)).(*CommitPacket)
+	if c.RequestID != 3 || c.ID != id {
 		t.Fatalf("commit mismatch")
 	}
 
@@ -127,9 +129,9 @@ func TestCommitAndDeclareRoundTrip(t *testing.T) {
 
 	resp := NewDeclareRespPacket(5)
 	resp.Results = []ChannelResult{{Channel: "x/**", Reason: ReasonSuccess}}
-	resp.Limits = Limits{MaxPacketSize: 4096, MaxRecords: 10, MaxWaitMs: 1000, MaxBatch: 100, MaxChannelsPerClient: 8}
+	resp.Limits = Limits{MaxPacketSize: 4096, MaxWaitMs: 1000, MaxChannelsPerClient: 8}
 	rr := roundTrip(t, resp).(*DeclareRespPacket)
-	if len(rr.Results) != 1 || rr.Limits.MaxRecords != 10 || rr.Limits.MaxChannelsPerClient != 8 {
+	if len(rr.Results) != 1 || rr.Limits.MaxWaitMs != 1000 || rr.Limits.MaxChannelsPerClient != 8 {
 		t.Fatalf("declare resp mismatch: %+v", rr)
 	}
 }
@@ -164,7 +166,7 @@ func TestPriorityDefault(t *testing.T) {
 }
 
 func TestMalformedRejected(t *testing.T) {
-	frame, err := EncodePacket(NewPullPacket(1, 10, 100, 0), 0)
+	frame, err := EncodePacket(NewPullPacket(1, 0), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +197,7 @@ func TestInvalidPriorityRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const recordFlagsOffset = 5 + 8 + 1 + 2
+	const recordFlagsOffset = 5 + 4 + 1
 	frame[recordFlagsOffset] = recordFlagHasPriority | 0x03<<1
 
 	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
@@ -206,12 +208,12 @@ func TestInvalidPriorityRejected(t *testing.T) {
 // 回归：声明超长字符串的小包不能触发大分配。
 func TestDeclaredStringLengthRejected(t *testing.T) {
 	body := []byte{}
-	body = append(body, 0, 0, 0, 0, 0, 0, 0, 1)        // RequestID
+	body = append(body, 0, 0, 0, 1)                    // RequestID
 	body = append(body, 0)                             // Flags
-	body = append(body, 0, 1)                          // Count = 1
 	body = append(body, 0)                             // Record flags
 	body = append(body, make([]byte, PacketIDSize)...) // ID
 	body = append(body, 0xFF, 0xFF)                    // Channel length = 65535
+	body = append(body, make([]byte, 10)...)           // padding: pass the minimum length check
 
 	frame := make([]byte, 5+len(body))
 	frame[0] = byte(PUSH)
@@ -225,11 +227,10 @@ func TestDeclaredStringLengthRejected(t *testing.T) {
 
 // 回归：声明超大 payload 长度的小包不能触发巨型内存分配。
 func TestHugePayloadLengthRejected(t *testing.T) {
-	// 手工构造 PUSH：RequestID(8) + Flags(1) + Count(2) + 一条只有头部、payload 长度声明为 0xFFFFFFFF
+	// 手工构造 PUSH：RequestID(4) + Flags(1) + 一条只有头部、payload 长度声明为 0xFFFFFFFF
 	body := []byte{}
-	body = append(body, 0, 0, 0, 0, 0, 0, 0, 1)        // RequestID
+	body = append(body, 0, 0, 0, 1)                    // RequestID
 	body = append(body, 0)                             // Flags
-	body = append(body, 0, 1)                          // Count = 1
 	body = append(body, 0)                             // Record flags
 	body = append(body, make([]byte, PacketIDSize)...) // ID
 	body = append(body, 0, 1, 'a')                     // Channel
@@ -245,22 +246,5 @@ func TestHugePayloadLengthRejected(t *testing.T) {
 
 	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
 		t.Fatal("expected error for oversized declared payload length")
-	}
-}
-
-// 回归：声明超多记录但包体很小时不应预分配大切片。
-func TestHugeRecordCountRejected(t *testing.T) {
-	body := []byte{}
-	body = append(body, 0, 0, 0, 0, 0, 0, 0, 1) // RequestID
-	body = append(body, 0)                      // Flags
-	body = append(body, 0xFF, 0xFF)             // Count = 65535
-
-	frame := make([]byte, 5+len(body))
-	frame[0] = byte(PUSH)
-	binary.BigEndian.PutUint32(frame[1:5], uint32(len(body)))
-	copy(frame[5:], body)
-
-	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
-		t.Fatal("expected error for impossible record count")
 	}
 }

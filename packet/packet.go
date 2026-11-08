@@ -10,18 +10,18 @@ import (
 // minRemainingLength 各包类型所需的最小 Remaining Length。
 var minRemainingLength = map[PacketType]uint32{
 	CONNECT:      25, // Version(1)+CleanSession(1)+ClientID(2)+KeepAlive(2)+MaxPacketSize(4)+WillFlags(1)+WillChannel(2)+WillPayload(4)+WillHeaders(2)+AuthMethod(2)+AuthData(4)
-	CONNACK:      46, // SessionPresent(1)+ReasonCode(1)+ClientID(2)+MaxPacketSize(4)+KeepAlive(2)+SessionID(8)+Pending(12)+Delivered(4)+OldestUncommitted(12)
-	PUSH:         11, // RequestID(8)+Flags(1)+Count(2)
-	PUSH_OK:      10, // RequestID(8)+Count(2)
-	PULL:         18, // RequestID(8)+MaxRecords(2)+MaxBytes(4)+WaitMs(4)
-	PULL_OK:      44, // RequestID(8)+Reason(1)+Flags(1)+RetryAfterMs(4)+Pending(12)+Delivered(4)+OldestUncommitted(12)+Count(2)
-	COMMIT:       10, // RequestID(8)+Count(2)
-	COMMIT_OK:    26, // RequestID(8)+Committed(2)+Pending(12)+Delivered(4)
+	CONNACK:      30, // SessionPresent(1)+ReasonCode(1)+ClientID(2)+MaxPacketSize(4)+KeepAlive(2)+SessionID(8)+Pending(12)
+	PUSH:         30, // RequestID(4)+Flags(1)+Record(25)
+	PUSH_OK:      25, // RequestID(4)+Reason(1)+ID(12)+Matched(4)+Dropped(4)
+	PULL:         8,  // RequestID(4)+WaitMs(4)
+	PULL_OK:      18, // RequestID(4)+Reason(1)+Flags(1)+Pending(12)
+	COMMIT:       16, // RequestID(4)+ID(12)
+	COMMIT_OK:    16, // RequestID(4)+Pending(12)
 	PING:         12, // Seq(4)+Timestamp(8)
 	PONG:         12, // Seq(4)+Echo(8)
 	DISCONNECT:   2,  // ReasonCode(1)+Flags(1)
-	DECLARE:      10, // RequestID(8)+Count(2)
-	DECLARE_RESP: 44, // RequestID(8)+Accepted(2)+Count(2)+Pending(12)+Delivered(4)+limits(16)
+	DECLARE:      6,  // RequestID(4)+Count(2)
+	DECLARE_RESP: 30, // RequestID(4)+Accepted(2)+Count(2)+Pending(12)+limits(10)
 }
 
 // Packet 数据包接口

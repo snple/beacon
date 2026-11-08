@@ -6,19 +6,19 @@ import "io"
 //
 // 空列表表示取消全部兴趣；希望接收所有 channel 时必须显式声明 "**"。
 type DeclarePacket struct {
-	RequestID uint64
+	RequestID uint32
 	Channels  []ChannelDecl
 }
 
 // NewDeclarePacket 创建 DECLARE 包。
-func NewDeclarePacket(requestID uint64, channels []ChannelDecl) *DeclarePacket {
+func NewDeclarePacket(requestID uint32, channels []ChannelDecl) *DeclarePacket {
 	return &DeclarePacket{RequestID: requestID, Channels: channels}
 }
 
 func (p *DeclarePacket) Type() PacketType { return DECLARE }
 
 func (p *DeclarePacket) encode(w io.Writer) error {
-	if err := EncodeUint64(w, p.RequestID); err != nil {
+	if err := EncodeUint32(w, p.RequestID); err != nil {
 		return err
 	}
 	if len(p.Channels) > MaxStringLength {
@@ -37,7 +37,7 @@ func (p *DeclarePacket) encode(w io.Writer) error {
 
 func (p *DeclarePacket) decode(r io.Reader, _ FixedHeader) error {
 	var err error
-	if p.RequestID, err = DecodeUint64(r); err != nil {
+	if p.RequestID, err = DecodeUint32(r); err != nil {
 		return err
 	}
 	count, err := DecodeUint16(r)
@@ -63,12 +63,8 @@ func (p *DeclarePacket) decode(r io.Reader, _ FixedHeader) error {
 
 // Limits 服务端对单连接/单会话施加的上限。
 type Limits struct {
-	MaxPacketSize uint32
-	// MaxRecords 单次 PULL 返回的最大记录数。
-	MaxRecords uint16
-	MaxWaitMs  uint32
-	// MaxBatch 单次 PUSH 允许的最大记录数。
-	MaxBatch             uint32
+	MaxPacketSize        uint32
+	MaxWaitMs            uint32
 	MaxChannelsPerClient uint16
 }
 
@@ -83,23 +79,22 @@ type ChannelResult struct {
 // Results 只包含被拒绝的声明项；Accepted 是被接受的项数。
 // 整批因数量超限被拒绝时 Results 为空且 Accepted=0。
 type DeclareRespPacket struct {
-	RequestID uint64
+	RequestID uint32
 	Accepted  uint16
 	Results   []ChannelResult
 	Pending   [3]uint32
-	Delivered uint32
 	Limits    Limits
 }
 
 // NewDeclareRespPacket 创建 DECLARE_RESP 包。
-func NewDeclareRespPacket(requestID uint64) *DeclareRespPacket {
+func NewDeclareRespPacket(requestID uint32) *DeclareRespPacket {
 	return &DeclareRespPacket{RequestID: requestID}
 }
 
 func (p *DeclareRespPacket) Type() PacketType { return DECLARE_RESP }
 
 func (p *DeclareRespPacket) encode(w io.Writer) error {
-	if err := EncodeUint64(w, p.RequestID); err != nil {
+	if err := EncodeUint32(w, p.RequestID); err != nil {
 		return err
 	}
 	if err := EncodeUint16(w, p.Accepted); err != nil {
@@ -124,19 +119,10 @@ func (p *DeclareRespPacket) encode(w io.Writer) error {
 			return err
 		}
 	}
-	if err := EncodeUint32(w, p.Delivered); err != nil {
-		return err
-	}
 	if err := EncodeUint32(w, p.Limits.MaxPacketSize); err != nil {
 		return err
 	}
-	if err := EncodeUint16(w, p.Limits.MaxRecords); err != nil {
-		return err
-	}
 	if err := EncodeUint32(w, p.Limits.MaxWaitMs); err != nil {
-		return err
-	}
-	if err := EncodeUint32(w, p.Limits.MaxBatch); err != nil {
 		return err
 	}
 	return EncodeUint16(w, p.Limits.MaxChannelsPerClient)
@@ -144,7 +130,7 @@ func (p *DeclareRespPacket) encode(w io.Writer) error {
 
 func (p *DeclareRespPacket) decode(r io.Reader, _ FixedHeader) error {
 	var err error
-	if p.RequestID, err = DecodeUint64(r); err != nil {
+	if p.RequestID, err = DecodeUint32(r); err != nil {
 		return err
 	}
 	if p.Accepted, err = DecodeUint16(r); err != nil {
@@ -176,19 +162,10 @@ func (p *DeclareRespPacket) decode(r io.Reader, _ FixedHeader) error {
 			return err
 		}
 	}
-	if p.Delivered, err = DecodeUint32(r); err != nil {
-		return err
-	}
 	if p.Limits.MaxPacketSize, err = DecodeUint32(r); err != nil {
 		return err
 	}
-	if p.Limits.MaxRecords, err = DecodeUint16(r); err != nil {
-		return err
-	}
 	if p.Limits.MaxWaitMs, err = DecodeUint32(r); err != nil {
-		return err
-	}
-	if p.Limits.MaxBatch, err = DecodeUint32(r); err != nil {
 		return err
 	}
 	p.Limits.MaxChannelsPerClient, err = DecodeUint16(r)

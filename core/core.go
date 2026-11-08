@@ -145,7 +145,7 @@ func (c *Core) Start() error {
 	c.logger.Info("core started",
 		zap.Uint32("maxClients", c.options.MaxClients),
 		zap.Int("queueCap", c.options.QueueCap),
-		zap.Uint16("maxRecords", c.options.MaxRecords))
+		zap.Uint32("maxRecordBytes", c.options.MaxRecordBytes))
 	return nil
 }
 

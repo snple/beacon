@@ -31,10 +31,8 @@ type ClientOptions struct {
 	// CONNECT 本身不携带订阅声明。
 	Channels []string
 
-	// 拉取默认值（PollMessage 使用）
-	DefaultMaxRecords uint16
-	DefaultMaxBytes   uint32
-	DefaultWaitMs     uint32
+	// 拉取默认长轮询时长（PollMessage 使用）
+	DefaultWaitMs uint32
 
 	// 认证
 	AuthMethod string
@@ -46,17 +44,15 @@ type ClientOptions struct {
 // NewClientOptions 创建默认配置。
 func NewClientOptions() *ClientOptions {
 	return &ClientOptions{
-		KeepAlive:         packet.DefaultKeepAlive,
-		MaxPacketSize:     packet.DefaultMaxPacketSize,
-		ConnectTimeout:    10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		AutoReconnect:     true,
-		ReconnectMin:      500 * time.Millisecond,
-		ReconnectMax:      30 * time.Second,
-		DefaultMaxRecords: 100,
-		DefaultMaxBytes:   1 << 20,
-		DefaultWaitMs:     30000,
-		Logger:            zap.NewNop(),
+		KeepAlive:      packet.DefaultKeepAlive,
+		MaxPacketSize:  packet.DefaultMaxPacketSize,
+		ConnectTimeout: 10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		AutoReconnect:  true,
+		ReconnectMin:   500 * time.Millisecond,
+		ReconnectMax:   30 * time.Second,
+		DefaultWaitMs:  30000,
+		Logger:         zap.NewNop(),
 	}
 }
 
@@ -164,9 +160,9 @@ func (o *ClientOptions) WithChannels(channels ...string) *ClientOptions {
 	return o
 }
 
-// WithPullDefaults 设置拉取默认值。
-func (o *ClientOptions) WithPullDefaults(maxRecords uint16, maxBytes, waitMs uint32) *ClientOptions {
-	o.DefaultMaxRecords, o.DefaultMaxBytes, o.DefaultWaitMs = maxRecords, maxBytes, waitMs
+// WithDefaultWait 设置拉取的默认长轮询时长（毫秒）。
+func (o *ClientOptions) WithDefaultWait(waitMs uint32) *ClientOptions {
+	o.DefaultWaitMs = waitMs
 	return o
 }
 

@@ -12,10 +12,9 @@ Beacon 是一个**面向 IoT 的拉取式消息服务**：生产者 `PUSH` 到 c
 ## 为什么是 pull
 
 - **消费节奏由客户端决定**：按自身处理能力拉取，慢消费者只影响自己的队列。
-- **队列有界**：`pending` 受 `QueueCap` 约束，`delivered` 受 `MaxRecords` 约束
-  （`delivered` 非空时 PULL 只重发未确认消息，不取新数据，因此长度天然不超过一次
-  拉取量）。
-- **确认即前缀压缩**：`COMMIT` 直接推进 `delivered` 的 FIFO 头，无需独立 ack 表与重传定时器。
+- **队列有界**：`pending` 受 `QueueCap` 约束；`PULL` 每次只返回一条记录，
+  `delivered` 最多保留 2 条未确认消息（Medium / High 各一），同级未确认时只重发、不取新数据。
+- **确认即释放投递位**：`COMMIT` 直接移除对应投递位，无需独立 ack 表与重传定时器。
 - **低延迟**：空队列时用长轮询（`WaitMs`）等待，有数据立即返回。
 
 ## 核心模型
@@ -26,7 +25,7 @@ PUSH ──匹配 channel──▶ 各客户端 pending[3]（Low/Medium/High，�
 PULL ──────────────────────────────▶│  取出 → 写出
                                     │     ├─ Low      ：写出即删
                                     │     └─ Medium/High：移入 delivered
-COMMIT(ids) ───────────────────────▶│  delivered 中按 ID 删除
+COMMIT(id) ────────────────────────▶│  delivered 中按 ID 删除
 ```
 
 - **优先级即可靠性**：`High`/`Medium` 必须 `COMMIT`；`Low` 尽力而为，写出即删。
@@ -53,8 +52,6 @@ go run ./cmd/core --addr :5208 --metrics-addr :9101
 | `--metrics-addr` | `/healthz`、`/metrics`、`/stats` 监听地址 |
 | `--auth-file` | 设备密钥 TOML（`[[nodes]] serial=... secret=...`） |
 | `--queue-cap` | 单客户端 pending 队列上限 |
-| `--max-records` / `--max-bytes` | 单次 PULL 的记录数/字节上限 |
-| `--max-batch` | 单次 PUSH 的记录数上限（默认 16，上限 128） |
 | `--max-sessions` | 会话总数上限（含离线保留，`-1` = 不限） |
 | `--session-timeout` | 离线会话保留秒数（`0` = 断开即清理） |
 | `--max-inflight-bytes` | 全局在途消息字节上限（`-1` = 不限） |
@@ -63,7 +60,7 @@ go run ./cmd/core --addr :5208 --metrics-addr :9101
 ### 客户端（CLI）
 
 ```bash
-# 订阅并消费（逐批拉取 + 整批确认）
+# 订阅并消费（逐条拉取 + 确认）
 go run ./cmd/client -core 127.0.0.1:5208 -client-id c1 -mode pull -channel 'sensors/**'
 
 # 丢弃该 client-id 的既有会话（pending/delivered/声明）后重新连接
@@ -97,16 +94,17 @@ if err := c.ConnectContext(ctx); err != nil {
 }
 defer c.Close()
 
-// 消费循环：拉取 → 处理 → 整批确认
+// 消费循环：逐条拉取 → 处理 → 确认
 for {
-    msgs, err := c.Pull(ctx, client.PullOptions{MaxRecords: 100, WaitMs: 30000})
+    m, err := c.Pull(ctx, client.PullOptions{WaitMs: 30000})
     if err != nil {
         return err
     }
-    for _, m := range msgs {
-        handle(m.Channel, m.Payload)
+    if m == nil {
+        continue
     }
-    if _, err := c.CommitAll(ctx); err != nil {
+    handle(m.Channel, m.Payload)
+    if err := m.Ack(ctx); err != nil {
         return err
     }
 }
@@ -138,14 +136,14 @@ SDK 层的默认值不同——为了让朴素循环不会空转：
 | `Pull(ctx, client.PullOptions{})` | 长轮询，最多等 `ClientOptions.DefaultWaitMs`（默认 30s） |
 | `Pull(ctx, client.PullOptions{WaitMs: 500})` | 最多等 500ms |
 | `Pull(ctx, client.PullOptions{Immediate: true})` | 立即返回，不等待 |
-| `PollMessage(ctx, timeout)` | 内部按批长轮询，攒够或者超时 |
+| `PollMessage(ctx, timeout)` | 内部逐条长轮询，直到取到消息或超时 |
 
 同一连接同一时刻只允许一个在途 `PULL`，第二个会收到 `PULL_OK(RateLimited)`；
 SDK 已在 `Pull` 内部串行化。
 
 ### 必须「先 commit 再 pull」
 
-`PULL` 在存在未确认消息时只重发这些消息。因此**客户端不 commit 就再 pull，只会反复收到同样的内容**。
+`PULL` 在存在同优先级未确认消息时只重发这些消息。因此**客户端不 commit 就再 pull，只会反复收到同样的内容**。
 服务端会统计连续无进展的拉取次数：
 
 - 超过 `NoProgressSoft`（默认 4）：返回 `PULL_OK(ReasonCommitRequired)`，不返回数据；
@@ -153,11 +151,9 @@ SDK 已在 `Pull` 内部串行化。
 
 `client.CommitAll()` / `Message.Ack()` 负责提交。
 
-### 响应只回显失败项
+### 响应内容
 
-为了不让响应超过对端声明的 `MaxPacketSize`：
-
-- `PUSH_OK.Results` 只包含失败或发生丢弃的记录，全部成功时为空；
+- `PUSH_OK` 始终回显该条记录的原因、ID 与匹配/丢弃数量；
 - `DECLARE_RESP.Results` 只包含被拒绝的声明，`Accepted` 给出接受数量。
 
 ### 消息 ID
@@ -168,7 +164,7 @@ SDK 已在 `Pull` 内部串行化。
 ### 优先级与丢弃
 
 队列满时按「低优先级优先丢弃、同优先级丢最旧」处理；如果新消息的优先级低于当前最低非空优先级，
-则丢弃新消息本身。被丢弃的数量通过 `PUSH_OK.Results[].Dropped` 返回给发布者。
+则丢弃新消息本身。被丢弃的数量通过 `PUSH_OK.Dropped` 返回给发布者。
 
 会话离线时队列**只保留 Medium / High**：Low 消息在入队前直接丢弃，不占用离线队列；
 离线队列满后仍按上述优先级策略淘汰。

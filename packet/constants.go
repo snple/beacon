@@ -240,9 +240,6 @@ const (
 	// 服务端实际生效的上限由 CoreOptions.MaxChannelLength 配置，取值必须落在
 	// [MinChannelLength, MaxChannelLength] 区间内。
 	MaxChannelLength = 1024
-	// MaxPushBatch 单次 PUSH 允许的最大记录数（协议硬上限）。
-	// 服务端可通过 MaxBatch 配置更小的值，默认 16。
-	MaxPushBatch = 128
 	// MaxPacketSize 协议硬上限。
 	MaxPacketSize = 268435456 // 256 MB
 )

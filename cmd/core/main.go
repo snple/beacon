@@ -79,9 +79,6 @@ func main() {
 		metricsAddr = flag.String("metrics-addr", "", "metrics/health listen address (empty to disable)")
 		authFile    = flag.String("auth-file", "", "TOML file with device secrets (empty to disable auth)")
 		queueCap    = flag.Int("queue-cap", 10000, "per-client pending queue capacity (0 = unlimited)")
-		maxRecords  = flag.Int("max-records", 1000, "max records per PULL")
-		maxBatch    = flag.Int("max-batch", 16, "max records per PUSH")
-		maxBytes    = flag.Int("max-bytes", 1<<20, "max bytes per PULL/PUSH")
 		maxSessions = flag.Int("max-sessions", 10000, "max sessions including offline (-1 = unlimited)")
 		maxInflight = flag.Int64("max-inflight-bytes", 256<<20, "global in-flight message bytes (-1 = unlimited)")
 		sessTimeout = flag.Int("session-timeout", 86400,
@@ -109,15 +106,6 @@ func main() {
 	}
 	defer func() { _ = logger.Sync() }()
 
-	if *maxRecords < 1 || *maxRecords > 65535 {
-		logger.Fatal("max-records must be between 1 and 65535")
-	}
-	if *maxBytes < 1 || int64(*maxBytes) > int64(^uint32(0)) {
-		logger.Fatal("max-bytes must be between 1 and 4294967295")
-	}
-	if *maxBatch < 1 || *maxBatch > packet.MaxPushBatch {
-		logger.Fatal("max-batch must be between 1 and 128")
-	}
 	if *maxChanLen < packet.MinChannelLength || *maxChanLen > packet.MaxChannelLength {
 		logger.Fatal("max-channel-length must be between 256 and 1024")
 	}
@@ -127,9 +115,6 @@ func main() {
 
 	opts := core.NewCoreOptions().
 		WithQueueCap(*queueCap).
-		WithMaxRecords(uint16(*maxRecords)).
-		WithMaxBatch(uint32(*maxBatch)).
-		WithMaxBytes(uint32(*maxBytes)).
 		WithMaxSessions(*maxSessions).
 		WithMaxInflightBytes(*maxInflight).
 		WithSessionTimeout(uint32(*sessTimeout)).

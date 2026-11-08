@@ -23,10 +23,8 @@ type Client struct {
 	connack *packet.ConnackPacket
 	// assignedID 是服务端在 CONNACK 中分配的 ClientID（可能覆盖配置值）。
 	assignedID string
-	// limits 是最近一次 DECLARE_RESP 公布的配额。
-	limits *packet.Limits
 
-	reqSeq atomic.Uint64
+	reqSeq atomic.Uint32
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -36,16 +34,12 @@ type Client struct {
 	uncommittedMu sync.Mutex
 	uncommitted   []*Message
 
-	// pullMu 串行化 Pull：并发拉取会让服务端重复投递同一批消息，
+	// pullMu 串行化 Pull：并发拉取会让服务端重复投递同一条消息，
 	// 也会让本地未确认集合互相覆盖。
 	pullMu sync.Mutex
 
 	// connectMu 串行化建连，避免重复 Connect 泄漏旧连接或启动多个 supervise。
 	connectMu sync.Mutex
-
-	// PollMessage 的本地缓冲
-	bufMu sync.Mutex
-	buf   []*Message
 
 	// 会话变化回调
 	onSessionReset func(prev, next uint64)
@@ -268,8 +262,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	c.logger.Debug("connected",
 		zap.String("clientID", connack.AssignedClientID),
 		zap.Bool("sessionPresent", connack.SessionPresent()),
-		zap.Uint32("pending", connack.Pending[0]+connack.Pending[1]+connack.Pending[2]),
-		zap.Uint32("delivered", connack.Delivered))
+		zap.Uint32("pending", connack.Pending[0]+connack.Pending[1]+connack.Pending[2]))
 
 	// 订阅声明统一由 DECLARE 承担（CONNECT 不再携带）：每次建连后重新声明，
 	// 这样 CleanSession 清空或被按新身份过滤掉的声明都会在重连后恢复。
@@ -367,7 +360,7 @@ func (c *Client) currentConn() *conn {
 }
 
 // roundTrip 发送请求并等待响应。
-func (c *Client) roundTrip(ctx context.Context, pkt packet.Packet, requestID uint64, timeout time.Duration) (packet.Packet, error) {
+func (c *Client) roundTrip(ctx context.Context, pkt packet.Packet, requestID uint32, timeout time.Duration) (packet.Packet, error) {
 	cn := c.currentConn()
 	if cn == nil || cn.closed.Load() {
 		return nil, ErrNotConnected
@@ -406,13 +399,13 @@ func (c *Client) roundTrip(ctx context.Context, pkt packet.Packet, requestID uin
 	}
 }
 
-func (c *Client) nextRequestID() uint64 { return c.reqSeq.Add(1) }
+func (c *Client) nextRequestID() uint32 { return c.reqSeq.Add(1) }
 
 // ============================================================================
 // 本地未确认追踪
 // ============================================================================
 
-// trackUncommitted 把本批需要确认的消息并入未确认集合（按 ID 去重）。
+// trackUncommitted 把需要确认的消息并入未确认集合（按 ID 去重）。
 //
 // 服务端会重发未确认消息，因此同一 ID 可能多次出现；这里按 ID 去重，
 // 保证集合规模只与「真正未确认的条数」有关。
@@ -449,10 +442,6 @@ func (c *Client) dropLocalUncommitted() {
 	c.uncommittedMu.Lock()
 	c.uncommitted = nil
 	c.uncommittedMu.Unlock()
-
-	c.bufMu.Lock()
-	c.buf = nil
-	c.bufMu.Unlock()
 }
 
 func (c *Client) hasUncommitted() bool {

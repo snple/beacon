@@ -114,27 +114,36 @@ func TestPollMessageTimeout(t *testing.T) {
 	}
 }
 
-func TestPushBatch(t *testing.T) {
+func TestPushSingleRecord(t *testing.T) {
 	_, addr := startCore(t, nil)
 	sub := newTestClient(t, addr, "sub-1", "ch/**")
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	records := []client.PushRecord{
-		{Channel: "ch/a", Payload: []byte("1")},
-		{Channel: "ch/b", Payload: []byte("2")},
-		{Channel: "other/c", Payload: []byte("3")},
-	}
-	if err := pub.PushBatch(ctx, records, client.PushOptions{}); err != nil {
-		t.Fatal(err)
+	for _, m := range []struct {
+		channel string
+		payload string
+	}{
+		{"ch/a", "1"},
+		{"ch/b", "2"},
+		{"other/c", "3"},
+	} {
+		if err := pub.Push(ctx, m.channel, []byte(m.payload), client.PushOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 matching messages, got %d", len(msgs))
+	for _, want := range []string{"1", "2"} {
+		msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg == nil || string(msg.Payload) != want {
+			t.Fatalf("expected %q, got %+v", want, msg)
+		}
+		if err := msg.Ack(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -153,12 +162,12 @@ func TestPushWithoutAck(t *testing.T) {
 	for b.GetStats().MessagesReceived == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if msg == nil || string(msg.Payload) != "noack" {
+		t.Fatalf("expected noack message, got %+v", msg)
 	}
 }
 
@@ -200,12 +209,12 @@ func TestOfflineQueueDeliveredOnReconnect(t *testing.T) {
 		t.Fatal("session should be present after reconnect")
 	}
 
-	msgs, err := c2.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
+	msg, err := c2.Pull(ctx, client.PullOptions{WaitMs: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || string(msgs[0].Payload) != "queued" {
-		t.Fatalf("offline queue not delivered: %+v", msgs)
+	if msg == nil || string(msg.Payload) != "queued" {
+		t.Fatalf("offline queue not delivered: %+v", msg)
 	}
 }
 
@@ -265,12 +274,12 @@ func TestWebSocketTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs, err := c.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 1000})
+	msg, err := c.Pull(ctx, client.PullOptions{WaitMs: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || string(msgs[0].Payload) != "over ws" {
-		t.Fatalf("ws delivery failed: %+v", msgs)
+	if msg == nil || string(msg.Payload) != "over ws" {
+		t.Fatalf("ws delivery failed: %+v", msg)
 	}
 }
 
@@ -320,12 +329,12 @@ func TestDeclareReplacesChannels(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || msgs[0].Channel != "b/x" {
-		t.Fatalf("declare did not replace: %+v", msgs)
+	if msg == nil || msg.Channel != "b/x" {
+		t.Fatalf("declare did not replace: %+v", msg)
 	}
 }
 
@@ -338,23 +347,23 @@ func TestMessageAck(t *testing.T) {
 	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1")
+	if msg == nil {
+		t.Fatal("expected 1 message")
 	}
-	if err := msgs[0].Ack(ctx); err != nil {
+	if err := msg.Ack(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	again, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200})
+	again, err := sub.Pull(ctx, client.PullOptions{WaitMs: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(again) != 0 {
-		t.Fatalf("acked message should not be redelivered, got %d", len(again))
+	if again != nil {
+		t.Fatalf("acked message should not be redelivered, got %+v", again)
 	}
 }
 
@@ -374,12 +383,61 @@ func TestPriorityHighBeforeMedium(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 1, WaitMs: 300})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || string(msgs[0].Payload) != "high" {
-		t.Fatalf("expected high priority first, got %+v", msgs)
+	if msg == nil || string(msg.Payload) != "high" {
+		t.Fatalf("expected high priority first, got %+v", msg)
+	}
+}
+
+// 高优先级消息必须能绕过未确认的中优先级消息，占用第二个投递位。
+func TestHighPriorityBypassesUnackedMedium(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	medOpt := client.PushOptions{}.WithPriority(packet.PriorityMedium)
+	highOpt := client.PushOptions{}.WithPriority(packet.PriorityHigh)
+
+	if err := pub.Push(ctx, "ch/a", []byte("med"), medOpt); err != nil {
+		t.Fatal(err)
+	}
+	med, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if med == nil || string(med.Payload) != "med" {
+		t.Fatalf("expected medium message, got %+v", med)
+	}
+	// 故意不 commit med。
+
+	if err := pub.Push(ctx, "ch/a", []byte("high"), highOpt); err != nil {
+		t.Fatal(err)
+	}
+	high, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if high == nil || string(high.Payload) != "high" || high.Dup {
+		t.Fatalf("high priority should bypass unacked medium, got %+v", high)
+	}
+
+	info, err := b.GetClientInfo("sub-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Delivered != 2 {
+		t.Fatalf("delivered=%d, want 2 occupied slots", info.Delivered)
+	}
+
+	if n, err := sub.CommitAll(ctx); err != nil || n != 2 {
+		t.Fatalf("commit: n=%d err=%v", n, err)
+	}
+	if next, err := sub.Pull(ctx, client.PullOptions{WaitMs: 100}); err != nil || next != nil {
+		t.Fatalf("expected empty after commit, got %+v err=%v", next, err)
 	}
 }
 
@@ -403,27 +461,27 @@ func TestOnDeliverRejectsMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || msgs[0].Channel != "ch/ok" {
-		t.Fatalf("OnDeliver filter failed: %+v", msgs)
-	}
-	if b.GetStats().MessagesDropped != 1 {
-		t.Fatalf("dropped=%d", b.GetStats().MessagesDropped)
+	if msg == nil || msg.Channel != "ch/ok" {
+		t.Fatalf("OnDeliver filter failed: %+v", msg)
 	}
 	if _, err := sub.CommitAll(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	// 被丢弃的消息不能留在队列里
-	again, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 100})
+	// 第二次拉取会取出 ch/blocked，OnDeliver 拒绝后直接丢弃。
+	again, err := sub.Pull(ctx, client.PullOptions{WaitMs: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(again) != 0 {
-		t.Fatalf("rejected message should be gone, got %d", len(again))
+	if again != nil {
+		t.Fatalf("rejected message should be gone, got %+v", again)
+	}
+	if b.GetStats().MessagesDropped != 1 {
+		t.Fatalf("dropped=%d", b.GetStats().MessagesDropped)
 	}
 }
 
@@ -453,12 +511,12 @@ func TestQueueFullDoesNotLeakInflight(t *testing.T) {
 		t.Fatalf("inflight bytes = %d", got)
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || string(msgs[0].Payload) != "high" {
-		t.Fatalf("unexpected batch: %+v", msgs)
+	if msg == nil || string(msg.Payload) != "high" {
+		t.Fatalf("unexpected message: %+v", msg)
 	}
 	if _, err := sub.CommitAll(ctx); err != nil {
 		t.Fatal(err)
@@ -479,17 +537,17 @@ func TestAdminPushDefaultsToMedium(t *testing.T) {
 
 	b.Push("ch/a", []byte("v"), core.PushOptions{})
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message")
+	if msg == nil {
+		t.Fatal("expected 1 message")
 	}
-	if msgs[0].Priority != packet.PriorityMedium {
-		t.Fatalf("default priority = %v, want medium", msgs[0].Priority)
+	if msg.Priority != packet.PriorityMedium {
+		t.Fatalf("default priority = %v, want medium", msg.Priority)
 	}
-	if !msgs[0].NeedsCommit() {
+	if !msg.NeedsCommit() {
 		t.Fatal("medium priority must require commit")
 	}
 }
@@ -501,12 +559,12 @@ func TestAdminPushExplicitLow(t *testing.T) {
 
 	b.Push("ch/a", []byte("v"), core.PushOptions{}.WithPriority(packet.PriorityLow))
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || msgs[0].NeedsCommit() {
-		t.Fatalf("explicit low priority should not need commit: %+v", msgs)
+	if msg == nil || msg.NeedsCommit() {
+		t.Fatalf("explicit low priority should not need commit: %+v", msg)
 	}
 }
 
@@ -527,12 +585,12 @@ func TestAdminPushCopiesPayload(t *testing.T) {
 	b.Push("ch/a", payload, core.PushOptions{})
 	copy(payload, "MODIFIED")
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || string(msgs[0].Payload) != "original" {
-		t.Fatalf("payload not copied: %q", msgs[0].Payload)
+	if msg == nil || string(msg.Payload) != "original" {
+		t.Fatalf("payload not copied: %+v", msg)
 	}
 }
 
@@ -639,12 +697,17 @@ func TestOfflineQueuePolicy(t *testing.T) {
 	if !sub2.SessionPresent() {
 		t.Fatal("session should be present on reconnect")
 	}
-	msgs, err := sub2.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(msgs) != 2 || msgs[0].Channel != "off/h1" || msgs[1].Channel != "off/m2" {
-		t.Fatalf("offline queue = %+v, want [off/h1 off/m2]", msgs)
+	for _, want := range []string{"off/h1", "off/m2"} {
+		msg, err := sub2.Pull(ctx, client.PullOptions{WaitMs: 300})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg == nil || msg.Channel != want {
+			t.Fatalf("offline queue = %+v, want %s", msg, want)
+		}
+		if err := msg.Ack(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -680,12 +743,12 @@ func TestCleanSessionClearsState(t *testing.T) {
 	if c2.SessionPresent() {
 		t.Fatal("CleanSession should report SessionPresent=false")
 	}
-	msgs, err := c2.Pull(ctx, client.PullOptions{MaxRecords: 10, Immediate: true})
+	msg, err := c2.Pull(ctx, client.PullOptions{Immediate: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("CleanSession should clear pending, got %+v", msgs)
+	if msg != nil {
+		t.Fatalf("CleanSession should clear pending, got %+v", msg)
 	}
 }
 
@@ -722,12 +785,12 @@ func TestCleanSessionTakeover(t *testing.T) {
 	if c2.SessionPresent() {
 		t.Fatal("CleanSession takeover should report SessionPresent=false")
 	}
-	msgs, err := c2.Pull(ctx, client.PullOptions{MaxRecords: 10, Immediate: true})
+	msg, err := c2.Pull(ctx, client.PullOptions{Immediate: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("CleanSession takeover should clear pending, got %+v", msgs)
+	if msg != nil {
+		t.Fatalf("CleanSession takeover should clear pending, got %+v", msg)
 	}
 	if old.Connected() {
 		t.Fatal("old connection should be taken over")
@@ -843,9 +906,9 @@ func TestTargetedPublishRequiresPermission(t *testing.T) {
 	if err := pubAllowed.PushTo(ctx, "acl-sub", "cmd/x", []byte("v"), client.PushOptions{}); err != nil {
 		t.Fatalf("targeted publish should be allowed: %v", err)
 	}
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
-	if err != nil || len(msgs) != 1 {
-		t.Fatalf("target should receive message, got %+v err=%v", msgs, err)
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || msg == nil {
+		t.Fatalf("target should receive message, got %+v err=%v", msg, err)
 	}
 }
 

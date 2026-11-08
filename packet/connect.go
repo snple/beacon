@@ -191,11 +191,9 @@ type ConnackPacket struct {
 	AssignedClientID    string
 	ServerMaxPacketSize uint32
 	// KeepAlive 是服务端要求的心跳间隔（秒）；客户端应以此覆盖自己的值。
-	KeepAlive         uint16
-	SessionID         uint64
-	Pending           [3]uint32
-	Delivered         uint32
-	OldestUncommitted PacketID
+	KeepAlive uint16
+	SessionID uint64
+	Pending   [3]uint32
 }
 
 // NewConnackPacket 创建 CONNACK 包。
@@ -229,10 +227,7 @@ func (p *ConnackPacket) encode(w io.Writer) error {
 			return err
 		}
 	}
-	if err := EncodeUint32(w, p.Delivered); err != nil {
-		return err
-	}
-	return EncodePacketID(w, p.OldestUncommitted)
+	return nil
 }
 
 func (p *ConnackPacket) decode(r io.Reader, _ FixedHeader) error {
@@ -265,9 +260,5 @@ func (p *ConnackPacket) decode(r io.Reader, _ FixedHeader) error {
 			return err
 		}
 	}
-	if p.Delivered, err = DecodeUint32(r); err != nil {
-		return err
-	}
-	p.OldestUncommitted, err = DecodePacketID(r)
-	return err
+	return nil
 }

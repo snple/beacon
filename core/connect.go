@@ -214,7 +214,7 @@ func (c *Core) handleConn(nc net.Conn) {
 	}
 	cn.maxPacketSize = outMax
 
-	pending, delivered, oldest := cl.mb.depth()
+	pending, _, _ := cl.mb.depth()
 	connack := packet.NewConnackPacket(packet.ReasonSuccess)
 	connack.SetSessionPresent(sessionPresent)
 	connack.AssignedClientID = clientID
@@ -222,8 +222,6 @@ func (c *Core) handleConn(nc net.Conn) {
 	connack.KeepAlive = keepAlive
 	connack.SessionID = cl.sessionID.Load()
 	connack.Pending = pending
-	connack.Delivered = delivered
-	connack.OldestUncommitted = oldest
 
 	if err := cn.writePacket(connack); err != nil {
 		return

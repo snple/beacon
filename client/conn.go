@@ -22,7 +22,7 @@ type conn struct {
 	maxPacketSize uint32
 
 	pendingMu sync.Mutex
-	pending   map[uint64]chan packet.Packet
+	pending   map[uint32]chan packet.Packet
 
 	closed    atomic.Bool
 	closeOnce sync.Once
@@ -40,18 +40,18 @@ func newConn(c *Client, nc net.Conn) *conn {
 		nc:            nc,
 		writeTimeout:  c.opts.WriteTimeout,
 		maxPacketSize: c.opts.MaxPacketSize,
-		pending:       make(map[uint64]chan packet.Packet),
+		pending:       make(map[uint32]chan packet.Packet),
 		done:          make(chan struct{}),
 	}
 }
 
-func (cn *conn) register(id uint64, ch chan packet.Packet) {
+func (cn *conn) register(id uint32, ch chan packet.Packet) {
 	cn.pendingMu.Lock()
 	cn.pending[id] = ch
 	cn.pendingMu.Unlock()
 }
 
-func (cn *conn) unregister(id uint64) {
+func (cn *conn) unregister(id uint32) {
 	cn.pendingMu.Lock()
 	delete(cn.pending, id)
 	cn.pendingMu.Unlock()
@@ -159,7 +159,7 @@ func (cn *conn) readLoop() {
 }
 
 // requestIDOf 返回响应包关联的请求 ID。
-func requestIDOf(pkt packet.Packet) uint64 {
+func requestIDOf(pkt packet.Packet) uint32 {
 	switch p := pkt.(type) {
 	case *packet.PushOkPacket:
 		return p.RequestID

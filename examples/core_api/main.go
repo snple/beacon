@@ -54,18 +54,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 客户端拉取 + 整批确认
-	msgs, err := worker.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 1000})
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, m := range msgs {
+	// 客户端逐条拉取 + 确认
+	for {
+		m, err := worker.Pull(ctx, client.PullOptions{WaitMs: 1000})
+		if err != nil {
+			log.Fatal(err)
+		}
+		if m == nil {
+			break
+		}
 		fmt.Printf("got %-12s %-16s priority=%s\n", m.Channel, string(m.Payload), m.Priority)
-	}
-	if n, err := worker.CommitAll(ctx); err != nil {
-		fmt.Println("commit failed:", err)
-	} else {
-		fmt.Printf("committed %d messages\n", n)
+		if err := m.Ack(ctx); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	for _, s := range b.ListClients() {

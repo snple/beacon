@@ -73,23 +73,23 @@ Payload    4 字节长度 + 字节
 
 ```c
 for (;;) {
-    pull(max_records, max_bytes, wait_ms);   // 阻塞直到有数据或超时
-    for (each record in PULL_OK.records) {
-        handle(record);
-        collect(record.id);
+    pull(wait_ms);                       // 阻塞直到有数据或超时
+    if (!(PULL_OK.Flags & HasRecord)) {
+        continue;
     }
-    commit(collect_ids);                     // 必须在下次 pull 之前
+    handle(PULL_OK.Record);
+    commit(PULL_OK.Record.ID);           // 必须在下次 pull 之前
 }
 ```
 
-**关键点：`delivered` 非空时，`PULL` 只重发未确认的消息。**
-如果没有 commit 就再次 pull，会收到一模一样的内容（`Dup=1`），并不会前进。
-服务端会统计连续无进展的拉取次数，超过阈值会返回 `CommitRequired` 甚至断开连接。
+每次 `PULL` 最多返回一条记录，`COMMIT` 也只确认一条。
 
-因此：
+**关键点：`delivered` 有 2 个投递位（Medium / High 各一，Low 不占位）。**
+存在未确认消息时，只有优先级严格更高的新消息会占用空闲投递位，否则 `PULL`
+会重发未确认消息（`Dup=1`），不会前进。服务端会统计连续无进展的拉取次数，
+超过阈值会返回 `CommitRequired` 甚至断开连接。
 
-- 不要「拉一批 → 慢慢处理 → 中途再拉」；
-- 一次 pull 的 `MaxRecords` 应等于一轮能处理完并提交的量。
+因此：处理并提交当前消息后，再拉取下一。不要「拉到消息 → 慢慢处理 → 中途再拉」。
 
 ## 5. 优先级与确认
 
@@ -142,11 +142,11 @@ Low 的消息 ID 不需要提交；提交了也没有副作用（服务端幂等
 单个客户端在服务端的占用上界：
 
 ```
-QueueCap 条（pending）  +  MaxRecords 条（delivered）
+QueueCap 条（pending）  +  2 条（delivered）
 每条约 24 字节索引 + 共享消息体
 ```
 
-客户端侧只需保存当前一批未确认消息的 ID 列表。
+客户端侧最多只需保存 2 条未确认消息的 ID。
 
 ## 10. 常见错误
 
@@ -155,7 +155,7 @@ QueueCap 条（pending）  +  MaxRecords 条（delivered）
 | 反复收到同样的消息 | 没有 commit 就再次 pull |
 | `PULL_OK.Reason = CommitRequired` | 连续无进展 pull 超过软上限 |
 | 连接被服务端关闭且收到 `CommitRequired` | 超过硬上限 |
-| `PUSH_OK` 全部 `NoMatch` | 没有客户端声明匹配的 channel |
+| `PUSH_OK` 返回 `NoMatch` | 没有客户端声明匹配的 channel |
 | `PUSH_OK` 返回 `TargetNotFound` | 定向目标是 clientID，且该客户端没有会话 |
 | `PUSH_OK` 返回 `NoMatch`（定向） | 目标存在但未声明匹配该 channel 的过滤器 |
 | `PUSH_OK` 返回 `NotAuthorized`（定向） | 发布方没有定向投递权限 |

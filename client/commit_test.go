@@ -47,7 +47,7 @@ func TestMarkCommittedRemovesEntries(t *testing.T) {
 	drop.ID = packet.NewPacketID()
 	c.uncommitted = []*Message{keep, drop}
 
-	c.markCommitted([]packet.PacketID{drop.ID})
+	c.markCommitted(drop.ID)
 
 	if len(c.uncommitted) != 1 || c.uncommitted[0] != keep {
 		t.Fatalf("unexpected uncommitted set: %+v", c.uncommitted)

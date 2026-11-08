@@ -23,14 +23,11 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 	resp := packet.NewDeclareRespPacket(p.RequestID)
 	resp.Limits = packet.Limits{
 		MaxPacketSize:        opts.MaxPacketSize,
-		MaxRecords:           opts.MaxRecords,
 		MaxWaitMs:            opts.MaxWaitMs,
-		MaxBatch:             opts.MaxBatch,
 		MaxChannelsPerClient: uint16(min(opts.MaxChannelsPerClient, 65535)),
 	}
-	pending, delivered, _ := cl.mb.depth()
+	pending, _, _ := cl.mb.depth()
 	resp.Pending = pending
-	resp.Delivered = delivered
 
 	// 数量超限整批拒绝：只返回一条紧凑错误，而不是逐项回显。
 	if opts.MaxChannelsPerClient > 0 && len(p.Channels) > opts.MaxChannelsPerClient {

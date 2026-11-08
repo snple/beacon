@@ -22,7 +22,7 @@
 
 **帧级超限是连接级错误**：`Remaining Length` 超过本端上限时，包边界已不可信，
 无法继续解析后续字节，因此直接终止连接（服务端发 `DISCONNECT(PacketTooLarge)`），
-不会逐条返回 `PUSH_OK` 记录级的 `PacketTooLarge`。
+不会返回 `PUSH_OK` 级别的 `PacketTooLarge`。
 
 ---
 
@@ -54,6 +54,7 @@
 - `bytes`：`uint32` 长度 + 原始字节
 - `stringmap`：`uint16` 条目数 + (`string` key, `string` value) × N，编码时按键排序
 - `PacketID`：12 字节，布局为 `[6B 毫秒时间戳][2B 计数器][4B 随机数]`
+- `RequestID`：`uint32`，由客户端生成并递增，服务端在响应中原样回显；回绕后可直接复用
 
 ---
 
@@ -128,11 +129,12 @@ CONNACK {
     ServerMaxPacketSize uint32
     KeepAlive           uint16   // 服务端要求的心跳间隔（秒），客户端必须以它为准
     SessionID           uint64   // 会话租约标识
-    Pending             [3]uint32 // Low / Medium / High 的未投递积压
-    Delivered           uint32    // 已投递未确认条数
-    OldestUncommitted   PacketID  // delivered 队头；空则全零
+    Pending             [3]uint32 // Low / Medium / High 的未投递积压（不含已投递未确认的那条）
 }
 ```
+
+已投递未确认的消息不计入 `Pending`；客户端重连后的 `PULL` 会以 `Dup=1`
+重新返回这些消息，确认后才继续取新消息。
 
 认证为**单轮**：`AuthMethod`/`AuthData` 在 `CONNECT` 中一次提交，失败时 `CONNACK` 携带错误原因码并关闭连接。
 
@@ -183,33 +185,25 @@ CONNACK {
 
 ```
 PUSH {
-    RequestID uint64
+    RequestID uint32
     Flags     uint8   // bit0 = WantAck
-    Count     uint16  // 不得超过服务端 MaxBatch（默认 16，上限 128）
-    Records   []Record
+    Record    Record
 }
 
 PUSH_OK {
-    RequestID uint64
-    Count     uint16
-    Results   []{
-        Reason  uint8
-        ID      PacketID
-        Matched uint32   // 入队成功的客户端数
-        Dropped uint32   // 目标离线且 Low 被丢弃，或因入队挤出旧消息的客户端数
-    }
+    RequestID uint32
+    Reason    uint8
+    ID        PacketID
+    Matched   uint32   // 入队成功的客户端数
+    Dropped   uint32   // 目标离线且 Low 被丢弃，或因入队挤出旧消息的客户端数
 }
 ```
 
-- 批量**不做整批原子**，逐条返回结果。
+- 每次 `PUSH` 只携带一条记录。
 - `WantAck=0` 时服务端**不发送** `PUSH_OK`（发送即可，无需等待）。
-- **`Results` 只回显未完全成功的记录**（失败或发生丢弃）：全部成功时 `Count=0`。
-  这样响应体积与失败数量相关，而不是与批量大小相关。
-- 记录数超过服务端 `MaxBatch`、批次编码后超过 `MaxBytes`、或触发发布限流时，
-  整批以 `QuotaExceeded` / `RateLimited` 拒绝，每条结果都带服务端生成的 `ID`。
-- 若失败项多到编码后超过对端 `CONNECT.MaxPacketSize`，服务端会**裁剪** `Results`
-  （至少保留一条，首条原因可信），避免因写包超限而断连。
-- 单条结果原因码：`Success`、`ChannelInvalid`、`NotAuthorized`、`PacketTooLarge`、
+- `PUSH_OK` 始终回显该记录的 `ID` 与处理结果，成功时 `Reason=Success`。
+- 触发发布限流时返回 `Reason=RateLimited`，`ID` 仍由服务端生成。
+- 原因码：`Success`、`ChannelInvalid`、`NotAuthorized`、`PacketTooLarge`、
   `TargetNotFound`、`NoMatch`、`ConsumerBacklog`、`RateLimited`、`QuotaExceeded`。
 - `PacketTooLarge` 是**记录级**结果（单条记录超过 `MaxRecordBytes`）；帧级超限在
   读取阶段就终止连接，见 §1。
@@ -227,85 +221,82 @@ PUSH_OK {
 
 ```
 PULL {
-    RequestID  uint64
-    MaxRecords uint16   // 0 或超上限时使用服务端上限
-    MaxBytes   uint32
-    WaitMs     uint32   // 长轮询时长；0 = 立即返回
+    RequestID uint32
+    WaitMs    uint32   // 长轮询时长；0 = 立即返回
 }
 
 PULL_OK {
-    RequestID    uint64
-    Reason       uint8
-    Flags        uint8   // bit0 = More
-    RetryAfterMs uint32
-    Pending      [3]uint32
-    Delivered    uint32
-    OldestUncommitted PacketID
-    Count        uint16
-    Records      []Record
+    RequestID uint32
+    Reason    uint8
+    Flags     uint8   // bit0 = HasRecord
+    Pending   [3]uint32
+    Record    Record  // 仅 HasRecord=1 时存在
 }
 ```
 
 拉取顺序：
 
-1. **`delivered` 非空时只返回 `delivered`**（`Dup=1`），不混入新消息；
-2. 否则按 **High → Medium → Low** 取值，存在更低优先级非空队列时，
-   本级最多占剩余预算的 80%（保证下级不会被完全饿死）。
+1. `delivered` 为空：按 **High → Medium → Low** 取一条新消息；
+2. `delivered` 非空且存在严格更高优先级的 pending 消息：投递该新消息；
+3. 否则重发 `delivered` 中的未确认消息（`Dup=1`）。
 
-`More=1` 表示被 `MaxRecords`/`MaxBytes` 截断。单条记录大于 `MaxBytes` 时仍至少返回一条。
+每次 `PULL` 最多返回一条记录；队列为空且未命中长轮询数据时返回 `HasRecord=0`。
+
+`delivered` 提供 2 个投递位（Medium / High 各一，Low 不占位）：
+
+- `delivered` 为空时，按 High → Medium → Low 取一条新消息；
+- 存在未确认消息时，只有**优先级严格更高**的新消息可以占用空闲投递位；
+- 否则 `PULL` 以 `Dup=1` 重发未确认消息，不取同级或更低优先级的新消息。
+
+因此未确认的 Medium 不会阻塞 High；同一优先级仍保持一次一条的确认节奏。
 
 **同一连接同一时刻只允许一个在途 PULL。** 第二个并发的 `PULL` 会立刻收到
-`PULL_OK(Reason=RateLimited, RetryAfterMs=1000)`，不返回任何记录：
+`PULL_OK(Reason=RateLimited)`，不返回任何记录；客户端应在约 1 秒后重试：
 并发拉取会让同一条消息被重复投递，也会让客户端的未确认集合互相覆盖。
 
 队列为空的处理完全由 `WaitMs` 决定：`0` 立即返回空结果，`>0` 最多等待该时长
 （服务端按 `MaxWaitMs` 裁剪）。
 
 `Reason=CommitRequired` 表示客户端在存在未确认消息时反复拉取，已超过软上限；
-此时 `Records` 为空，客户端应先 `COMMIT`。
+此时 `HasRecord=0`，客户端应先 `COMMIT`。
 
 ### 5.4 COMMIT / COMMIT_OK
 
 ```
 COMMIT {
-    RequestID uint64
-    Count     uint16
-    IDs       []PacketID   // 数量受 MaxPacketSize 约束
+    RequestID uint32
+    ID        PacketID
 }
 
 COMMIT_OK {
-    RequestID uint64
-    Committed uint16
+    RequestID uint32
     Pending   [3]uint32
-    Delivered uint32
 }
 ```
 
+- 每次 `COMMIT` 只确认一条消息。
 - 只影响 `delivered`；对不存在或重复的 ID 是幂等空操作。
-- 支持乱序确认（按 ID 匹配），确认后从头部压缩连续已确认的前缀。
+- 确认后释放对应投递位。
 - Low 优先级消息永不进入 `delivered`，其 ID 无需提交。
 
 ### 5.5 DECLARE / DECLARE_RESP
 
 ```
 DECLARE {
-    RequestID uint64
+    RequestID uint32
     Count     uint16
     Channels  []string   // 全量替换；[] = 取消全部；全部需显式 "**"
 }
 
 DECLARE_RESP {
-    RequestID uint64
+    RequestID uint32
     Accepted  uint16   // 被接受的声明数量
     Count     uint16   // Results 条数（只含失败项）
     Results   []{ Channel string, Reason uint8 }
     Pending   [3]uint32
-    Delivered uint32
     Limits {
         MaxPacketSize        uint32
-        MaxRecords           uint16  // 单次 PULL 最大记录数
         MaxWaitMs            uint32
-        MaxBatch             uint32  // 单次 PUSH 最大记录数
         MaxChannelsPerClient uint16
     }
 }
@@ -380,13 +371,10 @@ ACL 使用「模式包含」判定：声明过滤器 `F` 时要求存在允许�
 | 项 | 默认 |
 |---|---|
 | `QueueCap`（pending 条数） | 10000 |
-| `MaxRecords` | 1000 |
-| `MaxBytes` | 1 MiB |
 | `MaxRecordBytes`（单条记录：payload + channel/target/source/headers） | 1 MiB |
 | `MaxWaitMs`（服务端裁剪上限） | 300s |
 | `MaxChannelsPerClient` | 1024 |
 | `MaxChannelLength`（channel 名/过滤器字节数） | 256（可配 256–1024） |
-| `MaxBatch`（单次 PUSH 记录数） | 16（上限 128） |
 | `MaxClients`（在线连接数） | 10000 |
 | `MaxHandshakeConnections`（认证前并发连接） | 512 |
 | `SessionTimeout`（离线会话保留时长） | 86400s（0 = 断开即清理） |

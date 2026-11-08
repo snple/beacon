@@ -1,7 +1,6 @@
 package core_test
 
 import (
-	"bytes"
 	"encoding/binary"
 	"net"
 	"testing"
@@ -60,7 +59,7 @@ func (r *rawConn) declare(channels ...string) *packet.DeclareRespPacket {
 	for i, ch := range channels {
 		decls[i] = packet.ChannelDecl{Channel: ch}
 	}
-	req := packet.NewDeclarePacket(uint64(time.Now().UnixNano()), decls)
+	req := packet.NewDeclarePacket(uint32(time.Now().UnixNano()), decls)
 	r.send(req)
 
 	resp, err := r.recv()
@@ -106,13 +105,13 @@ func TestServerRejectsSecondInFlightPull(t *testing.T) {
 	rc := dialRaw(t, addr, "raw-1", "ch/a")
 
 	// 第一个 PULL 进入长轮询（队列为空）
-	rc.send(packet.NewPullPacket(1, 10, 0, 3000))
+	rc.send(packet.NewPullPacket(1, 3000))
 
 	time.Sleep(150 * time.Millisecond)
 
 	// 第二个 PULL 应立刻被拒绝
 	start := time.Now()
-	rc.send(packet.NewPullPacket(2, 10, 0, 100))
+	rc.send(packet.NewPullPacket(2, 100))
 
 	pkt := rc.expect(t, packet.PULL_OK)
 	first := pkt.(*packet.PullOkPacket)
@@ -125,9 +124,6 @@ func TestServerRejectsSecondInFlightPull(t *testing.T) {
 	if first.Reason != packet.ReasonRateLimited {
 		t.Fatalf("expected RateLimited, got %s", first.Reason)
 	}
-	if first.RetryAfterMs != 1000 {
-		t.Fatalf("RetryAfterMs = %d, want 1000", first.RetryAfterMs)
-	}
 
 	// 第一个 PULL 仍在等待，随后超时返回空响应
 	pkt = rc.expect(t, packet.PULL_OK)
@@ -138,8 +134,8 @@ func TestServerRejectsSecondInFlightPull(t *testing.T) {
 	if second.Reason != packet.ReasonSuccess {
 		t.Fatalf("first pull should succeed with empty result, got %s", second.Reason)
 	}
-	if len(second.Records) != 0 {
-		t.Fatalf("expected empty records, got %d", len(second.Records))
+	if second.HasRecord() {
+		t.Fatal("expected empty result")
 	}
 }
 
@@ -148,7 +144,7 @@ func TestLongPollDoesNotBlockPing(t *testing.T) {
 	_, addr := startCore(t, nil)
 	rc := dialRaw(t, addr, "raw-2", "ch/a")
 
-	rc.send(packet.NewPullPacket(1, 10, 0, 3000))
+	rc.send(packet.NewPullPacket(1, 3000))
 	time.Sleep(100 * time.Millisecond)
 
 	start := time.Now()
@@ -173,9 +169,8 @@ func TestInvalidPriorityIsRejected(t *testing.T) {
 	rc := dialRaw(t, addr, "raw-prio", "ch/a")
 
 	body := []byte{}
-	body = append(body, 0, 0, 0, 0, 0, 0, 0, 1)   // RequestID
+	body = append(body, 0, 0, 0, 1)               // RequestID
 	body = append(body, packet.PushFlagWantAck)   // Flags
-	body = append(body, 0, 1)                     // Count = 1
 	body = append(body, 0x16)                     // Record flags: HasPriority | priority=3
 	body = append(body, make([]byte, 12)...)      // ID
 	body = append(body, 0, 4, 'c', 'h', '/', 'a') // Channel
@@ -241,7 +236,7 @@ func TestPullHonorsClientMaxPacketSize(t *testing.T) {
 
 	b.Push("big/ch", make([]byte, 2048), core.PushOptions{}.WithPriority(packet.PriorityMedium))
 
-	if err := packet.WritePacket(nc, packet.NewPullPacket(1, 10, 0, 100), 0); err != nil {
+	if err := packet.WritePacket(nc, packet.NewPullPacket(1, 100), 0); err != nil {
 		t.Fatal(err)
 	}
 	pkt, err = packet.ReadPacket(nc, 1<<20)
@@ -252,8 +247,8 @@ func TestPullHonorsClientMaxPacketSize(t *testing.T) {
 	if ok.Reason != packet.ReasonPacketTooLarge {
 		t.Fatalf("expected PacketTooLarge, got %s", ok.Reason)
 	}
-	if len(ok.Records) != 0 {
-		t.Fatalf("expected no records, got %d", len(ok.Records))
+	if ok.HasRecord() {
+		t.Fatal("expected no record")
 	}
 
 	// 消息没有被丢弃，仍在队列中等待客户端提高上限后重试。
@@ -297,17 +292,17 @@ func TestLongPollWakesWithData(t *testing.T) {
 	b, addr := startCore(t, nil)
 	rc := dialRaw(t, addr, "raw-3", "ch/a")
 
-	rc.send(packet.NewPullPacket(1, 10, 0, 5000))
+	rc.send(packet.NewPullPacket(1, 5000))
 	time.Sleep(150 * time.Millisecond)
 
 	b.Push("ch/a", []byte("hello"), core.PushOptions{}.WithPriority(packet.PriorityHigh))
 
 	pkt := rc.expect(t, packet.PULL_OK)
 	ok := pkt.(*packet.PullOkPacket)
-	if len(ok.Records) != 1 || string(ok.Records[0].Payload) != "hello" {
-		t.Fatalf("unexpected records: %+v", ok.Records)
+	if !ok.HasRecord() || string(ok.Record.Payload) != "hello" {
+		t.Fatalf("unexpected record: %+v", ok.Record)
 	}
-	if ok.Records[0].Dup() {
+	if ok.Record.Dup() {
 		t.Fatal("first delivery should not be dup")
 	}
 }
@@ -352,36 +347,8 @@ func TestUnexpectedPacketSendsProtocolError(t *testing.T) {
 	}
 }
 
-// 超过 MaxBatch 的 PUSH 整批被拒，且每条结果都带服务端生成的 ID。
-func TestPushBatchLimitRejectedWithIDs(t *testing.T) {
-	_, addr := startCore(t, core.NewCoreOptions().WithMaxBatch(2))
-	rc := dialRaw(t, addr, "raw-batch", "ch/a")
-
-	rec := func() packet.Record {
-		r := packet.Record{Channel: "ch/a", Payload: []byte("x")}
-		r.SetPriority(packet.PriorityMedium)
-		return r
-	}
-	pkt := packet.NewPushPacket(7, rec(), rec(), rec())
-	pkt.Flags |= packet.PushFlagWantAck
-	rc.send(pkt)
-
-	resp := rc.expect(t, packet.PUSH_OK).(*packet.PushOkPacket)
-	if len(resp.Results) != 3 {
-		t.Fatalf("expected 3 rejected results, got %d", len(resp.Results))
-	}
-	for _, r := range resp.Results {
-		if r.Reason != packet.ReasonQuotaExceeded {
-			t.Fatalf("reason = %s, want QuotaExceeded", r.Reason)
-		}
-		if r.ID.IsZero() {
-			t.Fatal("rejected result must carry a server-generated ID")
-		}
-	}
-}
-
-// 全部成功的 PUSH_OK 不回显记录（紧凑响应）。
-func TestPushOkOmitsSuccessfulRecords(t *testing.T) {
+// PUSH_OK 始终携带单条记录的结果。
+func TestPushOkReportsResult(t *testing.T) {
 	_, addr := startCore(t, nil)
 	rc := dialRaw(t, addr, "raw-ok", "ch/a")
 
@@ -392,101 +359,42 @@ func TestPushOkOmitsSuccessfulRecords(t *testing.T) {
 	rc.send(pkt)
 
 	resp := rc.expect(t, packet.PUSH_OK).(*packet.PushOkPacket)
-	if len(resp.Results) != 0 {
-		t.Fatalf("successful push should not echo results, got %+v", resp.Results)
+	if resp.Reason != packet.ReasonSuccess || resp.Matched != 1 || resp.Dropped != 0 || resp.ID.IsZero() {
+		t.Fatalf("unexpected result: %+v", resp)
 	}
 }
 
-// 小缓冲客户端发送整批失败记录时，PUSH_OK 必须裁剪到 MaxPacketSize 内，
-// 而不是因为写包超限而断连。
-func TestPushOkTrimmedForSmallClient(t *testing.T) {
-	_, addr := startCore(t, core.NewCoreOptions().WithMaxBatch(50))
-
-	nc, err := net.DialTimeout("tcp", addr, 3*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer nc.Close()
-	_ = nc.SetDeadline(time.Now().Add(10 * time.Second))
-
-	connect := packet.NewConnectPacket("tiny-buf")
-	connect.KeepAlive = 60
-	connect.MaxPacketSize = 128
-	if err := packet.WritePacket(nc, connect, 0); err != nil {
-		t.Fatal(err)
-	}
-	if pkt, err := packet.ReadPacket(nc, 1<<20); err != nil {
-		t.Fatal(err)
-	} else if connack := pkt.(*packet.ConnackPacket); connack.ReasonCode != packet.ReasonSuccess {
-		t.Fatalf("connack: %s", connack.ReasonCode)
-	}
-
-	// 未声明任何 channel：整批记录都返回 NoMatch（失败项）。
-	pkt := packet.NewPushPacket(3)
-	pkt.Flags |= packet.PushFlagWantAck
-	for i := 0; i < 50; i++ {
-		rec := packet.Record{Channel: "ch/a", Payload: []byte("x")}
-		rec.SetPriority(packet.PriorityMedium)
-		pkt.Records = append(pkt.Records, rec)
-	}
-	if err := packet.WritePacket(nc, pkt, 0); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := make([]byte, 1<<20)
-	n, err := nc.Read(buf)
-	if err != nil {
-		t.Fatalf("server closed instead of returning a trimmed PUSH_OK: %v", err)
-	}
-	if n > 128 {
-		t.Fatalf("response %d bytes exceeds client MaxPacketSize 128", n)
-	}
-	parsed, err := packet.ReadPacket(bytes.NewReader(buf[:n]), 1<<20)
-	if err != nil {
-		t.Fatalf("parse trimmed PUSH_OK: %v", err)
-	}
-	ok := parsed.(*packet.PushOkPacket)
-	if len(ok.Results) == 0 {
-		t.Fatal("trimmed response must keep at least one result")
-	}
-	if ok.Results[0].Reason != packet.ReasonNoMatch {
-		t.Fatalf("first result reason = %s, want NoMatch", ok.Results[0].Reason)
-	}
-}
-
-// 默认 MaxBatch=16：17 条记录的 PUSH 整批被拒。
-func TestPushBatchDefaultLimit(t *testing.T) {
+// 无匹配 channel 时返回 NoMatch 与服务端生成的 ID。
+func TestPushNoMatchReportsResult(t *testing.T) {
 	_, addr := startCore(t, nil)
-	rc := dialRaw(t, addr, "raw-batch-default", "ch/a")
+	rc := dialRaw(t, addr, "raw-nomatch", "ch/a")
 
-	pkt := packet.NewPushPacket(11)
+	rec := packet.Record{Channel: "ch/b", Payload: []byte("x")}
+	rec.SetPriority(packet.PriorityMedium)
+	pkt := packet.NewPushPacket(10, rec)
 	pkt.Flags |= packet.PushFlagWantAck
-	for i := 0; i < 17; i++ {
-		rec := packet.Record{Channel: "ch/a", Payload: []byte("x")}
-		rec.SetPriority(packet.PriorityMedium)
-		pkt.Records = append(pkt.Records, rec)
-	}
 	rc.send(pkt)
 
 	resp := rc.expect(t, packet.PUSH_OK).(*packet.PushOkPacket)
-	if len(resp.Results) != 17 {
-		t.Fatalf("expected 17 rejected results, got %d", len(resp.Results))
+	if resp.Reason != packet.ReasonNoMatch || resp.ID.IsZero() {
+		t.Fatalf("unexpected result: %+v", resp)
 	}
-	if resp.Results[0].Reason != packet.ReasonQuotaExceeded {
-		t.Fatalf("reason = %s, want QuotaExceeded", resp.Results[0].Reason)
-	}
+}
 
-	// 16 条记录可以被接受。
-	rc2 := dialRaw(t, addr, "raw-batch-ok", "ch/a")
-	ok := packet.NewPushPacket(12)
-	ok.Flags |= packet.PushFlagWantAck
-	for i := 0; i < 16; i++ {
-		rec := packet.Record{Channel: "ch/a", Payload: []byte("x")}
-		rec.SetPriority(packet.PriorityMedium)
-		ok.Records = append(ok.Records, rec)
-	}
-	rc2.send(ok)
-	if got := rc2.expect(t, packet.PUSH_OK).(*packet.PushOkPacket); len(got.Results) != 0 {
-		t.Fatalf("16-record batch should succeed, got %+v", got.Results)
+// WantAck=0 时服务端不回包，但消息仍然入队。
+func TestPushWithoutAckReturnsNoResponse(t *testing.T) {
+	_, addr := startCore(t, nil)
+	rc := dialRaw(t, addr, "raw-noack", "ch/a")
+
+	rec := packet.Record{Channel: "ch/a", Payload: []byte("x")}
+	rec.SetPriority(packet.PriorityMedium)
+	rc.send(packet.NewPushPacket(11, rec))
+
+	// 立即 PULL 应该能取到刚推送的消息；若服务端错误地回了 PUSH_OK，
+	// 这里会先读到 PUSH_OK 而失败。
+	rc.send(packet.NewPullPacket(12, 1000))
+	pkt := rc.expect(t, packet.PULL_OK).(*packet.PullOkPacket)
+	if !pkt.HasRecord() || string(pkt.Record.Payload) != "x" {
+		t.Fatalf("unexpected pull result: %+v", pkt.Record)
 	}
 }

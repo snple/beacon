@@ -72,21 +72,21 @@ func TestPushPullCommit(t *testing.T) {
 		t.Fatalf("push: %v", err)
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 1000})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 1000})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if msg == nil {
+		t.Fatal("expected 1 message")
 	}
-	if msgs[0].Channel != "sensors/temp" || string(msgs[0].Payload) != "21.5" {
-		t.Fatalf("unexpected message: %+v", msgs[0])
+	if msg.Channel != "sensors/temp" || string(msg.Payload) != "21.5" {
+		t.Fatalf("unexpected message: %+v", msg)
 	}
-	if msgs[0].Source != "pub-1" {
-		t.Fatalf("source should be filled by broker, got %q", msgs[0].Source)
+	if msg.Source != "pub-1" {
+		t.Fatalf("source should be filled by broker, got %q", msg.Source)
 	}
-	if msgs[0].Priority != packet.PriorityMedium {
-		t.Fatalf("default priority should be medium, got %v", msgs[0].Priority)
+	if msg.Priority != packet.PriorityMedium {
+		t.Fatalf("default priority should be medium, got %v", msg.Priority)
 	}
 
 	if n, err := sub.CommitAll(ctx); err != nil || n != 1 {
@@ -94,12 +94,12 @@ func TestPushPullCommit(t *testing.T) {
 	}
 
 	// 确认后再拉应为空
-	msgs, err = sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200})
+	msg, err = sub.Pull(ctx, client.PullOptions{WaitMs: 200})
 	if err != nil {
 		t.Fatalf("pull after commit: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("expected empty after commit, got %d", len(msgs))
+	if msg != nil {
+		t.Fatalf("expected empty after commit, got %+v", msg)
 	}
 
 	stats := b.GetStats()
@@ -118,20 +118,20 @@ func TestReliableResentUntilCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
+	first, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first) != 1 || first[0].Dup {
+	if first == nil || first.Dup {
 		t.Fatalf("first pull should be a fresh message, got %+v", first)
 	}
 
 	// 不 commit 再拉：应收到重复
-	second, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200})
+	second, err := sub.Pull(ctx, client.PullOptions{WaitMs: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(second) != 1 || !second[0].Dup || second[0].ID != first[0].ID {
+	if second == nil || !second.Dup || second.ID != first.ID {
 		t.Fatalf("expected duplicate, got %+v", second)
 	}
 
@@ -139,12 +139,12 @@ func TestReliableResentUntilCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	third, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200})
+	third, err := sub.Pull(ctx, client.PullOptions{WaitMs: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(third) != 0 {
-		t.Fatalf("expected empty after commit, got %d", len(third))
+	if third != nil {
+		t.Fatalf("expected empty after commit, got %+v", third)
 	}
 }
 
@@ -159,21 +159,21 @@ func TestLowPriorityIsBestEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || msgs[0].NeedsCommit() {
-		t.Fatalf("low priority message must not need commit: %+v", msgs)
+	if msg == nil || msg.NeedsCommit() {
+		t.Fatalf("low priority message must not need commit: %+v", msg)
 	}
 
 	// 低优先级发出即删除，再拉不会重复
-	again, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 100})
+	again, err := sub.Pull(ctx, client.PullOptions{WaitMs: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(again) != 0 {
-		t.Fatalf("low priority message should be gone, got %d", len(again))
+	if again != nil {
+		t.Fatalf("low priority message should be gone, got %+v", again)
 	}
 }
 
@@ -193,15 +193,23 @@ func TestPriorityOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
+	first, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	if first == nil || string(first.Payload) != "high" {
+		t.Fatalf("high priority should be delivered first, got %+v", first)
 	}
-	if string(msgs[0].Payload) != "high" || string(msgs[1].Payload) != "low" {
-		t.Fatalf("priority order violated: %s then %s", msgs[0].Payload, msgs[1].Payload)
+	if err := first.Ack(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == nil || string(second.Payload) != "low" {
+		t.Fatalf("low priority should follow, got %+v", second)
 	}
 }
 
@@ -224,12 +232,12 @@ func TestTargetDeliveryRequiresDeclaration(t *testing.T) {
 	if _, err := b.PushToClient("sub-2", "cmd/x", []byte("only-sub-2"), core.PushOptions{}); err != nil {
 		t.Fatalf("publish to client: %v", err)
 	}
-	msgs, err := sub2.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
+	msg, err := sub2.Pull(ctx, client.PullOptions{WaitMs: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || string(msgs[0].Payload) != "only-sub-2" {
-		t.Fatalf("target client should receive message, got %+v", msgs)
+	if msg == nil || string(msg.Payload) != "only-sub-2" {
+		t.Fatalf("target client should receive message, got %+v", msg)
 	}
 }
 
@@ -262,13 +270,19 @@ func TestWildcardMatchingAndDeclare(t *testing.T) {
 		}
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 500})
-	if err != nil {
-		t.Fatal(err)
-	}
 	got := map[string]bool{}
-	for _, m := range msgs {
-		got[m.Channel] = true
+	for i := 0; i < 4; i++ {
+		msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg == nil {
+			t.Fatalf("expected 4 matching messages, got %d", i)
+		}
+		got[msg.Channel] = true
+		if err := msg.Ack(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, want := range []string{"a", "a/x", "a/x/y", "b/1"} {
 		if !got[want] {
@@ -287,16 +301,16 @@ func TestLongPollWakesOnPush(t *testing.T) {
 	sub := newTestClient(t, addr, "sub-1", "ch/a")
 	pub := newTestClient(t, addr, "pub-1")
 
-	done := make(chan []*client.Message, 1)
+	done := make(chan *client.Message, 1)
 	errc := make(chan error, 1)
 
 	go func() {
-		msgs, err := sub.Pull(context.Background(), client.PullOptions{MaxRecords: 10, WaitMs: 3000})
+		msg, err := sub.Pull(context.Background(), client.PullOptions{WaitMs: 3000})
 		if err != nil {
 			errc <- err
 			return
 		}
-		done <- msgs
+		done <- msg
 	}()
 
 	time.Sleep(200 * time.Millisecond)
@@ -306,9 +320,9 @@ func TestLongPollWakesOnPush(t *testing.T) {
 	}
 
 	select {
-	case msgs := <-done:
-		if len(msgs) != 1 || string(msgs[0].Payload) != "wake" {
-			t.Fatalf("unexpected messages: %+v", msgs)
+	case msg := <-done:
+		if msg == nil || string(msg.Payload) != "wake" {
+			t.Fatalf("unexpected message: %+v", msg)
 		}
 		if elapsed := time.Since(start); elapsed > 2*time.Second {
 			t.Fatalf("long poll woke too slowly: %v", elapsed)
@@ -361,13 +375,13 @@ func TestNoProgressPenalty(t *testing.T) {
 	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 200}); err != nil {
+	if _, err := sub.Pull(ctx, client.PullOptions{WaitMs: 200}); err != nil {
 		t.Fatal(err)
 	}
 
 	var lastErr error
 	for i := 0; i < 5; i++ {
-		_, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 100})
+		_, err := sub.Pull(ctx, client.PullOptions{WaitMs: 100})
 		if err != nil {
 			lastErr = err
 			break
@@ -397,15 +411,20 @@ func TestQueueCapDropsLowestPriority(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs, err := sub.Pull(ctx, client.PullOptions{MaxRecords: 10, WaitMs: 300})
-	if err != nil {
-		t.Fatal(err)
+	var payloads []string
+	for i := 0; i < 2; i++ {
+		msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg == nil {
+			t.Fatalf("expected 2 messages after eviction, got %d", i)
+		}
+		payloads = append(payloads, string(msg.Payload))
+		if err := msg.Ack(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages after eviction, got %d", len(msgs))
-	}
-
-	payloads := []string{string(msgs[0].Payload), string(msgs[1].Payload)}
 	if payloads[0] != "high" {
 		t.Fatalf("high priority should be delivered first, got %v", payloads)
 	}

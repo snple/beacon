@@ -2,83 +2,50 @@ package packet
 
 import "io"
 
-// CommitPacket COMMIT：确认已处理的消息 ID（按 ID 列表，支持乱序确认）。
+// CommitPacket COMMIT：确认一条已处理的消息。
 type CommitPacket struct {
-	RequestID uint64
-	IDs       []PacketID
+	RequestID uint32
+	ID        PacketID
 }
 
 // NewCommitPacket 创建 COMMIT 包。
-func NewCommitPacket(requestID uint64, ids ...PacketID) *CommitPacket {
-	return &CommitPacket{RequestID: requestID, IDs: ids}
+func NewCommitPacket(requestID uint32, id PacketID) *CommitPacket {
+	return &CommitPacket{RequestID: requestID, ID: id}
 }
 
 func (p *CommitPacket) Type() PacketType { return COMMIT }
 
 func (p *CommitPacket) encode(w io.Writer) error {
-	if err := EncodeUint64(w, p.RequestID); err != nil {
+	if err := EncodeUint32(w, p.RequestID); err != nil {
 		return err
 	}
-	if len(p.IDs) > MaxStringLength {
-		return ErrMalformedPacket
-	}
-	if err := EncodeUint16(w, uint16(len(p.IDs))); err != nil {
-		return err
-	}
-	for _, id := range p.IDs {
-		if err := EncodePacketID(w, id); err != nil {
-			return err
-		}
-	}
-	return nil
+	return EncodePacketID(w, p.ID)
 }
 
 func (p *CommitPacket) decode(r io.Reader, _ FixedHeader) error {
 	var err error
-	if p.RequestID, err = DecodeUint64(r); err != nil {
+	if p.RequestID, err = DecodeUint32(r); err != nil {
 		return err
 	}
-	count, err := DecodeUint16(r)
-	if err != nil {
-		return err
-	}
-	if count == 0 {
-		return nil
-	}
-	if err := checkCount(r, count, 1); err != nil {
-		return err
-	}
-	p.IDs = make([]PacketID, 0, count)
-	for i := 0; i < int(count); i++ {
-		id, err := DecodePacketID(r)
-		if err != nil {
-			return err
-		}
-		p.IDs = append(p.IDs, id)
-	}
-	return nil
+	p.ID, err = DecodePacketID(r)
+	return err
 }
 
 // CommitOkPacket COMMIT_OK：确认结果。
 type CommitOkPacket struct {
-	RequestID uint64
-	Committed uint16
+	RequestID uint32
 	Pending   [3]uint32
-	Delivered uint32
 }
 
 // NewCommitOkPacket 创建 COMMIT_OK 包。
-func NewCommitOkPacket(requestID uint64) *CommitOkPacket {
+func NewCommitOkPacket(requestID uint32) *CommitOkPacket {
 	return &CommitOkPacket{RequestID: requestID}
 }
 
 func (p *CommitOkPacket) Type() PacketType { return COMMIT_OK }
 
 func (p *CommitOkPacket) encode(w io.Writer) error {
-	if err := EncodeUint64(w, p.RequestID); err != nil {
-		return err
-	}
-	if err := EncodeUint16(w, p.Committed); err != nil {
+	if err := EncodeUint32(w, p.RequestID); err != nil {
 		return err
 	}
 	for _, v := range p.Pending {
@@ -86,15 +53,12 @@ func (p *CommitOkPacket) encode(w io.Writer) error {
 			return err
 		}
 	}
-	return EncodeUint32(w, p.Delivered)
+	return nil
 }
 
 func (p *CommitOkPacket) decode(r io.Reader, _ FixedHeader) error {
 	var err error
-	if p.RequestID, err = DecodeUint64(r); err != nil {
-		return err
-	}
-	if p.Committed, err = DecodeUint16(r); err != nil {
+	if p.RequestID, err = DecodeUint32(r); err != nil {
 		return err
 	}
 	for i := 0; i < 3; i++ {
@@ -102,6 +66,5 @@ func (p *CommitOkPacket) decode(r io.Reader, _ FixedHeader) error {
 			return err
 		}
 	}
-	p.Delivered, err = DecodeUint32(r)
-	return err
+	return nil
 }

@@ -10,7 +10,7 @@ func TestOptionsDefaults(t *testing.T) {
 	if opts.KeepAlive == 0 || opts.MaxPacketSize == 0 || opts.ConnectTimeout == 0 {
 		t.Fatalf("defaults not applied: %+v", opts)
 	}
-	if opts.DefaultMaxRecords == 0 || opts.DefaultWaitMs == 0 {
+	if opts.DefaultWaitMs == 0 {
 		t.Fatalf("pull defaults not applied: %+v", opts)
 	}
 	if !opts.AutoReconnect {

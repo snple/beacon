@@ -18,12 +18,6 @@ type taken struct {
 	prio packet.Priority
 }
 
-// deliveredEntry 是已写出、等待 COMMIT 的条目。
-type deliveredEntry struct {
-	entry
-	committed bool
-}
-
 // prioQueue 是单个优先级的 FIFO，使用切片 + head 索引。
 //
 // 引用语义：队列中的每个条目持有一个 Message 引用，出队时所有权转移给调用方。
@@ -85,16 +79,20 @@ func (q *prioQueue) maybeCompact() {
 
 // Mailbox 是一个客户端的投递队列：
 //
-//	pending[3]  未投递（Low / Medium / High），受 cap 约束
-//	delivered   已投递未 COMMIT，只含 Medium / High，长度受 maxRecords 约束
+//	pending[3]       未投递（Low / Medium / High），受 cap 约束
+//	deliveredMedium  已投递未 COMMIT 的 Medium 消息
+//	deliveredHigh    已投递未 COMMIT 的 High 消息
 //
-// 两个队列的引用都是「所有权」语义：Message 的引用随条目在队列间移动而转移。
+// Low 不占投递位。两组引用都是「所有权」语义：Message 的引用随消息
+// 在队列间移动而转移。
 type mailbox struct {
-	mu        sync.Mutex
-	q         [3]prioQueue
-	delivered []deliveredEntry
-	dhead     int
-	cap       int
+	mu sync.Mutex
+	q  [3]prioQueue
+
+	deliveredMedium *Message
+	deliveredHigh   *Message
+
+	cap int
 
 	// onDropped 在丢弃消息时回调（释放引用并计数）。
 	onRelease func(*Message)
@@ -125,7 +123,7 @@ func (m *mailbox) enqueue(msg *Message) (enqueued, evicted bool) {
 	}
 
 	victim := -1
-	for p := 0; p < 3; p++ {
+	for p := range 3 {
 		if m.q[p].len() > 0 {
 			victim = p
 			break
@@ -155,129 +153,106 @@ func (m *mailbox) totalLocked() int {
 	return m.q[0].len() + m.q[1].len() + m.q[2].len()
 }
 
-// takePending 按 High → Medium → Low 的顺序取出最多 maxRecords 条、maxBytes 字节。
+// takeDelivery 尝试取出一条可投递的新消息。
+//
+// delivered 为空时按 High → Medium → Low 取一条；delivered 非空时，
+// 只有优先级严格更高的消息可以占用空闲投递位，避免同级消息互相阻塞，
+// 同时保证 High 始终能绕过未确认的 Medium。Low 不占用投递位。
 //
 // 取出的条目所有权转移给调用方：成功写出后必须调用 applySent，失败时调用 restore。
-// more 表示被 maxRecords/maxBytes 截断且队列仍有剩余。
-func (m *mailbox) takePending(maxRecords int, maxBytes int) (batch []taken, more bool) {
-	if maxRecords <= 0 {
-		maxRecords = 1
-	}
-
+func (m *mailbox) takeDelivery() (taken, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	budget := maxRecords
-	bytesLeft := maxBytes
-
-	totalPending := m.totalLocked()
-	if totalPending == 0 {
-		return nil, false
+	p, ok := m.highestPendingLocked()
+	if !ok || !m.canTakeLocked(p) {
+		return taken{}, false
 	}
+	return m.popPendingLocked()
+}
 
-	// 份额：存在更低优先级非空队列时，本级最多占剩余预算的 80%
+// canTakeLocked 报告优先级 p 的新消息是否可以投递：
+// delivered 为空时都可以；否则只有严格更高优先级才能占用空闲投递位。
+func (m *mailbox) canTakeLocked(p packet.Priority) bool {
+	switch {
+	case m.deliveredMedium == nil && m.deliveredHigh == nil:
+		return true
+	case m.deliveredMedium != nil && m.deliveredHigh == nil:
+		return p > packet.PriorityMedium
+	default:
+		// deliveredHigh 已占用（无论 Medium 是否存在）时没有更高优先级可用。
+		return false
+	}
+}
+
+func (m *mailbox) highestPendingLocked() (packet.Priority, bool) {
 	for p := 2; p >= 0; p-- {
-		if budget <= 0 {
-			break
-		}
-		lower := false
-		for lp := p - 1; lp >= 0; lp-- {
-			if m.q[lp].len() > 0 {
-				lower = true
-				break
-			}
-		}
-
-		limit := budget
-		if lower {
-			limit = budget * 8 / 10
-			if limit < 1 {
-				limit = 1
-			}
-		}
-
-		for i := 0; i < limit && budget > 0; i++ {
-			e, ok := m.q[p].popFront()
-			if !ok {
-				break
-			}
-
-			if maxBytes > 0 {
-				size := int(e.msg.Size())
-				if size > bytesLeft {
-					if len(batch) > 0 {
-						// 放不下（含预算恰好用尽）且已经有内容：放回去，结束
-						m.q[p].pushFront(e)
-						return batch, true
-					}
-					// 单条即超出预算：至少返回一条，然后停止
-					batch = append(batch, taken{entry: e, prio: packet.Priority(p)})
-					return batch, m.totalLocked() > 0
-				}
-				bytesLeft -= size
-			}
-
-			batch = append(batch, taken{entry: e, prio: packet.Priority(p)})
-			budget--
+		if m.q[p].len() > 0 {
+			return packet.Priority(p), true
 		}
 	}
-
-	remaining := m.totalLocked()
-	return batch, remaining > 0
+	return 0, false
 }
 
-// applySent 在写出成功后应用一批条目：
+func (m *mailbox) popPendingLocked() (taken, bool) {
+	for p := 2; p >= 0; p-- {
+		if e, ok := m.q[p].popFront(); ok {
+			return taken{entry: e, prio: packet.Priority(p)}, true
+		}
+	}
+	return taken{}, false
+}
+
+// applySent 在写出成功后应用条目：
 //   - Low：释放引用（不进入 delivered）
-//   - Medium/High：按投递顺序追加到 delivered 尾部
-func (m *mailbox) applySent(batch []taken) {
-	if len(batch) == 0 {
-		return
-	}
-
+//   - Medium/High：占用一个投递位
+func (m *mailbox) applySent(t taken) {
 	m.mu.Lock()
-	var release []*Message
-	for _, t := range batch {
-		if t.prio.RequiresCommit() {
-			m.delivered = append(m.delivered, deliveredEntry{entry: t.entry})
-		} else {
-			release = append(release, t.msg)
+	switch t.prio {
+	case packet.PriorityMedium:
+		if m.deliveredMedium == nil {
+			m.deliveredMedium = t.msg
+			m.mu.Unlock()
+			return
+		}
+	case packet.PriorityHigh:
+		if m.deliveredHigh == nil {
+			m.deliveredHigh = t.msg
+			m.mu.Unlock()
+			return
 		}
 	}
-	m.mu.Unlock()
 
-	for _, msg := range release {
-		m.onRelease(msg)
-	}
-}
-
-// restore 把未成功写出的条目按原顺序放回 pending 头部。
-func (m *mailbox) restore(batch []taken) {
-	if len(batch) == 0 {
+	if t.prio.RequiresCommit() {
+		// 不应发生（takeDelivery 已检查投递位）。保守放回 pending，
+		// 宁可重复投递也不能丢失可靠消息。
+		m.q[t.prio].pushFront(t.entry)
+		m.mu.Unlock()
 		return
 	}
+	m.mu.Unlock()
 
+	m.onRelease(t.msg)
+}
+
+// restore 把未成功写出的条目放回 pending 头部。
+func (m *mailbox) restore(t taken) {
 	m.mu.Lock()
-	for i := len(batch) - 1; i >= 0; i-- {
-		t := batch[i]
-		m.q[t.prio].pushFront(t.entry)
-	}
+	m.q[t.prio].pushFront(t.entry)
 	m.mu.Unlock()
 }
 
-// drainDelivered 返回 delivered 中从 served 开始的一批条目（不删除，引用由调用方保留）。
+// drainDelivered 返回 delivered 中从 served 开始的条目（不删除，引用由调用方保留）。
 //
 // nextServed 是下一次应该继续的位置；当 served 已经到达末尾时从头开始（重复投递），
 // 此时 repeated 为 true，调用方应计入「无进展 pull」。
-func (m *mailbox) drainDelivered(served, maxRecords, maxBytes int) (batch []taken, nextServed int, more, repeated bool) {
-	if maxRecords <= 0 {
-		maxRecords = 1
-	}
-
+func (m *mailbox) drainDelivered(served int) (t taken, nextServed int, repeated, ok bool) {
 	m.mu.Lock()
-	n := len(m.delivered) - m.dhead
+	defer m.mu.Unlock()
+
+	n := m.deliveredLenLocked()
 	if n <= 0 {
-		m.mu.Unlock()
-		return nil, 0, false, false
+		return taken{}, 0, false, false
 	}
 
 	start := served
@@ -286,90 +261,51 @@ func (m *mailbox) drainDelivered(served, maxRecords, maxBytes int) (batch []take
 		repeated = true
 	}
 
-	bytesLeft := maxBytes
-	cut := false
-	for i := start; i < n && len(batch) < maxRecords; i++ {
-		d := m.delivered[m.dhead+i]
-		size := int(d.msg.Size())
-		if maxBytes > 0 {
-			if size > bytesLeft {
-				if len(batch) > 0 {
-					cut = true
-					break
-				}
-				// 单条即超出预算：至少返回一条，然后停止
-				d.msg.retain()
-				batch = append(batch, taken{entry: d.entry, prio: d.msg.Priority})
-				cut = true
-				break
-			}
-			bytesLeft -= size
-		}
-		d.msg.retain()
-		batch = append(batch, taken{entry: d.entry, prio: d.msg.Priority})
+	msg := m.deliveredMedium
+	if start == 1 || msg == nil {
+		msg = m.deliveredHigh
 	}
-	nextServed = start + len(batch)
-	more = cut || nextServed < n
-	m.mu.Unlock()
-
-	return batch, nextServed, more, repeated
+	msg.retain()
+	return taken{entry: entry{msg: msg, id: msg.ID}, prio: msg.Priority}, start + 1, repeated, true
 }
 
-// releaseBatch 释放一批只为发送而临时保留引用的条目（delivered 用的 retain）。
-func (m *mailbox) releaseBatch(batch []taken) {
-	for _, t := range batch {
-		m.onRelease(t.msg)
+func (m *mailbox) deliveredLenLocked() int {
+	n := 0
+	if m.deliveredMedium != nil {
+		n++
 	}
+	if m.deliveredHigh != nil {
+		n++
+	}
+	return n
 }
 
-// commit 标记指定 ID 已确认，并从头部压缩连续已确认的前缀。
-// 返回被压缩掉的条目数（调用方据此调整 served）。
-func (m *mailbox) commit(ids []packet.PacketID) (committed, popped int) {
-	if len(ids) == 0 {
-		return 0, 0
-	}
+// release 释放只为发送而临时保留引用的条目（delivered 用的 retain）。
+func (m *mailbox) release(t taken) {
+	m.onRelease(t.msg)
+}
 
-	set := make(map[packet.PacketID]struct{}, len(ids))
-	for _, id := range ids {
-		set[id] = struct{}{}
-	}
-
+// commit 标记指定 ID 已确认，并移出对应投递位。
+// 返回释放的条目数（0 或 1），调用方据此调整 served。
+func (m *mailbox) commit(id packet.PacketID) (popped int) {
 	m.mu.Lock()
-	var release []*Message
+	var release *Message
 
-	for i := m.dhead; i < len(m.delivered); i++ {
-		e := &m.delivered[i]
-		if e.committed {
-			continue
-		}
-		if _, ok := set[e.id]; ok {
-			e.committed = true
-			committed++
-		}
-	}
-
-	for m.dhead < len(m.delivered) && m.delivered[m.dhead].committed {
-		release = append(release, m.delivered[m.dhead].msg)
-		m.delivered[m.dhead] = deliveredEntry{}
-		m.dhead++
-		popped++
-	}
-
-	if m.dhead == len(m.delivered) {
-		m.delivered = m.delivered[:0]
-		m.dhead = 0
-	} else if m.dhead >= queueCompactThreshold && m.dhead >= len(m.delivered)/2 {
-		n := copy(m.delivered, m.delivered[m.dhead:])
-		clear(m.delivered[n:])
-		m.delivered = m.delivered[:n]
-		m.dhead = 0
+	switch {
+	case m.deliveredMedium != nil && m.deliveredMedium.ID == id:
+		release = m.deliveredMedium
+		m.deliveredMedium = nil
+	case m.deliveredHigh != nil && m.deliveredHigh.ID == id:
+		release = m.deliveredHigh
+		m.deliveredHigh = nil
 	}
 	m.mu.Unlock()
 
-	for _, msg := range release {
-		m.onRelease(msg)
+	if release != nil {
+		m.onRelease(release)
+		return 1
 	}
-	return committed, popped
+	return 0
 }
 
 // depth 返回当前积压：三个优先级的未投递条数、已投递未确认条数、最早的未确认 ID。
@@ -377,12 +313,18 @@ func (m *mailbox) depth() (pending [3]uint32, delivered uint32, oldest packet.Pa
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		pending[i] = uint32(m.q[i].len())
 	}
-	delivered = uint32(len(m.delivered) - m.dhead)
-	if m.dhead < len(m.delivered) {
-		oldest = m.delivered[m.dhead].id
+	if m.deliveredMedium != nil {
+		delivered++
+		oldest = m.deliveredMedium.ID
+	}
+	if m.deliveredHigh != nil {
+		delivered++
+		if oldest.IsZero() {
+			oldest = m.deliveredHigh.ID
+		}
 	}
 	return pending, delivered, oldest
 }
@@ -423,11 +365,14 @@ func (m *mailbox) releaseAll() {
 			release = append(release, e.msg)
 		}
 	}
-	for i := m.dhead; i < len(m.delivered); i++ {
-		release = append(release, m.delivered[i].msg)
+	if m.deliveredMedium != nil {
+		release = append(release, m.deliveredMedium)
+		m.deliveredMedium = nil
 	}
-	m.delivered = nil
-	m.dhead = 0
+	if m.deliveredHigh != nil {
+		release = append(release, m.deliveredHigh)
+		m.deliveredHigh = nil
+	}
 	m.mu.Unlock()
 
 	for _, msg := range release {

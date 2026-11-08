@@ -332,19 +332,11 @@ func (cn *conn) wait() { cn.wg.Wait() }
 // pullPlan 描述一次 PULL 的结果：写成功后才推进状态。
 type pullPlan struct {
 	resp       *packet.PullOkPacket
-	pending    []taken // 从 pending 取出、写成功后应用
-	delivered  []taken // 仅为发送而 retain、写成功后释放
+	pending    *taken // 从 pending 取出、写成功后应用
+	delivered  *taken // 仅为发送而 retain、写成功后释放
 	nextServed int
 	empty      bool
 	epoch      uint64 // 构建计划时的会话 resetEpoch
-}
-
-func recordsOf(batch []taken, dup bool) []packet.Record {
-	out := make([]packet.Record, len(batch))
-	for i, t := range batch {
-		out[i] = t.msg.record(dup)
-	}
-	return out
 }
 
 // buildPlan 构造一次拉取计划（不改变任何状态）。
@@ -352,133 +344,92 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 	cl := cn.client
 	opts := cn.core.options
 
-	maxRecords := int(p.MaxRecords)
-	if maxRecords <= 0 || maxRecords > int(opts.MaxRecords) {
-		maxRecords = int(opts.MaxRecords)
-	}
-	maxBytes := int(p.MaxBytes)
-	if maxBytes <= 0 || maxBytes > int(opts.MaxBytes) {
-		maxBytes = int(opts.MaxBytes)
-	}
-	// 客户端在 CONNECT 中声明的接收上限同样必须满足，否则写包阶段才会失败并断连。
-	maxBytes = cn.payloadBudget(maxBytes)
-
-	pendingDepth, deliveredDepth, oldest := cl.mb.depth()
-
 	plan := &pullPlan{resp: packet.NewPullOkPacket(p.RequestID), epoch: cl.resetEpoch.Load()}
 
-	// 1) delivered 优先：未确认的消息先重发
+	// 1) 优先投递新消息：delivered 为空时按优先级取一条；
+	//    delivered 非空时，只有更高优先级的消息可以占用空闲投递位。
+	for {
+		t, ok := cl.mb.takeDelivery()
+		if !ok {
+			break
+		}
+
+		// 投递钩子：拒绝的条目直接丢弃（不进入 delivered）。
+		if cn.core.options.Hooks.hasOnDeliver() && !cn.core.options.Hooks.callOnDeliver(&DeliverContext{
+			ClientID: cl.ID,
+			Channel:  t.msg.Channel,
+			Source:   t.msg.Source,
+			Priority: t.prio,
+			Payload:  t.msg.Payload,
+		}) {
+			cn.core.releaseMessage(t.msg)
+			cn.core.stats.MessagesDropped.Add(1)
+			cl.dropped.Add(1)
+			continue
+		}
+
+		// 单条记录可能大于客户端声明的接收上限：恢复队列并明确返回错误，而不是写完才断连。
+		if !cn.fitsClientPacket(t) {
+			cl.mb.restore(t)
+			pendingDepth, _, _ := cl.mb.depth()
+			return cn.packetTooLargePlan(p.RequestID, pendingDepth)
+		}
+
+		pendingDepth, _, _ := cl.mb.depth()
+		plan.resp.Pending = pendingDepth
+		plan.resp.SetRecord(t.msg.record(false))
+		plan.pending = &t
+		plan.nextServed = 0
+		return plan
+	}
+
+	// 2) 没有可投递的新消息：重发已投递未确认的消息。
+	_, deliveredDepth, _ := cl.mb.depth()
 	if deliveredDepth > 0 {
 		cn.pullMu.Lock()
-		batch, next, more, repeated := cl.mb.drainDelivered(cn.served, maxRecords, maxBytes)
-		if len(batch) > 0 {
+		t, next, repeated, ok := cl.mb.drainDelivered(cn.served)
+		if ok {
 			if repeated {
 				cn.noProgress++
 			}
 
 			if hard := opts.NoProgressHard; hard > 0 && cn.noProgress > hard {
-				cl.mb.releaseBatch(batch)
+				cl.mb.release(t)
 				cn.pullMu.Unlock()
 				return &pullPlan{resp: nil, empty: true}
 			}
 			if soft := opts.NoProgressSoft; soft > 0 && cn.noProgress > soft {
-				cl.mb.releaseBatch(batch)
+				cl.mb.release(t)
+				pendingDepth, _, _ := cl.mb.depth()
 				resp := packet.NewPullOkPacket(p.RequestID)
 				resp.Reason = packet.ReasonCommitRequired
-				resp.RetryAfterMs = 1000
 				resp.Pending = pendingDepth
-				resp.Delivered = deliveredDepth
-				resp.OldestUncommitted = oldest
 				cn.core.stats.CommitRequired.Add(1)
 				cn.pullMu.Unlock()
 				return &pullPlan{resp: resp}
 			}
 			cn.pullMu.Unlock()
 
-			if !cn.fitsClientPacket(batch) {
-				cl.mb.releaseBatch(batch)
-				return cn.packetTooLargePlan(p.RequestID, pendingDepth, deliveredDepth, oldest)
+			if !cn.fitsClientPacket(t) {
+				cl.mb.release(t)
+				pendingDepth, _, _ := cl.mb.depth()
+				return cn.packetTooLargePlan(p.RequestID, pendingDepth)
 			}
 
-			plan.resp.More = more
+			pendingDepth, _, _ := cl.mb.depth()
 			plan.resp.Pending = pendingDepth
-			plan.resp.Delivered = deliveredDepth
-			plan.resp.OldestUncommitted = oldest
-			plan.resp.Records = recordsOf(batch, true)
-			plan.delivered = batch
+			plan.resp.SetRecord(t.msg.record(true))
+			plan.delivered = &t
 			plan.nextServed = next
 			return plan
 		}
 		cn.pullMu.Unlock()
 	}
 
-	// 2) 从 pending 取
-	batch, more := cl.mb.takePending(maxRecords, maxBytes)
-
-	// 投递钩子：拒绝的条目直接丢弃（不进入 delivered）
-	if len(batch) > 0 && cn.core.options.Hooks.hasOnDeliver() {
-		kept := batch[:0]
-		for _, t := range batch {
-			if cn.core.options.Hooks.callOnDeliver(&DeliverContext{
-				ClientID: cl.ID,
-				Channel:  t.msg.Channel,
-				Source:   t.msg.Source,
-				Priority: t.prio,
-				Payload:  t.msg.Payload,
-			}) {
-				kept = append(kept, t)
-				continue
-			}
-			cn.core.releaseMessage(t.msg)
-			cn.core.stats.MessagesDropped.Add(1)
-			cl.dropped.Add(1)
-		}
-		batch = kept
-	}
-
-	// 单条记录可能大于客户端声明的接收上限：恢复队列并明确返回错误，而不是写完才断连。
-	if len(batch) > 0 && !cn.fitsClientPacket(batch) {
-		cl.mb.restore(batch)
-		return cn.packetTooLargePlan(p.RequestID, pendingDepth, deliveredDepth, oldest)
-	}
-
-	if len(batch) == 0 {
-		plan.empty = true
-		plan.resp.Pending = pendingDepth
-		plan.resp.Delivered = deliveredDepth
-		plan.resp.OldestUncommitted = oldest
-		return plan
-	}
-
-	reliable := 0
-	for _, t := range batch {
-		if t.prio.RequiresCommit() {
-			reliable++
-		}
-	}
-
-	plan.resp.More = more
-	plan.resp.Pending = [3]uint32{
-		pendingDepth[0], pendingDepth[1], pendingDepth[2],
-	}
-	// 队列深度是扣除本批之后的近似值
-	plan.resp.Pending[0] = saturatingSub(plan.resp.Pending[0], uint32(countPrio(batch, packet.PriorityLow)))
-	plan.resp.Pending[1] = saturatingSub(plan.resp.Pending[1], uint32(countPrio(batch, packet.PriorityMedium)))
-	plan.resp.Pending[2] = saturatingSub(plan.resp.Pending[2], uint32(countPrio(batch, packet.PriorityHigh)))
-	plan.resp.Delivered = deliveredDepth + uint32(reliable)
-	if !oldest.IsZero() {
-		plan.resp.OldestUncommitted = oldest
-	} else {
-		for _, t := range batch {
-			if t.prio.RequiresCommit() {
-				plan.resp.OldestUncommitted = t.id
-				break
-			}
-		}
-	}
-	plan.resp.Records = recordsOf(batch, false)
-	plan.pending = batch
-	plan.nextServed = 0
+	// 3) 既没有新消息，也没有未确认消息。
+	pendingDepth, _, _ := cl.mb.depth()
+	plan.empty = true
+	plan.resp.Pending = pendingDepth
 	return plan
 }
 
@@ -490,32 +441,8 @@ func (cn *conn) responseBudget() int {
 	return int(cn.maxPacketSize)
 }
 
-// pushResultSize 是 PUSH_OK 中单条结果的编码大小。
-const pushResultSize = 1 + packet.PacketIDSize + 4 + 4
-
-// pushOkOverhead 是 PUSH_OK 的固定头 + RequestID + Count。
-const pushOkOverhead = 5 + 8 + 2
-
-// trimPushResults 把结果裁剪到不超过对端声明的大小，至少保留一条。
-//
-// 失败项极多时（例如整批 rejected）逐条回显会超过小缓冲客户端的 MaxPacketSize，
-// 此时写包失败将被迫断连；裁剪后仍能传达"本批失败"以及首条原因。
-func trimPushResults(results []packet.PushResult, budget int) []packet.PushResult {
-	if budget <= 0 || len(results) <= 1 {
-		return results
-	}
-	max := (budget - pushOkOverhead) / pushResultSize
-	if max < 1 {
-		max = 1
-	}
-	if len(results) <= max {
-		return results
-	}
-	return results[:max]
-}
-
 // declareRespOverhead 是 DECLARE_RESP 的固定头 + 固定字段（不含 Results）。
-const declareRespOverhead = 5 + 8 + 2 + 2 + 12 + 4 + 4 + 2 + 4 + 4 + 2
+const declareRespOverhead = 5 + 4 + 2 + 2 + 12 + 4 + 4 + 2
 
 // trimDeclareResults 把失败项裁剪到不超过对端声明的大小，至少保留一条。
 func trimDeclareResults(results []packet.ChannelResult, budget int) []packet.ChannelResult {
@@ -538,59 +465,22 @@ func trimDeclareResults(results []packet.ChannelResult, budget int) []packet.Cha
 }
 
 // pullResponseOverhead 是 PULL_OK 的固定头 + 最小包体大小。
-const pullResponseOverhead = 5 + 44
+const pullResponseOverhead = 5 + 18
 
-// payloadBudget 把批次字节预算限制在客户端声明的最大包大小之内。
-func (cn *conn) payloadBudget(maxBytes int) int {
-	limit := int(cn.maxPacketSize)
-	if limit <= 0 {
-		return maxBytes
-	}
-	limit -= pullResponseOverhead
-	if limit < 1 {
-		limit = 1
-	}
-	if maxBytes <= 0 || maxBytes > limit {
-		return limit
-	}
-	return maxBytes
-}
-
-// pullRecordsSize 返回该批记录编码进 PULL_OK 后的近似总字节数。
-func pullRecordsSize(batch []taken) int {
-	total := pullResponseOverhead
-	for _, t := range batch {
-		rec := t.msg.record(false)
-		total += packet.RecordSize(&rec)
-	}
-	return total
-}
-
-func (cn *conn) fitsClientPacket(batch []taken) bool {
+func (cn *conn) fitsClientPacket(t taken) bool {
 	if cn.maxPacketSize == 0 {
 		return true
 	}
-	return pullRecordsSize(batch) <= int(cn.maxPacketSize)
+	rec := t.msg.record(false)
+	return pullResponseOverhead+packet.RecordSize(&rec) <= int(cn.maxPacketSize)
 }
 
-func (cn *conn) packetTooLargePlan(requestID uint64, pending [3]uint32, delivered uint32, oldest packet.PacketID) *pullPlan {
+func (cn *conn) packetTooLargePlan(requestID uint32, pending [3]uint32) *pullPlan {
 	resp := packet.NewPullOkPacket(requestID)
 	resp.Reason = packet.ReasonPacketTooLarge
 	resp.Pending = pending
-	resp.Delivered = delivered
-	resp.OldestUncommitted = oldest
 	cn.core.stats.MessagesRejected.Add(1)
 	return &pullPlan{resp: resp}
-}
-
-func countPrio(batch []taken, p packet.Priority) int {
-	n := 0
-	for _, t := range batch {
-		if t.prio == p {
-			n++
-		}
-	}
-	return n
 }
 
 func saturatingSub(a, b uint32) uint32 {
@@ -605,29 +495,33 @@ func (cn *conn) applyPlan(plan *pullPlan) {
 	cl := cn.client
 
 	cn.pullMu.Lock()
-	if len(plan.delivered) > 0 {
+	if plan.delivered != nil {
 		cn.served = plan.nextServed
-		cn.core.stats.DuplicatesSent.Add(int64(len(plan.delivered)))
+		cn.core.stats.DuplicatesSent.Add(1)
 	}
-	if len(plan.pending) > 0 {
+	if plan.pending != nil {
 		cn.served = 0
 		cn.noProgress = 0
 	}
 	cn.pullMu.Unlock()
 
-	if len(plan.delivered) > 0 {
-		cl.mb.releaseBatch(plan.delivered)
+	if plan.delivered != nil {
+		cl.mb.release(*plan.delivered)
 	}
-	if len(plan.pending) > 0 {
-		cl.mb.applySent(plan.pending)
-		if reliable := len(plan.pending) - countPrio(plan.pending, packet.PriorityLow); reliable > 0 {
-			if cl.deliveredSince.Load() == 0 {
-				cl.deliveredSince.Store(time.Now().UnixMilli())
-			}
+	if plan.pending != nil {
+		cl.mb.applySent(*plan.pending)
+		if plan.pending.prio.RequiresCommit() && cl.deliveredSince.Load() == 0 {
+			cl.deliveredSince.Store(time.Now().UnixMilli())
 		}
 	}
 
-	n := len(plan.delivered) + len(plan.pending)
+	n := 0
+	if plan.delivered != nil {
+		n++
+	}
+	if plan.pending != nil {
+		n++
+	}
 	if n > 0 {
 		cn.core.stats.MessagesSent.Add(int64(n))
 		cl.sent.Add(int64(n))
@@ -658,25 +552,25 @@ func (cn *conn) abortPlan(plan *pullPlan) {
 		return
 	}
 	cl := cn.client
-	if len(plan.delivered) > 0 {
-		cl.mb.releaseBatch(plan.delivered)
+	if plan.delivered != nil {
+		cl.mb.release(*plan.delivered)
 	}
-	if len(plan.pending) > 0 {
-		cl.mb.restore(plan.pending)
+	if plan.pending != nil {
+		cl.mb.restore(*plan.pending)
 	}
 }
 
 // discardPlan 在连接已失去会话所有权时丢弃计划。
 //
 // 此时会话可能已被接管或 CleanSession 重置，不能再把消息放回队列
-// 或推进 delivered（旧连接不得产生任何状态变更），只释放本批引用。
+// 或推进 delivered（旧连接不得产生任何状态变更），只释放本次引用。
 func (cn *conn) discardPlan(plan *pullPlan) {
 	cl := cn.client
-	if len(plan.delivered) > 0 {
-		cl.mb.releaseBatch(plan.delivered)
+	if plan.delivered != nil {
+		cl.mb.release(*plan.delivered)
 	}
-	for _, t := range plan.pending {
-		cn.core.releaseMessage(t.msg)
+	if plan.pending != nil {
+		cn.core.releaseMessage(plan.pending.msg)
 	}
 }
 
@@ -734,22 +628,16 @@ func (cn *conn) handlePull(p *packet.PullPacket) error {
 	return nil
 }
 
-// pullRetryAfterMs 是拒绝并发 PULL 时回给客户端的建议重试间隔。
+// writePullRateLimited 拒绝并发的第二个 PULL。
 //
 // 正常客户端（含 SDK）不会触发这条路径：它意味着上一条 PULL 还没收到响应。
-// 这里给一个足够大的值，让裸协议客户端不会立刻重试造成忙循环。
-const pullRetryAfterMs uint32 = 1000
-
-// writePullRateLimited 拒绝并发的第二个 PULL。
+// 客户端应在约 1s 后重试，避免立刻重试造成忙循环。
 func (cn *conn) writePullRateLimited(p *packet.PullPacket) error {
-	pending, delivered, oldest := cn.client.mb.depth()
+	pending, _, _ := cn.client.mb.depth()
 
 	resp := packet.NewPullOkPacket(p.RequestID)
 	resp.Reason = packet.ReasonRateLimited
-	resp.RetryAfterMs = pullRetryAfterMs
 	resp.Pending = pending
-	resp.Delivered = delivered
-	resp.OldestUncommitted = oldest
 
 	cn.core.stats.MessagesRejected.Add(1)
 	return cn.writePacket(resp)
@@ -809,12 +697,10 @@ func (cn *conn) writeEmptyPull(p *packet.PullPacket) {
 		return
 	}
 	cl := cn.client
-	pending, delivered, oldest := cl.mb.depth()
+	pending, _, _ := cl.mb.depth()
 
 	resp := packet.NewPullOkPacket(p.RequestID)
 	resp.Pending = pending
-	resp.Delivered = delivered
-	resp.OldestUncommitted = oldest
 	_ = cn.writePacket(resp)
 }
 
@@ -828,7 +714,7 @@ func (cn *conn) handleCommit(p *packet.CommitPacket) error {
 	}
 
 	cl := cn.client
-	committed, popped := cl.mb.commit(p.IDs)
+	popped := cl.mb.commit(p.ID)
 
 	cn.pullMu.Lock()
 	cn.served -= popped
@@ -844,9 +730,7 @@ func (cn *conn) handleCommit(p *packet.CommitPacket) error {
 	}
 
 	resp := packet.NewCommitOkPacket(p.RequestID)
-	resp.Committed = uint16(committed)
 	resp.Pending = pending
-	resp.Delivered = delivered
 
 	if err := cn.writePacket(resp); err != nil {
 		return err

@@ -77,9 +77,7 @@ func (c *Core) Ready() bool { return c.running.Load() }
 func (c *Core) limits() packet.Limits {
 	return packet.Limits{
 		MaxPacketSize:        c.options.MaxPacketSize,
-		MaxRecords:           c.options.MaxRecords,
 		MaxWaitMs:            c.options.MaxWaitMs,
-		MaxBatch:             c.options.MaxBatch,
 		MaxChannelsPerClient: uint16(min(c.options.MaxChannelsPerClient, 65535)),
 	}
 }

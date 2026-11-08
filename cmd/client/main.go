@@ -30,7 +30,6 @@ func main() {
 		priority  = flag.String("priority", "medium", "Priority: low | medium | high")
 		target    = flag.String("target", "", "Target client ID for directed push")
 		channels  = flag.String("channels", "", "Comma separated channel filters to declare")
-		maxRecs   = flag.Int("max-records", 100, "Max records per pull")
 		interval  = flag.Duration("interval", 0, "Push interval")
 		waitMs    = flag.Int("wait-ms", 30000, "Pull long-poll wait in ms (0 = immediate)")
 		stdout    = flag.Bool("stdout", true, "Print pulled payloads")
@@ -97,7 +96,7 @@ func main() {
 	case "push":
 		runPush(ctx, c, *channel, *message, *count, prio, *target, *interval)
 	case "pull":
-		runPull(ctx, c, *maxRecs, *waitMs, *stdout)
+		runPull(ctx, c, *waitMs, *stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode %q\n", *mode)
 		os.Exit(2)
@@ -123,12 +122,11 @@ func runPush(ctx context.Context, c *client.Client, channel, message string, cou
 	}
 }
 
-func runPull(ctx context.Context, c *client.Client, maxRecords, waitMs int, print bool) {
+func runPull(ctx context.Context, c *client.Client, waitMs int, print bool) {
 	for {
-		msgs, err := c.Pull(ctx, client.PullOptions{
-			MaxRecords: uint16(maxRecords),
-			WaitMs:     uint32(waitMs),
-			Immediate:  waitMs == 0,
+		m, err := c.Pull(ctx, client.PullOptions{
+			WaitMs:    uint32(waitMs),
+			Immediate: waitMs == 0,
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, client.ErrClientClosed) {
@@ -138,25 +136,25 @@ func runPull(ctx context.Context, c *client.Client, maxRecords, waitMs int, prin
 			return
 		}
 
-		for _, m := range msgs {
+		if m != nil {
 			if print {
 				fmt.Printf("[%s] %s: %s (dup=%v priority=%s)\n",
 					m.ID.Hex()[:8], m.Channel, string(m.Payload), m.Dup, m.Priority)
 			}
+			if err := m.Ack(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "commit failed: %v\n", err)
+				return
+			}
+			continue
 		}
 
-		if len(msgs) == 0 && waitMs == 0 {
+		if waitMs == 0 {
 			// 非阻塞拉取：避免空转
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(100 * time.Millisecond):
 			}
-		}
-
-		if _, err := c.CommitAll(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "commit failed: %v\n", err)
-			return
 		}
 	}
 }

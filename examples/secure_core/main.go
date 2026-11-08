@@ -45,8 +45,6 @@ func main() {
 	b, err := core.NewWithOptions(core.NewCoreOptions().
 		WithLogger(logger).
 		WithQueueCap(2000).
-		WithMaxRecords(500).
-		WithMaxBytes(256*1024).
 		WithPushRateLimit(1000, 2000).
 		WithHooks(&core.Hooks{
 			Auth: &staticAuth{secrets: map[string]string{

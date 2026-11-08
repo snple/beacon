@@ -46,9 +46,6 @@ var (
 
 	// ErrRecordTooLarge 单条记录超过上限
 	ErrRecordTooLarge = errors.New("record too large")
-
-	// ErrBatchTooLarge 单次 PUSH 超过上限
-	ErrBatchTooLarge = errors.New("batch too large")
 )
 
 // ClientNotFoundError 客户端不存在
