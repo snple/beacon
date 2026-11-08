@@ -248,6 +248,116 @@ func TestTargetNotFound(t *testing.T) {
 	}
 }
 
+// 只接收定向投递的声明不得命中广播，但仍可接收定向投递。
+func TestTargetOnlyDeclarationSkipsBroadcast(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-to")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	results, err := sub.DeclareChannels(ctx, client.Channel{Filter: "cmd/**", TargetOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("declare rejected: %+v", results)
+	}
+
+	if err := pub.Push(ctx, "cmd/x", []byte("broadcast"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if msg, err := sub.Pull(ctx, client.PullOptions{Immediate: true}); err != nil || msg != nil {
+		t.Fatalf("target-only declaration must not receive broadcast: msg=%+v err=%v", msg, err)
+	}
+
+	res, err := b.PushToClient("sub-to", "cmd/x", []byte("targeted"), core.PushOptions{})
+	if err != nil {
+		t.Fatalf("targeted push: %v (%+v)", err, res)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || string(msg.Payload) != "targeted" {
+		t.Fatalf("target should receive targeted message, got %+v", msg)
+	}
+}
+
+// 同一客户端的不同声明各自生效：广播声明命中广播，只定向声明不命中。
+func TestTargetOnlyIsPerDeclaration(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-mixed")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	results, err := sub.DeclareChannels(ctx,
+		client.Channel{Filter: "a/**", TargetOnly: true},
+		client.Channel{Filter: "a/b"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("declare rejected: %+v", results)
+	}
+
+	if err := pub.Push(ctx, "a/c", []byte("no"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if msg, err := sub.Pull(ctx, client.PullOptions{Immediate: true}); err != nil || msg != nil {
+		t.Fatalf("a/c is only covered by a target-only declaration: msg=%+v err=%v", msg, err)
+	}
+
+	if err := pub.Push(ctx, "a/b", []byte("yes"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || string(msg.Payload) != "yes" {
+		t.Fatalf("a/b has a broadcast declaration and must receive broadcast, got %+v", msg)
+	}
+}
+
+// 同一过滤器重复声明时取更宽松的模式：广播可达覆盖只定向投递。
+func TestDuplicateDeclarationKeepsBroadcast(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "sub-dup")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	results, err := sub.DeclareChannels(ctx,
+		client.Channel{Filter: "d/1", TargetOnly: true},
+		client.Channel{Filter: "d/1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("declare rejected: %+v", results)
+	}
+
+	ci, err := b.GetClientInfo("sub-dup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ci.Channels) != 1 || ci.Channels[0].Filter != "d/1" || ci.Channels[0].TargetOnly {
+		t.Fatalf("channels: %+v", ci.Channels)
+	}
+
+	if err := pub.Push(ctx, "d/1", []byte("v"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || string(msg.Payload) != "v" {
+		t.Fatalf("duplicate declaration should stay broadcast-capable, got %+v", msg)
+	}
+}
+
 func TestWildcardMatchingAndDeclare(t *testing.T) {
 	_, addr := startCore(t, nil)
 	sub := newTestClient(t, addr, "sub-1")
@@ -493,7 +603,7 @@ func TestStatsAndAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ci.Channels) != 1 || ci.Channels[0] != "ch/a" {
+	if len(ci.Channels) != 1 || ci.Channels[0].Filter != "ch/a" {
 		t.Fatalf("channels: %v", ci.Channels)
 	}
 

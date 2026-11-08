@@ -7,7 +7,10 @@ import (
 	"github.com/snple/beacon/packet"
 )
 
-// matcher 维护 channel 过滤器 → 客户端 的映射。
+// matcher 维护「广播可达」的 channel 过滤器 → 客户端 的映射。
+//
+// 只接收定向投递的声明（ChannelFlagTargetOnly）不登记在这里：
+// 广播发布不得命中它们；定向投递直接查会话声明（Client.matchesChannel）。
 //
 // 与 MQTT 的订阅树同构（"*" 等价于 "+"，"**" 等价于 "#"）：
 //   - 精确过滤器放在 map 中，发布命中时 O(1) 复制；
@@ -58,6 +61,8 @@ func isWildcardFilter(filter string) bool {
 }
 
 // declare 用新声明全量替换某客户端的过滤器集合。
+//
+// decls 只应包含广播可达的声明；只定向投递的声明由调用方过滤掉。
 func (m *matcher) declare(clientID string, decls []packet.ChannelDecl) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,17 +139,6 @@ func (m *matcher) match(channel string) map[string]struct{} {
 		out = m.wild.root.collect(channel, 0, out)
 	}
 
-	return out
-}
-
-// filters 返回某客户端当前声明的过滤器。
-func (m *matcher) filters(clientID string) []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	src := m.byClient[clientID]
-	out := make([]string, len(src))
-	copy(out, src)
 	return out
 }
 

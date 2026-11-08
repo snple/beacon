@@ -269,13 +269,34 @@ type DeclareResult struct {
 	Reason  packet.ReasonCode
 }
 
-// Declare 全量替换 channel 声明。
+// Channel 是一项 channel 声明。
+type Channel struct {
+	// Filter 是 channel 过滤器（支持 "*" / "**" 通配符）。
+	Filter string
+	// TargetOnly 为 true 时只接收定向投递（PushTo），不参与广播匹配。
+	// 默认同时接收广播与定向投递。
+	TargetOnly bool
+}
+
+// Declare 全量替换 channel 声明：声明的过滤器同时接收广播与定向投递。
 //
 // 返回的切片只包含被拒绝的项（服务端为压缩响应只回显失败项）。
 func (c *Client) Declare(ctx context.Context, channels ...string) ([]DeclareResult, error) {
+	decls := make([]Channel, len(channels))
+	for i, ch := range channels {
+		decls[i] = Channel{Filter: ch}
+	}
+	return c.DeclareChannels(ctx, decls...)
+}
+
+// DeclareChannels 全量替换 channel 声明，可逐项指定是否只接收定向投递。
+//
+// 返回的切片只包含被拒绝的项（服务端为压缩响应只回显失败项）。
+func (c *Client) DeclareChannels(ctx context.Context, channels ...Channel) ([]DeclareResult, error) {
 	decls := make([]packet.ChannelDecl, len(channels))
 	for i, ch := range channels {
-		decls[i] = packet.ChannelDecl{Channel: ch}
+		decls[i] = packet.ChannelDecl{Channel: ch.Filter}
+		decls[i].SetTargetOnly(ch.TargetOnly)
 	}
 	req := packet.NewDeclarePacket(c.nextRequestID(), decls)
 

@@ -122,9 +122,13 @@ func TestCommitAndDeclareRoundTrip(t *testing.T) {
 	}
 
 	d := NewDeclarePacket(4, []ChannelDecl{{Channel: "x/**"}, {Channel: "y"}})
+	d.Channels[1].SetTargetOnly(true)
 	dd := roundTrip(t, d).(*DeclarePacket)
 	if len(dd.Channels) != 2 || dd.Channels[0].Channel != "x/**" {
 		t.Fatalf("declare mismatch")
+	}
+	if dd.Channels[0].TargetOnly() || !dd.Channels[1].TargetOnly() {
+		t.Fatalf("declare flags mismatch: %+v", dd.Channels)
 	}
 
 	resp := NewDeclareRespPacket(5)

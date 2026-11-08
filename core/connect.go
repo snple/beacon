@@ -397,19 +397,28 @@ func (c *Core) filterChannels(identity *Identity, decls []packet.ChannelDecl) []
 	}
 
 	out := make([]packet.ChannelDecl, 0, len(decls))
-	seen := make(map[string]struct{}, len(decls))
+	index := make(map[string]int, len(decls))
 	for _, d := range decls {
-		if _, dup := seen[d.Channel]; dup {
+		if pos, dup := index[d.Channel]; dup {
+			if pos >= 0 && d.Flags.Unknown() == 0 && !d.TargetOnly() {
+				out[pos].SetTargetOnly(false)
+			}
 			continue
 		}
-		seen[d.Channel] = struct{}{}
 
+		if d.Flags.Unknown() != 0 {
+			index[d.Channel] = -1
+			continue
+		}
 		if !packet.ValidateChannelFilterLimit(d.Channel, c.options.MaxChannelLength) {
+			index[d.Channel] = -1
 			continue
 		}
 		if !c.canRead(identity, d.Channel) {
+			index[d.Channel] = -1
 			continue
 		}
+		index[d.Channel] = len(out)
 		out = append(out, d)
 	}
 	return out

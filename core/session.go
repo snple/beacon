@@ -154,12 +154,21 @@ func (cl *Client) setIdentity(id *Identity) { cl.identity.Store(id.Clone()) }
 func (cl *Client) getIdentity() *Identity { return cl.identity.Load() }
 
 // replaceChannels 全量替换声明并同步到 matcher。
+//
+// matcher 只登记参与广播匹配的声明；只接收定向投递的声明不登记，
+// 定向投递直接查会话声明（matchesChannel），因此仍可命中。
 func (cl *Client) replaceChannels(decls []packet.ChannelDecl) {
 	cl.chMu.Lock()
 	cl.channels = append([]packet.ChannelDecl(nil), decls...)
 	cl.chMu.Unlock()
 
-	cl.core.matcher.declare(cl.ID, decls)
+	broadcast := make([]packet.ChannelDecl, 0, len(decls))
+	for _, d := range decls {
+		if !d.TargetOnly() {
+			broadcast = append(broadcast, d)
+		}
+	}
+	cl.core.matcher.declare(cl.ID, broadcast)
 }
 
 // declaredChannels 返回当前声明的快照。
@@ -172,10 +181,23 @@ func (cl *Client) declaredChannels() []packet.ChannelDecl {
 	return append([]packet.ChannelDecl(nil), cl.channels...)
 }
 
+// channelInfos 返回当前声明的管理面视图。
+func (cl *Client) channelInfos() []ChannelInfo {
+	decls := cl.declaredChannels()
+	if len(decls) == 0 {
+		return nil
+	}
+	out := make([]ChannelInfo, len(decls))
+	for i, d := range decls {
+		out[i] = ChannelInfo{Filter: d.Channel, TargetOnly: d.TargetOnly()}
+	}
+	return out
+}
+
 // matchesChannel 报告该会话是否声明了能匹配 channel 的过滤器。
 //
-// 用于定向投递：目标必须主动声明过该 channel，否则定向投递就是绕过
-// 订阅/读权限的后门。
+// 用于定向投递：目标必须主动声明过该 channel（含只接收定向投递的声明），
+// 否则定向投递就是绕过订阅/读权限的后门。
 func (cl *Client) matchesChannel(channel string) bool {
 	cl.chMu.RLock()
 	defer cl.chMu.RUnlock()

@@ -95,7 +95,7 @@ func (c *Core) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeMetric(w, "beacon_target_misses_total", "counter", "定向投递目标不存在次数", float64(snap.TargetMisses))
 	writeMetric(w, "beacon_inflight_messages", "gauge", "内存中未完成投递的消息条数", float64(snap.InFlightMessages))
 	writeMetric(w, "beacon_inflight_bytes", "gauge", "内存中未完成投递消息的近似字节数", float64(snap.InFlightBytes))
-	writeMetric(w, "beacon_wildcard_filters", "gauge", "通配符过滤器数量", float64(snap.WildcardFilters))
+	writeMetric(w, "beacon_wildcard_filters", "gauge", "参与广播匹配的通配符过滤器数量", float64(snap.WildcardFilters))
 }
 
 func writeMetric(w http.ResponseWriter, name, kind, help string, value float64) {

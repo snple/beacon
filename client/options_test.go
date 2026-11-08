@@ -61,3 +61,15 @@ func TestReasonToError(t *testing.T) {
 		t.Fatal("not authorized should be an error")
 	}
 }
+
+func TestOptionsTargetOnlyChannels(t *testing.T) {
+	o := NewClientOptions().
+		WithChannels("a/**").
+		WithTargetOnlyChannels("b/1", "b/2")
+	if len(o.Channels) != 3 {
+		t.Fatalf("channels: %+v", o.Channels)
+	}
+	if o.Channels[0].TargetOnly || !o.Channels[1].TargetOnly || !o.Channels[2].TargetOnly {
+		t.Fatalf("target-only flags: %+v", o.Channels)
+	}
+}

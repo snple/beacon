@@ -40,7 +40,7 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 
 	identity := cl.getIdentity()
 	accepted := make([]packet.ChannelDecl, 0, len(p.Channels))
-	seen := make(map[string]struct{}, len(p.Channels))
+	index := make(map[string]int, len(p.Channels))
 
 	fail := func(channel string, reason packet.ReasonCode) {
 		resp.Results = append(resp.Results, packet.ChannelResult{
@@ -50,18 +50,27 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 	}
 
 	for _, d := range p.Channels {
-		if _, dup := seen[d.Channel]; dup {
-			// 重复声明等同于已接受，不占用响应体积。
+		if pos, dup := index[d.Channel]; dup {
+			// 同一过滤器重复声明等同已接受，不占用响应体积；
+			// 模式取更宽松的广播可达（它覆盖只定向投递，见 docs）。
+			if pos >= 0 && d.Flags.Unknown() == 0 && !d.TargetOnly() {
+				accepted[pos].SetTargetOnly(false)
+			}
 			continue
 		}
-		seen[d.Channel] = struct{}{}
 
 		switch {
+		case d.Flags.Unknown() != 0:
+			index[d.Channel] = -1
+			fail(d.Channel, packet.ReasonChannelFilterInvalid)
 		case !packet.ValidateChannelFilterLimit(d.Channel, opts.MaxChannelLength):
+			index[d.Channel] = -1
 			fail(d.Channel, packet.ReasonChannelFilterInvalid)
 		case !c.canRead(identity, d.Channel):
+			index[d.Channel] = -1
 			fail(d.Channel, packet.ReasonNotAuthorized)
 		default:
+			index[d.Channel] = len(accepted)
 			accepted = append(accepted, d)
 		}
 	}

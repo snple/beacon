@@ -215,7 +215,7 @@ PUSH_OK {
 - **定向投递**（`Target` 非空）需要额外的发布权限；未配置认证器时默认允许，
   配置认证器后要求 `Identity.AllowTargeted`。
 - 定向投递还要求**目标已声明匹配该 `Channel` 的过滤器**，否则返回 `NoMatch`：
-  定向投递不是绕过订阅/读权限的后门。
+  定向投递不是绕过订阅/读权限的后门。只接收定向投递的声明（见 §5.5）同样满足该要求。
 
 ### 5.3 PULL / PULL_OK
 
@@ -285,7 +285,7 @@ COMMIT_OK {
 DECLARE {
     RequestID uint32
     Count     uint16
-    Channels  []string   // 全量替换；[] = 取消全部；全部需显式 "**"
+    Channels  []{ Channel string, Flags uint8 }   // 全量替换；[] = 取消全部；全部需显式 "**"
 }
 
 DECLARE_RESP {
@@ -304,6 +304,21 @@ DECLARE_RESP {
 
 `DECLARE` 是**全量替换**且幂等。它**只影响之后的匹配**：已入队消息不会被清理，
 因此不能用它「退订」已有积压。
+
+每项声明的 `Flags`：
+
+| 位 | 名称 | 语义 |
+|---|---|---|
+| bit0 | `TargetOnly` | 只接收**定向投递**：广播发布（`Target` 为空）不会命中该过滤器 |
+| 其他 | — | 保留；置位时该声明被拒绝（`ChannelFilterInvalid`） |
+
+未置位 `TargetOnly`（默认）时同时接收广播与定向投递。定向投递仍要求目标声明过
+匹配该 `Channel` 的过滤器，`TargetOnly` 只是不参与广播匹配，不会扩大接收范围。
+
+同一过滤器在一个 `DECLARE` 中重复声明时按**更宽松的模式**合并：只要有一次未置位
+`TargetOnly`，该过滤器就参与广播匹配（重复项按接受计，不占用响应体积）。
+`TargetOnly` 是逐项生效的：同一客户端可以同时声明 `jobs/**`（只定向投递）与
+`jobs/public`（广播可达），广播只会命中后者。
 
 响应压缩：`Results` **只回显被拒绝的项**，`Accepted` 给出接受数量（重复项按接受计）。
 这样可以避免回显大量成功项把响应撑过对端声明的 `MaxPacketSize`。

@@ -31,7 +31,8 @@ COMMIT(id) ───────────────────────
 - **优先级即可靠性**：`High`/`Medium` 必须 `COMMIT`；`Low` 尽力而为，写出即删。
 - **`delivered` 优先**：存在未确认消息时，`PULL` 只重发这些消息（`Dup=1`），不取新数据，
   因此客户端必须先 `COMMIT` 再拉取。
-- **定向投递**：`Record.Target` 指定 clientID，完全跳过 channel 匹配。
+- **定向投递**：`Record.Target` 指定 clientID，完全跳过 channel 匹配；
+  声明可标记为只接收定向投递（`TargetOnly`），此时广播不会命中它。
 - **会话**：`SessionID` 是会话租约；同 ClientID 的新连接会接管会话并关闭旧连接，
   旧连接的请求从此不产生任何状态变更（fencing）。
 
@@ -85,7 +86,7 @@ import (
 c, err := client.NewWithOptions(client.NewClientOptions().
     WithCore("127.0.0.1:5208").
     WithClientID("worker-1").
-    WithChannels("jobs/**"))     // 建连时随 CONNECT 一起声明
+    WithChannels("jobs/**"))     // 建连后自动 DECLARE（广播 + 定向投递）
 if err != nil {
     return err
 }
@@ -178,6 +179,28 @@ SDK 已在 `Pull` 内部串行化。
   不能绕过目标的订阅与读权限；
 - 目标离线但会话保留时仍然入队（Low 除外）；
 - 目标没有会话时返回 `TargetNotFound`。
+
+声明可以逐项指定是否接收广播（见下节）：`TargetOnly` 声明只接收定向投递，
+广播发布不会命中它，但定向投递仍可命中。
+
+### 声明模式：广播 vs 只定向投递
+
+```go
+// 默认：同时接收广播与定向投递
+c.DeclareChannels(ctx,
+    client.Channel{Filter: "jobs/**"},                            // 广播 + 定向投递
+    client.Channel{Filter: "worker-1/inbox", TargetOnly: true},   // 只接收定向投递
+)
+
+// 建连后自动声明时同样可以区分
+client.NewClientOptions().
+    WithChannels("jobs/**").                       // 广播 + 定向投递
+    WithTargetOnlyChannels("worker-1/inbox")       // 只接收定向投递
+```
+
+`TargetOnly` 是**逐项生效**的：同一客户端可以同时声明 `jobs/**`（只定向投递）
+与 `jobs/public`（广播可达），广播只会命中后者。同一过滤器重复声明时取更宽松的
+模式（只要有一次广播可达，就参与广播匹配）。
 
 ### 保留 channel
 

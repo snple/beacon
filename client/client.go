@@ -267,7 +267,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	// 订阅声明统一由 DECLARE 承担（CONNECT 不再携带）：每次建连后重新声明，
 	// 这样 CleanSession 清空或被按新身份过滤掉的声明都会在重连后恢复。
 	if len(c.opts.Channels) > 0 {
-		if _, err := c.Declare(c.ctx, c.opts.Channels...); err != nil {
+		if _, err := c.DeclareChannels(c.ctx, c.opts.Channels...); err != nil {
 			cn.close(err)
 			return err
 		}

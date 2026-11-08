@@ -62,11 +62,16 @@ type ClientInfo struct {
     Pending           [3]uint32
     Delivered         uint32
     OldestUncommitted packet.PacketID
-    Channels          []string
+    Channels          []ChannelInfo
     Identity          *Identity
     MessagesSent      int64
     MessagesDropped   int64
     MessagesRejected  int64
+}
+
+type ChannelInfo struct {
+    Filter     string
+    TargetOnly bool // 只接收定向投递，不参与广播匹配
 }
 
 func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) // 不存在：*ClientNotFoundError

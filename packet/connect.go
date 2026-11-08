@@ -4,11 +4,6 @@ import (
 	"io"
 )
 
-// ChannelDecl 客户端声明的一项 channel 兴趣。
-type ChannelDecl struct {
-	Channel string
-}
-
 // ConnectFlags 是 CONNECT 的会话与能力开关。
 //
 // 用一个字节承载全部开关，后续新增能力时无需再扩展 CONNECT 布局。

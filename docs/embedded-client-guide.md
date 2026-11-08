@@ -41,6 +41,8 @@
 - 会话保留时长由**服务端配置**，`CONNECT` 不携带 `SessionTimeout`。
 - 订阅声明**不在 `CONNECT` 中**：连接建立后必须用 `DECLARE` 全量声明。
   重连后如依赖既有订阅，建议无条件重发 `DECLARE`（服务端会按新身份重新校验）。
+- 每项声明带 1 字节 `Flags`：bit0 `TargetOnly` 表示只接收定向投递（广播发布不命中），
+  默认同时接收广播与定向投递；置位保留位会被拒绝（`ChannelFilterInvalid`）。
 - `CleanSession`（`CONNECT.Flags` bit0）置位：服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，
   `CONNACK.SessionPresent=0` 并返回新的 `SessionID`。
 - `CleanSession` 未置位：若会话仍被保留，则复用队列与声明（`SessionPresent=1`）。

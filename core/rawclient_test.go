@@ -398,3 +398,24 @@ func TestPushWithoutAckReturnsNoResponse(t *testing.T) {
 		t.Fatalf("unexpected pull result: %+v", pkt.Record)
 	}
 }
+
+// 服务端必须拒绝无法理解的声明标志位，而不是静默忽略。
+func TestDeclareUnknownFlagsRejected(t *testing.T) {
+	_, addr := startCore(t, nil)
+	rc := dialRaw(t, addr, "raw-decl")
+
+	req := packet.NewDeclarePacket(20, []packet.ChannelDecl{{
+		Channel: "a/b",
+		Flags:   1 << 7,
+	}})
+	rc.send(req)
+
+	resp := rc.expect(t, packet.DECLARE_RESP).(*packet.DeclareRespPacket)
+	if resp.Accepted != 0 {
+		t.Fatalf("unexpected accepted count: %+v", resp)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Channel != "a/b" ||
+		resp.Results[0].Reason != packet.ReasonChannelFilterInvalid {
+		t.Fatalf("unexpected declare results: %+v", resp.Results)
+	}
+}

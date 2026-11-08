@@ -163,11 +163,18 @@ type ClientInfo struct {
 	Pending           [3]uint32
 	Delivered         uint32
 	OldestUncommitted packet.PacketID
-	Channels          []string
+	Channels          []ChannelInfo
 	Identity          *Identity
 	MessagesSent      int64
 	MessagesDropped   int64
 	MessagesRejected  int64
+}
+
+// ChannelInfo 是客户端声明的一项 channel 过滤器。
+type ChannelInfo struct {
+	Filter string
+	// TargetOnly 表示该过滤器只接收定向投递，不参与广播匹配。
+	TargetOnly bool
 }
 
 // GetClientInfo 返回单个客户端详情。
@@ -191,7 +198,7 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 		Pending:           pending,
 		Delivered:         delivered,
 		OldestUncommitted: oldest,
-		Channels:          c.matcher.filters(cl.ID),
+		Channels:          cl.channelInfos(),
 		Identity:          cl.getIdentity().Clone(),
 		MessagesSent:      cl.sent.Load(),
 		MessagesDropped:   cl.dropped.Load(),

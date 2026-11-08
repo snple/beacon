@@ -27,9 +27,9 @@ type ClientOptions struct {
 	ReconnectMin  time.Duration
 	ReconnectMax  time.Duration
 
-	// Channels 是建连后自动 DECLARE 的过滤器（含重连）。
+	// Channels 是建连后自动 DECLARE 的声明（含重连）。
 	// CONNECT 本身不携带订阅声明。
-	Channels []string
+	Channels []Channel
 
 	// 拉取默认长轮询时长（PollMessage 使用）
 	DefaultWaitMs uint32
@@ -80,7 +80,7 @@ func (o *ClientOptions) applyDefaults() {
 		o.Address = "127.0.0.1:5208"
 	}
 	if len(o.Channels) > 0 {
-		o.Channels = append([]string(nil), o.Channels...)
+		o.Channels = append([]Channel(nil), o.Channels...)
 	}
 	if o.Logger == nil {
 		o.Logger = def.Logger
@@ -155,8 +155,21 @@ func (o *ClientOptions) WithReconnectBackoff(min, max time.Duration) *ClientOpti
 }
 
 // WithChannels 设置建连后自动声明的过滤器（每次连接/重连都会重新 DECLARE）。
+//
+// 这些过滤器同时接收广播与定向投递；只需要定向投递时用 WithTargetOnlyChannels。
 func (o *ClientOptions) WithChannels(channels ...string) *ClientOptions {
-	o.Channels = channels
+	o.Channels = make([]Channel, len(channels))
+	for i, ch := range channels {
+		o.Channels[i] = Channel{Filter: ch}
+	}
+	return o
+}
+
+// WithTargetOnlyChannels 追加只接收定向投递的过滤器（不参与广播匹配）。
+func (o *ClientOptions) WithTargetOnlyChannels(channels ...string) *ClientOptions {
+	for _, ch := range channels {
+		o.Channels = append(o.Channels, Channel{Filter: ch, TargetOnly: true})
+	}
 	return o
 }
 

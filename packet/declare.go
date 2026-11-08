@@ -2,9 +2,50 @@ package packet
 
 import "io"
 
+// ChannelDecl 客户端声明的一项 channel 兴趣。
+type ChannelDecl struct {
+	Channel string
+	// Flags 承载声明开关，见 ChannelFlag*。
+	Flags ChannelFlags
+}
+
+// ChannelFlags 是单个 channel 声明的开关。
+type ChannelFlags uint8
+
+const (
+	// ChannelFlagTargetOnly 表示该过滤器只接收定向投递：广播发布不会命中它。
+	// 未置位时同时接收广播与定向投递（默认）。
+	ChannelFlagTargetOnly ChannelFlags = 1 << 0
+)
+
+const channelFlagsKnown = ChannelFlagTargetOnly
+
+// Unknown 返回未定义的标志位，供服务端拒绝无法理解的声明。
+func (f ChannelFlags) Unknown() ChannelFlags { return f &^ channelFlagsKnown }
+
+// HasFlag 报告某个开关是否置位。
+func (d *ChannelDecl) HasFlag(flag ChannelFlags) bool { return d.Flags&flag != 0 }
+
+// SetFlag 设置或清除某个开关。
+func (d *ChannelDecl) SetFlag(flag ChannelFlags, on bool) {
+	if on {
+		d.Flags |= flag
+	} else {
+		d.Flags &^= flag
+	}
+}
+
+// TargetOnly 报告该过滤器是否只接收定向投递。
+func (d *ChannelDecl) TargetOnly() bool { return d.HasFlag(ChannelFlagTargetOnly) }
+
+// SetTargetOnly 设置该过滤器是否只接收定向投递。
+func (d *ChannelDecl) SetTargetOnly(on bool) { d.SetFlag(ChannelFlagTargetOnly, on) }
+
 // DeclarePacket DECLARE：全量替换客户端的 channel 声明。
 //
 // 空列表表示取消全部兴趣；希望接收所有 channel 时必须显式声明 "**"。
+// 每项声明可带 ChannelFlags：默认同时接收广播与定向投递，
+// ChannelFlagTargetOnly 则只接收定向投递。
 type DeclarePacket struct {
 	RequestID uint32
 	Channels  []ChannelDecl
@@ -31,6 +72,9 @@ func (p *DeclarePacket) encode(w io.Writer) error {
 		if err := EncodeString(w, ch.Channel); err != nil {
 			return err
 		}
+		if err := WriteByte(w, byte(ch.Flags)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -47,7 +91,7 @@ func (p *DeclarePacket) decode(r io.Reader, _ FixedHeader) error {
 	if count == 0 {
 		return nil
 	}
-	if err := checkCount(r, count, 1); err != nil {
+	if err := checkCount(r, count, 3); err != nil {
 		return err
 	}
 	p.Channels = make([]ChannelDecl, 0, count)
@@ -56,7 +100,11 @@ func (p *DeclarePacket) decode(r io.Reader, _ FixedHeader) error {
 		if err != nil {
 			return err
 		}
-		p.Channels = append(p.Channels, ChannelDecl{Channel: ch})
+		flags, err := ReadByte(r)
+		if err != nil {
+			return err
+		}
+		p.Channels = append(p.Channels, ChannelDecl{Channel: ch, Flags: ChannelFlags(flags)})
 	}
 	return nil
 }

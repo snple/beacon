@@ -127,9 +127,6 @@ func TestMatcherRemovePrunesTrie(t *testing.T) {
 	if !m.wild.root.empty() {
 		t.Fatal("trie should be pruned back to an empty root")
 	}
-	if got := m.filters("c1"); len(got) != 0 {
-		t.Fatalf("filters after remove = %v", got)
-	}
 }
 
 func TestMatcherSharedFilterBookkeeping(t *testing.T) {
