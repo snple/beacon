@@ -1,13 +1,16 @@
 package core_test
 
 import (
+	"context"
 	"encoding/binary"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/snple/beacon/client"
 	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/packet"
+	"go.uber.org/zap"
 )
 
 // rawConn 是绕过 client SDK 的最小协议客户端，用于测试协议层行为。
@@ -171,7 +174,7 @@ func TestInvalidPriorityIsRejected(t *testing.T) {
 	body := []byte{}
 	body = append(body, 0, 0, 0, 1)               // RequestID
 	body = append(body, packet.PushFlagWantAck)   // Flags
-	body = append(body, 0x16)                     // Record flags: HasPriority | priority=3
+	body = append(body, 0x06)                     // Record flags: Priority=11（非法）
 	body = append(body, make([]byte, 12)...)      // ID
 	body = append(body, 0, 4, 'c', 'h', '/', 'a') // Channel
 	body = append(body, 0, 0)                     // Target
@@ -205,8 +208,8 @@ func TestInvalidPriorityIsRejected(t *testing.T) {
 	_ = dialRaw(t, addr, "raw-prio-2", "ch/a")
 }
 
-// 回归：PULL 结果必须适配客户端声明的 MaxPacketSize，不能静默断连。
-func TestPullHonorsClientMaxPacketSize(t *testing.T) {
+// 回归：超过目标接收上限的记录不能入队，也不能阻塞后续消息。
+func TestOversizeRecordRejectedAtEnqueue(t *testing.T) {
 	b, addr := startCore(t, nil)
 
 	nc, err := net.DialTimeout("tcp", addr, 3*time.Second)
@@ -230,34 +233,122 @@ func TestPullHonorsClientMaxPacketSize(t *testing.T) {
 		t.Fatalf("connack: %s", connack.ReasonCode)
 	}
 
-	// 定向投递要求目标声明过该 channel，这里显式声明。
 	rc := &rawConn{nc: nc, t: t}
 	rc.declare("big/ch")
 
-	b.Push("big/ch", make([]byte, 2048), core.PushOptions{}.WithPriority(packet.PriorityMedium))
-
-	if err := packet.WritePacket(nc, packet.NewPullPacket(1, 100), 0); err != nil {
-		t.Fatal(err)
-	}
-	pkt, err = packet.ReadPacket(nc, 1<<20)
-	if err != nil {
-		t.Fatalf("server disconnected instead of returning a PULL_OK: %v", err)
-	}
-	ok := pkt.(*packet.PullOkPacket)
-	if ok.Reason != packet.ReasonPacketTooLarge {
-		t.Fatalf("expected PacketTooLarge, got %s", ok.Reason)
-	}
-	if ok.HasRecord() {
-		t.Fatal("expected no record")
+	res := b.Push("big/ch", make([]byte, 2048), core.PushOptions{}.WithPriority(packet.PriorityMedium))
+	if res.Matched != 0 || res.Dropped != 1 || res.Reason != packet.ReasonPacketTooLarge {
+		t.Fatalf("oversize push should be dropped, got %+v", res)
 	}
 
-	// 消息没有被丢弃，仍在队列中等待客户端提高上限后重试。
 	info, err := b.GetClientInfo("small-buf")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Pending[1]+info.Pending[2] != 1 {
-		t.Fatalf("message should remain queued, pending=%v", info.Pending)
+	if info.Pending[0]+info.Pending[1]+info.Pending[2] != 0 {
+		t.Fatalf("oversize message must not be queued, pending=%v", info.Pending)
+	}
+
+	// 连接仍然可用：PULL 返回空结果，PING 得到 PONG。
+	rc.send(packet.NewPullPacket(1, 100))
+	ok := rc.expect(t, packet.PULL_OK).(*packet.PullOkPacket)
+	if ok.Reason != packet.ReasonSuccess || ok.HasRecord() {
+		t.Fatalf("unexpected pull result: %+v", ok)
+	}
+	rc.send(packet.NewPingPacket(7, 123))
+	if _, ok := rc.expect(t, packet.PONG).(*packet.PongPacket); !ok {
+		t.Fatal("expected PONG")
+	}
+}
+
+// 客户端重连时降低接收上限：已入队的超限消息应被丢弃，而不是永久堵住队列。
+func TestOversizeQueuedRecordDroppedOnReconnect(t *testing.T) {
+	b, addr := startCore(t, nil)
+
+	first := newTestClient(t, addr, "shrink-1", "big/**")
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitClientDetached(t, b, "shrink-1")
+
+	b.Push("big/ch", make([]byte, 2048), core.PushOptions{}.WithPriority(packet.PriorityHigh))
+
+	opts := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("shrink-1").
+		WithMaxPacketSize(512).
+		WithAutoReconnect(false).
+		WithChannels("big/**").
+		WithLogger(zap.NewNop())
+	sub, err := client.NewWithOptions(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sub.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sub.ConnectContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 超限消息被丢弃，PULL 不再返回 PacketTooLarge，也不会断连。
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 100})
+	if err != nil {
+		t.Fatalf("pull should not fail on oversize record: %v", err)
+	}
+	if msg != nil {
+		t.Fatalf("expected empty pull, got %+v", msg)
+	}
+	info, err := b.GetClientInfo("shrink-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Pending[0]+info.Pending[1]+info.Pending[2] != 0 {
+		t.Fatalf("oversize message should be dropped, pending=%v", info.Pending)
+	}
+
+	// 队列仍可继续工作。
+	pub := newTestClient(t, addr, "shrink-pub")
+	if err := pub.Push(ctx, "big/small", []byte("ok"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err = sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || string(msg.Payload) != "ok" {
+		t.Fatalf("queue should still deliver new records, got %+v", msg)
+	}
+}
+
+// 过小的接收上限连 CONNACK 都放不下：必须显式返回错误，而不是静默断开。
+func TestTooSmallClientMaxPacketSizeRejected(t *testing.T) {
+	_, addr := startCore(t, nil)
+
+	nc, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	_ = nc.SetDeadline(time.Now().Add(5 * time.Second))
+
+	connect := packet.NewConnectPacket("tiny-buf")
+	connect.KeepAlive = 60
+	connect.MaxPacketSize = packet.MinPacketSize - 1
+	if err := packet.WritePacket(nc, connect, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	pkt, err := packet.ReadPacket(nc, 1<<20)
+	if err != nil {
+		t.Fatalf("expected CONNACK before close, got %v", err)
+	}
+	connack, ok := pkt.(*packet.ConnackPacket)
+	if !ok || connack.ReasonCode != packet.ReasonPacketTooLarge {
+		t.Fatalf("expected CONNACK(PacketTooLarge), got %s %+v", pkt.Type(), pkt)
+	}
+	if _, err := packet.ReadPacket(nc, 1<<20); err == nil {
+		t.Fatal("connection should be closed after CONNACK")
 	}
 }
 
@@ -299,10 +390,10 @@ func TestLongPollWakesWithData(t *testing.T) {
 
 	pkt := rc.expect(t, packet.PULL_OK)
 	ok := pkt.(*packet.PullOkPacket)
-	if !ok.HasRecord() || string(ok.Record.Payload) != "hello" {
-		t.Fatalf("unexpected record: %+v", ok.Record)
+	if !ok.HasRecord() || string(ok.Records[0].Payload) != "hello" {
+		t.Fatalf("unexpected record: %+v", ok.Records)
 	}
-	if ok.Record.Dup() {
+	if ok.Records[0].Dup() {
 		t.Fatal("first delivery should not be dup")
 	}
 }
@@ -394,8 +485,8 @@ func TestPushWithoutAckReturnsNoResponse(t *testing.T) {
 	// 这里会先读到 PUSH_OK 而失败。
 	rc.send(packet.NewPullPacket(12, 1000))
 	pkt := rc.expect(t, packet.PULL_OK).(*packet.PullOkPacket)
-	if !pkt.HasRecord() || string(pkt.Record.Payload) != "x" {
-		t.Fatalf("unexpected pull result: %+v", pkt.Record)
+	if !pkt.HasRecord() || string(pkt.Records[0].Payload) != "x" {
+		t.Fatalf("unexpected pull result: %+v", pkt.Records)
 	}
 }
 
@@ -417,5 +508,48 @@ func TestDeclareUnknownFlagsRejected(t *testing.T) {
 	if len(resp.Results) != 1 || resp.Results[0].Channel != "a/b" ||
 		resp.Results[0].Reason != packet.ReasonChannelFilterInvalid {
 		t.Fatalf("unexpected declare results: %+v", resp.Results)
+	}
+}
+
+// DECLARE 中重复的过滤器按接受计，Accepted 应覆盖全部请求项。
+func TestDeclareDuplicateAcceptedCount(t *testing.T) {
+	_, addr := startCore(t, nil)
+	rc := dialRaw(t, addr, "raw-dup")
+
+	req := packet.NewDeclarePacket(30, []packet.ChannelDecl{
+		{Channel: "a/b"},
+		{Channel: "a/b"},
+	})
+	rc.send(req)
+
+	resp := rc.expect(t, packet.DECLARE_RESP).(*packet.DeclareRespPacket)
+	if resp.Accepted != 2 || len(resp.Results) != 0 {
+		t.Fatalf("duplicate declarations should both count as accepted: %+v", resp)
+	}
+}
+
+// 服务端必须把客户端声明的 KeepAlive 裁剪到 MaxKeepAlive。
+func TestConnackClampsClientKeepAlive(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxKeepAlive(30))
+
+	nc, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	_ = nc.SetDeadline(time.Now().Add(5 * time.Second))
+
+	connect := packet.NewConnectPacket("ka-clamp")
+	connect.KeepAlive = 600
+	if err := packet.WritePacket(nc, connect, 0); err != nil {
+		t.Fatal(err)
+	}
+	pkt, err := packet.ReadPacket(nc, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connack := pkt.(*packet.ConnackPacket)
+	if connack.KeepAlive != 30 {
+		t.Fatalf("CONNACK KeepAlive = %d, want 30", connack.KeepAlive)
 	}
 }

@@ -18,7 +18,8 @@ const PacketIDSize = 12
 //	+---------------------------+-----------+-----------+
 //	  0                          6           8           12
 //
-// 前 6 字节是毫秒时间戳，因此 PacketID 天然按时间有序，可直接作为队列 key 的前缀排序。
+// 前 6 字节是毫秒时间戳，因此 PacketID 大致按时间有序，可用于追踪/去重；
+// 投递顺序仍以队列位置为准，不应依赖 ID 排序。
 type PacketID [PacketIDSize]byte
 
 var lastPacketIDCount atomic.Uint32

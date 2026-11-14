@@ -31,3 +31,11 @@ func NewPacketTooLargeError(size, maxAllowed uint32) error {
 		MaxAllowed: maxAllowed,
 	}
 }
+
+// checkUnknownFlags 拒绝对端设置的保留标志位。
+func checkUnknownFlags(flags, known uint8) error {
+	if unknown := flags &^ known; unknown != 0 {
+		return fmt.Errorf("%w: unknown flags 0x%02x", ErrMalformedPacket, unknown)
+	}
+	return nil
+}

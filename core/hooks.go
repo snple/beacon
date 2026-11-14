@@ -48,9 +48,13 @@ type AuthContext struct {
 	RemoteAddr string
 	Method     string
 	Data       []byte
+	// Properties 是客户端在 CONNECT 中发送的键值信息，必须视为只读。
+	Properties map[string]string
 
 	// Identity 由认证器填写，成功后透出到管理面。
 	Identity *Identity
+	// ResponseProperties 会随 CONNACK 返回给客户端；仅认证成功时生效。
+	ResponseProperties map[string]string
 }
 
 // AuthHandler 认证钩子。
@@ -65,14 +69,21 @@ type AuthHandlerFunc func(ctx *AuthContext) error
 func (f AuthHandlerFunc) Authenticate(ctx *AuthContext) error { return f(ctx) }
 
 // PushContext 发布上下文。
+//
+// Headers 与 Payload 直接引用即将入队的共享消息，钩子必须视为只读：
+// 修改会影响所有命中客户端以及后续重发。
 type PushContext struct {
-	ClientID string
-	Identity *Identity
-	Channel  string
-	Target   string
-	Priority packet.Priority
-	Headers  map[string]string
-	Payload  []byte
+	ClientID    string
+	Identity    *Identity
+	Channel     string
+	Target      string
+	Priority    packet.Priority
+	ExpiresAt   int64 // Unix 毫秒；0 表示永不过期
+	PublishedAt int64 // Unix 毫秒；0 表示未提供
+	Headers     map[string]string
+	Payload     []byte
+	// Properties 是 PUSH 携带的可选属性，必须视为只读。
+	Properties map[string]string
 }
 
 // MessageHandler 消息面钩子。
@@ -84,12 +95,17 @@ type MessageHandler interface {
 }
 
 // DeliverContext 投递上下文。
+//
+// Payload 引用共享消息内容，钩子必须视为只读：修改会影响其他客户端
+// 以及后续重发。
 type DeliverContext struct {
-	ClientID string
-	Channel  string
-	Source   string
-	Priority packet.Priority
-	Payload  []byte
+	ClientID    string
+	Channel     string
+	Source      string
+	Priority    packet.Priority
+	ExpiresAt   int64
+	PublishedAt int64
+	Payload     []byte
 }
 
 // MessageHandlerFunc 适配函数式消息钩子。
@@ -114,11 +130,37 @@ func (f MessageHandlerFunc) OnDeliver(ctx *DeliverContext) bool {
 	return f.DeliverFn(ctx)
 }
 
+// NackContext 是客户端 NACK 一条消息的上下文。
+//
+// 可用于记录死信、告警或补偿；钩子在 COMMIT 处理路径中同步执行。
+type NackContext struct {
+	ClientID string
+	ID       packet.PacketID
+	Channel  string
+	Source   string
+	Priority packet.Priority
+	Reliable bool
+	Reason   packet.ReasonCode
+}
+
+// NackHandler 处理客户端 NACK。
+type NackHandler interface {
+	OnNack(ctx *NackContext)
+}
+
+// NackHandlerFunc 适配函数式 NACK 钩子。
+type NackHandlerFunc func(ctx *NackContext)
+
+// OnNack 实现 NackHandler。
+func (f NackHandlerFunc) OnNack(ctx *NackContext) { f(ctx) }
+
 // ConnectContext 连接建立上下文。
 type ConnectContext struct {
 	ClientID       string
 	RemoteAddr     string
 	SessionPresent bool
+	// Properties 是客户端在 CONNECT 中发送的键值信息。
+	Properties map[string]string
 }
 
 // DisconnectContext 连接断开上下文。
@@ -159,6 +201,7 @@ type Hooks struct {
 	Auth       AuthHandler
 	Message    MessageHandler
 	Connection ConnectionHandler
+	Nack       NackHandler
 
 	// Logger 用于记录钩子 panic；由 Core 自动填充。
 	Logger *zap.Logger
@@ -224,6 +267,22 @@ func (h *Hooks) callOnConnect(ctx *ConnectContext) {
 		}
 	}()
 	h.Connection.OnConnect(ctx)
+}
+
+func (h *Hooks) hasNack() bool {
+	return h != nil && h.Nack != nil
+}
+
+func (h *Hooks) callOnNack(ctx *NackContext) {
+	if h == nil || h.Nack == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			h.logPanic("OnNack", r)
+		}
+	}()
+	h.Nack.OnNack(ctx)
 }
 
 func (h *Hooks) callOnDisconnect(ctx *DisconnectContext) {

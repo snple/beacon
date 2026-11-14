@@ -68,7 +68,7 @@ func TestPushPullCommit(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 
 	ctx := context.Background()
-	if err := pub.Push(ctx, "sensors/temp", []byte("21.5"), client.PushOptions{}); err != nil {
+	if err := pub.Push(ctx, "sensors/temp", []byte("21.5"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestReliableResentUntilCommit(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 
 	ctx := context.Background()
-	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}); err != nil {
+	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,6 +245,52 @@ func TestTargetNotFound(t *testing.T) {
 	b, _ := startCore(t, nil)
 	if _, err := b.PushToClient("ghost", "cmd/x", []byte("x"), core.PushOptions{}); err == nil {
 		t.Fatal("expected error for unknown target")
+	}
+}
+
+// 客户端定向投递到未订阅的目标必须返回明确错误，不能静默成功。
+func TestTargetedPushToUnsubscribedReturnsError(t *testing.T) {
+	_, addr := startCore(t, nil)
+	newTestClient(t, addr, "nm-sub", "ch/a")
+	pub := newTestClient(t, addr, "nm-pub")
+
+	err := pub.PushTo(context.Background(), "nm-sub", "ch/other", []byte("x"), client.PushOptions{})
+	if !errors.Is(err, client.ErrTargetNotSubscribed) {
+		t.Fatalf("expected ErrTargetNotSubscribed, got %v", err)
+	}
+}
+
+// PushWithResult 必须暴露服务端的 Matched/Dropped，便于发布方感知丢弃。
+func TestPushResultExposesMatchedAndDropped(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithQueueCap(1))
+	newTestClient(t, addr, "res-sub", "ch/a")
+	pub := newTestClient(t, addr, "res-pub")
+	ctx := context.Background()
+
+	res, err := pub.PushWithResult(ctx, "ch/a", []byte("one"), client.PushOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Matched != 1 || res.Dropped != 0 || res.Reason != packet.ReasonSuccess || res.ID.IsZero() {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+
+	// 队列已满：同优先级挤掉最旧消息，Matched=1 / Dropped=1。
+	res, err = pub.PushWithResult(ctx, "ch/a", []byte("two"), client.PushOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Matched != 1 || res.Dropped != 1 {
+		t.Fatalf("expected eviction to be visible, got %+v", res)
+	}
+
+	// 无匹配客户端：NoMatch 不算错误，但结果必须可见。
+	res, err = pub.PushWithResult(ctx, "none/x", []byte("x"), client.PushOptions{})
+	if err != nil {
+		t.Fatalf("no-match broadcast should not error: %v", err)
+	}
+	if res.Reason != packet.ReasonNoMatch || res.Matched != 0 {
+		t.Fatalf("unexpected no-match result: %+v", res)
 	}
 }
 
@@ -482,7 +528,7 @@ func TestNoProgressPenalty(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}); err != nil {
+	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sub.Pull(ctx, client.PullOptions{WaitMs: 200}); err != nil {
@@ -584,6 +630,28 @@ func TestDeclareUnauthorized(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Reason != packet.ReasonNotAuthorized {
 		t.Fatalf("expected NotAuthorized, got %+v", results)
+	}
+}
+
+// "$" 前缀保留给 broker：客户端不得声明该命名空间。
+func TestReservedChannelDeclarationRejected(t *testing.T) {
+	b, addr := startCore(t, nil)
+	c := newTestClient(t, addr, "resv-1")
+	ctx := context.Background()
+
+	for _, filter := range []string{"$sys/**", "$exact"} {
+		results, err := c.Declare(ctx, filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != 1 || results[0].Channel != filter ||
+			results[0].Reason != packet.ReasonChannelFilterInvalid {
+			t.Fatalf("declare %q should be rejected, got %+v", filter, results)
+		}
+	}
+
+	if res := b.Push("$sys/x", []byte("x"), core.PushOptions{}); res.Matched != 0 {
+		t.Fatalf("reserved channel must not match clients: %+v", res)
 	}
 }
 

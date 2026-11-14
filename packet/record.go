@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"maps"
 )
 
 // Record 是 PUSH 与 PULL_OK 共用的消息记录。
@@ -12,7 +13,9 @@ import (
 // 一条消息由 broker 生成唯一 ID 并编码一次，之后被所有命中的客户端队列共享，
 // 因此线上编码与内存中的编码可以复用同一份字节。
 type Record struct {
-	// Flags 位布局：bit0 Dup，bit1-2 Priority，bit3 HasHeaders，bit4 HasPriority
+	// Flags 位布局：bit0 Dup，bit1-2 Priority（00=Medium，01=Low，10=High），
+	// bit3 HasHeaders，bit4 保留，bit5 Reliable，bit6 HasExpiry，
+	// bit7 HasPublishedAt。
 	Flags uint8
 
 	ID      PacketID
@@ -22,15 +25,23 @@ type Record struct {
 	Headers map[string]string
 
 	Payload []byte
+
+	// ExpiresAt 是消息过期时间（Unix 毫秒）；0 表示永不过期。
+	ExpiresAt int64
+	// PublishedAt 是发布者提供的时间戳（Unix 毫秒）；0 表示未提供。
+	PublishedAt int64
 }
 
 // Record 标志位
 const (
-	recordFlagDup         uint8 = 1 << 0
-	recordFlagPriorityLo  uint8 = 1 << 1
-	recordFlagPriorityHi  uint8 = 1 << 2
-	recordFlagHasHeaders  uint8 = 1 << 3
-	recordFlagHasPriority uint8 = 1 << 4
+	recordFlagDup            uint8 = 1 << 0
+	recordFlagPriorityMask   uint8 = 0x06 // bit1-2
+	recordFlagHasHeaders     uint8 = 1 << 3
+	recordFlagReliable       uint8 = 1 << 5
+	recordFlagHasExpiry      uint8 = 1 << 6
+	recordFlagHasPublishedAt uint8 = 1 << 7
+	recordFlagsKnown               = recordFlagDup | recordFlagPriorityMask |
+		recordFlagHasHeaders | recordFlagReliable | recordFlagHasExpiry | recordFlagHasPublishedAt
 )
 
 // SetDup 设置重复投递标志。
@@ -45,26 +56,94 @@ func (r *Record) SetDup(dup bool) {
 // Dup 报告该记录是否是重复投递。
 func (r *Record) Dup() bool { return r.Flags&recordFlagDup != 0 }
 
-// SetPriority 设置优先级，并标记为显式指定。
-func (r *Record) SetPriority(p Priority) {
-	r.Flags &^= recordFlagPriorityLo | recordFlagPriorityHi
-	r.Flags |= (uint8(p) << 1) & (recordFlagPriorityLo | recordFlagPriorityHi)
-	r.Flags |= recordFlagHasPriority
+// wirePriority 返回优先级在线路上的编码：00=Medium，01=Low，10=High。
+//
+// 除 Low/High 外的值都按默认的 Medium 编码。
+func wirePriority(p Priority) uint8 {
+	switch p {
+	case PriorityLow:
+		return 1
+	case PriorityHigh:
+		return 2
+	default:
+		return 0
+	}
 }
 
-// HasPriority 报告发送方是否显式指定了优先级。
-func (r *Record) HasPriority() bool { return r.Flags&recordFlagHasPriority != 0 }
-
-// Priority 返回优先级；未显式指定时默认 Medium。
-func (r *Record) Priority() Priority {
-	if r.Flags&recordFlagHasPriority == 0 {
+// priorityFromWire 解码线路上的优先级；11 返回无效值。
+func priorityFromWire(v uint8) Priority {
+	switch v {
+	case 0:
 		return PriorityMedium
+	case 1:
+		return PriorityLow
+	case 2:
+		return PriorityHigh
+	default:
+		return Priority(0xFF)
 	}
-	return Priority((r.Flags >> 1) & 0x03)
+}
+
+// SetPriority 设置优先级。Medium 的线路编码是 00，因此零值 Flags 就是默认优先级。
+func (r *Record) SetPriority(p Priority) {
+	r.Flags &^= recordFlagPriorityMask
+	r.Flags |= wirePriority(p) << 1
+}
+
+// Priority 返回优先级；默认 Medium。仅在解码损坏数据时可能返回无效值。
+func (r *Record) Priority() Priority {
+	return priorityFromWire((r.Flags & recordFlagPriorityMask) >> 1)
 }
 
 // HasHeaders 报告是否携带 headers。
 func (r *Record) HasHeaders() bool { return r.Flags&recordFlagHasHeaders != 0 }
+
+// SetReliable 设置该记录是否需要 COMMIT 确认。
+//
+// 可靠性默认关闭：未调用 SetReliable(true) 的记录一律视为不可靠。
+func (r *Record) SetReliable(reliable bool) {
+	if reliable {
+		r.Flags |= recordFlagReliable
+	} else {
+		r.Flags &^= recordFlagReliable
+	}
+}
+
+// Reliable 报告该记录是否需要 COMMIT 确认；默认 false。
+func (r *Record) Reliable() bool { return r.Flags&recordFlagReliable != 0 }
+
+// HasExpiry 报告记录是否携带过期时间。
+func (r *Record) HasExpiry() bool { return r.Flags&recordFlagHasExpiry != 0 }
+
+// SetExpiresAt 设置过期时间（Unix 毫秒）；<= 0 表示永不过期。
+func (r *Record) SetExpiresAt(ms int64) {
+	if ms > 0 {
+		r.ExpiresAt = ms
+		r.Flags |= recordFlagHasExpiry
+		return
+	}
+	r.ExpiresAt = 0
+	r.Flags &^= recordFlagHasExpiry
+}
+
+// Expired 报告记录是否已在 now（Unix 毫秒）之前过期。
+func (r *Record) Expired(now int64) bool {
+	return r.ExpiresAt > 0 && r.ExpiresAt <= now
+}
+
+// HasPublishedAt 报告记录是否携带发布者时间戳。
+func (r *Record) HasPublishedAt() bool { return r.Flags&recordFlagHasPublishedAt != 0 }
+
+// SetPublishedAt 设置发布者时间戳（Unix 毫秒）；<= 0 表示不提供。
+func (r *Record) SetPublishedAt(ms int64) {
+	if ms > 0 {
+		r.PublishedAt = ms
+		r.Flags |= recordFlagHasPublishedAt
+		return
+	}
+	r.PublishedAt = 0
+	r.Flags &^= recordFlagHasPublishedAt
+}
 
 // Timestamp 返回 ID 中内嵌的毫秒时间戳。
 func (r *Record) Timestamp() int64 {
@@ -82,20 +161,32 @@ func (r *Record) Clone() *Record {
 	c.Payload = append([]byte(nil), r.Payload...)
 	if r.Headers != nil {
 		c.Headers = make(map[string]string, len(r.Headers))
-		for k, v := range r.Headers {
-			c.Headers[k] = v
-		}
+		maps.Copy(c.Headers, r.Headers)
 	}
 	return &c
 }
 
 // encodeRecord 把记录写入 w。
 func encodeRecord(w io.Writer, r *Record) error {
+	if r.Flags&^recordFlagsKnown != 0 {
+		return fmt.Errorf("%w: unknown record flags 0x%02x", ErrMalformedPacket, r.Flags&^recordFlagsKnown)
+	}
 	flags := r.Flags
 	if len(r.Headers) > 0 {
 		flags |= recordFlagHasHeaders
 	} else {
 		flags &^= recordFlagHasHeaders
+	}
+	payload := r.Payload
+	if r.ExpiresAt > 0 {
+		flags |= recordFlagHasExpiry
+	} else {
+		flags &^= recordFlagHasExpiry
+	}
+	if r.PublishedAt > 0 {
+		flags |= recordFlagHasPublishedAt
+	} else {
+		flags &^= recordFlagHasPublishedAt
 	}
 	if _, err := w.Write([]byte{flags}); err != nil {
 		return err
@@ -121,7 +212,20 @@ func encodeRecord(w io.Writer, r *Record) error {
 		return err
 	}
 
-	return EncodeBytes32(w, r.Payload)
+	if err := EncodeBytes32(w, payload); err != nil {
+		return err
+	}
+	if flags&recordFlagHasExpiry != 0 {
+		if err := EncodeUint64(w, uint64(r.ExpiresAt)); err != nil {
+			return err
+		}
+	}
+	if flags&recordFlagHasPublishedAt != 0 {
+		if err := EncodeUint64(w, uint64(r.PublishedAt)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // decodeRecord 从 r 读取一条记录。
@@ -131,6 +235,9 @@ func decodeRecord(r io.Reader) (*Record, error) {
 		return nil, err
 	}
 
+	if flags&^recordFlagsKnown != 0 {
+		return nil, fmt.Errorf("%w: unknown record flags 0x%02x", ErrMalformedPacket, flags&^recordFlagsKnown)
+	}
 	rec := &Record{Flags: flags}
 
 	if rec.ID, err = DecodePacketID(r); err != nil {
@@ -157,11 +264,28 @@ func decodeRecord(r io.Reader) (*Record, error) {
 	}
 	rec.Headers = headers
 
-	if rec.Payload, err = DecodeBytes32(r); err != nil {
+	payload, err := DecodeBytes32(r)
+	if err != nil {
 		return nil, err
 	}
-	if rec.HasPriority() && !rec.Priority().IsValid() {
-		return nil, fmt.Errorf("%w: invalid priority %d", ErrMalformedPacket, rec.Priority())
+	if flags&recordFlagHasExpiry != 0 {
+		v, err := DecodeUint64(r)
+		if err != nil {
+			return nil, err
+		}
+		rec.ExpiresAt = int64(v)
+	}
+	if flags&recordFlagHasPublishedAt != 0 {
+		v, err := DecodeUint64(r)
+		if err != nil {
+			return nil, err
+		}
+		rec.PublishedAt = int64(v)
+	}
+	rec.Payload = payload
+	rec.Flags = flags
+	if !rec.Priority().IsValid() {
+		return nil, fmt.Errorf("%w: invalid priority", ErrMalformedPacket)
 	}
 
 	return rec, nil
@@ -169,9 +293,17 @@ func decodeRecord(r io.Reader) (*Record, error) {
 
 // RecordSize 返回记录编码后的字节数。
 func RecordSize(r *Record) int {
-	return 1 + PacketIDSize +
+	payload := r.Payload
+	size := 1 + PacketIDSize +
 		StringSize(r.Channel) + StringSize(r.Target) + StringSize(r.Source) +
-		StringMapSize(r.Headers) + Bytes32Size(r.Payload)
+		StringMapSize(r.Headers) + Bytes32Size(payload)
+	if r.ExpiresAt > 0 {
+		size += 8
+	}
+	if r.PublishedAt > 0 {
+		size += 8
+	}
+	return size
 }
 
 // EncodeRecordBody 把记录编码为独立字节切片（broker 侧一次编码、多客户端共享）。

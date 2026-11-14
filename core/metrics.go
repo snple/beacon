@@ -16,11 +16,15 @@ func (c *Core) ServeMetrics(address string) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = listener.Close() }()
 	return c.ServeMetricsListener(listener)
 }
 
 // ServeMetricsListener 在已有 listener 上提供运维端点。
 func (c *Core) ServeMetricsListener(listener net.Listener) error {
+	id := c.registerListener(listener.Addr().String(), "http")
+	defer c.unregisterListener(id)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", c.handleHealthz)
 	mux.HandleFunc("/metrics", c.handleMetrics)
@@ -90,6 +94,8 @@ func (c *Core) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeMetric(w, "beacon_bytes_received_total", "counter", "接收字节数", float64(snap.BytesReceived))
 	writeMetric(w, "beacon_bytes_sent_total", "counter", "发送字节数", float64(snap.BytesSent))
 	writeMetric(w, "beacon_duplicates_sent_total", "counter", "重复投递（delivered 重发）数", float64(snap.DuplicatesSent))
+	writeMetric(w, "beacon_messages_nacked_total", "counter", "客户端 NACK 的消息数", float64(snap.MessagesNacked))
+	writeMetric(w, "beacon_messages_expired_total", "counter", "过期丢弃的消息数", float64(snap.MessagesExpired))
 	writeMetric(w, "beacon_commit_required_total", "counter", "触发无进展惩罚的次数", float64(snap.CommitRequired))
 	writeMetric(w, "beacon_session_takeovers_total", "counter", "会话接管次数", float64(snap.SessionTakeovers))
 	writeMetric(w, "beacon_target_misses_total", "counter", "定向投递目标不存在次数", float64(snap.TargetMisses))

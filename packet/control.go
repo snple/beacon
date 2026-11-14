@@ -66,19 +66,12 @@ func (p *PongPacket) decode(r io.Reader, header FixedHeader) error {
 	return err
 }
 
-// DISCONNECT 标志位
-const (
-	// DisconnectFlagSuppressWill 表示本次断开不应触发遗嘱消息。
-	DisconnectFlagSuppressWill uint8 = 1 << 0
-)
-
 // DisconnectPacket DISCONNECT：双向的断开通知。
 //
 //	客户端 -> 服务端：优雅关闭
 //	服务端 -> 客户端：终止通知（会话被接管、停机、被踢下线）
 type DisconnectPacket struct {
 	ReasonCode ReasonCode
-	Flags      uint8
 }
 
 // NewDisconnectPacket 创建 DISCONNECT 包
@@ -89,10 +82,7 @@ func NewDisconnectPacket(reason ReasonCode) *DisconnectPacket {
 func (p *DisconnectPacket) Type() PacketType { return DISCONNECT }
 
 func (p *DisconnectPacket) encode(w io.Writer) error {
-	if err := WriteByte(w, byte(p.ReasonCode)); err != nil {
-		return err
-	}
-	return WriteByte(w, p.Flags)
+	return WriteByte(w, byte(p.ReasonCode))
 }
 
 func (p *DisconnectPacket) decode(r io.Reader, _ FixedHeader) error {
@@ -101,6 +91,5 @@ func (p *DisconnectPacket) decode(r io.Reader, _ FixedHeader) error {
 		return err
 	}
 	p.ReasonCode = ReasonCode(reason)
-	p.Flags, err = ReadByte(r)
-	return err
+	return nil
 }

@@ -77,8 +77,13 @@ func (c *Core) Ready() bool { return c.running.Load() }
 func (c *Core) limits() packet.Limits {
 	return packet.Limits{
 		MaxPacketSize:        c.options.MaxPacketSize,
+		MaxRecordBytes:       c.options.MaxRecordBytes,
 		MaxWaitMs:            c.options.MaxWaitMs,
 		MaxChannelsPerClient: uint16(min(c.options.MaxChannelsPerClient, 65535)),
+		MaxChannelLength:     uint16(min(c.options.MaxChannelLength, 65535)),
+		MaxPullBatch:         uint16(min(c.options.MaxPullBatch, 65535)),
+		MaxQueueCap:          uint32(max(c.options.QueueCap, 0)),
+		SessionTimeout:       c.options.SessionTimeout,
 	}
 }
 
@@ -168,6 +173,12 @@ type ClientInfo struct {
 	MessagesSent      int64
 	MessagesDropped   int64
 	MessagesRejected  int64
+	// MessagesNacked 是该会话累计被客户端 NACK 的消息数。
+	MessagesNacked int64
+	// MessagesExpired 是该会话累计丢弃的过期消息数。
+	MessagesExpired int64
+	// ReceiveMaximum 是当前生效的未确认可靠消息窗口。
+	ReceiveMaximum uint32
 }
 
 // ChannelInfo 是客户端声明的一项 channel 过滤器。
@@ -203,6 +214,9 @@ func (c *Core) GetClientInfo(clientID string) (*ClientInfo, error) {
 		MessagesSent:      cl.sent.Load(),
 		MessagesDropped:   cl.dropped.Load(),
 		MessagesRejected:  cl.rejected.Load(),
+		MessagesNacked:    cl.nacked.Load(),
+		MessagesExpired:   cl.expired.Load(),
+		ReceiveMaximum:    cl.recvWindow.Load(),
 	}
 	if ms := cl.connectedAt.Load(); ms > 0 {
 		info.ConnectedAt = time.UnixMilli(ms)
@@ -230,7 +244,7 @@ func (c *Core) DisconnectClient(clientID string, reason packet.ReasonCode) error
 	if cn == nil {
 		return ErrClientNotConnected
 	}
-	cn.terminate(reason, true)
+	cn.terminate(reason)
 	return nil
 }
 
@@ -246,7 +260,7 @@ func (c *Core) DisconnectClientAndWait(ctx context.Context, clientID string, rea
 	if cn == nil {
 		return ErrClientNotConnected
 	}
-	cn.terminate(reason, true)
+	cn.terminate(reason)
 
 	done := make(chan struct{})
 	go func() {
@@ -272,12 +286,43 @@ type PushOptions struct {
 
 	priority    packet.Priority
 	prioritySet bool
+	reliable    bool
+
+	ttl         time.Duration
+	expiresAt   int64
+	publishedAt int64
 }
 
 // WithPriority 显式设置优先级（允许显式指定 Low）。
 func (o PushOptions) WithPriority(p packet.Priority) PushOptions {
 	o.priority = p
 	o.prioritySet = true
+	return o
+}
+
+// WithReliable 设置是否需要 COMMIT，与优先级相互独立。
+//
+// 默认为 false（尽力而为、不重发、离线丢弃）；需要投递保证时显式传 true。
+func (o PushOptions) WithReliable(reliable bool) PushOptions {
+	o.reliable = reliable
+	return o
+}
+
+// WithTTL 设置消息存活时长；发布时换算为绝对过期时间，并记录发布者时间戳。
+func (o PushOptions) WithTTL(ttl time.Duration) PushOptions {
+	o.ttl = ttl
+	return o
+}
+
+// WithExpiresAt 设置绝对过期时间（Unix 毫秒）；<= 0 表示永不过期。
+func (o PushOptions) WithExpiresAt(ms int64) PushOptions {
+	o.expiresAt = ms
+	return o
+}
+
+// WithPublishedAt 设置发布者时间戳（Unix 毫秒）。
+func (o PushOptions) WithPublishedAt(ms int64) PushOptions {
+	o.publishedAt = ms
 	return o
 }
 
@@ -325,8 +370,25 @@ func (c *Core) pushTo(target, channel string, payload []byte, opts PushOptions) 
 		Payload: append([]byte(nil), payload...),
 	}
 	rec.SetPriority(opts.effectivePriority())
+	rec.SetReliable(opts.reliable)
 
-	res := c.pushRecord(nil, rec, true)
+	now := time.Now().UnixMilli()
+	expiresAt := opts.expiresAt
+	if expiresAt <= 0 && opts.ttl > 0 {
+		expiresAt = now + opts.ttl.Milliseconds()
+	}
+	if expiresAt > 0 {
+		rec.SetExpiresAt(expiresAt)
+	}
+	publishedAt := opts.publishedAt
+	if publishedAt <= 0 && expiresAt > 0 {
+		publishedAt = now
+	}
+	if publishedAt > 0 {
+		rec.SetPublishedAt(publishedAt)
+	}
+
+	res := c.pushRecord(nil, rec, nil, true)
 	out := PushResult{ID: res.ID, Reason: res.Reason, Matched: res.Matched, Dropped: res.Dropped}
 
 	switch res.Reason {
@@ -336,7 +398,8 @@ func (c *Core) pushTo(target, channel string, payload []byte, opts PushOptions) 
 		// 目标存在但未声明匹配该 channel 的过滤器。
 		return out, fmt.Errorf("%w: %s", ErrTargetNotSubscribed, res.Reason)
 	case packet.ReasonChannelInvalid, packet.ReasonPacketTooLarge, packet.ReasonNotAuthorized,
-		packet.ReasonQuotaExceeded, packet.ReasonMalformedPacket:
+		packet.ReasonQuotaExceeded, packet.ReasonMalformedPacket, packet.ReasonConsumerBacklog,
+		packet.ReasonExpired:
 		return out, fmt.Errorf("push rejected: %s", res.Reason)
 	default:
 		return out, nil

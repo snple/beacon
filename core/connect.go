@@ -4,12 +4,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"time"
 
 	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
+
+// connackBaseSize 是 CONNACK 除 AssignedClientID 与 Properties 内容外的固定线格式大小
+// （固定头 + Flags/ReasonCode + 字符串长度前缀 + SessionID + KeepAlive
+// + ReceiveMaximum + Pending + Limits）。用于判断客户端的接收上限
+// 能否容纳握手响应。
+const connackBaseSize = 5 + 1 + 1 + 2 + 8 + 2 + 2 + 12 + 26
+
+// connackEncodedSize 返回 CONNACK 的完整编码大小。
+func connackEncodedSize(clientID string, props map[string]string) int {
+	size := connackBaseSize + len(clientID)
+	if len(props) > 0 {
+		size += packet.StringMapSize(props)
+	}
+	return size
+}
 
 // HandleConn 处理一个已建立的连接。
 //
@@ -48,7 +64,7 @@ func (c *Core) HandleConn(nc net.Conn) error {
 func (c *Core) rejectConn(nc net.Conn, reason packet.ReasonCode, msg string) {
 	c.logger.Warn("rejecting connection", zap.String("remote", safeAddr(nc)), zap.String("reason", msg))
 	connack := packet.NewConnackPacket(reason)
-	connack.ServerMaxPacketSize = c.options.MaxPacketSize
+	connack.Limits = c.limits()
 	if c.options.WriteTimeout > 0 {
 		_ = nc.SetWriteDeadline(time.Now().Add(c.options.WriteTimeout))
 	}
@@ -68,10 +84,9 @@ func (c *Core) handleConn(nc net.Conn) {
 	cn := newConn(c, nc)
 
 	var (
-		reason       = packet.ReasonNormalDisconnect
-		will         *willMessage
-		suppressWill bool
-		clientID     string
+		reason   = packet.ReasonNormalDisconnect
+		clientID string
+		serveErr error
 	)
 
 	defer func() {
@@ -83,14 +98,15 @@ func (c *Core) handleConn(nc net.Conn) {
 
 		cl := cn.client
 		if cl != nil {
-			// 仅当本连接仍是会话的当前连接时才处理遗嘱；被接管的旧连接不能触发。
-			wasOwner := c.detachConn(cl, cn)
-			if wasOwner && will != nil && !suppressWill && !cn.serverBy.Load() {
-				c.publishWill(cl, will)
+			c.detachConn(cl, cn)
+			dcErr := serveErr
+			if errors.Is(dcErr, io.EOF) {
+				dcErr = nil
 			}
 			c.options.Hooks.callOnDisconnect(&DisconnectContext{
 				ClientID: cl.ID,
 				Reason:   reason,
+				Err:      dcErr,
 			})
 		}
 	}()
@@ -123,7 +139,7 @@ func (c *Core) handleConn(nc net.Conn) {
 	}
 
 	if connect.Version != packet.ProtocolVersion {
-		// 不向后兼容：非 v4 的包不做任何协商，直接静默关闭（不发 CONNACK）。
+		// 不向后兼容：非 v5 的包不做任何协商，直接静默关闭（不发 CONNACK）。
 		// 真正的旧版 CONNECT 通常在此之前就已因布局不同而解码失败。
 		c.logger.Debug("unsupported protocol version",
 			zap.String("remote", cn.remoteAddr), zap.Uint8("version", connect.Version))
@@ -134,8 +150,19 @@ func (c *Core) handleConn(nc net.Conn) {
 	if clientID == "" {
 		clientID = c.generateClientID()
 	} else if !packet.ValidateClientID(clientID) {
-		c.rejectConn(nc, packet.ReasonClientIDNotValid, "invalid client id")
+		c.rejectConn(nc, packet.ReasonClientIDNotValid, "bad client id")
 		return
+	}
+
+	// 客户端声明的接收上限必须至少能容纳 CONNACK，否则握手响应根本发不出去，
+	// 对端只能看到静默断开。0 表示按服务端上限处理。
+	if connect.MaxPacketSize > 0 {
+		baseProps := maps.Clone(c.options.ServerProperties)
+		need := uint32(connackEncodedSize(clientID, baseProps))
+		if connect.MaxPacketSize < packet.MinPacketSize || connect.MaxPacketSize < need {
+			c.rejectConn(nc, packet.ReasonPacketTooLarge, "client max packet size too small")
+			return
+		}
 	}
 
 	// 认证（单轮）
@@ -145,6 +172,7 @@ func (c *Core) handleConn(nc net.Conn) {
 		RemoteAddr: cn.remoteAddr,
 		Method:     connect.AuthMethod,
 		Data:       connect.AuthData,
+		Properties: maps.Clone(connect.Properties),
 	}
 	if err := c.options.Hooks.callAuth(authCtx); err != nil {
 		reason := packet.ReasonNotAuthorized
@@ -157,23 +185,17 @@ func (c *Core) handleConn(nc net.Conn) {
 	}
 	identity = authCtx.Identity
 
-	// will 校验（在建立会话前做，避免无效 will 占用会话）
-	if connect.HasWill {
-		if !packet.ValidateClientChannelName(connect.WillChannel, c.options.MaxChannelLength) {
-			c.rejectConn(nc, packet.ReasonChannelNameInvalid, "invalid will channel")
-			return
+	// 合并认证钩子返回的属性，并确认最终 CONNACK 仍能放进客户端声明的上限。
+	properties := maps.Clone(c.options.ServerProperties)
+	for k, v := range authCtx.ResponseProperties {
+		if properties == nil {
+			properties = make(map[string]string, len(authCtx.ResponseProperties))
 		}
-		if !c.canWrite(identity, connect.WillChannel) {
-			c.rejectConn(nc, packet.ReasonNotAuthorized, "will channel not authorized")
-			return
-		}
-		priority := packet.PriorityMedium
-		will = &willMessage{
-			Channel:  connect.WillChannel,
-			Payload:  connect.WillPayload,
-			Headers:  connect.WillHeaders,
-			Priority: priority,
-		}
+		properties[k] = v
+	}
+	if connect.MaxPacketSize > 0 && uint32(connackEncodedSize(clientID, properties)) > connect.MaxPacketSize {
+		c.rejectConn(nc, packet.ReasonPacketTooLarge, "connack exceeds client max packet size")
+		return
 	}
 
 	// 绑定会话（必要时接管）。会话状态在 registerMu 内一次性设置，
@@ -189,7 +211,7 @@ func (c *Core) handleConn(nc net.Conn) {
 	// 也必须终止它挤掉的旧连接。
 	if oldConn != nil {
 		c.stats.SessionTakeovers.Add(1)
-		go oldConn.terminate(packet.ReasonSessionTakenOver, true)
+		go oldConn.terminate(packet.ReasonSessionTakenOver)
 	}
 
 	// attachSession 之后可能又有同 ClientID 的连接接管了本连接。
@@ -206,6 +228,10 @@ func (c *Core) handleConn(nc net.Conn) {
 	if keepAlive == 0 {
 		keepAlive = packet.DefaultKeepAlive
 	}
+	// 限制客户端可声明的心跳间隔，避免超长 KeepAlive 长期占用连接名额。
+	if max := c.options.MaxKeepAlive; max > 0 && keepAlive > max {
+		keepAlive = max
+	}
 	cn.keepAlive = keepAlive
 
 	outMax := connect.MaxPacketSize
@@ -214,14 +240,24 @@ func (c *Core) handleConn(nc net.Conn) {
 	}
 	cn.maxPacketSize = outMax
 
+	// 未确认可靠消息窗口完全由服务端决定。
+	window := c.options.ReceiveMaximum
+	// 记录接收上限/窗口，供发布与拉取路径使用。
+	// 期间可能已被新连接接管：被接管的旧连接不得再修改会话状态。
+	if !cl.setReceiveParamsIfOwner(cn, outMax, uint32(window)) {
+		return
+	}
+
 	pending, _, _ := cl.mb.depth()
 	connack := packet.NewConnackPacket(packet.ReasonSuccess)
 	connack.SetSessionPresent(sessionPresent)
 	connack.AssignedClientID = clientID
-	connack.ServerMaxPacketSize = c.options.MaxPacketSize
-	connack.KeepAlive = keepAlive
 	connack.SessionID = cl.sessionID.Load()
+	connack.KeepAlive = keepAlive
+	connack.ReceiveMaximum = uint16(window)
 	connack.Pending = pending
+	connack.Limits = c.limits()
+	connack.Properties = properties
 
 	if err := cn.writePacket(connack); err != nil {
 		return
@@ -234,6 +270,7 @@ func (c *Core) handleConn(nc net.Conn) {
 		ClientID:       clientID,
 		RemoteAddr:     cn.remoteAddr,
 		SessionPresent: sessionPresent,
+		Properties:     maps.Clone(connect.Properties),
 	})
 
 	c.logger.Debug("client connected",
@@ -242,14 +279,12 @@ func (c *Core) handleConn(nc net.Conn) {
 		zap.Bool("sessionPresent", sessionPresent))
 
 	err = cn.serve()
+	serveErr = err
 	switch {
 	case errors.Is(err, io.EOF):
 		reason = packet.ReasonNormalDisconnect
 		if dp := cn.lastDisconnect(); dp != nil {
 			reason = dp.ReasonCode
-			if dp.Flags&packet.DisconnectFlagSuppressWill != 0 || reason == packet.ReasonNormalDisconnect {
-				suppressWill = true
-			}
 		}
 	default:
 		// 服务端主动终止（接管/超时/协议错误）时 serve 已记录真实原因。
@@ -339,6 +374,14 @@ func (c *Core) attachSession(
 	cl.lastSeen.Store(now)
 	cl.expiresAt.Store(0)
 
+	// 重连后重新开始计算 delivered 未确认超时：离线期间不应被判定为
+	// “消费端卡住”，否则恢复的会话会在下一次清理循环里被立刻踢掉。
+	if _, delivered, _ := cl.mb.depth(); delivered > 0 {
+		cl.deliveredSince.Store(now)
+	} else {
+		cl.deliveredSince.Store(0)
+	}
+
 	return cl, sessionPresent, old, nil
 }
 
@@ -374,13 +417,15 @@ func (c *Core) detachConn(cl *Client, cn *conn) bool {
 	}
 	c.registerMu.Unlock()
 
-	// 会话转入离线：Low 是尽力而为的消息，不保留在离线队列中。
-	if n := cl.mb.dropLow(); n > 0 {
+	// 会话转入离线：不可靠消息尽力而为，不保留在离线队列中。
+	if n := cl.mb.dropUnreliable(); n > 0 {
 		c.stats.MessagesDropped.Add(int64(n))
 		cl.dropped.Add(int64(n))
 	}
 
 	cl.markExpiry(time.Now())
+	// 离线期间不参与 delivered 未确认超时判定；重连时会重新计时。
+	cl.deliveredSince.Store(0)
 	if cl.sessionTimeout() == 0 {
 		c.destroySession(cl, packet.ReasonNormalDisconnect)
 	}
@@ -410,7 +455,7 @@ func (c *Core) filterChannels(identity *Identity, decls []packet.ChannelDecl) []
 			index[d.Channel] = -1
 			continue
 		}
-		if !packet.ValidateChannelFilterLimit(d.Channel, c.options.MaxChannelLength) {
+		if !packet.ValidateClientChannelFilter(d.Channel, c.options.MaxChannelLength) {
 			index[d.Channel] = -1
 			continue
 		}
@@ -422,20 +467,6 @@ func (c *Core) filterChannels(identity *Identity, decls []packet.ChannelDecl) []
 		out = append(out, d)
 	}
 	return out
-}
-
-// publishWill 发布遗嘱消息。
-func (c *Core) publishWill(cl *Client, w *willMessage) {
-	rec := &packet.Record{
-		Channel: w.Channel,
-		Source:  cl.ID,
-		Headers: w.Headers,
-		Payload: w.Payload,
-	}
-	rec.SetPriority(w.Priority)
-
-	c.pushRecord(nil, rec, true)
-	c.logger.Debug("published will", zap.String("clientID", cl.ID), zap.String("channel", w.Channel))
 }
 
 // ============================================================================

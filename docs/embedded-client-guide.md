@@ -1,16 +1,16 @@
 # 嵌入式客户端实现要点
 
-面向用 C / Rust / 裸机等语言自行实现 Beacon v4 客户端的开发者。线格式的权威定义见
-[`protocol-v4.md`](./protocol-v4.md)，这里只讲实现时容易出错的点。
+面向用 C / Rust / 裸机等语言自行实现 Beacon v5 客户端的开发者。线格式的权威定义见
+[`protocol-v5.md`](./protocol-v5.md)，这里只讲实现时容易出错的点。
 
 ## 1. 一个最小客户端需要实现什么
 
 必需：
 
 1. 固定头解析（1 字节类型 + 4 字节大端长度）
-2. `CONNECT` 编码 / `CONNACK` 解析
-3. `PULL` 编码 / `PULL_OK` 解析（含 Record）
-4. `COMMIT` 编码 / `COMMIT_OK` 解析
+2. `CONNECT` 编码 / `CONNACK` 解析（含可选 `Properties`、`Limits` 与 `ReceiveMaximum`）
+3. `PULL` 编码 / `PULL_OK` 解析（含一批 Record）
+4. `COMMIT` 编码 / `COMMIT_OK` 解析（支持批量与 NACK）
 5. `PUSH` 编码 / `PUSH_OK` 解析（只做消费者可以不实现）
 6. `PING` / `PONG`
 
@@ -27,13 +27,13 @@
   │ ── DECLARE（订阅声明，必需）──────────────▶ │
   │ ◀────────────────────────── DECLARE_RESP ─ │
   │                                            │
-  │ ── PULL ─────────────────────────────────▶ │
-  │ ◀────────────────────────────── PULL_OK ── │
-  │ ── COMMIT ───────────────────────────────▶ │
+  │ ── PULL(MaxCount=N) ──────────────────────▶ │
+  │ ◀───────────────── PULL_OK(N 条 Records) ─ │
+  │ ── COMMIT(N 条 Entries) ──────────────────▶ │
   │ ◀───────────────────────────── COMMIT_OK ─ │
 ```
 
-`CONNECT` 必须是第一个包。版本不是 `4` 时**服务端静默关闭连接**，不返回 `CONNACK`
+`CONNECT` 必须是第一个包。版本不是 `5` 时**服务端静默关闭连接**，不返回 `CONNACK`
 （协议不向后兼容）。
 
 ### 2.1 会话与 CleanSession
@@ -46,7 +46,40 @@
 - `CleanSession`（`CONNECT.Flags` bit0）置位：服务端丢弃该 ClientID 的既有 pending / delivered / channel 声明，
   `CONNACK.SessionPresent=0` 并返回新的 `SessionID`。
 - `CleanSession` 未置位：若会话仍被保留，则复用队列与声明（`SessionPresent=1`）。
-- 会话离线期间队列只保留 **Medium / High**，Low 消息直接丢弃；队列满后按优先级淘汰。
+- 会话离线期间队列保留**全部可靠消息**，不可靠消息直接丢弃；队列满后按可靠性/优先级淘汰。
+
+### 2.2 Properties 与 Limits
+
+`Properties` 是可选块，只有对应 `HasProperties` 标志置位时才出现在包尾：
+
+```
+Properties = uint16 条目数 + N × (string key, string value)
+```
+
+- 没有属性时**不要**写入该块，也不要只写 2 字节的 `0`；
+- 编码时按键排序，解码不要求有序；
+- 除保留键外，broker 不解释键值，只透传给钩子或对端；
+- `CONNECT`：`Flags` bit1，布局 `... AuthData, [Properties]`；
+- `CONNACK`：`Flags` bit1，布局 `... Pending, Limits, [Properties]`；
+- `PUSH`：bit1；`PUSH_OK`：bit0；`PULL`：bit0；`PULL_OK`：bit0；
+  `DECLARE`：bit0；`DECLARE_RESP`：bit0。各自的 `Properties` 都在包尾。
+- 除保留键 `PUSH_OK.Properties.error`（错误细节）外，`Properties` 的键值由应用自定义。
+
+`CONNACK.Limits` 是**固定 26 字节**，即使全为 0 也必须存在：
+
+```
+MaxPacketSize        uint32
+MaxRecordBytes       uint32
+MaxWaitMs            uint32
+MaxChannelsPerClient uint16
+MaxChannelLength     uint16
+MaxPullBatch         uint16
+MaxQueueCap          uint32
+SessionTimeout       uint32
+```
+
+`DECLARE_RESP` 在 `Pending` 之后使用完全相同布局的 `Limits`。客户端应以最近一次
+收到的值为准，不要假设服务端默认值。
 
 ## 3. Record 编解码
 
@@ -58,7 +91,12 @@ Target     2 字节长度 + 字节（可为 0）
 Source     2 字节长度 + 字节
 Headers    2 字节条目数 + N × (2 字节 key 长度 + key + 2 字节 value 长度 + value)
 Payload    4 字节长度 + 字节
+ExpiresAt  8 字节 uint64（仅 HasExpiry bit6）
+PublishedAt 8 字节 uint64（仅 HasPublishedAt bit7）
 ```
+
+Flags 位：bit0 Dup，bit1-2 Priority，bit3 HasHeaders，bit4 保留，
+bit5 Reliable，bit6 HasExpiry，bit7 HasPublishedAt。
 
 注意：
 
@@ -69,39 +107,54 @@ Payload    4 字节长度 + 字节
   （线格式仍是 `uint16`）。超限时 `PUSH_OK` 返回 `ChannelInvalid`，
   `DECLARE_RESP` 返回 `ChannelFilterInvalid`。
 - `Headers` 的键在编码时排序，便于确定性输出；解码不要求有序。
-- `Priority` 位为 0 且 `HasPriority` 未置位时，按 **Medium** 处理。
+- `Priority` 位：`00`=Medium（默认），`01`=Low，`10`=High；`11` 非法
+  （`MalformedPacket`）。
+- `Reliable` 取 bit5，默认 `0`（不可靠）；需要 `COMMIT` 时必须显式置位，
+  不会从优先级推导。`Dup` 由服务端设置，发布方不应设置。
+- `HasExpiry` 置位时，Payload 之后是 8 字节的绝对过期时间（Unix 毫秒）；
+  `HasPublishedAt` 同理。两者默认不发送，因此不产生额外带宽。
+- **`CONNECT.MaxPacketSize` 最小 64，且必须能容纳 CONNACK**（固定 59 字节 +
+  `AssignedClientID` + 可选 `Properties`）；否则服务端返回 `CONNACK(PacketTooLarge)` 后关闭连接。
+  超过该上限的记录不会为**在线**目标入队（`PUSH_OK.Dropped` 增加）；重连时调小
+  上限会让已入队但放不下的消息被丢弃，以免永久堵住队列。
 
 ## 4. 必须遵守的消费循环
 
 ```c
 for (;;) {
-    pull(wait_ms);                       // 阻塞直到有数据或超时
-    if (!(PULL_OK.Flags & HasRecord)) {
-        continue;
+    pull(wait_ms, max_count);            // 阻塞直到有数据或超时
+    for (i = 0; i < PULL_OK.Count; i++) {
+        handle(PULL_OK.Records[i]);
     }
-    handle(PULL_OK.Record);
-    commit(PULL_OK.Record.ID);           // 必须在下次 pull 之前
+    commit(PULL_OK.Records, Count);      // 一个 RTT 确认整批
 }
 ```
 
-每次 `PULL` 最多返回一条记录，`COMMIT` 也只确认一条。
+一次 `PULL` 返回 0..`MaxCount` 条记录，`MaxCount` 会被服务端裁剪到 `MaxPullBatch`
+（默认 32）。记录可能包含新消息与 `Dup=1` 的重发消息。
 
-**关键点：`delivered` 有 2 个投递位（Medium / High 各一，Low 不占位）。**
-存在未确认消息时，只有优先级严格更高的新消息会占用空闲投递位，否则 `PULL`
-会重发未确认消息（`Dup=1`），不会前进。服务端会统计连续无进展的拉取次数，
-超过阈值会返回 `CommitRequired` 甚至断开连接。
+**关键点：窗口。** 未确认的**可靠**消息占用 `CONNACK.ReceiveMaximum` 个槽位
+（默认 32）。窗口有空位时 `PULL` 继续投递新消息；窗口满后只重发未确认消息。
+不可靠消息不占窗口，但窗口已满时同样会暂停新消息投递（优先重发未确认消息）。
 
-因此：处理并提交当前消息后，再拉取下一。不要「拉到消息 → 慢慢处理 → 中途再拉」。
+服务端会统计连续无进展的拉取次数，超过阈值会返回 `CommitRequired` 甚至断开连接。
+因此：**拉取后尽快批量确认**，不要在窗口里长期积压已处理的消息。
 
 ## 5. 优先级与确认
 
-| 优先级 | 需要 commit | 说明 |
-|---|---|---|
-| Low (0) | 否 | 服务端写出后立即删除，可能丢失 |
-| Medium (1) | 是 | 默认值 |
-| High (2) | 是 | 队列满时最后被丢弃 |
+可靠性与优先级是两个独立的位：
 
-Low 的消息 ID 不需要提交；提交了也没有副作用（服务端幂等忽略）。
+| 字段 | 说明 |
+|---|---|
+| `Reliable=0` | 服务端写出后立即释放，不占窗口、不重发、离线丢弃 |
+| `Reliable=1` | 需要 `COMMIT` 或 `NACK`；离线保留；受窗口约束 |
+| `Priority` | Low/Medium/High，只影响投递顺序与队列满时的淘汰顺序 |
+
+可靠性默认关闭：不置位 `Reliable`（bit5）的消息一律不可靠，
+不会被重发、不占窗口、离线时不保留。需要投递保证时必须显式置位。
+
+`COMMIT` 的每项带 `Action`：`0=Commit`（确认，不再重发）、`1=Nack`（拒绝，不再重发，
+服务端可配置钩子做死信）。不可靠消息的 ID 提交后计入 `Unknown`，无副作用。
 
 ## 6. 长轮询
 
@@ -124,7 +177,9 @@ Low 的消息 ID 不需要提交；提交了也没有副作用（服务端幂等
 并在 `1.5 × KeepAlive` 内没有收到任何包时断开。因此：
 
 - 以 `CONNACK.KeepAlive` 为准，空闲时每 `KeepAlive/2` 发一次 `PING`；
-- 长轮询的 `PULL` 不算「已发送」，仍需要 `PING`。
+- 长轮询的 `PULL` 不算「已发送」，仍需要 `PING`；
+- 客户端也应设置读超时（约 `2 × KeepAlive`）：超过该时长没有任何包（包括 `PONG`）
+  就主动断开并重连，否则半开连接会一直表现为“在线”。
 
 ## 8. 断线处理
 
@@ -144,17 +199,18 @@ Low 的消息 ID 不需要提交；提交了也没有副作用（服务端幂等
 单个客户端在服务端的占用上界：
 
 ```
-QueueCap 条（pending）  +  2 条（delivered）
+QueueCap 条（pending）  +  ReceiveMaximum 条（delivered，默认 32）
 每条约 24 字节索引 + 共享消息体
 ```
 
-客户端侧最多只需保存 2 条未确认消息的 ID。
+客户端侧最多保存服务端 `CONNACK.ReceiveMaximum` 条未确认消息的 ID。
 
 ## 10. 常见错误
 
 | 现象 | 原因 |
 |---|---|
-| 反复收到同样的消息 | 没有 commit 就再次 pull |
+| 反复收到同样的消息（`Dup=1`） | 窗口已满且未确认，先 `COMMIT` |
+| `PULL_OK.Count=0` 且 `Reason=Success` | 长轮询超时，不是错误 |
 | `PULL_OK.Reason = CommitRequired` | 连续无进展 pull 超过软上限 |
 | 连接被服务端关闭且收到 `CommitRequired` | 超过硬上限 |
 | `PUSH_OK` 返回 `NoMatch` | 没有客户端声明匹配的 channel |

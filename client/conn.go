@@ -17,9 +17,15 @@ type conn struct {
 	client *Client
 	nc     net.Conn
 
-	writeMu       sync.Mutex
-	writeTimeout  time.Duration
-	maxPacketSize uint32
+	writeMu      sync.Mutex
+	writeTimeout time.Duration
+	// readMaxPacketSize 限制本端可接收的单包大小；writeMaxPacketSize 限制发送。
+	// 两者相互独立：接收上限小并不意味只能发送小包。
+	readMaxPacketSize  uint32
+	writeMaxPacketSize uint32
+	// readTimeout 是应用层存活窗口：超过该时长没有收到任何包就认为连接
+	// 已死（半开连接、服务端挂死）。0 表示不检测。
+	readTimeout time.Duration
 
 	pendingMu sync.Mutex
 	pending   map[uint32]chan packet.Packet
@@ -35,13 +41,20 @@ type conn struct {
 }
 
 func newConn(c *Client, nc net.Conn) *conn {
+	writeMax := c.opts.MaxSendPacketSize
+	if writeMax == 0 {
+		// CONNACK 之前的发送上限未知；按协议硬上限编码 CONNECT，
+		// 由服务端按它自己的 MaxPacketSize 决定是否接受。
+		writeMax = packet.MaxPacketSize
+	}
 	return &conn{
-		client:        c,
-		nc:            nc,
-		writeTimeout:  c.opts.WriteTimeout,
-		maxPacketSize: c.opts.MaxPacketSize,
-		pending:       make(map[uint32]chan packet.Packet),
-		done:          make(chan struct{}),
+		client:             c,
+		nc:                 nc,
+		writeTimeout:       c.opts.WriteTimeout,
+		readMaxPacketSize:  c.opts.MaxPacketSize,
+		writeMaxPacketSize: writeMax,
+		pending:            make(map[uint32]chan packet.Packet),
+		done:               make(chan struct{}),
 	}
 }
 
@@ -64,7 +77,7 @@ func (cn *conn) write(pkt packet.Packet) error {
 	if cn.writeTimeout > 0 {
 		_ = cn.nc.SetWriteDeadline(time.Now().Add(cn.writeTimeout))
 	}
-	if _, err := packet.WritePacketWithSize(cn.nc, pkt, cn.maxPacketSize); err != nil {
+	if _, err := packet.WritePacketWithSize(cn.nc, pkt, cn.writeMaxPacketSize); err != nil {
 		return err
 	}
 	if cn.writeTimeout > 0 {
@@ -118,9 +131,16 @@ func (cn *conn) readLoop() {
 			return
 		}
 
-		pkt, _, rerr := packet.ReadPacketWithSize(cn.nc, cn.maxPacketSize)
+		if cn.readTimeout > 0 {
+			_ = cn.nc.SetReadDeadline(time.Now().Add(cn.readTimeout))
+		}
+
+		pkt, _, rerr := packet.ReadPacketWithSize(cn.nc, cn.readMaxPacketSize)
 		if rerr != nil {
-			if errors.Is(rerr, io.EOF) {
+			var ne net.Error
+			if errors.As(rerr, &ne) && ne.Timeout() {
+				err = NewConnectionError("read", ErrKeepAliveTimeout)
+			} else if errors.Is(rerr, io.EOF) {
 				err = ErrNotConnected
 			} else {
 				err = NewConnectionError("read", rerr)

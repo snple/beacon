@@ -17,6 +17,25 @@ import (
 	"go.uber.org/zap"
 )
 
+func newTestClientWithOptions(t *testing.T, addr, id, channels string, opts *client.ClientOptions) *client.Client {
+	t.Helper()
+	opts = opts.WithCore(addr).WithClientID(id).WithAutoReconnect(false).WithLogger(zap.NewNop())
+	if channels != "" {
+		opts.WithChannels(channels)
+	}
+	c, err := client.NewWithOptions(opts)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.ConnectContext(ctx); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
 // 会话总数上限必须覆盖离线保留会话。
 func TestMaxSessionsRejected(t *testing.T) {
 	_, addr := startCore(t, core.NewCoreOptions().WithMaxSessions(1))
@@ -46,7 +65,8 @@ func TestMaxSessionsRejected(t *testing.T) {
 
 // 全局在途字节上限必须阻止无界内存增长。
 func TestMaxInflightBytesRejected(t *testing.T) {
-	_, addr := startCore(t, core.NewCoreOptions().WithMaxInflightBytes(1))
+	// 上限必须覆盖第一条消息，但放不下两条（Message.Size 含约 160B 固定开销）。
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxInflightBytes(250))
 	sub := newTestClient(t, addr, "inflight-sub", "ch/a")
 	defer func() { _ = sub.Close() }()
 	pub := newTestClient(t, addr, "inflight-pub")
@@ -188,7 +208,8 @@ func TestOfflineQueueDeliveredOnReconnect(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if _, err := b.PushToClient("device-1", "cmd/x", []byte("queued"), core.PushOptions{}); err != nil {
+	if _, err := b.PushToClient("device-1", "cmd/x", []byte("queued"),
+		core.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatalf("publish to offline session: %v", err)
 	}
 
@@ -344,7 +365,7 @@ func TestMessageAck(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}); err != nil {
+	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
@@ -373,8 +394,8 @@ func TestPriorityHighBeforeMedium(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	medOpt := client.PushOptions{}.WithPriority(packet.PriorityMedium)
-	highOpt := client.PushOptions{}.WithPriority(packet.PriorityHigh)
+	medOpt := client.PushOptions{}.WithPriority(packet.PriorityMedium).WithReliable(true)
+	highOpt := client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(true)
 
 	if err := pub.Push(ctx, "ch/a", []byte("med"), medOpt); err != nil {
 		t.Fatal(err)
@@ -399,8 +420,8 @@ func TestHighPriorityBypassesUnackedMedium(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	medOpt := client.PushOptions{}.WithPriority(packet.PriorityMedium)
-	highOpt := client.PushOptions{}.WithPriority(packet.PriorityHigh)
+	medOpt := client.PushOptions{}.WithPriority(packet.PriorityMedium).WithReliable(true)
+	highOpt := client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(true)
 
 	if err := pub.Push(ctx, "ch/a", []byte("med"), medOpt); err != nil {
 		t.Fatal(err)
@@ -454,7 +475,7 @@ func TestOnDeliverRejectsMessage(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "ch/ok", []byte("keep"), client.PushOptions{}); err != nil {
+	if err := pub.Push(ctx, "ch/ok", []byte("keep"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	if err := pub.Push(ctx, "ch/blocked", []byte("drop"), client.PushOptions{}); err != nil {
@@ -547,8 +568,20 @@ func TestAdminPushDefaultsToMedium(t *testing.T) {
 	if msg.Priority != packet.PriorityMedium {
 		t.Fatalf("default priority = %v, want medium", msg.Priority)
 	}
-	if !msg.NeedsCommit() {
-		t.Fatal("medium priority must require commit")
+	if msg.NeedsCommit() {
+		t.Fatal("messages must default to unreliable")
+	}
+	if err := msg.Ack(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	b.Push("ch/a", []byte("r"), core.PushOptions{}.WithReliable(true))
+	reliable, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reliable == nil || !reliable.NeedsCommit() {
+		t.Fatalf("explicit reliable push should require commit: %+v", reliable)
 	}
 }
 
@@ -656,7 +689,7 @@ func assertDeclareChannel(t *testing.T, c *client.Client, ctx context.Context, f
 	}
 }
 
-// 离线会话只保留 Medium/High；Low 直接丢弃。队列满后沿用既有淘汰策略。
+// 离线会话保留全部可靠消息；不可靠消息直接丢弃。队列满后沿用既有淘汰策略。
 func TestOfflineQueuePolicy(t *testing.T) {
 	b, addr := startCore(t, core.NewCoreOptions().WithQueueCap(2))
 	sub := newTestClient(t, addr, "offline-sub", "off/**")
@@ -666,20 +699,20 @@ func TestOfflineQueuePolicy(t *testing.T) {
 	_ = sub.Close()
 	waitClientDetached(t, b, "offline-sub")
 
-	push := func(channel string, prio packet.Priority) {
+	push := func(channel string, prio packet.Priority, reliable bool) {
 		t.Helper()
-		err := pub.Push(ctx, channel, []byte(channel), client.PushOptions{}.WithPriority(prio))
-		if err != nil {
+		opts := client.PushOptions{}.WithPriority(prio).WithReliable(reliable)
+		if err := pub.Push(ctx, channel, []byte(channel), opts); err != nil {
 			t.Fatalf("push %s: %v", channel, err)
 		}
 	}
 
-	push("off/m1", packet.PriorityMedium)
-	push("off/h1", packet.PriorityHigh)
-	// Low 在离线时被丢弃，不占用队列。
-	push("off/l1", packet.PriorityLow)
+	push("off/m1", packet.PriorityMedium, true)
+	push("off/h1", packet.PriorityHigh, true)
+	// 不可靠消息在离线时被丢弃，不占用队列。
+	push("off/l1", packet.PriorityLow, false)
 	// 队列已满（cap=2）：挤掉最旧的 Medium。
-	push("off/m2", packet.PriorityMedium)
+	push("off/m2", packet.PriorityMedium, true)
 
 	info, err := b.GetClientInfo("offline-sub")
 	if err != nil {
@@ -794,6 +827,702 @@ func TestCleanSessionTakeover(t *testing.T) {
 	}
 	if old.Connected() {
 		t.Fatal("old connection should be taken over")
+	}
+}
+
+// 服务端分配 ClientID 时，重连必须沿用同一个 ID 并恢复会话。
+func TestAutoClientIDReconnectResumesSession(t *testing.T) {
+	b, addr := startCore(t, nil)
+
+	opts := client.NewClientOptions().
+		WithCore(addr).
+		WithAutoReconnect(true).
+		WithChannels("auto/**").
+		WithLogger(zap.NewNop())
+	c, err := client.NewWithOptions(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := c.ConnectContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := c.ClientID()
+	if id == "" {
+		t.Fatal("server should assign a client id")
+	}
+	if c.SessionPresent() {
+		t.Fatal("first connect must not reuse a session")
+	}
+
+	pub := newTestClient(t, addr, "auto-pub")
+	if err := pub.Push(ctx, "auto/x", []byte("queued"), client.PushOptions{}.WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.DisconnectClient(id, packet.ReasonServerShuttingDown); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.Connected() && c.SessionPresent() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !c.Connected() {
+		t.Fatal("client did not reconnect")
+	}
+	if c.ClientID() != id {
+		t.Fatalf("assigned client id changed across reconnect: %s -> %s", id, c.ClientID())
+	}
+	if !c.SessionPresent() {
+		t.Fatal("reconnect should resume the same session")
+	}
+
+	msg, err := c.Pull(ctx, client.PullOptions{WaitMs: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || string(msg.Payload) != "queued" {
+		t.Fatalf("pending message lost across reconnect: %+v", msg)
+	}
+}
+
+// UncommittedTimeout 必须从重连时刻重新计时，不能把离线时间算作消费卡住。
+func TestUncommittedTimeoutRestartsOnReconnect(t *testing.T) {
+	b, addr := startCore(t, core.NewCoreOptions().
+		WithSessionCheckInterval(50*time.Millisecond).
+		WithUncommittedTimeout(800*time.Millisecond))
+
+	sub := newTestClient(t, addr, "unc-1", "ch/a")
+	pub := newTestClient(t, addr, "unc-pub")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := pub.Push(ctx, "ch/a", []byte("x"),
+		client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
+	if err != nil || msg == nil {
+		t.Fatalf("pull: msg=%+v err=%v", msg, err)
+	}
+	_ = sub.Close()
+	waitClientDetached(t, b, "unc-1")
+
+	// 离线时间超过 UncommittedTimeout。
+	time.Sleep(1200 * time.Millisecond)
+
+	opts := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("unc-1").
+		WithAutoReconnect(false).
+		WithLogger(zap.NewNop())
+	c, err := client.NewWithOptions(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.ConnectContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !c.SessionPresent() {
+		t.Fatal("session should be resumed")
+	}
+
+	// 重连后计时重新开始：短时间内不应被踢。
+	time.Sleep(200 * time.Millisecond)
+	if !c.Connected() {
+		t.Fatal("resumed session must not be kicked immediately")
+	}
+
+	// 但持续不 commit 仍会在超时后被断开（特性仍然有效）。
+	deadline := time.Now().Add(3 * time.Second)
+	for c.Connected() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if c.Connected() {
+		t.Fatal("uncommitted timeout should still kick a stalled consumer")
+	}
+}
+
+// 队列满导致的定向投递被拒必须返回 error，而不是只体现在 Dropped。
+func TestAdminPushToClientBacklogReturnsError(t *testing.T) {
+	b, addr := startCore(t, core.NewCoreOptions().WithQueueCap(1))
+	newTestClient(t, addr, "cap-sub", "ch/a")
+
+	if res := b.Push("ch/a", []byte("high"), core.PushOptions{}.WithPriority(packet.PriorityHigh)); res.Matched != 1 {
+		t.Fatalf("first push should match: %+v", res)
+	}
+	if _, err := b.PushToClient("cap-sub", "ch/a", []byte("low"),
+		core.PushOptions{}.WithPriority(packet.PriorityLow)); err == nil {
+		t.Fatal("targeted push rejected by consumer backlog must return an error")
+	}
+}
+
+// 单客户端字节配额：超过上限的新消息会被拒绝，已有消息保留。
+func TestPerClientPendingBytesCap(t *testing.T) {
+	b, addr := startCore(t, core.NewCoreOptions().WithMaxPendingBytesPerClient(300))
+	newTestClient(t, addr, "bytes-sub", "b/a")
+
+	if res := b.Push("b/a", make([]byte, 100), core.PushOptions{}); res.Matched != 1 || res.Dropped != 0 {
+		t.Fatalf("first push should fit: %+v", res)
+	}
+	if res := b.Push("b/a", make([]byte, 100), core.PushOptions{}); res.Matched != 0 || res.Dropped != 1 {
+		t.Fatalf("second push should exceed the byte budget: %+v", res)
+	}
+	info, err := b.GetClientInfo("bytes-sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Pending[1] != 1 {
+		t.Fatalf("original message should remain queued: %+v", info.Pending)
+	}
+}
+
+// 运行时 Declare 必须被记住，并在重连（CleanSession 清空）后自动重放。
+func TestRuntimeDeclarationReplayedOnReconnect(t *testing.T) {
+	b, addr := startCore(t, nil)
+
+	opts := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("decl-1").
+		WithCleanSession(true).
+		WithAutoReconnect(true).
+		WithLogger(zap.NewNop())
+	c, err := client.NewWithOptions(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := c.ConnectContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Declare(ctx, "decl/**"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.DisconnectClient("decl-1", packet.ReasonServerShuttingDown); err != nil {
+		t.Fatal(err)
+	}
+	waitClientDetached(t, b, "decl-1")
+
+	deadline := time.Now().Add(10 * time.Second)
+	var restored bool
+	for time.Now().Before(deadline) {
+		if info, err := b.GetClientInfo("decl-1"); err == nil && info.Connected && len(info.Channels) > 0 {
+			restored = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !restored {
+		t.Fatal("runtime declaration was not replayed after reconnect")
+	}
+
+	pub := newTestClient(t, addr, "decl-pub")
+	if err := pub.Push(ctx, "decl/x", []byte("ok"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := c.Pull(ctx, client.PullOptions{WaitMs: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || string(msg.Payload) != "ok" {
+		t.Fatalf("declaration was not restored: %+v", msg)
+	}
+}
+
+// 接收上限只限制读取，不应限制发送。
+func TestSmallReceiveLimitDoesNotRestrictSending(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "big-sub", "big/**")
+	ctx := context.Background()
+
+	opts := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("small-recv").
+		WithMaxPacketSize(512).
+		WithAutoReconnect(false).
+		WithLogger(zap.NewNop())
+	pub, err := client.NewWithOptions(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pub.Close() }()
+	if err := pub.ConnectContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := make([]byte, 2048)
+	if err := pub.Push(ctx, "big/x", payload, client.PushOptions{}); err != nil {
+		t.Fatalf("send must not be limited by the receive limit: %v", err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || len(msg.Payload) != len(payload) {
+		t.Fatalf("subscriber should receive payload, got %+v", msg)
+	}
+}
+
+// 显式发送上限仍然生效。
+func TestMaxSendPacketSizeIsEnforced(t *testing.T) {
+	_, addr := startCore(t, nil)
+	newTestClient(t, addr, "send-sub", "send/**")
+	ctx := context.Background()
+
+	opts := client.NewClientOptions().
+		WithCore(addr).
+		WithClientID("small-send").
+		WithMaxSendPacketSize(512).
+		WithAutoReconnect(false).
+		WithLogger(zap.NewNop())
+	pub, err := client.NewWithOptions(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pub.Close() }()
+	if err := pub.ConnectContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.Push(ctx, "send/x", make([]byte, 2048), client.PushOptions{}); err == nil {
+		t.Fatal("send should be rejected by MaxSendPacketSize")
+	}
+}
+
+// 可靠性必须独立于优先级：Low + Reliable 离线保留，High + Unreliable 直接丢弃。
+func TestReliabilityIndependentOfPriority(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "rel-1", "r/**")
+	pub := newTestClient(t, addr, "rel-pub")
+	ctx := context.Background()
+
+	if err := sub.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitClientDetached(t, b, "rel-1")
+
+	lowReliable := client.PushOptions{}.WithPriority(packet.PriorityLow).WithReliable(true)
+	res, err := pub.PushWithResult(ctx, "r/low", []byte("keep"), lowReliable)
+	if err != nil || res.Matched != 1 || res.Dropped != 0 {
+		t.Fatalf("low+reliable should be queued offline: %+v err=%v", res, err)
+	}
+
+	highUnreliable := client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(false)
+	res, err = pub.PushWithResult(ctx, "r/high", []byte("drop"), highUnreliable)
+	if err != nil || res.Matched != 0 || res.Dropped != 1 {
+		t.Fatalf("high+unreliable should be dropped offline: %+v err=%v", res, err)
+	}
+
+	sub2 := newTestClient(t, addr, "rel-1", "r/**")
+	msg, err := sub2.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || string(msg.Payload) != "keep" || msg.Priority != packet.PriorityLow || !msg.NeedsCommit() {
+		t.Fatalf("unexpected message: %+v", msg)
+	}
+	if err := msg.Ack(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 不可靠消息不占用 ReceiveMaximum 窗口。
+func TestUnreliableDoesNotConsumeWindow(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithReceiveMaximum(1))
+	sub := newTestClient(t, addr, "win-1", "w/**")
+	pub := newTestClient(t, addr, "win-pub")
+	ctx := context.Background()
+
+	highUnreliable := client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(false)
+	if err := pub.Push(ctx, "w/high", []byte("u"), highUnreliable); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.Push(ctx, "w/med", []byte("r"), client.PushOptions{}.WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || first == nil || first.NeedsCommit() || first.Dup {
+		t.Fatalf("first should be unreliable high: %+v err=%v", first, err)
+	}
+	second, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || second == nil || !second.NeedsCommit() || second.Dup {
+		t.Fatalf("unreliable must not consume the window: %+v err=%v", second, err)
+	}
+	if err := second.Ack(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 发布默认不可靠：不占用窗口，也不需要 COMMIT。
+func TestPushDefaultsToUnreliable(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithReceiveMaximum(1))
+	sub := newTestClient(t, addr, "def-1", "d/**")
+	pub := newTestClient(t, addr, "def-pub")
+	ctx := context.Background()
+
+	for _, v := range []string{"1", "2"} {
+		if err := pub.Push(ctx, "d/a", []byte(v), client.PushOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, want := range []string{"1", "2"} {
+		msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+		if err != nil || msg == nil || string(msg.Payload) != want {
+			t.Fatalf("pull %s: %+v err=%v", want, msg, err)
+		}
+		if msg.Reliable || msg.NeedsCommit() || msg.Dup {
+			t.Fatalf("default message must be unreliable: %+v", msg)
+		}
+		if err := msg.Ack(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := sub.CommitAll(ctx); err != nil || n != 0 {
+		t.Fatalf("unreliable messages must not be tracked: n=%d err=%v", n, err)
+	}
+}
+
+// MaxBytes 限制单次批量响应的大小。
+func TestPullBatchMaxBytes(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "mb-1", "m/**")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		if err := pub.Push(ctx, "m/a", make([]byte, 100), client.PushOptions{}.WithReliable(true)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msgs, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 10, MaxBytes: 150})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("MaxBytes should limit batch to 1, got %d", len(msgs))
+	}
+	if err := msgs[0].Ack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rest, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 1 {
+		t.Fatalf("remaining message: %d", len(rest))
+	}
+	if err := rest[0].Ack(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// PUSH_OK 的 error 属性提供人类可读的拒绝原因。
+func TestPushErrorDetail(t *testing.T) {
+	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
+		Message: core.MessageHandlerFunc{
+			PushFn: func(ctx *core.PushContext) error {
+				return errors.New("blocked by policy")
+			},
+		},
+	})
+	_, addr := startCore(t, opts)
+	pub := newTestClient(t, addr, "err-pub")
+
+	_, err := pub.PushWithResult(context.Background(), "ch/a", []byte("x"), client.PushOptions{})
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Detail == "" {
+		t.Fatalf("expected ServerError with detail, got %v", err)
+	}
+}
+
+// CONNACK.Properties 过大时必须显式拒绝，而不是写出超过客户端上限的包。
+func TestConnackPropertiesRespectClientMaxPacket(t *testing.T) {
+	big := map[string]string{"k": strings.Repeat("x", 100)}
+	cases := []struct {
+		name string
+		opts *core.CoreOptions
+	}{
+		{"static", core.NewCoreOptions().WithServerProperties(big)},
+		{"auth", core.NewCoreOptions().WithHooks(&core.Hooks{
+			Auth: core.AuthHandlerFunc(func(ctx *core.AuthContext) error {
+				ctx.ResponseProperties = big
+				return nil
+			}),
+		})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, addr := startCore(t, tc.opts)
+			opts := client.NewClientOptions().
+				WithCore(addr).
+				WithClientID("prop-big").
+				WithMaxPacketSize(packet.MinPacketSize).
+				WithAutoReconnect(false).
+				WithLogger(zap.NewNop())
+			c, err := client.NewWithOptions(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = c.Close() }()
+
+			err = c.ConnectContext(context.Background())
+			var se *client.ServerError
+			if !errors.As(err, &se) || se.Reason != packet.ReasonPacketTooLarge {
+				t.Fatalf("expected PacketTooLarge, got %v", err)
+			}
+		})
+	}
+}
+
+// CONNACK.Limits 必须反映服务端实际配置。
+func TestConnackServerLimits(t *testing.T) {
+	opts := core.NewCoreOptions().
+		WithQueueCap(7).
+		WithMaxRecordBytes(1024).
+		WithMaxPullBatch(3).
+		WithMaxChannelsPerClient(5).
+		WithMaxChannelLength(300).
+		WithWaitLimit(5000).
+		WithSessionTimeout(60)
+	_, addr := startCore(t, opts)
+	c := newTestClient(t, addr, "limits-1")
+
+	got := c.ServerLimits()
+	if got.MaxQueueCap != 7 || got.MaxRecordBytes != 1024 || got.MaxPullBatch != 3 ||
+		got.MaxChannelsPerClient != 5 || got.MaxChannelLength != 300 ||
+		got.MaxWaitMs != 5000 || got.SessionTimeout != 60 {
+		t.Fatalf("unexpected CONNACK limits: %+v", got)
+	}
+}
+
+// 发布时已经过期的消息应被拒绝。
+func TestMessageExpiredAtPush(t *testing.T) {
+	_, addr := startCore(t, nil)
+	pub := newTestClient(t, addr, "exp-pub")
+
+	_, err := pub.PushWithResult(context.Background(), "ch/a", []byte("x"),
+		client.PushOptions{}.WithExpiresAt(time.Now().Add(-time.Second).UnixMilli()))
+	if !errors.Is(err, client.ErrExpired) {
+		t.Fatalf("expected ErrExpired, got %v", err)
+	}
+}
+
+// 已入队但超过 TTL 的消息在 PULL 时被丢弃。
+func TestMessageTTLDroppedBeforePull(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "ttl-sub", "ttl/**")
+	pub := newTestClient(t, addr, "ttl-pub")
+	ctx := context.Background()
+
+	if err := pub.Push(ctx, "ttl/a", []byte("x"),
+		client.PushOptions{}.WithReliable(true).WithTTL(50*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg != nil {
+		t.Fatalf("expired message must not be delivered: %+v", msg)
+	}
+	if got := b.GetStats().MessagesExpired; got == 0 {
+		t.Fatal("MessagesExpired should increase")
+	}
+}
+
+// 离线队列中的过期消息也会被丢弃。
+func TestOfflineMessageExpires(t *testing.T) {
+	b, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "ttl-off", "off/**")
+	pub := newTestClient(t, addr, "ttl-pub")
+	ctx := context.Background()
+
+	_ = sub.Close()
+	waitClientDetached(t, b, "ttl-off")
+
+	if err := pub.Push(ctx, "off/a", []byte("x"),
+		client.PushOptions{}.WithReliable(true).WithTTL(50*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	sub2 := newTestClient(t, addr, "ttl-off", "off/**")
+	msg, err := sub2.Pull(ctx, client.PullOptions{WaitMs: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg != nil {
+		t.Fatalf("expired offline message must not be delivered: %+v", msg)
+	}
+}
+
+// CONNECT.MaxPacketSize 必须容纳含 ReceiveMaximum 的 CONNACK。
+func TestConnectMaxPacketTooSmallForConnack(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions())
+
+	clientID := strings.Repeat("c", 40)
+	const connackBase = 5 + 1 + 1 + 2 + 8 + 2 + 2 + 12 + 26
+	need := uint32(connackBase + len(clientID))
+
+	connectWith := func(maxPacket uint32) (packet.Packet, error) {
+		nc, err := net.DialTimeout("tcp", addr, 3*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		defer nc.Close()
+		_ = nc.SetDeadline(time.Now().Add(5 * time.Second))
+		r := &rawConn{nc: nc, t: t}
+		connect := packet.NewConnectPacket(clientID)
+		connect.MaxPacketSize = maxPacket
+		r.send(connect)
+		return r.recv()
+	}
+
+	resp, err := connectWith(need - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connack, ok := resp.(*packet.ConnackPacket); !ok || connack.ReasonCode != packet.ReasonPacketTooLarge {
+		t.Fatalf("expected PacketTooLarge CONNACK, got %#v", resp)
+	}
+
+	resp, err = connectWith(need)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connack, ok := resp.(*packet.ConnackPacket); !ok || connack.ReasonCode != packet.ReasonSuccess {
+		t.Fatalf("expected success CONNACK at boundary, got %#v", resp)
+	}
+}
+
+// 服务端用 MaxPullBatch 裁剪客户端请求的批量大小。
+func TestMaxPullBatchClamp(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithMaxPullBatch(2))
+	sub := newTestClient(t, addr, "batch-1", "b/**")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		if err := pub.Push(ctx, "b/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msgs, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("MaxPullBatch should clamp to 2, got %d", len(msgs))
+	}
+	if _, err := sub.CommitAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ReceiveMaximum 完全由服务端决定，客户端只读取 CONNACK 结果。
+func TestReceiveMaximumFromServer(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithReceiveMaximum(4))
+	sub := newTestClient(t, addr, "win-2", "x/**")
+	if got := sub.ReceiveMaximum(); got != 4 {
+		t.Fatalf("server value should be used: got %d", got)
+	}
+}
+
+// CONNECT/CONNACK 的 Properties 可以双向交换，认证钩子可覆盖响应项。
+func TestConnectPropertiesExchange(t *testing.T) {
+	connectProps := make(chan map[string]string, 1)
+	authProps := make(chan map[string]string, 1)
+	hooks := &core.Hooks{
+		Auth: core.AuthHandlerFunc(func(ctx *core.AuthContext) error {
+			authProps <- ctx.Properties
+			ctx.ResponseProperties = map[string]string{"session": "ok"}
+			return nil
+		}),
+		Connection: core.ConnectionHandlerFunc{
+			ConnectFn: func(ctx *core.ConnectContext) { connectProps <- ctx.Properties },
+		},
+	}
+	_, addr := startCore(t, core.NewCoreOptions().
+		WithServerProperties(map[string]string{"region": "cn"}).
+		WithHooks(hooks))
+
+	c := newTestClientWithOptions(t, addr, "prop-1", "p/**",
+		client.NewClientOptions().WithProperty("model", "x1"))
+	defer func() { _ = c.Close() }()
+
+	want := map[string]string{"model": "x1"}
+	for name, ch := range map[string]chan map[string]string{"auth": authProps, "connect": connectProps} {
+		select {
+		case got := <-ch:
+			if got["model"] != want["model"] {
+				t.Fatalf("%s properties: %+v", name, got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s hook did not see properties", name)
+		}
+	}
+
+	got := c.ServerProperties()
+	if got["region"] != "cn" || got["session"] != "ok" {
+		t.Fatalf("server properties: %+v", got)
+	}
+}
+
+// NACK 后消息不再重发，并触发钩子与统计。
+func TestNackRemovesDelivered(t *testing.T) {
+	nackCh := make(chan *core.NackContext, 1)
+	hooks := &core.Hooks{
+		Nack: core.NackHandlerFunc(func(ctx *core.NackContext) { nackCh <- ctx }),
+	}
+	b, addr := startCore(t, core.NewCoreOptions().WithHooks(hooks))
+	sub := newTestClient(t, addr, "nack-1", "n/**")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	if err := pub.Push(ctx, "n/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || msg == nil {
+		t.Fatalf("pull: %+v err=%v", msg, err)
+	}
+	if err := msg.Nack(ctx, packet.ReasonUnspecifiedError); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case n := <-nackCh:
+		if n.ID != msg.ID || n.ClientID != "nack-1" || n.Channel != "n/a" {
+			t.Fatalf("unexpected nack context: %+v", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("nack hook not called")
+	}
+
+	if next, err := sub.Pull(ctx, client.PullOptions{WaitMs: 200}); err != nil || next != nil {
+		t.Fatalf("nacked message must not be redelivered: %+v err=%v", next, err)
+	}
+	if got := b.GetStats().MessagesNacked; got != 1 {
+		t.Fatalf("MessagesNacked=%d", got)
+	}
+	if n, err := sub.CommitAll(ctx); err != nil || n != 0 {
+		t.Fatalf("CommitAll after Nack: n=%d err=%v", n, err)
 	}
 }
 

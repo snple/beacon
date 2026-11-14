@@ -27,24 +27,20 @@ func TestConnectRoundTrip(t *testing.T) {
 	in.KeepAlive = 30
 	in.SetCleanSession(true)
 	in.MaxPacketSize = 4096
-	in.HasWill = true
-	in.WillChannel = "dev/1/offline"
-	in.WillPayload = []byte("bye")
-	in.WillHeaders = map[string]string{"k": "v"}
 	in.AuthMethod = "plain"
 	in.AuthData = []byte("secret")
+	in.Properties = map[string]string{"model": "x1", "fw": "1.2"}
 
 	out := roundTrip(t, in).(*ConnectPacket)
 	if out.ClientID != in.ClientID || out.KeepAlive != in.KeepAlive ||
 		out.CleanSession() != in.CleanSession() || out.MaxPacketSize != in.MaxPacketSize {
 		t.Fatalf("header mismatch: %+v", out)
 	}
-	if !out.HasWill || out.WillChannel != in.WillChannel ||
-		string(out.WillPayload) != string(in.WillPayload) || out.WillHeaders["k"] != "v" {
-		t.Fatalf("will mismatch: %+v", out)
-	}
 	if out.AuthMethod != "plain" || string(out.AuthData) != "secret" {
 		t.Fatalf("auth mismatch")
+	}
+	if out.Properties["model"] != "x1" || out.Properties["fw"] != "1.2" {
+		t.Fatalf("properties mismatch: %+v", out.Properties)
 	}
 }
 
@@ -52,10 +48,11 @@ func TestConnackRoundTrip(t *testing.T) {
 	in := NewConnackPacket(ReasonSuccess)
 	in.SetSessionPresent(true)
 	in.AssignedClientID = "c1"
-	in.ServerMaxPacketSize = 1024
 	in.KeepAlive = 25
 	in.SessionID = 42
 	in.Pending = [3]uint32{1, 2, 3}
+	in.Limits = Limits{MaxPacketSize: 1024, MaxPullBatch: 8}
+	in.Properties = map[string]string{"region": "cn", "limit": "32"}
 
 	out := roundTrip(t, in).(*ConnackPacket)
 	if !out.SessionPresent() || out.AssignedClientID != "c1" || out.SessionID != 42 || out.KeepAlive != 25 {
@@ -63,6 +60,12 @@ func TestConnackRoundTrip(t *testing.T) {
 	}
 	if out.Pending != in.Pending {
 		t.Fatalf("depth mismatch: %+v", out)
+	}
+	if out.Limits != in.Limits {
+		t.Fatalf("limits mismatch: %+v", out.Limits)
+	}
+	if out.Properties["region"] != "cn" || out.Properties["limit"] != "32" {
+		t.Fatalf("properties mismatch: %+v", out.Properties)
 	}
 }
 
@@ -75,7 +78,7 @@ func TestPushRoundTrip(t *testing.T) {
 
 	out := roundTrip(t, in).(*PushPacket)
 	if out.RequestID != 7 || out.Flags&PushFlagWantAck == 0 {
-		t.Fatalf("header mismatch")
+		t.Fatalf("header mismatch: %+v", out)
 	}
 	got := out.Record
 	if got.Channel != "a/b" || string(got.Payload) != "hello" || got.Priority() != PriorityHigh {
@@ -96,11 +99,11 @@ func TestPullRoundTrip(t *testing.T) {
 	in.Pending = [3]uint32{5, 0, 0}
 
 	out := roundTrip(t, in).(*PullOkPacket)
-	if out.RequestID != 9 || !out.HasRecord() || out.Pending != in.Pending {
+	if out.RequestID != 9 || !out.HasRecord() || out.Pending != in.Pending || out.RecordCount() != 1 {
 		t.Fatalf("mismatch: %+v", out)
 	}
-	if !out.Record.Dup() || out.Record.Priority() != PriorityLow {
-		t.Fatalf("record mismatch: %+v", out.Record)
+	if !out.Records[0].Dup() || out.Records[0].Priority() != PriorityLow {
+		t.Fatalf("record mismatch: %+v", out.Records[0])
 	}
 }
 
@@ -117,7 +120,7 @@ func TestPullOkEmptyRoundTrip(t *testing.T) {
 func TestCommitAndDeclareRoundTrip(t *testing.T) {
 	id := NewPacketID()
 	c := roundTrip(t, NewCommitPacket(3, id)).(*CommitPacket)
-	if c.RequestID != 3 || c.ID != id {
+	if c.RequestID != 3 || len(c.Entries) != 1 || c.Entries[0].ID != id {
 		t.Fatalf("commit mismatch")
 	}
 
@@ -140,6 +143,47 @@ func TestCommitAndDeclareRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOptionalPropertiesRoundTrip(t *testing.T) {
+	props := map[string]string{"trace": "abc"}
+
+	push := NewPushPacket(40, Record{Channel: "a", Payload: []byte("x")})
+	push.Properties = props
+	if out := roundTrip(t, push).(*PushPacket); out.Properties["trace"] != "abc" {
+		t.Fatalf("push properties mismatch: %+v", out.Properties)
+	}
+
+	ok := NewPushOkPacket(41)
+	ok.Reason = ReasonNotAuthorized
+	ok.Properties = props
+	if out := roundTrip(t, ok).(*PushOkPacket); out.Properties["trace"] != "abc" {
+		t.Fatalf("push ok properties mismatch: %+v", out.Properties)
+	}
+
+	pull := NewPullPacket(42, 10)
+	pull.Properties = props
+	if out := roundTrip(t, pull).(*PullPacket); out.Properties["trace"] != "abc" {
+		t.Fatalf("pull properties mismatch: %+v", out.Properties)
+	}
+
+	pullOK := NewPullOkPacket(43)
+	pullOK.Properties = props
+	if out := roundTrip(t, pullOK).(*PullOkPacket); out.Properties["trace"] != "abc" {
+		t.Fatalf("pull ok properties mismatch: %+v", out.Properties)
+	}
+
+	declare := NewDeclarePacket(44, nil)
+	declare.Properties = props
+	if out := roundTrip(t, declare).(*DeclarePacket); out.Properties["trace"] != "abc" {
+		t.Fatalf("declare properties mismatch: %+v", out.Properties)
+	}
+
+	declareResp := NewDeclareRespPacket(45)
+	declareResp.Properties = props
+	if out := roundTrip(t, declareResp).(*DeclareRespPacket); out.Properties["trace"] != "abc" {
+		t.Fatalf("declare resp properties mismatch: %+v", out.Properties)
+	}
+}
+
 func TestControlRoundTrip(t *testing.T) {
 	p := roundTrip(t, NewPingPacket(11, 12345)).(*PingPacket)
 	if p.Seq != 11 || p.Timestamp != 12345 {
@@ -147,9 +191,8 @@ func TestControlRoundTrip(t *testing.T) {
 	}
 
 	d := NewDisconnectPacket(ReasonSessionTakenOver)
-	d.Flags |= DisconnectFlagSuppressWill
 	dd := roundTrip(t, d).(*DisconnectPacket)
-	if dd.ReasonCode != ReasonSessionTakenOver || dd.Flags&DisconnectFlagSuppressWill == 0 {
+	if dd.ReasonCode != ReasonSessionTakenOver {
 		t.Fatalf("disconnect mismatch")
 	}
 }
@@ -159,13 +202,39 @@ func TestPriorityDefault(t *testing.T) {
 	if r.Priority() != PriorityMedium {
 		t.Fatalf("default priority should be medium, got %v", r.Priority())
 	}
-	if r.HasPriority() {
-		t.Fatal("HasPriority should be false by default")
+	if bits := (r.Flags & recordFlagPriorityMask) >> 1; bits != 0 {
+		t.Fatalf("medium must encode as 00, got %02b", bits)
 	}
 
-	r.SetPriority(PriorityLow)
-	if r.Priority() != PriorityLow || !r.HasPriority() {
-		t.Fatal("explicit low priority not preserved")
+	for _, tc := range []struct {
+		p    Priority
+		wire uint8
+	}{
+		{PriorityLow, 1},
+		{PriorityMedium, 0},
+		{PriorityHigh, 2},
+	} {
+		r.SetPriority(tc.p)
+		if r.Priority() != tc.p {
+			t.Fatalf("priority %v not preserved, got %v", tc.p, r.Priority())
+		}
+		if bits := (r.Flags & recordFlagPriorityMask) >> 1; bits != tc.wire {
+			t.Fatalf("priority %v encoded as %02b, want %02b", tc.p, bits, tc.wire)
+		}
+
+		rec := Record{Channel: "c", Payload: []byte("x")}
+		rec.SetPriority(tc.p)
+		body, err := EncodeRecordBody(&rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeRecord(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Priority() != tc.p {
+			t.Fatalf("priority %v not preserved on the wire, got %v", tc.p, decoded.Priority())
+		}
 	}
 }
 
@@ -202,10 +271,65 @@ func TestInvalidPriorityRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	const recordFlagsOffset = 5 + 4 + 1
-	frame[recordFlagsOffset] = recordFlagHasPriority | 0x03<<1
+	frame[recordFlagsOffset] = 0x03 << 1 // Priority=11：非法
 
 	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
 		t.Fatal("expected error for invalid priority bits")
+	}
+}
+
+// 回归：Record 的保留位必须被拒绝，避免不同实现产生不同解释。
+func TestReservedRecordFlagRejected(t *testing.T) {
+	frame, err := EncodePacket(NewPushPacket(1, Record{Channel: "a", Payload: []byte("x")}), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const recordFlagsOffset = 5 + 4 + 1
+	frame[recordFlagsOffset] |= 1 << 4
+
+	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
+		t.Fatal("expected error for reserved record flag")
+	}
+}
+
+func TestUnknownPacketFlagsRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		pkt  Packet
+		pos  int
+	}{
+		{"connect", NewConnectPacket("c"), 6},
+		{"connack", NewConnackPacket(ReasonSuccess), 5},
+		{"push", NewPushPacket(1, Record{Channel: "a"}), 9},
+		{"push_ok", NewPushOkPacket(1), 9},
+		{"pull", NewPullPacket(1, 0), 9},
+		{"pull_ok", NewPullOkPacket(1), 9},
+		{"declare", NewDeclarePacket(1, nil), 9},
+		{"declare_resp", NewDeclareRespPacket(1), 9},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frame, err := EncodePacket(tc.pkt, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame[tc.pos] |= 0x80
+			if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
+				t.Fatal("expected error for unknown packet flags")
+			}
+		})
+	}
+}
+
+func TestUnknownCommitActionRejected(t *testing.T) {
+	frame, err := EncodePacket(NewCommitPacket(1, NewPacketID()), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const actionOffset = 5 + 4 + 2 + PacketIDSize
+	frame[actionOffset] = 2
+	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
+		t.Fatal("expected error for unknown commit action")
 	}
 }
 
@@ -250,5 +374,167 @@ func TestHugePayloadLengthRejected(t *testing.T) {
 
 	if _, _, err := ReadPacketWithSize(bytes.NewReader(frame), 1<<20); err == nil {
 		t.Fatal("expected error for oversized declared payload length")
+	}
+}
+
+func TestRecordReliability(t *testing.T) {
+	var r Record
+	if r.Reliable() {
+		t.Fatal("reliability must default to false")
+	}
+	r.SetPriority(PriorityHigh)
+	if r.Reliable() {
+		t.Fatal("priority must not imply reliability")
+	}
+	r.SetReliable(true)
+	if !r.Reliable() {
+		t.Fatal("explicit reliability not preserved")
+	}
+	r.SetPriority(PriorityLow)
+	if !r.Reliable() {
+		t.Fatal("reliability must not change with priority")
+	}
+	r.SetReliable(false)
+	if r.Reliable() {
+		t.Fatal("explicit unreliable not preserved")
+	}
+
+	rec := Record{Channel: "c", Payload: []byte("x")}
+	rec.SetReliable(true)
+	body, err := EncodeRecordBody(&rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body[0]&0x40 != 0 {
+		t.Fatalf("reserved reliability bit must stay clear: %#x", body[0])
+	}
+	decoded, err := DecodeRecord(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Reliable() {
+		t.Fatal("reliable bit must survive round trip")
+	}
+}
+
+func TestPushOkRoundTrip(t *testing.T) {
+	in := NewPushOkPacket(30)
+	in.Reason = ReasonSuccess
+	in.ID = NewPacketID()
+	in.Matched = 2
+	in.Dropped = 1
+
+	out := roundTrip(t, in).(*PushOkPacket)
+	if out.RequestID != 30 || out.Reason != ReasonSuccess || out.ID != in.ID ||
+		out.Matched != 2 || out.Dropped != 1 {
+		t.Fatalf("push ok mismatch: %+v", out)
+	}
+}
+
+func TestPushOkSizeMatchesEncoding(t *testing.T) {
+	p := NewPushOkPacket(1)
+	p.Properties = map[string]string{"error": "not authorized"}
+	frame, err := EncodePacket(p, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frame) != p.Size() {
+		t.Fatalf("PushOk.Size() = %d, encoded size = %d", p.Size(), len(frame))
+	}
+}
+
+func TestBatchRoundTrip(t *testing.T) {
+	pull := NewPullPacket(20, 100)
+	pull.MaxCount = 8
+	pull.MaxBytes = 4096
+	pp := roundTrip(t, pull).(*PullPacket)
+	if pp.MaxCount != 8 || pp.MaxBytes != 4096 || pp.WaitMs != 100 {
+		t.Fatalf("pull mismatch: %+v", pp)
+	}
+
+	resp := NewPullOkPacket(21)
+	for i := 0; i < 3; i++ {
+		rec := Record{Channel: "a", Payload: []byte{byte(i)}}
+		rec.SetPriority(PriorityMedium)
+		resp.AddRecord(rec)
+	}
+	rr := roundTrip(t, resp).(*PullOkPacket)
+	if rr.RecordCount() != 3 || rr.Records[2].Payload[0] != 2 {
+		t.Fatalf("pull ok batch mismatch: %+v", rr)
+	}
+
+	ids := []PacketID{NewPacketID(), NewPacketID()}
+	commit := NewCommitBatchPacket(22, []CommitEntry{
+		{ID: ids[0], Action: CommitActionCommit},
+		{ID: ids[1], Action: CommitActionNack, Reason: ReasonConsumerBacklog},
+	})
+	cc := roundTrip(t, commit).(*CommitPacket)
+	if len(cc.Entries) != 2 || cc.Entries[1].Action != CommitActionNack ||
+		cc.Entries[1].Reason != ReasonConsumerBacklog {
+		t.Fatalf("commit batch mismatch: %+v", cc)
+	}
+
+	ok := NewCommitOkPacket(23)
+	ok.Committed, ok.Nacked, ok.Unknown = 2, 1, 3
+	ook := roundTrip(t, ok).(*CommitOkPacket)
+	if ook.Committed != 2 || ook.Nacked != 1 || ook.Unknown != 3 {
+		t.Fatalf("commit ok mismatch: %+v", ook)
+	}
+}
+
+func TestRecordFlagLayout(t *testing.T) {
+	rec := Record{
+		Channel: "c",
+		Headers: map[string]string{"k": "v"},
+		Payload: []byte("x"),
+	}
+	rec.SetReliable(true)
+	rec.SetExpiresAt(123)
+	rec.SetPublishedAt(456)
+
+	body, err := EncodeRecordBody(&rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := body[0]
+	if flags&(1<<4) != 0 {
+		t.Fatalf("reserved bit4 must stay clear: %08b", flags)
+	}
+	for _, bit := range []struct {
+		name string
+		bit  uint8
+	}{
+		{"HasHeaders", 1 << 3},
+		{"Reliable", 1 << 5},
+		{"HasExpiry", 1 << 6},
+		{"HasPublishedAt", 1 << 7},
+	} {
+		if flags&bit.bit == 0 {
+			t.Fatalf("%s flag not set: %08b", bit.name, flags)
+		}
+	}
+}
+
+func TestRecordExpiryRoundTrip(t *testing.T) {
+	rec := Record{Channel: "c", Payload: []byte("x")}
+	rec.SetExpiresAt(123456789)
+	rec.SetPublishedAt(123456000)
+
+	body, err := EncodeRecordBody(&rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := DecodeRecord(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.HasExpiry() || out.ExpiresAt != 123456789 {
+		t.Fatalf("expiry mismatch: %+v", out)
+	}
+	if !out.HasPublishedAt() || out.PublishedAt != 123456000 {
+		t.Fatalf("publishedAt mismatch: %+v", out)
+	}
+	if out.Expired(123456788) || !out.Expired(123456789) {
+		t.Fatal("expiry boundary mismatch")
 	}
 }

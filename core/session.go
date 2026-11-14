@@ -9,14 +9,6 @@ import (
 	"github.com/snple/beacon/packet"
 )
 
-// willMessage 是一条遗嘱消息。
-type willMessage struct {
-	Channel  string
-	Payload  []byte
-	Headers  map[string]string
-	Priority packet.Priority
-}
-
 // Client 表示一个客户端会话（可能在线，也可能离线保留）。
 type Client struct {
 	ID string
@@ -32,6 +24,13 @@ type Client struct {
 	channels []packet.ChannelDecl
 
 	identity atomic.Pointer[Identity]
+
+	// recvMax 是该客户端最近一次声明的接收上限（CONNECT.MaxPacketSize，
+	// 0 表示按服务端上限）。用于在入队时拒绝目标根本无法接收的记录。
+	recvMax atomic.Uint32
+
+	// recvWindow 是本会话允许的最大未确认可靠消息数（ReceiveMaximum）。
+	recvWindow atomic.Uint32
 
 	timeout   atomic.Uint32
 	expiresAt atomic.Int64 // Unix 毫秒；0 表示在线
@@ -54,6 +53,8 @@ type Client struct {
 	dropped  atomic.Int64
 	sent     atomic.Int64
 	rejected atomic.Int64
+	nacked   atomic.Int64
+	expired  atomic.Int64
 }
 
 func newClient(core *Core, clientID string) *Client {
@@ -63,8 +64,9 @@ func newClient(core *Core, clientID string) *Client {
 		createdAt: time.Now(),
 	}
 	cl.sessionID.Store(newSessionID())
-	cl.mb = newMailbox(core.options.QueueCap, core.releaseMessage)
+	cl.mb = newMailbox(core.options.QueueCap, core.options.MaxPendingBytesPerClient, core.releaseMessage)
 	cl.timeout.Store(core.options.SessionTimeout)
+	cl.recvWindow.Store(uint32(core.options.ReceiveMaximum))
 
 	if core.options.PushRate > 0 {
 		cl.pushLimiter = newTokenBucket(core.options.PushRate, core.options.PushBurst)
@@ -124,13 +126,14 @@ func (cl *Client) notify() {
 
 // enqueue 把消息放入会话队列。
 //
-// 离线会话只保留 Medium/High：Low 是尽力而为的消息，直接丢弃（skipped=true），
-// 避免可丢失的数据占用离线队列。队列满时仍由 mailbox.enqueue 按优先级淘汰。
+// 离线会话只保留可靠消息：不可靠消息直接丢弃（skipped=true），
+// 避免可丢失的数据占用离线队列。队列满时仍由 mailbox.enqueue 按
+// (reliability, priority) 淘汰。
 func (cl *Client) enqueue(msg *Message) (enqueued, evicted, skipped bool) {
 	cl.connMu.Lock()
 	defer cl.connMu.Unlock()
 
-	if msg.Priority == packet.PriorityLow && cl.conn == nil {
+	if !msg.Reliable && cl.conn == nil {
 		return false, false, true
 	}
 	enqueued, evicted = cl.mb.enqueue(msg)
@@ -140,12 +143,16 @@ func (cl *Client) enqueue(msg *Message) (enqueued, evicted, skipped bool) {
 // reset 清空会话状态并更换 SessionID（CONNECT 的 CleanSession=true）。
 func (cl *Client) reset() {
 	cl.resetEpoch.Add(1)
-	cl.mb.releaseAll()
+	if n := cl.mb.clearAll(); n > 0 {
+		cl.core.stats.MessagesDropped.Add(int64(n))
+	}
 	cl.replaceChannels(nil)
 	cl.deliveredSince.Store(0)
 	cl.dropped.Store(0)
 	cl.sent.Store(0)
 	cl.rejected.Store(0)
+	cl.nacked.Store(0)
+	cl.expired.Store(0)
 	cl.sessionID.Store(newSessionID())
 }
 
@@ -211,6 +218,33 @@ func (cl *Client) matchesChannel(channel string) bool {
 
 // sessionTimeout 返回会话保留时长（秒）。
 func (cl *Client) sessionTimeout() uint32 { return cl.timeout.Load() }
+
+// receiveLimit 返回该会话最近一次声明的接收上限（0 表示不限制）。
+func (cl *Client) receiveLimit() uint32 { return cl.recvMax.Load() }
+
+// receiveWindow 返回该会话允许的最大未确认可靠消息数。
+func (cl *Client) receiveWindow() uint32 {
+	n := cl.recvWindow.Load()
+	if n == 0 {
+		return 1
+	}
+	return n
+}
+
+// setReceiveParamsIfOwner 仅在 cn 仍是会话当前连接时记录接收上限与窗口。
+// 被接管的旧连接不得再修改会话状态（fencing）。
+func (cl *Client) setReceiveParamsIfOwner(cn *conn, limit, window uint32) bool {
+	cl.connMu.Lock()
+	defer cl.connMu.Unlock()
+	if cl.conn != cn {
+		return false
+	}
+	cl.recvMax.Store(limit)
+	if window > 0 {
+		cl.recvWindow.Store(window)
+	}
+	return true
+}
 
 // markExpiry 记录离线过期时间（timeout=0 表示立即过期）。
 func (cl *Client) markExpiry(now time.Time) {

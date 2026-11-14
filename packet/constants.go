@@ -2,9 +2,10 @@ package packet
 
 // ProtocolVersion 协议版本。
 //
-// v4 是 pull 模型：客户端 PUSH 入队、PULL 拉取、COMMIT 确认。
-// 与 v2/v3 完全二进制不兼容。
-const ProtocolVersion uint8 = 4
+// v5 是 pull 模型：客户端 PUSH 入队、PULL 批量拉取、COMMIT 批量确认。
+// 可靠性（Reliable）与优先级（Priority）相互独立，并支持 NACK 与 TTL。
+// 与 v4 完全二进制不兼容。
+const ProtocolVersion uint8 = 5
 
 // PacketType 数据包类型
 type PacketType uint8
@@ -72,9 +73,8 @@ func (t PacketType) IsRequest() bool {
 
 // Priority 消息优先级。
 //
-// v4 中优先级同时决定可靠性：
-//   - High / Medium：必须 COMMIT 确认，未确认不会从队列删除
-//   - Low：尽力而为，写出成功后立即从队列删除，无需 COMMIT
+// 优先级只决定投递顺序与队列满时的淘汰顺序，与可靠性无关：
+// 是否需要 COMMIT 由 Record.Reliable（PUSH/Record 的 bit5）单独决定。
 type Priority uint8
 
 const (
@@ -100,19 +100,13 @@ func (p Priority) String() string {
 	}
 }
 
-// RequiresCommit 报告该优先级是否需要客户端确认。
-func (p Priority) RequiresCommit() bool {
-	return p != PriorityLow
-}
-
 // ReasonCode 原因码
 type ReasonCode uint8
 
 const (
 	// ========== 成功类 (0x00-0x0F) ==========
-	ReasonSuccess            ReasonCode = 0x00 // 操作成功
-	ReasonNormalDisconnect   ReasonCode = 0x01 // 正常断开连接
-	ReasonDisconnectWithWill ReasonCode = 0x02 // 带遗嘱消息断开
+	ReasonSuccess          ReasonCode = 0x00 // 操作成功
+	ReasonNormalDisconnect ReasonCode = 0x01 // 正常断开连接
 
 	// ========== 路由类 (0x10-0x1F) ==========
 	ReasonNoMatch ReasonCode = 0x10 // 没有匹配的客户端（含定向目标未订阅该 channel）
@@ -124,7 +118,7 @@ const (
 	ReasonImplementationError ReasonCode = 0x83 // 实现错误
 
 	// ========== 连接/认证错误 (0x84-0x87) ==========
-	// ReasonUnsupportedProtocol 仅为保留码：当前实现遇到非 v4 版本直接静默关闭。
+	// ReasonUnsupportedProtocol 仅为保留码：当前实现遇到非 v5 版本直接静默关闭。
 	ReasonUnsupportedProtocol     ReasonCode = 0x84 // 不支持的协议版本（保留）
 	ReasonClientIDNotValid        ReasonCode = 0x85 // 客户端 ID 无效
 	ReasonBadAuthMethodOrAuthData ReasonCode = 0x86 // 错误的认证方法或数据
@@ -147,12 +141,13 @@ const (
 	ReasonRateLimited    ReasonCode = 0x96 // 速率超限
 	ReasonQuotaExceeded  ReasonCode = 0x97 // 配额超限
 
-	// ========== 投递语义 (0xA0-0xA4) ==========
+	// ========== 投递语义 (0xA0-0xA5) ==========
 	ReasonTargetNotFound  ReasonCode = 0xA0 // 定向目标没有会话
 	ReasonCommitRequired  ReasonCode = 0xA1 // 需先 COMMIT 才能继续拉取
 	ReasonKicked          ReasonCode = 0xA2 // 被管理面踢下线
 	ReasonConsumerBacklog ReasonCode = 0xA3 // 消费端积压导致发布被拒
 	ReasonChannelInvalid  ReasonCode = 0xA4 // 消息中的 channel 非法（含保留前缀）
+	ReasonExpired         ReasonCode = 0xA5 // 消息已过期
 	// 0xB0-0xBF 保留，不得复用。
 )
 
@@ -162,8 +157,6 @@ func (r ReasonCode) String() string {
 		return "Success"
 	case ReasonNormalDisconnect:
 		return "Normal disconnect"
-	case ReasonDisconnectWithWill:
-		return "Disconnect with will"
 	case ReasonNoMatch:
 		return "No match"
 	case ReasonUnspecifiedError:
@@ -212,6 +205,8 @@ func (r ReasonCode) String() string {
 		return "Kicked"
 	case ReasonConsumerBacklog:
 		return "Consumer backlog"
+	case ReasonExpired:
+		return "Message expired"
 	case ReasonChannelInvalid:
 		return "Channel invalid"
 	default:
@@ -229,6 +224,18 @@ const (
 	DefaultKeepAlive     = 60       // 默认心跳间隔（秒）
 	DefaultMaxPacketSize = 16777216 // 16 MB
 )
+
+// 批量与在途窗口限制。
+const (
+	DefaultReceiveMaximum = 32   // 默认单会话最大未确认可靠消息数
+	MaxReceiveMaximum     = 1024 // 协议硬上限
+	DefaultMaxPullBatch   = 32   // 默认单次 PULL 最多返回的记录数
+	MaxPullBatch          = 1024 // 协议硬上限
+)
+
+// MinPacketSize 是客户端/服务端可配置的最小包上限。
+// 更小的值连固定头 + 最小响应都放不下，握手阶段应被拒绝。
+const MinPacketSize = 64
 
 // 最大值限制
 const (

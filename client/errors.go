@@ -26,6 +26,12 @@ var (
 	ErrCommitRequired = errors.New("commit required before pulling more")
 	// ErrRateLimited 服务端限流（例如已有在途 PULL）
 	ErrRateLimited = errors.New("request rate limited")
+	// ErrTargetNotSubscribed 定向投递的目标存在，但没有声明匹配该 channel 的过滤器
+	ErrTargetNotSubscribed = errors.New("target has not subscribed to the channel")
+	// ErrKeepAliveTimeout 超过存活窗口没有收到任何包（半开连接或服务端无响应）
+	ErrKeepAliveTimeout = errors.New("keepalive timeout")
+	// ErrExpired 消息已过期，服务端拒绝或丢弃
+	ErrExpired = errors.New("message expired")
 )
 
 // ConnectionError 表示连接层错误。
@@ -45,9 +51,13 @@ func NewConnectionError(op string, err error) *ConnectionError {
 // ServerError 表示服务端返回了失败原因码。
 type ServerError struct {
 	Reason packet.ReasonCode
+	Detail string
 }
 
 func (e *ServerError) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("server rejected: %s: %s", e.Reason.String(), e.Detail)
+	}
 	return fmt.Sprintf("server rejected: %s", e.Reason.String())
 }
 
@@ -56,8 +66,18 @@ func NewServerError(reason packet.ReasonCode) *ServerError {
 	return &ServerError{Reason: reason}
 }
 
+// NewServerErrorWithDetail 构造带错误细节的服务端错误。
+func NewServerErrorWithDetail(reason packet.ReasonCode, detail string) *ServerError {
+	return &ServerError{Reason: reason, Detail: detail}
+}
+
 // reasonToError 把原因码映射为错误（成功返回 nil）。
 func reasonToError(reason packet.ReasonCode) error {
+	return reasonToErrorWithDetail(reason, "")
+}
+
+// reasonToErrorWithDetail 把原因码和可选细节映射为错误。
+func reasonToErrorWithDetail(reason packet.ReasonCode, detail string) error {
 	if !reason.IsError() {
 		return nil
 	}
@@ -70,7 +90,9 @@ func reasonToError(reason packet.ReasonCode) error {
 		return ErrCommitRequired
 	case packet.ReasonRateLimited:
 		return ErrRateLimited
+	case packet.ReasonExpired:
+		return ErrExpired
 	default:
-		return NewServerError(reason)
+		return NewServerErrorWithDetail(reason, detail)
 	}
 }

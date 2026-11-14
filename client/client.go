@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Client 是 Beacon v4 客户端：PUSH 发布、PULL 拉取、COMMIT 确认。
+// Client 是 Beacon v5 客户端：PUSH 发布、批量 PULL 拉取、批量 COMMIT/NACK 确认。
 type Client struct {
 	opts   *ClientOptions
 	logger *zap.Logger
@@ -44,6 +45,11 @@ type Client struct {
 	// 会话变化回调
 	onSessionReset func(prev, next uint64)
 
+	// declMu 保护 desiredChannels/desiredDeclareProps；重连后按最近一次声明自动重放。
+	declMu              sync.Mutex
+	desiredChannels     []Channel
+	desiredDeclareProps map[string]string
+
 	supWG sync.WaitGroup
 }
 
@@ -59,10 +65,11 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
-		opts:   opts,
-		logger: opts.Logger,
-		ctx:    ctx,
-		cancel: cancel,
+		opts:            opts,
+		logger:          opts.Logger,
+		ctx:             ctx,
+		cancel:          cancel,
+		desiredChannels: mergeChannels(opts.Channels),
 	}, nil
 }
 
@@ -104,6 +111,36 @@ func (c *Client) SessionID() uint64 {
 		return c.connack.SessionID
 	}
 	return 0
+}
+
+// ReceiveMaximum 返回服务端为本会话采用的未确认可靠消息窗口。
+func (c *Client) ReceiveMaximum() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.connack == nil {
+		return 0
+	}
+	return int(c.connack.ReceiveMaximum)
+}
+
+// ServerLimits 返回 CONNACK 中服务端声明的限制。
+func (c *Client) ServerLimits() packet.Limits {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.connack == nil {
+		return packet.Limits{}
+	}
+	return c.connack.Limits
+}
+
+// ServerProperties 返回服务端在 CONNACK 中返回的键值信息（副本）。
+func (c *Client) ServerProperties() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.connack == nil {
+		return nil
+	}
+	return maps.Clone(c.connack.Properties)
 }
 
 // SessionPresent 报告本次连接是否复用了既有会话。
@@ -179,12 +216,22 @@ func (c *Client) connectOnce(ctx context.Context) error {
 
 	cn := newConn(c, nc)
 
-	connect := packet.NewConnectPacket(c.opts.ClientID)
+	// 首次连接可以请求服务端分配 ClientID；重连时必须沿用分配到的 ID，
+	// 否则每次重连都会创建新会话，pending/delivered 丢失并累积离线会话。
+	c.mu.RLock()
+	clientID := c.opts.ClientID
+	if clientID == "" {
+		clientID = c.assignedID
+	}
+	c.mu.RUnlock()
+
+	connect := packet.NewConnectPacket(clientID)
 	connect.KeepAlive = c.opts.KeepAlive
 	connect.SetCleanSession(c.opts.CleanSession)
 	connect.MaxPacketSize = c.opts.MaxPacketSize
 	connect.AuthMethod = c.opts.AuthMethod
 	connect.AuthData = c.opts.AuthData
+	connect.Properties = maps.Clone(c.opts.Properties)
 
 	if d := c.opts.ConnectTimeout; d > 0 {
 		_ = nc.SetDeadline(time.Now().Add(d))
@@ -207,15 +254,23 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		_ = nc.Close()
 		return fmt.Errorf("expected CONNACK, got %s", pkt.Type())
 	}
-	if err := reasonToError(connack.ReasonCode); err != nil {
+	if err := reasonToErrorWithDetail(connack.ReasonCode, connack.Properties[packet.PropertyError]); err != nil {
 		_ = nc.Close()
 		return err
 	}
 
 	cn.connack = connack
-	if connack.ServerMaxPacketSize > 0 && connack.ServerMaxPacketSize < cn.maxPacketSize {
-		cn.maxPacketSize = connack.ServerMaxPacketSize
+	cn.readMaxPacketSize = c.opts.MaxPacketSize
+	writeMax := c.opts.MaxSendPacketSize
+	if serverMax := connack.Limits.MaxPacketSize; serverMax > 0 &&
+		(writeMax == 0 || serverMax < writeMax) {
+		writeMax = serverMax
 	}
+	if writeMax == 0 {
+		// 服务端未声明接收上限：保守使用本端配置。
+		writeMax = c.opts.MaxPacketSize
+	}
+	cn.writeMaxPacketSize = writeMax
 	if c.closed.Load() {
 		cn.close(ErrClientClosed)
 		return ErrClientClosed
@@ -247,16 +302,19 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		}
 	}
 
-	go cn.readLoop()
 	// 服务端可在 CONNACK 中要求更短/更长的心跳间隔，必须采用它的值。
 	keepAlive := c.opts.KeepAlive
 	if connack.KeepAlive > 0 {
 		keepAlive = connack.KeepAlive
 	}
-	pingInterval := time.Duration(keepAlive) * time.Second / 2
-	if pingInterval < time.Second {
-		pingInterval = time.Second
+	// 两个心跳周期内没有收到任何包（包括 PONG）就判定连接已死。
+	// 这能发现对端不响应但 TCP 仍处于 ESTABLISHED 的半开连接。
+	if keepAlive > 0 {
+		cn.readTimeout = time.Duration(keepAlive) * 2 * time.Second
 	}
+
+	go cn.readLoop()
+	pingInterval := max(time.Duration(keepAlive)*time.Second/2, time.Second)
 	go cn.pingLoop(pingInterval)
 
 	c.logger.Debug("connected",
@@ -264,12 +322,23 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		zap.Bool("sessionPresent", connack.SessionPresent()),
 		zap.Uint32("pending", connack.Pending[0]+connack.Pending[1]+connack.Pending[2]))
 
-	// 订阅声明统一由 DECLARE 承担（CONNECT 不再携带）：每次建连后重新声明，
-	// 这样 CleanSession 清空或被按新身份过滤掉的声明都会在重连后恢复。
-	if len(c.opts.Channels) > 0 {
-		if _, err := c.DeclareChannels(c.ctx, c.opts.Channels...); err != nil {
+	// 订阅声明统一由 DECLARE 承担（CONNECT 不再携带）：每次建连后重放最近一次
+	// 声明，这样 CleanSession 清空、运行时 Declare 或被按新身份过滤掉的声明
+	// 都能在重连后恢复。失败项记录日志，但不阻断连接。
+	if decls, props := c.desiredChannelSnapshot(); len(decls) > 0 {
+		results, err := c.declareChannels(c.ctx, decls, props)
+		if err != nil {
 			cn.close(err)
 			return err
+		}
+		if len(results) > 0 {
+			reasons := make([]string, 0, len(results))
+			for _, r := range results {
+				reasons = append(reasons, r.Channel+": "+r.Reason.String())
+			}
+			c.logger.Warn("some channel declarations were rejected",
+				zap.Int("rejected", len(results)),
+				zap.Strings("results", reasons))
 		}
 	}
 	return nil

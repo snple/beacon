@@ -1,6 +1,7 @@
 package core
 
 import (
+	"maps"
 	"time"
 
 	"github.com/snple/beacon/packet"
@@ -12,7 +13,7 @@ import (
 // 返回 PUSH_OK 中的一条结果。matched 是入队成功的客户端数，
 // dropped 是「因入队导致旧消息被挤出」「新消息本身被丢弃」或
 // 「目标离线且消息为 Low 而被丢弃」的客户端数。
-func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.PushResult {
+func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]string, system bool) packet.PushResult {
 	res := packet.PushResult{ID: rec.ID}
 
 	// 服务端生成 ID（客户端不可指定），并填充可信字段
@@ -85,13 +86,16 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 	// 发布钩子
 	if c.options.Hooks.hasMessagePush() {
 		ctx := &PushContext{
-			ClientID: rec.Source,
-			Identity: identity,
-			Channel:  rec.Channel,
-			Target:   rec.Target,
-			Priority: rec.Priority(),
-			Headers:  rec.Headers,
-			Payload:  rec.Payload,
+			ClientID:    rec.Source,
+			Identity:    identity,
+			Channel:     rec.Channel,
+			Target:      rec.Target,
+			Priority:    rec.Priority(),
+			ExpiresAt:   rec.ExpiresAt,
+			PublishedAt: rec.PublishedAt,
+			Headers:     rec.Headers,
+			Payload:     rec.Payload,
+			Properties:  maps.Clone(properties),
 		}
 		if err := c.options.Hooks.callOnPush(ctx); err != nil {
 			res.Reason = packet.ReasonNotAuthorized
@@ -107,6 +111,19 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 
 	msg := newMessage(rec)
 	msg.ReceivedAt = nowMillis()
+
+	// 发布时就已经过期：不再入队，直接告知发布者。
+	if msg.Expired(msg.ReceivedAt) {
+		res.Reason = packet.ReasonExpired
+		c.stats.MessagesExpired.Add(1)
+		if cl != nil {
+			cl.expired.Add(1)
+		}
+		c.logger.Debug("dropped expired message",
+			zap.String("channel", rec.Channel),
+			zap.Int64("expiresAt", msg.ExpiresAt))
+		return res
+	}
 
 	// 定向投递：完全跳过匹配
 	if rec.Target != "" {
@@ -126,7 +143,17 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 			res.Reason = packet.ReasonNoMatch
 			return res
 		}
-		if c.overInflightLimit() {
+		// 目标当前连接声明的接收上限放不下这条记录：不入队，直接告知发布者，
+		// 否则它会永久堵住目标队列（PULL 时无法跳过）。
+		// 离线会话保留旧上限，可能在重连后提高，因此仍先入队，由 PULL 侧兜底。
+		if target.currentConn() != nil && !fitsRecordInPacket(target.receiveLimit(), rec) {
+			res.Reason = packet.ReasonPacketTooLarge
+			res.Dropped = 1
+			c.stats.MessagesDropped.Add(1)
+			target.dropped.Add(1)
+			return res
+		}
+		if c.overInflightLimit(msg.Size()) {
 			return c.rejectOverInflight(cl, res)
 		}
 
@@ -168,17 +195,28 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 		res.Reason = packet.ReasonNoMatch
 		return res
 	}
-	if c.overInflightLimit() {
+	if c.overInflightLimit(msg.Size()) {
 		return c.rejectOverInflight(cl, res)
 	}
 
 	c.takeOwnership(msg)
 	backlog := false
+	tooSmall := false
 	for clientID := range targets {
 		c.clientsMu.RLock()
 		target := c.clients[clientID]
 		c.clientsMu.RUnlock()
 		if target == nil {
+			continue
+		}
+
+		// 目标当前接收上限放不下这条记录：不为该客户端入队，计入丢弃。
+		// 离线会话仍先入队（重连后可能提高上限），由 PULL 侧兜底丢弃。
+		if target.currentConn() != nil && !fitsRecordInPacket(target.receiveLimit(), rec) {
+			tooSmall = true
+			res.Dropped++
+			c.stats.MessagesDropped.Add(1)
+			target.dropped.Add(1)
 			continue
 		}
 
@@ -200,15 +238,18 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, system bool) packet.Pu
 
 	c.stats.MessagesReceived.Add(1)
 	res.Reason = packet.ReasonSuccess
-	if res.Matched == 0 && backlog {
+	if res.Matched == 0 && tooSmall {
+		res.Reason = packet.ReasonPacketTooLarge
+	} else if res.Matched == 0 && backlog {
 		res.Reason = packet.ReasonConsumerBacklog
 	}
 	return res
 }
 
-// overInflightLimit 报告全局在途消息是否已达上限。
-func (c *Core) overInflightLimit() bool {
-	return c.options.MaxInflightBytes > 0 && c.inflightBytes.Load() >= c.options.MaxInflightBytes
+// overInflightLimit 报告加入 size 字节后是否会超过全局在途消息上限。
+func (c *Core) overInflightLimit(size int64) bool {
+	limit := c.options.MaxInflightBytes
+	return limit > 0 && c.inflightBytes.Load()+size > limit
 }
 
 func (c *Core) rejectOverInflight(cl *Client, res packet.PushResult) packet.PushResult {
@@ -237,7 +278,7 @@ func (cn *conn) handlePush(p *packet.PushPacket) error {
 		return cn.rejectPush(p, packet.ReasonRateLimited)
 	}
 
-	res := cn.core.pushRecord(cl, &p.Record, false)
+	res := cn.core.pushRecord(cl, &p.Record, p.Properties, false)
 
 	// WantAck=0：客户端不等待结果，不回包以节省一个 RTT 与带宽。
 	if p.Flags&packet.PushFlagWantAck == 0 {
@@ -245,6 +286,8 @@ func (cn *conn) handlePush(p *packet.PushPacket) error {
 	}
 	resp := packet.NewPushOkPacket(p.RequestID)
 	resp.PushResult = res
+	resp.Properties = pushErrorProperties(res.Reason)
+	cn.fitPushOkProperties(resp)
 	return cn.writePacket(resp)
 }
 
@@ -258,7 +301,28 @@ func (cn *conn) rejectPush(p *packet.PushPacket, reason packet.ReasonCode) error
 	resp := packet.NewPushOkPacket(p.RequestID)
 	resp.Reason = reason
 	resp.ID = packet.NewPacketID()
+	resp.Properties = pushErrorProperties(reason)
+	cn.fitPushOkProperties(resp)
 	return cn.writePacket(resp)
+}
+
+// fitPushOkProperties 在客户端接收上限过小时省略可选错误细节，
+// 避免 PUSH_OK 本身超限导致连接被关闭。
+func (cn *conn) fitPushOkProperties(resp *packet.PushOkPacket) {
+	if len(resp.Properties) == 0 || cn.maxPacketSize == 0 {
+		return
+	}
+	if resp.Size() > int(cn.maxPacketSize) {
+		resp.Properties = nil
+	}
+}
+
+// pushErrorProperties 返回错误原因的可读细节；成功时为空。
+func pushErrorProperties(reason packet.ReasonCode) map[string]string {
+	if !reason.IsError() {
+		return nil
+	}
+	return map[string]string{packet.PropertyError: reason.String()}
 }
 
 // hasMessagePush 报告是否注册了 OnPush 钩子。

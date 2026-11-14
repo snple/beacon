@@ -6,23 +6,23 @@ import (
 	"testing"
 
 	"github.com/snple/beacon/client"
+	"github.com/snple/beacon/core"
 	"github.com/snple/beacon/packet"
 )
 
-// 验证「delivered 非空时不返回新消息」这个硬门。
-func TestStopAndWaitGate(t *testing.T) {
-	_, addr := startCore(t, nil)
+// ReceiveMaximum=1 时窗口满，未确认前只能重发同一条消息。
+func TestReceiveMaximumGatesNewDelivery(t *testing.T) {
+	_, addr := startCore(t, core.NewCoreOptions().WithReceiveMaximum(1))
 	sub := newTestClient(t, addr, "sub-1", "ch/a")
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
 	for _, v := range []string{"m1", "m2", "m3"} {
-		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}); err != nil {
+		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// 第一次拉取 m1
 	first, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +31,6 @@ func TestStopAndWaitGate(t *testing.T) {
 		t.Fatalf("first pull: %+v", first)
 	}
 
-	// 未确认时再拉：只重发 m1，不应出现 m2
 	second, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +39,6 @@ func TestStopAndWaitGate(t *testing.T) {
 		t.Fatalf("expected duplicate of m1, got %+v", second)
 	}
 
-	// 确认后才应拿到 m2
 	if _, err := sub.CommitAll(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +48,73 @@ func TestStopAndWaitGate(t *testing.T) {
 	}
 	if third == nil || string(third.Payload) != "m2" || third.Dup {
 		t.Fatalf("third pull should be m2, got %+v", third)
+	}
+}
+
+// 窗口内允许先拉取多条再统一确认。
+func TestReceiveWindowAllowsPipelinedDelivery(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "pipe-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	for _, v := range []string{"m1", "m2"} {
+		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || first == nil || first.Dup {
+		t.Fatalf("first pull: %+v err=%v", first, err)
+	}
+	second, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || second == nil || second.Dup {
+		t.Fatalf("second pull should be fresh: %+v err=%v", second, err)
+	}
+	if first.ID == second.ID {
+		t.Fatal("pipelined pulls must return distinct messages")
+	}
+
+	if n, err := sub.CommitAll(ctx); err != nil {
+		t.Fatal(err)
+	} else if n != 2 {
+		t.Fatalf("committed %d, want 2", n)
+	}
+}
+
+// 批量拉取一次返回多条，并可在一次 COMMIT 中全部确认。
+func TestPullBatchAndCommitBatch(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "batch-1", "ch/a")
+	pub := newTestClient(t, addr, "pub-1")
+	ctx := context.Background()
+
+	for _, v := range []string{"m1", "m2", "m3"} {
+		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msgs, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(msgs))
+	}
+	ids := make([]packet.PacketID, len(msgs))
+	for i, m := range msgs {
+		ids[i] = m.ID
+		if m.Dup {
+			t.Fatalf("batch record %d should not be dup", i)
+		}
+	}
+	if err := sub.CommitBatch(ctx, ids); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := sub.CommitAll(ctx); err != nil || n != 0 {
+		t.Fatalf("CommitAll after CommitBatch: n=%d err=%v", n, err)
 	}
 }
 
@@ -89,7 +154,7 @@ func TestConcurrentPullSerializedByClient(t *testing.T) {
 	ctx := context.Background()
 
 	for _, v := range []string{"1", "2"} {
-		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}); err != nil {
+		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,28 +175,28 @@ func TestConcurrentPullSerializedByClient(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 串行化后第二次拿到的仍是同一条未确认消息（dup）。
+	// 串行化后两次拉取应各拿到一条不同消息，且都不是重复投递。
 	if results[0] == nil || results[1] == nil {
 		t.Fatalf("both pulls should return a message: %+v", results)
 	}
-	if results[0].ID != results[1].ID {
-		t.Fatalf("concurrent pulls should observe the same unacked message")
+	if results[0].ID == results[1].ID {
+		t.Fatalf("serialized pulls should advance: %+v", results)
 	}
-	if results[0].Dup == results[1].Dup {
-		t.Fatalf("exactly one pull should be marked dup: %+v", results)
+	if results[0].Dup || results[1].Dup {
+		t.Fatalf("fresh window should not redeliver: %+v", results)
 	}
 
 	if n, err := sub.CommitAll(ctx); err != nil {
 		t.Fatal(err)
-	} else if n != 1 {
-		t.Fatalf("committed %d, want 1 unique message", n)
+	} else if n != 2 {
+		t.Fatalf("committed %d, want 2 messages", n)
 	}
 
 	next, err := sub.Pull(ctx, client.PullOptions{WaitMs: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next == nil || next.Dup {
-		t.Fatalf("remaining message should be fresh, got %+v", next)
+	if next != nil {
+		t.Fatalf("queue should be drained, got %+v", next)
 	}
 }

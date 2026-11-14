@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Core 是 Beacon v4 的核心：维护每客户端队列、channel 匹配与会话生命周期。
+// Core 是 Beacon v5 的核心：维护每客户端队列、channel 匹配与会话生命周期。
 //
 // 消息只保存一份（*Message），各客户端队列只持有指针与投递 ID，
 // 因此 1→N 分发不复制消息内容，也不落盘。
@@ -77,6 +77,8 @@ type Stats struct {
 	BytesReceived    atomic.Int64
 	BytesSent        atomic.Int64
 	DuplicatesSent   atomic.Int64
+	MessagesNacked   atomic.Int64
+	MessagesExpired  atomic.Int64
 	CommitRequired   atomic.Int64
 	SessionTakeovers atomic.Int64
 	TargetMisses     atomic.Int64
@@ -185,7 +187,7 @@ func (c *Core) Stop() error {
 		notifyWG.Add(1)
 		go func(cn *conn) {
 			defer notifyWG.Done()
-			cn.terminate(packet.ReasonServerShuttingDown, true)
+			cn.terminate(packet.ReasonServerShuttingDown)
 		}(cn)
 	}
 	notifyWG.Wait()
@@ -252,10 +254,12 @@ func (c *Core) expireSessions(now time.Time) {
 
 	c.clientsMu.RLock()
 	var (
+		all     []*Client
 		expired []*Client
 		stale   []*Client
 	)
 	for _, cl := range c.clients {
+		all = append(all, cl)
 		at := cl.expiresAt.Load()
 		if at > 0 && nowMs >= at && cl.currentConn() == nil {
 			expired = append(expired, cl)
@@ -269,13 +273,24 @@ func (c *Core) expireSessions(now time.Time) {
 	}
 	c.clientsMu.RUnlock()
 
+	// 清理所有会话中已过期的消息，避免离线队列长期保留无效数据。
+	for _, cl := range all {
+		if n := cl.mb.dropExpired(nowMs); n > 0 {
+			c.stats.MessagesExpired.Add(int64(n))
+			cl.expired.Add(int64(n))
+			if cl.mb.deliveredLen() == 0 {
+				cl.deliveredSince.Store(0)
+			}
+		}
+	}
+
 	for _, cl := range expired {
 		c.destroySession(cl, packet.ReasonKeepAliveTimeout)
 	}
 	for _, cl := range stale {
 		if cn := cl.currentConn(); cn != nil {
 			c.logger.Debug("uncommitted timeout", zap.String("clientID", cl.ID))
-			cn.terminate(packet.ReasonCommitRequired, true)
+			cn.terminate(packet.ReasonCommitRequired)
 		}
 	}
 }
@@ -301,7 +316,9 @@ func (c *Core) destroySession(cl *Client, reason packet.ReasonCode) {
 		return
 	}
 
-	cl.mb.releaseAll()
+	if n := cl.mb.releaseAll(); n > 0 {
+		c.stats.MessagesDropped.Add(int64(n))
+	}
 	c.logger.Debug("session destroyed",
 		zap.String("clientID", cl.ID),
 		zap.String("reason", reason.String()))
@@ -369,6 +386,8 @@ type StatsSnapshot struct {
 	BytesReceived    int64
 	BytesSent        int64
 	DuplicatesSent   int64
+	MessagesNacked   int64
+	MessagesExpired  int64
 	CommitRequired   int64
 	SessionTakeovers int64
 	TargetMisses     int64
@@ -396,6 +415,8 @@ func (c *Core) GetStats() StatsSnapshot {
 		BytesReceived:    c.stats.BytesReceived.Load(),
 		BytesSent:        c.stats.BytesSent.Load(),
 		DuplicatesSent:   c.stats.DuplicatesSent.Load(),
+		MessagesNacked:   c.stats.MessagesNacked.Load(),
+		MessagesExpired:  c.stats.MessagesExpired.Load(),
 		CommitRequired:   c.stats.CommitRequired.Load(),
 		SessionTakeovers: c.stats.SessionTakeovers.Load(),
 		TargetMisses:     c.stats.TargetMisses.Load(),

@@ -13,7 +13,7 @@ func TestCommitAllRetriesAfterFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Message{Priority: packet.PriorityMedium, client: c}
+	m := &Message{Reliable: true, client: c}
 	m.ID = packet.NewPacketID()
 	c.uncommitted = []*Message{m}
 
@@ -41,13 +41,13 @@ func TestMarkCommittedRemovesEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keep := &Message{Priority: packet.PriorityMedium, client: c}
-	drop := &Message{Priority: packet.PriorityHigh, client: c}
+	keep := &Message{Reliable: true, client: c}
+	drop := &Message{Reliable: true, client: c}
 	keep.ID = packet.NewPacketID()
 	drop.ID = packet.NewPacketID()
 	c.uncommitted = []*Message{keep, drop}
 
-	c.markCommitted(drop.ID)
+	c.markCommittedBatch([]packet.PacketID{drop.ID})
 
 	if len(c.uncommitted) != 1 || c.uncommitted[0] != keep {
 		t.Fatalf("unexpected uncommitted set: %+v", c.uncommitted)

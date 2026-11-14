@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/snple/beacon/packet"
@@ -15,12 +16,16 @@ type ClientOptions struct {
 	// Dialer 自定义连接方式（TCPAddress 会被忽略）
 	Dialer Dialer
 
-	ClientID       string
-	KeepAlive      uint16 // 秒
-	CleanSession   bool   // 建连时要求服务端丢弃该 ClientID 的既有会话
-	MaxPacketSize  uint32
-	ConnectTimeout time.Duration
-	WriteTimeout   time.Duration
+	ClientID     string
+	KeepAlive    uint16 // 秒
+	CleanSession bool   // 建连时要求服务端丢弃该 ClientID 的既有会话
+	// MaxPacketSize 是本端可接收的最大包（CONNECT.MaxPacketSize），
+	// 只限制读取；发送上限由 MaxSendPacketSize / 服务端 CONNACK 决定。
+	MaxPacketSize uint32
+	// MaxSendPacketSize 是发送上限；0 表示采用服务端 CONNACK.Limits.MaxPacketSize。
+	MaxSendPacketSize uint32
+	ConnectTimeout    time.Duration
+	WriteTimeout      time.Duration
 
 	// 重连
 	AutoReconnect bool
@@ -37,6 +42,9 @@ type ClientOptions struct {
 	// 认证
 	AuthMethod string
 	AuthData   []byte
+
+	// Properties 是随 CONNECT 发送给服务端的键值信息，broker 本身不解释。
+	Properties map[string]string
 
 	Logger *zap.Logger
 }
@@ -103,8 +111,13 @@ func (o *ClientOptions) Validate() error {
 	if o.KeepAlive == 0 {
 		return fmt.Errorf("keepAlive must be > 0")
 	}
-	if o.MaxPacketSize < 64 {
-		return fmt.Errorf("maxPacketSize must be >= 64")
+	if o.MaxPacketSize < packet.MinPacketSize || o.MaxPacketSize > packet.MaxPacketSize {
+		return fmt.Errorf("maxPacketSize must be in [%d, %d]", packet.MinPacketSize, packet.MaxPacketSize)
+	}
+	if o.MaxSendPacketSize != 0 &&
+		(o.MaxSendPacketSize < packet.MinPacketSize || o.MaxSendPacketSize > packet.MaxPacketSize) {
+		return fmt.Errorf("maxSendPacketSize must be 0 or in [%d, %d]",
+			packet.MinPacketSize, packet.MaxPacketSize)
 	}
 	return nil
 }
@@ -127,8 +140,29 @@ func (o *ClientOptions) WithCleanSession(clean bool) *ClientOptions {
 	return o
 }
 
-// WithMaxPacketSize 设置最大包大小。
+// WithMaxPacketSize 设置本端可接收的最大包大小（只影响读取）。
 func (o *ClientOptions) WithMaxPacketSize(n uint32) *ClientOptions { o.MaxPacketSize = n; return o }
+
+// WithMaxSendPacketSize 设置发送上限（0 = 采用服务端 CONNACK 的接收上限）。
+func (o *ClientOptions) WithMaxSendPacketSize(n uint32) *ClientOptions {
+	o.MaxSendPacketSize = n
+	return o
+}
+
+// WithProperties 设置随 CONNECT 发送给服务端的键值信息。
+func (o *ClientOptions) WithProperties(props map[string]string) *ClientOptions {
+	o.Properties = maps.Clone(props)
+	return o
+}
+
+// WithProperty 设置一项随 CONNECT 发送的键值信息。
+func (o *ClientOptions) WithProperty(key, value string) *ClientOptions {
+	if o.Properties == nil {
+		o.Properties = make(map[string]string)
+	}
+	o.Properties[key] = value
+	return o
+}
 
 // WithConnectTimeout 设置连接超时。
 func (o *ClientOptions) WithConnectTimeout(d time.Duration) *ClientOptions {

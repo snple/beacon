@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -59,6 +60,14 @@ func TestReasonToError(t *testing.T) {
 	}
 	if err := reasonToError(0x87); err == nil {
 		t.Fatal("not authorized should be an error")
+	}
+	if err := reasonToError(0xA5); !errors.Is(err, ErrExpired) {
+		t.Fatalf("expired: %v", err)
+	}
+	err := reasonToErrorWithDetail(0x87, "channel denied")
+	var se *ServerError
+	if !errors.As(err, &se) || se.Detail != "channel denied" {
+		t.Fatalf("detail not preserved: %#v", err)
 	}
 }
 

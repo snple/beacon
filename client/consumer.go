@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sync/atomic"
 	"time"
 
@@ -17,15 +18,26 @@ type Message struct {
 	Headers  map[string]string
 	Payload  []byte
 	Priority packet.Priority
+	// Reliable 表示该消息需要 COMMIT；与 Priority 独立。
+	Reliable bool
 	// Dup 表示这是服务端重发的消息（此前已投递过但未确认）。
 	Dup bool
+	// ExpiresAt 是消息过期时间（Unix 毫秒）；0 表示永不过期。
+	ExpiresAt int64
+	// PublishedAt 是发布者时间戳（Unix 毫秒）；0 表示未提供。
+	PublishedAt int64
 
 	client *Client
 	acked  atomic.Bool
 }
 
 // NeedsCommit 报告该消息是否需要 COMMIT 确认。
-func (m *Message) NeedsCommit() bool { return m.Priority.RequiresCommit() }
+func (m *Message) NeedsCommit() bool { return m.Reliable }
+
+// Expired 报告消息是否已过期。
+func (m *Message) Expired() bool {
+	return m.ExpiresAt > 0 && m.ExpiresAt <= time.Now().UnixMilli()
+}
 
 // Ack 立即确认单条消息。
 //
@@ -41,16 +53,31 @@ func (m *Message) Ack(ctx context.Context) error {
 	return nil
 }
 
+// Nack 拒绝单条消息：服务端会从 delivered 移除并触发 Nack 钩子（死信处理）。
+func (m *Message) Nack(ctx context.Context, reason packet.ReasonCode) error {
+	if m.acked.Load() {
+		return nil
+	}
+	if err := m.client.Nack(ctx, m.ID, reason); err != nil {
+		return err
+	}
+	m.acked.Store(true)
+	return nil
+}
+
 func newMessage(c *Client, rec *packet.Record) *Message {
 	return &Message{
-		ID:       rec.ID,
-		Channel:  rec.Channel,
-		Source:   rec.Source,
-		Headers:  rec.Headers,
-		Payload:  rec.Payload,
-		Priority: rec.Priority(),
-		Dup:      rec.Dup(),
-		client:   c,
+		ID:          rec.ID,
+		Channel:     rec.Channel,
+		Source:      rec.Source,
+		Headers:     rec.Headers,
+		Payload:     rec.Payload,
+		Priority:    rec.Priority(),
+		Reliable:    rec.Reliable(),
+		Dup:         rec.Dup(),
+		ExpiresAt:   rec.ExpiresAt,
+		PublishedAt: rec.PublishedAt,
+		client:      c,
 	}
 }
 
@@ -62,6 +89,13 @@ type PullOptions struct {
 
 	// Immediate 为 true 时无论 WaitMs 如何都立即返回（非阻塞拉取）。
 	Immediate bool
+
+	// MaxCount 是单次最多拉取的记录数（0 = 1）。
+	MaxCount uint16
+	// MaxBytes 是单次响应中记录编码大小的总和上限（0 = 服务端默认）。
+	MaxBytes uint32
+	// Properties 是随 PULL 发送的可选属性。
+	Properties map[string]string
 }
 
 // effectiveWait 计算本次请求实际使用的长轮询时长。
@@ -78,15 +112,32 @@ func (c *Client) effectiveWait(opts PullOptions) uint32 {
 
 // Pull 拉取一条消息；队列为空且等待超时时返回 (nil, nil)。
 //
-// 语义：服务端优先重发「已投递未确认」的消息；因此客户端应在处理完后
-// 立即调用 Commit（或 Ack），否则会收到重复内容。
+// 语义：服务端在窗口内优先投递新消息，窗口已满时重发「已投递未确认」的
+// 可靠消息；因此客户端应在处理完后立即调用 Commit/Nack（或 Ack）。
 func (c *Client) Pull(ctx context.Context, opts PullOptions) (*Message, error) {
+	opts.MaxCount = 1
+	msgs, err := c.PullBatch(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	return msgs[0], nil
+}
+
+// PullBatch 拉取一批消息；队列为空且等待超时时返回空切片。
+func (c *Client) PullBatch(ctx context.Context, opts PullOptions) ([]*Message, error) {
 	// 同一时刻只允许一个在途 PULL：并发拉取会拿到重复内容，
 	// 且会让本地未确认集合互相覆盖。
 	c.pullMu.Lock()
 	defer c.pullMu.Unlock()
 
 	waitMs := c.effectiveWait(opts)
+	maxCount := opts.MaxCount
+	if maxCount == 0 {
+		maxCount = 1
+	}
 
 	// 长轮询可能在服务端停留 waitMs，客户端等待窗口需要覆盖它。
 	timeout := time.Duration(waitMs)*time.Millisecond + 5*time.Second
@@ -95,6 +146,10 @@ func (c *Client) Pull(ctx context.Context, opts PullOptions) (*Message, error) {
 	const maxRateLimitedRetries = 3
 	for attempt := 0; ; attempt++ {
 		req := packet.NewPullPacket(c.nextRequestID(), waitMs)
+		req.MaxCount = maxCount
+		req.MaxBytes = opts.MaxBytes
+		req.Properties = maps.Clone(opts.Properties)
+
 		resp, err := c.roundTrip(ctx, req, req.RequestID, timeout)
 		if err != nil {
 			return nil, err
@@ -121,31 +176,87 @@ func (c *Client) Pull(ctx context.Context, opts PullOptions) (*Message, error) {
 			return nil, err
 		}
 
-		if !ok.HasRecord() {
+		if len(ok.Records) == 0 {
 			return nil, nil
 		}
-		msg := newMessage(c, &ok.Record)
-		c.trackUncommitted([]*Message{msg})
-		return msg, nil
+		msgs := make([]*Message, 0, len(ok.Records))
+		for i := range ok.Records {
+			msgs = append(msgs, newMessage(c, &ok.Records[i]))
+		}
+		c.trackUncommitted(msgs)
+		return msgs, nil
 	}
 }
 
 // Commit 确认一条已处理的消息 ID。
 func (c *Client) Commit(ctx context.Context, id packet.PacketID) error {
-	req := packet.NewCommitPacket(c.nextRequestID(), id)
-	resp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
-	if err != nil {
+	return c.CommitBatch(ctx, []packet.PacketID{id})
+}
+
+// CommitBatch 批量确认消息。
+func (c *Client) CommitBatch(ctx context.Context, ids []packet.PacketID) error {
+	entries := make([]packet.CommitEntry, len(ids))
+	for i, id := range ids {
+		entries[i] = packet.CommitEntry{ID: id, Action: packet.CommitActionCommit}
+	}
+	if _, err := c.commitEntries(ctx, entries); err != nil {
 		return err
 	}
-	if _, ok := resp.(*packet.CommitOkPacket); !ok {
-		return fmt.Errorf("unexpected response %s", resp.Type())
-	}
-	c.markCommitted(id)
+	c.markCommittedBatch(ids)
 	return nil
 }
 
-// markCommitted 从本地未确认集合中移除成功提交的消息。
-func (c *Client) markCommitted(id packet.PacketID) {
+// NackEntry 是一条 NACK 请求。
+type NackEntry struct {
+	ID     packet.PacketID
+	Reason packet.ReasonCode
+}
+
+// Nack 拒绝一条消息（不再重发，触发服务端 Nack 钩子）。
+func (c *Client) Nack(ctx context.Context, id packet.PacketID, reason packet.ReasonCode) error {
+	return c.NackBatch(ctx, []NackEntry{{ID: id, Reason: reason}})
+}
+
+// NackBatch 批量拒绝消息。
+func (c *Client) NackBatch(ctx context.Context, entries []NackEntry) error {
+	ce := make([]packet.CommitEntry, len(entries))
+	for i, e := range entries {
+		ce[i] = packet.CommitEntry{ID: e.ID, Action: packet.CommitActionNack, Reason: e.Reason}
+	}
+	if _, err := c.commitEntries(ctx, ce); err != nil {
+		return err
+	}
+	ids := make([]packet.PacketID, len(entries))
+	for i, e := range entries {
+		ids[i] = e.ID
+	}
+	c.markCommittedBatch(ids)
+	return nil
+}
+
+func (c *Client) commitEntries(ctx context.Context, entries []packet.CommitEntry) (*packet.CommitOkPacket, error) {
+	req := packet.NewCommitBatchPacket(c.nextRequestID(), entries)
+	resp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	ok, valid := resp.(*packet.CommitOkPacket)
+	if !valid {
+		return nil, fmt.Errorf("unexpected response %s", resp.Type())
+	}
+	return ok, nil
+}
+
+// markCommittedBatch 从本地未确认集合中移除成功提交/拒绝的消息。
+func (c *Client) markCommittedBatch(ids []packet.PacketID) {
+	if len(ids) == 0 {
+		return
+	}
+	done := make(map[packet.PacketID]struct{}, len(ids))
+	for _, id := range ids {
+		done[id] = struct{}{}
+	}
+
 	c.uncommittedMu.Lock()
 	defer c.uncommittedMu.Unlock()
 
@@ -154,7 +265,7 @@ func (c *Client) markCommitted(id packet.PacketID) {
 	}
 	kept := c.uncommitted[:0]
 	for _, m := range c.uncommitted {
-		if m.ID == id {
+		if _, ok := done[m.ID]; ok {
 			m.acked.Store(true)
 			continue
 		}
@@ -192,7 +303,7 @@ func (c *Client) mergeUncommitted(extra []*Message) {
 	c.uncommitted = merged
 }
 
-// CommitAll 逐条确认当前所有需要确认的消息。
+// CommitAll 批量确认当前所有需要确认的消息。
 //
 // 返回实际提交的条数。提交失败时未确认集合保持可重试状态。
 func (c *Client) CommitAll(ctx context.Context) (int, error) {
@@ -201,20 +312,29 @@ func (c *Client) CommitAll(ctx context.Context) (int, error) {
 	c.uncommitted = nil
 	c.uncommittedMu.Unlock()
 
-	n := 0
-	for i, m := range pending {
-		if !m.NeedsCommit() || m.acked.Load() {
-			continue
+	ids := make([]packet.PacketID, 0, len(pending))
+	for _, m := range pending {
+		if m.NeedsCommit() && !m.acked.Load() {
+			ids = append(ids, m.ID)
 		}
-		if err := c.Commit(ctx, m.ID); err != nil {
-			// 提交失败：未处理的条目放回，调用方可以重试。
-			c.mergeUncommitted(pending[i:])
-			return n, err
-		}
-		m.acked.Store(true)
-		n++
 	}
-	return n, nil
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	entries := make([]packet.CommitEntry, len(ids))
+	for i, id := range ids {
+		entries[i] = packet.CommitEntry{ID: id, Action: packet.CommitActionCommit}
+	}
+	if _, err := c.commitEntries(ctx, entries); err != nil {
+		// 提交失败：全部未确认条目放回，调用方可以重试。
+		c.mergeUncommitted(pending)
+		return 0, err
+	}
+	for _, m := range pending {
+		m.acked.Store(true)
+	}
+	return len(ids), nil
 }
 
 // PollMessage 逐条取消息；timeout<=0 表示一直等待。
@@ -292,13 +412,39 @@ func (c *Client) Declare(ctx context.Context, channels ...string) ([]DeclareResu
 // DeclareChannels 全量替换 channel 声明，可逐项指定是否只接收定向投递。
 //
 // 返回的切片只包含被拒绝的项（服务端为压缩响应只回显失败项）。
+// 请求会被记住，并在每次重连后自动重放。
 func (c *Client) DeclareChannels(ctx context.Context, channels ...Channel) ([]DeclareResult, error) {
+	return c.DeclareChannelsWithProperties(ctx, nil, channels...)
+}
+
+// DeclareWithProperties 是 Declare 的属性版本：属性会随 DECLARE 发送并记录，
+// 在每次重连后随声明一起重放。
+func (c *Client) DeclareWithProperties(ctx context.Context, props map[string]string, channels ...string) ([]DeclareResult, error) {
+	decls := make([]Channel, len(channels))
+	for i, ch := range channels {
+		decls[i] = Channel{Filter: ch}
+	}
+	return c.DeclareChannelsWithProperties(ctx, props, decls...)
+}
+
+// DeclareChannelsWithProperties 是 DeclareChannels 的属性版本。
+func (c *Client) DeclareChannelsWithProperties(ctx context.Context, props map[string]string, channels ...Channel) ([]DeclareResult, error) {
+	results, err := c.declareChannels(ctx, channels, props)
+	if err != nil {
+		return nil, err
+	}
+	c.setDesiredChannels(channels, props)
+	return results, nil
+}
+
+func (c *Client) declareChannels(ctx context.Context, channels []Channel, props map[string]string) ([]DeclareResult, error) {
 	decls := make([]packet.ChannelDecl, len(channels))
 	for i, ch := range channels {
 		decls[i] = packet.ChannelDecl{Channel: ch.Filter}
 		decls[i].SetTargetOnly(ch.TargetOnly)
 	}
 	req := packet.NewDeclarePacket(c.nextRequestID(), decls)
+	req.Properties = maps.Clone(props)
 
 	resp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
 	if err != nil {
@@ -315,4 +461,41 @@ func (c *Client) DeclareChannels(ctx context.Context, channels ...Channel) ([]De
 	}
 
 	return out, nil
+}
+
+// setDesiredChannels 记住最近一次声明请求（保持用户意图，失败项也保留，
+// 以便 ACL 恢复后重连时重试）。
+func (c *Client) setDesiredChannels(channels []Channel, props map[string]string) {
+	merged := mergeChannels(channels)
+	c.declMu.Lock()
+	c.desiredChannels = merged
+	c.desiredDeclareProps = maps.Clone(props)
+	c.declMu.Unlock()
+}
+
+func (c *Client) desiredChannelSnapshot() ([]Channel, map[string]string) {
+	c.declMu.Lock()
+	defer c.declMu.Unlock()
+	return append([]Channel(nil), c.desiredChannels...), maps.Clone(c.desiredDeclareProps)
+}
+
+// mergeChannels 按过滤器去重；同一过滤器重复声明时保留更宽松的广播模式，
+// 与服务端的合并规则一致。
+func mergeChannels(channels []Channel) []Channel {
+	if len(channels) == 0 {
+		return nil
+	}
+	out := make([]Channel, 0, len(channels))
+	index := make(map[string]int, len(channels))
+	for _, ch := range channels {
+		if pos, ok := index[ch.Filter]; ok {
+			if !ch.TargetOnly {
+				out[pos].TargetOnly = false
+			}
+			continue
+		}
+		index[ch.Filter] = len(out)
+		out = append(out, ch)
+	}
+	return out
 }

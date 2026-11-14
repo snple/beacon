@@ -21,11 +21,7 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 	opts := c.options
 
 	resp := packet.NewDeclareRespPacket(p.RequestID)
-	resp.Limits = packet.Limits{
-		MaxPacketSize:        opts.MaxPacketSize,
-		MaxWaitMs:            opts.MaxWaitMs,
-		MaxChannelsPerClient: uint16(min(opts.MaxChannelsPerClient, 65535)),
-	}
+	resp.Limits = c.limits()
 	pending, _, _ := cl.mb.depth()
 	resp.Pending = pending
 
@@ -41,6 +37,9 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 	identity := cl.getIdentity()
 	accepted := make([]packet.ChannelDecl, 0, len(p.Channels))
 	index := make(map[string]int, len(p.Channels))
+	// acceptedCount 统计「被接受的请求项数」，重复项按接受计，
+	// 使客户端可以用 Accepted+len(Results) 校验请求项是否全部有结果。
+	acceptedCount := 0
 
 	fail := func(channel string, reason packet.ReasonCode) {
 		resp.Results = append(resp.Results, packet.ChannelResult{
@@ -53,8 +52,16 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 		if pos, dup := index[d.Channel]; dup {
 			// 同一过滤器重复声明等同已接受，不占用响应体积；
 			// 模式取更宽松的广播可达（它覆盖只定向投递，见 docs）。
-			if pos >= 0 && d.Flags.Unknown() == 0 && !d.TargetOnly() {
-				accepted[pos].SetTargetOnly(false)
+			// 带未知标志位的重复项仍视为非法声明。
+			if d.Flags.Unknown() != 0 {
+				fail(d.Channel, packet.ReasonChannelFilterInvalid)
+				continue
+			}
+			if pos >= 0 {
+				if !d.TargetOnly() {
+					accepted[pos].SetTargetOnly(false)
+				}
+				acceptedCount++
 			}
 			continue
 		}
@@ -63,7 +70,7 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 		case d.Flags.Unknown() != 0:
 			index[d.Channel] = -1
 			fail(d.Channel, packet.ReasonChannelFilterInvalid)
-		case !packet.ValidateChannelFilterLimit(d.Channel, opts.MaxChannelLength):
+		case !packet.ValidateClientChannelFilter(d.Channel, opts.MaxChannelLength):
 			index[d.Channel] = -1
 			fail(d.Channel, packet.ReasonChannelFilterInvalid)
 		case !c.canRead(identity, d.Channel):
@@ -72,15 +79,16 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 		default:
 			index[d.Channel] = len(accepted)
 			accepted = append(accepted, d)
+			acceptedCount++
 		}
 	}
 
 	cl.replaceChannels(accepted)
-	resp.Accepted = uint16(len(accepted))
+	resp.Accepted = uint16(acceptedCount)
 
 	c.logger.Debug("channels declared",
 		zap.String("clientID", cl.ID),
-		zap.Int("accepted", len(accepted)),
+		zap.Int("accepted", acceptedCount),
 		zap.Int("requested", len(p.Channels)))
 
 	resp.Results = trimDeclareResults(resp.Results, cn.responseBudget())

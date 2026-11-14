@@ -9,11 +9,16 @@ import (
 
 func newTestMailbox(cap int) (*mailbox, *atomic.Int64) {
 	var released atomic.Int64
-	mb := newMailbox(cap, func(*Message) { released.Add(1) })
+	mb := newMailbox(cap, 0, func(*Message) { released.Add(1) })
 	return mb, &released
 }
 
 func testMsg(t *testing.T, channel string, prio packet.Priority) *Message {
+	t.Helper()
+	return testMsgReliable(t, channel, prio, prio != packet.PriorityLow)
+}
+
+func testMsgReliable(t *testing.T, channel string, prio packet.Priority, reliable bool) *Message {
 	t.Helper()
 	rec := &packet.Record{
 		Channel: channel,
@@ -21,9 +26,14 @@ func testMsg(t *testing.T, channel string, prio packet.Priority) *Message {
 		ID:      packet.NewPacketID(),
 	}
 	rec.SetPriority(prio)
+	rec.SetReliable(reliable)
 	m := newMessage(rec)
 	m.refs.Store(1) // 测试中由调用方直接持有
 	return m
+}
+
+func commitOne(mb *mailbox, id packet.PacketID) (int, []nackedEntry, int) {
+	return mb.commit([]packet.CommitEntry{{ID: id, Action: packet.CommitActionCommit}})
 }
 
 func TestMailboxPriorityOrder(t *testing.T) {
@@ -38,30 +48,32 @@ func TestMailboxPriorityOrder(t *testing.T) {
 	mb.enqueue(high)
 
 	for i, want := range []*Message{high, med, low} {
-		got, ok := mb.takeDelivery()
+		got, ok := mb.takeDelivery(10)
 		if !ok || got.id != want.ID {
 			t.Fatalf("take #%d: got %v ok=%v want %s", i, got.id, ok, want.ID.Hex())
 		}
 		mb.applySent(got)
-		if got.prio.RequiresCommit() {
-			mb.commit(got.id)
+		if got.reliable {
+			if n, _, _ := commitOne(mb, got.id); n != 1 {
+				t.Fatalf("commit #%d = %d", i, n)
+			}
 		}
 	}
 }
 
-func TestMailboxLowDeletedOnSend(t *testing.T) {
+func TestMailboxUnreliableDeletedOnSend(t *testing.T) {
 	mb, released := newTestMailbox(100)
-	m := testMsg(t, "a", packet.PriorityLow)
+	m := testMsgReliable(t, "a", packet.PriorityHigh, false)
 	mb.enqueue(m)
 
-	got, ok := mb.takeDelivery()
+	got, ok := mb.takeDelivery(1)
 	if !ok {
 		t.Fatal("expected pending message")
 	}
 	mb.applySent(got)
 
 	if released.Load() != 1 {
-		t.Fatalf("low priority should be released after send, released=%d", released.Load())
+		t.Fatalf("unreliable message should be released after send, released=%d", released.Load())
 	}
 	pending, delivered, _ := mb.depth()
 	if pending != [3]uint32{} || delivered != 0 {
@@ -74,7 +86,7 @@ func TestMailboxReliableStaysUntilCommit(t *testing.T) {
 	m := testMsg(t, "a", packet.PriorityHigh)
 	mb.enqueue(m)
 
-	got, ok := mb.takeDelivery()
+	got, ok := mb.takeDelivery(1)
 	if !ok {
 		t.Fatal("expected pending message")
 	}
@@ -88,11 +100,39 @@ func TestMailboxReliableStaysUntilCommit(t *testing.T) {
 		t.Fatalf("delivered=%d oldest=%s", delivered, oldest.Hex())
 	}
 
-	if popped := mb.commit(m.ID); popped != 1 {
-		t.Fatalf("popped=%d", popped)
+	if n, _, _ := commitOne(mb, m.ID); n != 1 {
+		t.Fatalf("committed=%d", n)
 	}
 	if released.Load() != 1 {
 		t.Fatal("message should be released after commit")
+	}
+}
+
+func TestMailboxReliabilityIndependentOfPriority(t *testing.T) {
+	mb, released := newTestMailbox(100)
+
+	lowReliable := testMsgReliable(t, "a", packet.PriorityLow, true)
+	highUnreliable := testMsgReliable(t, "a", packet.PriorityHigh, false)
+	mb.enqueue(lowReliable)
+	mb.enqueue(highUnreliable)
+
+	first, ok := mb.takeDelivery(1)
+	if !ok || first.id != highUnreliable.ID || first.reliable {
+		t.Fatalf("high unreliable should go first: %+v", first)
+	}
+	mb.applySent(first)
+
+	second, ok := mb.takeDelivery(1)
+	if !ok || second.id != lowReliable.ID || !second.reliable {
+		t.Fatalf("low reliable should follow: %+v", second)
+	}
+	mb.applySent(second)
+
+	if released.Load() != 1 {
+		t.Fatalf("only unreliable should be released, got %d", released.Load())
+	}
+	if _, delivered, _ := mb.depth(); delivered != 1 {
+		t.Fatalf("delivered=%d, want 1", delivered)
 	}
 }
 
@@ -101,11 +141,11 @@ func TestMailboxCommitUnknownIsNoop(t *testing.T) {
 	m := testMsg(t, "a", packet.PriorityMedium)
 	mb.enqueue(m)
 
-	got, _ := mb.takeDelivery()
+	got, _ := mb.takeDelivery(1)
 	mb.applySent(got)
 
-	if popped := mb.commit(packet.NewPacketID()); popped != 0 {
-		t.Fatalf("unknown commit popped=%d", popped)
+	if n, _, unknown := commitOne(mb, packet.NewPacketID()); n != 0 || unknown != 1 {
+		t.Fatalf("unknown commit: committed=%d unknown=%d", n, unknown)
 	}
 	if released.Load() != 0 {
 		t.Fatal("nothing should be released")
@@ -115,7 +155,28 @@ func TestMailboxCommitUnknownIsNoop(t *testing.T) {
 	}
 }
 
-func TestMailboxDropLowestPriority(t *testing.T) {
+func TestMailboxNackRemovesDelivered(t *testing.T) {
+	mb, _ := newTestMailbox(100)
+	m := testMsg(t, "a", packet.PriorityMedium)
+	mb.enqueue(m)
+	got, _ := mb.takeDelivery(1)
+	mb.applySent(got)
+
+	committed, nacked, unknown := mb.commit([]packet.CommitEntry{{
+		ID:     m.ID,
+		Action: packet.CommitActionNack,
+		Reason: packet.ReasonUnspecifiedError,
+	}})
+	if committed != 0 || len(nacked) != 1 || unknown != 0 || nacked[0].id != m.ID {
+		t.Fatalf("nack mismatch: committed=%d nacked=%v unknown=%d", committed, nacked, unknown)
+	}
+	if _, delivered, _ := mb.depth(); delivered != 0 {
+		t.Fatalf("delivered=%d, want 0", delivered)
+	}
+	mb.onRelease(nacked[0].msg)
+}
+
+func TestMailboxDropLowestValue(t *testing.T) {
 	mb, released := newTestMailbox(2)
 
 	mb.enqueue(testMsg(t, "a", packet.PriorityLow))
@@ -126,7 +187,7 @@ func TestMailboxDropLowestPriority(t *testing.T) {
 		t.Fatalf("expected enqueue with eviction, got enq=%v evicted=%v", enq, evicted)
 	}
 	if released.Load() != 1 {
-		t.Fatalf("low priority message should be evicted, released=%d", released.Load())
+		t.Fatalf("unreliable low-priority message should be evicted, released=%d", released.Load())
 	}
 
 	pending, _, _ := mb.depth()
@@ -135,16 +196,34 @@ func TestMailboxDropLowestPriority(t *testing.T) {
 	}
 }
 
-func TestMailboxDropNewWhenLowerPriority(t *testing.T) {
+func TestMailboxReliabilityBeatsPriorityOnEviction(t *testing.T) {
+	mb, released := newTestMailbox(1)
+	// 队列里是不可靠的 High；新来的是可靠的 Low：应淘汰不可靠消息。
+	mb.enqueue(testMsgReliable(t, "a", packet.PriorityHigh, false))
+
+	reliableLow := testMsgReliable(t, "a", packet.PriorityLow, true)
+	enq, evicted := mb.enqueue(reliableLow)
+	if !enq || !evicted {
+		t.Fatalf("reliable low should evict unreliable high: enq=%v evicted=%v", enq, evicted)
+	}
+	if released.Load() != 1 {
+		t.Fatalf("released=%d, want 1", released.Load())
+	}
+	pending, _, _ := mb.depth()
+	if pending[0] != 1 {
+		t.Fatalf("pending=%v, want reliable low queued", pending)
+	}
+}
+
+func TestMailboxDropNewWhenLowerValue(t *testing.T) {
 	mb, released := newTestMailbox(1)
 	mb.enqueue(testMsg(t, "a", packet.PriorityHigh))
 
 	dropped := testMsg(t, "a", packet.PriorityLow)
 	enq, evicted := mb.enqueue(dropped)
 	if enq || !evicted {
-		t.Fatalf("new low-priority message should be dropped, enq=%v", enq)
+		t.Fatalf("new low-value message should be dropped, enq=%v", enq)
 	}
-	// 被丢弃的新消息由调用方释放（这里手工释放并验证 mailbox 未重复释放）
 	if released.Load() != 0 {
 		t.Fatal("mailbox must not release the dropped new message")
 	}
@@ -155,82 +234,64 @@ func TestMailboxDropNewWhenLowerPriority(t *testing.T) {
 	}
 }
 
-func TestMailboxHigherPriorityUsesFreeSlot(t *testing.T) {
+func TestMailboxWindowControlsNewDelivery(t *testing.T) {
 	mb, _ := newTestMailbox(100)
-	med := testMsg(t, "a", packet.PriorityMedium)
-	mb.enqueue(med)
-
-	got, ok := mb.takeDelivery()
-	if !ok || got.id != med.ID {
-		t.Fatalf("expected medium message, got %v ok=%v", got.id, ok)
-	}
-	mb.applySent(got)
-
-	// 同级和更低优先级不能占用第二个投递位。
-	mb.enqueue(testMsg(t, "a", packet.PriorityLow))
-	mb.enqueue(testMsg(t, "a", packet.PriorityMedium))
-	if got, ok := mb.takeDelivery(); ok {
-		t.Fatalf("same/lower priority should wait for commit, got %s", got.id.Hex())
+	for i := 0; i < 3; i++ {
+		mb.enqueue(testMsg(t, "a", packet.PriorityMedium))
 	}
 
-	// 高优先级可以使用空闲投递位。
-	high := testMsg(t, "a", packet.PriorityHigh)
-	mb.enqueue(high)
-	got, ok = mb.takeDelivery()
-	if !ok || got.id != high.ID {
-		t.Fatalf("high priority should bypass unacked medium, got %v ok=%v", got.id, ok)
+	first, ok := mb.takeDelivery(2)
+	if !ok {
+		t.Fatal("first delivery")
 	}
-	mb.applySent(got)
+	mb.applySent(first)
+	second, ok := mb.takeDelivery(1)
+	if !ok {
+		t.Fatal("second delivery")
+	}
+	mb.applySent(second)
 
+	if _, ok := mb.takeDelivery(0); ok {
+		t.Fatal("window full: no new delivery allowed")
+	}
 	if _, delivered, _ := mb.depth(); delivered != 2 {
 		t.Fatalf("delivered=%d, want 2", delivered)
 	}
-	if _, ok := mb.takeDelivery(); ok {
-		t.Fatal("both delivery slots should be occupied")
-	}
 
-	// 确认 Medium 后 High 仍占一个位；同级 Medium 仍不能进入。
-	if popped := mb.commit(med.ID); popped != 1 {
-		t.Fatalf("popped=%d", popped)
+	if n, _, _ := commitOne(mb, first.id); n != 1 {
+		t.Fatalf("commit=%d", n)
 	}
-	if _, ok := mb.takeDelivery(); ok {
-		t.Fatal("pending medium must still wait while high is unacked")
+	third, ok := mb.takeDelivery(1)
+	if !ok {
+		t.Fatal("window free slot should allow next delivery")
 	}
+	mb.applySent(third)
 }
 
-func TestMailboxDeliveredCursor(t *testing.T) {
+func TestMailboxRedeliver(t *testing.T) {
 	mb, _ := newTestMailbox(100)
-	a := testMsg(t, "a", packet.PriorityMedium)
-	mb.enqueue(a)
-
-	first, _ := mb.takeDelivery()
-	mb.applySent(first)
-
-	b := testMsg(t, "a", packet.PriorityHigh)
-	mb.enqueue(b)
-	second, _ := mb.takeDelivery()
-	mb.applySent(second)
-
-	// served=0：从头取，不应算 repeated
-	got1, next1, repeated1, ok1 := mb.drainDelivered(0)
-	if !ok1 || got1.id != a.ID || next1 != 1 || repeated1 {
-		t.Fatalf("first drain: id=%s next=%d repeated=%v ok=%v", got1.id.Hex(), next1, repeated1, ok1)
+	var ids []packet.PacketID
+	for i := 0; i < 2; i++ {
+		m := testMsg(t, "a", packet.PriorityMedium)
+		ids = append(ids, m.ID)
+		mb.enqueue(m)
+		got, _ := mb.takeDelivery(1)
+		mb.applySent(got)
 	}
-	mb.release(got1)
 
-	// served=1：继续取第二条
-	got2, next2, repeated2, ok2 := mb.drainDelivered(1)
-	if !ok2 || got2.id != b.ID || next2 != 2 || repeated2 {
-		t.Fatalf("second drain: id=%s next=%d repeated=%v ok=%v", got2.id.Hex(), next2, repeated2, ok2)
+	got := mb.redeliver(1)
+	if len(got) != 1 || got[0].id != ids[0] {
+		t.Fatalf("redeliver first: %+v", got)
 	}
-	mb.release(got2)
+	mb.release(got[0])
 
-	// served 已到末尾：从头重发，并标记 repeated
-	got3, next3, repeated3, ok3 := mb.drainDelivered(2)
-	if !ok3 || got3.id != a.ID || next3 != 1 || !repeated3 {
-		t.Fatalf("third drain: id=%s next=%d repeated=%v ok=%v", got3.id.Hex(), next3, repeated3, ok3)
+	all := mb.redeliver(10)
+	if len(all) != 2 || all[0].id != ids[0] || all[1].id != ids[1] {
+		t.Fatalf("redeliver all: %+v", all)
 	}
-	mb.release(got3)
+	for _, t0 := range all {
+		mb.release(t0)
+	}
 }
 
 func TestMailboxRestore(t *testing.T) {
@@ -240,11 +301,10 @@ func TestMailboxRestore(t *testing.T) {
 	mb.enqueue(a)
 	mb.enqueue(b)
 
-	first, ok := mb.takeDelivery()
+	first, ok := mb.takeDelivery(1)
 	if !ok || first.id != a.ID {
 		t.Fatalf("first take: id=%s ok=%v", first.id.Hex(), ok)
 	}
-	// 模拟写失败
 	mb.restore(first)
 
 	pending, delivered, _ := mb.depth()
@@ -252,8 +312,52 @@ func TestMailboxRestore(t *testing.T) {
 		t.Fatalf("restore failed: %v delivered=%d", pending, delivered)
 	}
 
-	again, ok := mb.takeDelivery()
+	again, ok := mb.takeDelivery(1)
 	if !ok || again.id != a.ID {
 		t.Fatalf("restore order violated: id=%s ok=%v", again.id.Hex(), ok)
+	}
+}
+
+func TestMailboxByteCapDropsNewMessage(t *testing.T) {
+	var released atomic.Int64
+	mb := newMailbox(100, 300, func(*Message) { released.Add(1) })
+
+	a := testMsg(t, "a", packet.PriorityMedium)
+	if enqueued, evicted := mb.enqueue(a); !enqueued || evicted {
+		t.Fatalf("first message should fit: enqueued=%v evicted=%v", enqueued, evicted)
+	}
+
+	b := testMsg(t, "a", packet.PriorityMedium)
+	if enqueued, _ := mb.enqueue(b); enqueued {
+		t.Fatal("second message should exceed the byte cap")
+	}
+
+	got, ok := mb.takeDelivery(1)
+	if !ok || got.id != a.ID {
+		t.Fatalf("original message should remain queued: id=%s ok=%v", got.id.Hex(), ok)
+	}
+	if released.Load() != 0 {
+		t.Fatalf("no message should have been released, got %d", released.Load())
+	}
+}
+
+func TestMailboxClosedRejectsEnqueue(t *testing.T) {
+	mb, released := newTestMailbox(10)
+
+	a := testMsg(t, "a", packet.PriorityMedium)
+	mb.enqueue(a)
+	if n := mb.releaseAll(); n != 1 {
+		t.Fatalf("releaseAll = %d, want 1", n)
+	}
+	if released.Load() != 1 {
+		t.Fatalf("released = %d, want 1", released.Load())
+	}
+
+	b := testMsg(t, "a", packet.PriorityMedium)
+	if enqueued, evicted := mb.enqueue(b); enqueued || evicted {
+		t.Fatalf("closed mailbox must reject enqueue: enqueued=%v evicted=%v", enqueued, evicted)
+	}
+	if !b.release() {
+		t.Fatal("test message should be fully released")
 	}
 }
