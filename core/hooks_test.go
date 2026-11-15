@@ -10,9 +10,9 @@ import (
 func TestHookPanicRecovered(t *testing.T) {
 	push := &Hooks{
 		Logger: zap.NewNop(),
-		Message: MessageHandlerFunc{PushFn: func(*PushContext) error {
+		Push: PushHandlerFunc(func(*PushContext) error {
 			panic("boom")
-		}},
+		}),
 	}
 	if err := push.callOnPush(&PushContext{}); err == nil {
 		t.Fatal("expected error from panicking OnPush")
@@ -20,9 +20,9 @@ func TestHookPanicRecovered(t *testing.T) {
 
 	deliver := &Hooks{
 		Logger: zap.NewNop(),
-		Message: MessageHandlerFunc{DeliverFn: func(*DeliverContext) bool {
+		Deliver: DeliverHandlerFunc(func(*DeliverContext) bool {
 			panic("boom")
-		}},
+		}),
 	}
 	if deliver.callOnDeliver(&DeliverContext{}) {
 		t.Fatal("panicking OnDeliver should reject the message")

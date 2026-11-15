@@ -98,15 +98,25 @@ func (c *Core) handleConn(nc net.Conn) {
 
 		cl := cn.client
 		if cl != nil {
+			// registered 在 CONNACK 写出成功、OnConnect 即将触发前设置：
+			// 从未完成握手的连接（例如在 CONNACK 前就被接管）不应产生
+			// 一条没有对应 OnConnect 的断开事件。
+			wasConnected := cn.registered.Load()
 			c.detachConn(cl, cn)
+			if !wasConnected {
+				return
+			}
 			dcErr := serveErr
 			if errors.Is(dcErr, io.EOF) {
 				dcErr = nil
 			}
-			c.options.Hooks.callOnDisconnect(&DisconnectContext{
-				ClientID: cl.ID,
-				Reason:   reason,
-				Err:      dcErr,
+			c.hooks.callOnDisconnect(&DisconnectContext{
+				ClientID:   cl.ID,
+				SessionID:  cn.sessionID,
+				RemoteAddr: cn.remoteAddr,
+				Reason:     reason,
+				Err:        dcErr,
+				Identity:   cn.identity,
 			})
 		}
 	}()
@@ -168,22 +178,33 @@ func (c *Core) handleConn(nc net.Conn) {
 	// 认证（单轮）
 	var identity *Identity
 	authCtx := &AuthContext{
-		ClientID:   clientID,
-		RemoteAddr: cn.remoteAddr,
-		Method:     connect.AuthMethod,
-		Data:       connect.AuthData,
-		Properties: maps.Clone(connect.Properties),
+		ClientID:        clientID,
+		RemoteAddr:      cn.remoteAddr,
+		ProtocolVersion: connect.Version,
+		CleanSession:    connect.CleanSession(),
+		KeepAlive:       connect.KeepAlive,
+		MaxPacketSize:   connect.MaxPacketSize,
+		AuthMethod:      connect.AuthMethod,
+		AuthData:        connect.AuthData,
+		Properties:      maps.Clone(connect.Properties),
 	}
-	if err := c.options.Hooks.callAuth(authCtx); err != nil {
+	if err := c.hooks.callAuth(authCtx); err != nil {
 		reason := packet.ReasonNotAuthorized
 		var ae *AuthError
-		if errors.As(err, &ae) && ae.Reason != 0 {
+		if errors.As(err, &ae) && ae.Reason.IsError() {
 			reason = ae.Reason
 		}
 		c.rejectConn(nc, reason, "authentication failed")
 		return
 	}
 	identity = authCtx.Identity
+	if identity == nil && c.hooks.Auth != nil {
+		// 认证通过但没有身份：按“已认证、无任何 channel 权限”处理。
+		// 这几乎总是认证器的实现疏漏，显式提示一次。
+		c.logger.Warn("auth hook returned nil identity; channel access is denied",
+			zap.String("clientID", clientID),
+			zap.String("remote", cn.remoteAddr))
+	}
 
 	// 合并认证钩子返回的属性，并确认最终 CONNACK 仍能放进客户端声明的上限。
 	properties := maps.Clone(c.options.ServerProperties)
@@ -266,10 +287,13 @@ func (c *Core) handleConn(nc net.Conn) {
 	cn.registered.Store(true)
 	c.stats.ClientsConnected.Add(1)
 
-	c.options.Hooks.callOnConnect(&ConnectContext{
+	c.hooks.callOnConnect(&ConnectContext{
 		ClientID:       clientID,
+		SessionID:      cn.sessionID,
 		RemoteAddr:     cn.remoteAddr,
 		SessionPresent: sessionPresent,
+		CleanSession:   connect.CleanSession(),
+		Identity:       cn.identity,
 		Properties:     maps.Clone(connect.Properties),
 	})
 
@@ -364,6 +388,12 @@ func (c *Core) attachSession(
 	if connect.CleanSession() && existing != nil {
 		cl.reset()
 	}
+
+	// 快照本次连接拿到的租约与身份，供 OnConnect/OnDisconnect 使用：
+	// 会话被接管或 CleanSession 重置后，cl.sessionID 与 cl.identity 会变化，
+	// 但历史连接的事件仍应带上它自己的那份。
+	cn.sessionID = cl.sessionID.Load()
+	cn.identity = cl.getIdentity()
 
 	// 恢复会话时按本次认证得到的身份重新校验保留的声明：
 	// 上次连接允许的过滤器可能超出本次身份的授权范围。

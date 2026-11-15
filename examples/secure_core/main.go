@@ -23,7 +23,7 @@ func (a *staticAuth) Authenticate(ctx *core.AuthContext) error {
 	if !ok {
 		return &core.AuthError{Reason: packet.ReasonNotAuthorized}
 	}
-	if string(ctx.Data) != want {
+	if string(ctx.AuthData) != want {
 		return &core.AuthError{Reason: packet.ReasonBadAuthMethodOrAuthData}
 	}
 	ctx.Identity = &core.Identity{

@@ -19,6 +19,10 @@ import (
 type Core struct {
 	options *CoreOptions
 	logger  *zap.Logger
+	// hooks 是创建时对 options.Hooks 的浅拷贝，避免运行期替换钩子字段
+	// 造成数据竞争。
+	hooks     Hooks
+	hookStats hookStats
 
 	// 客户端会话（在线 + 离线保留）
 	clients   map[string]*Client
@@ -100,6 +104,7 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 	c := &Core{
 		options:        opts,
 		logger:         opts.Logger,
+		hooks:          *opts.Hooks,
 		clients:        make(map[string]*Client),
 		matcher:        newMatcher(),
 		handshakeConns: make(map[net.Conn]struct{}),
@@ -112,6 +117,8 @@ func NewWithOptions(opts *CoreOptions) (*Core, error) {
 	if opts.MaxHandshakeConnections > 0 {
 		c.handshakeSlots = make(chan struct{}, opts.MaxHandshakeConnections)
 	}
+	// 钩子统计由 Core 持有，Hooks 里只保留指针。
+	c.hooks.stats = &c.hookStats
 	if opts.ConnectionRateLimit > 0 {
 		c.connLimiter = newTokenBucket(opts.ConnectionRateLimit, opts.ConnectionRateBurst)
 	}
@@ -316,12 +323,21 @@ func (c *Core) destroySession(cl *Client, reason packet.ReasonCode) {
 		return
 	}
 
-	if n := cl.mb.releaseAll(); n > 0 {
-		c.stats.MessagesDropped.Add(int64(n))
+	dropped := cl.mb.releaseAll()
+	if dropped > 0 {
+		c.stats.MessagesDropped.Add(int64(dropped))
 	}
 	c.logger.Debug("session destroyed",
 		zap.String("clientID", cl.ID),
 		zap.String("reason", reason.String()))
+
+	c.hooks.callOnSessionEnd(&SessionEndContext{
+		ClientID:        cl.ID,
+		SessionID:       cl.sessionID.Load(),
+		Identity:        cl.getIdentity(),
+		Reason:          reason,
+		MessagesDropped: dropped,
+	})
 }
 
 // canRead 校验某身份是否可以声明该过滤器。
@@ -369,7 +385,15 @@ func (c *Core) canTarget(id *Identity) bool {
 
 // authEnabled 报告是否配置了认证器（未配置时不做 ACL 校验）。
 func (c *Core) authEnabled() bool {
-	return c.options.Hooks != nil && c.options.Hooks.Auth != nil
+	return c.hooks.Auth != nil
+}
+
+// HookStat 是单个钩子的调用统计。
+type HookStat struct {
+	// Calls 是钩子被调用的次数。
+	Calls int64
+	// Panics 是调用中发生 panic 的次数（已捕获并记录）。
+	Panics int64
 }
 
 // StatsSnapshot 是 GetStats 的返回快照。
@@ -394,6 +418,8 @@ type StatsSnapshot struct {
 	InFlightMessages int64
 	InFlightBytes    int64
 	WildcardFilters  int
+	// Hooks 是各钩子的调用/panic 次数，键为钩子名（auth/push/deliver/...）。
+	Hooks map[string]HookStat
 }
 
 // GetStats 返回统计快照。
@@ -401,6 +427,14 @@ func (c *Core) GetStats() StatsSnapshot {
 	c.clientsMu.RLock()
 	sessions := int64(len(c.clients))
 	c.clientsMu.RUnlock()
+
+	hooks := make(map[string]HookStat, hookKindCount)
+	for k := hookKind(0); k < hookKindCount; k++ {
+		hooks[hookKindNames[k]] = HookStat{
+			Calls:  c.hookStats.calls[k].Load(),
+			Panics: c.hookStats.panics[k].Load(),
+		}
+	}
 
 	return StatsSnapshot{
 		StartedAt:        c.startedAt,
@@ -423,5 +457,6 @@ func (c *Core) GetStats() StatsSnapshot {
 		InFlightMessages: c.inflightMsgs.Load(),
 		InFlightBytes:    c.inflightBytes.Load(),
 		WildcardFilters:  c.matcher.wildcardCount(),
+		Hooks:            hooks,
 	}
 }

@@ -126,8 +126,22 @@ func (c *Client) Pull(ctx context.Context, opts PullOptions) (*Message, error) {
 	return msgs[0], nil
 }
 
+// PullResult 是 PULL_OK 的完整结果。
+type PullResult struct {
+	// Messages 是本批消息；队列为空时为空。
+	Messages []*Message
+	// Properties 是服务端随 PULL_OK 返回的属性。
+	Properties map[string]string
+}
+
 // PullBatch 拉取一批消息；队列为空且等待超时时返回空切片。
 func (c *Client) PullBatch(ctx context.Context, opts PullOptions) ([]*Message, error) {
+	res, err := c.PullBatchResult(ctx, opts)
+	return res.Messages, err
+}
+
+// PullBatchResult 与 PullBatch 相同，但额外返回 PULL_OK 的属性。
+func (c *Client) PullBatchResult(ctx context.Context, opts PullOptions) (PullResult, error) {
 	// 同一时刻只允许一个在途 PULL：并发拉取会拿到重复内容，
 	// 且会让本地未确认集合互相覆盖。
 	c.pullMu.Lock()
@@ -152,39 +166,41 @@ func (c *Client) PullBatch(ctx context.Context, opts PullOptions) ([]*Message, e
 
 		resp, err := c.roundTrip(ctx, req, req.RequestID, timeout)
 		if err != nil {
-			return nil, err
+			return PullResult{}, err
 		}
 
 		ok, valid := resp.(*packet.PullOkPacket)
 		if !valid {
-			return nil, ErrNotConnected
+			return PullResult{}, ErrNotConnected
 		}
 
 		if ok.Reason == packet.ReasonRateLimited {
 			if attempt >= maxRateLimitedRetries {
-				return nil, ErrRateLimited
+				return PullResult{}, ErrRateLimited
 			}
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return PullResult{}, ctx.Err()
 			case <-time.After(time.Second):
 				continue
 			}
 		}
 
 		if err := reasonToError(ok.Reason); err != nil {
-			return nil, err
+			return PullResult{}, err
 		}
 
+		result := PullResult{Properties: maps.Clone(ok.Properties)}
 		if len(ok.Records) == 0 {
-			return nil, nil
+			return result, nil
 		}
 		msgs := make([]*Message, 0, len(ok.Records))
 		for i := range ok.Records {
 			msgs = append(msgs, newMessage(c, &ok.Records[i]))
 		}
 		c.trackUncommitted(msgs)
-		return msgs, nil
+		result.Messages = msgs
+		return result, nil
 	}
 }
 
@@ -429,15 +445,36 @@ func (c *Client) DeclareWithProperties(ctx context.Context, props map[string]str
 
 // DeclareChannelsWithProperties 是 DeclareChannels 的属性版本。
 func (c *Client) DeclareChannelsWithProperties(ctx context.Context, props map[string]string, channels ...Channel) ([]DeclareResult, error) {
-	results, err := c.declareChannels(ctx, channels, props)
+	resp, err := c.DeclareChannelsResponse(ctx, props, channels...)
 	if err != nil {
 		return nil, err
 	}
-	c.setDesiredChannels(channels, props)
-	return results, nil
+	return resp.Results, nil
 }
 
-func (c *Client) declareChannels(ctx context.Context, channels []Channel, props map[string]string) ([]DeclareResult, error) {
+// DeclareResponse 是 DECLARE_RESP 的完整结果。
+type DeclareResponse struct {
+	// Results 只包含被拒绝的项。
+	Results []DeclareResult
+	// Accepted 是被接受的项数。
+	Accepted uint16
+	// Pending 是 Low / Medium / High 三个优先级的未投递积压。
+	Pending [3]uint32
+	// Properties 是服务端随 DECLARE_RESP 返回的属性。
+	Properties map[string]string
+}
+
+// DeclareChannelsResponse 与 DeclareChannelsWithProperties 相同，但返回完整响应。
+func (c *Client) DeclareChannelsResponse(ctx context.Context, props map[string]string, channels ...Channel) (DeclareResponse, error) {
+	resp, err := c.declareChannels(ctx, channels, props)
+	if err != nil {
+		return DeclareResponse{}, err
+	}
+	c.setDesiredChannels(channels, props)
+	return resp, nil
+}
+
+func (c *Client) declareChannels(ctx context.Context, channels []Channel, props map[string]string) (DeclareResponse, error) {
 	decls := make([]packet.ChannelDecl, len(channels))
 	for i, ch := range channels {
 		decls[i] = packet.ChannelDecl{Channel: ch.Filter}
@@ -446,13 +483,13 @@ func (c *Client) declareChannels(ctx context.Context, channels []Channel, props 
 	req := packet.NewDeclarePacket(c.nextRequestID(), decls)
 	req.Properties = maps.Clone(props)
 
-	resp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
+	packetResp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
 	if err != nil {
-		return nil, err
+		return DeclareResponse{}, err
 	}
-	ok, valid := resp.(*packet.DeclareRespPacket)
+	ok, valid := packetResp.(*packet.DeclareRespPacket)
 	if !valid {
-		return nil, ErrNotConnected
+		return DeclareResponse{}, ErrNotConnected
 	}
 
 	out := make([]DeclareResult, len(ok.Results))
@@ -460,7 +497,12 @@ func (c *Client) declareChannels(ctx context.Context, channels []Channel, props 
 		out[i] = DeclareResult{Channel: r.Channel, Reason: r.Reason}
 	}
 
-	return out, nil
+	return DeclareResponse{
+		Results:    out,
+		Accepted:   ok.Accepted,
+		Pending:    ok.Pending,
+		Properties: maps.Clone(ok.Properties),
+	}, nil
 }
 
 // setDesiredChannels 记住最近一次声明请求（保持用户意图，失败项也保留，

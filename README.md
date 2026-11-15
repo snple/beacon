@@ -112,7 +112,7 @@ if err := c.ConnectContext(ctx); err != nil {
 }
 defer c.Close()
 
-// 服务端可通过 WithServerProperties / AuthContext.ResponseProperties 返回信息
+// 服务端可通过 WithServerProperties / AuthContext.ResponseProperties 在 CONNACK 中返回信息
 region := c.ServerProperties()["region"]
 // 握手时下发的限制，客户端可直接按此裁剪请求
 limits := c.ServerLimits()
@@ -184,7 +184,8 @@ SDK 层的默认值不同——为了让朴素循环不会空转：
 | `PollMessage(ctx, timeout)` | 内部逐条长轮询，直到取到消息或超时 |
 
 同一连接同一时刻只允许一个在途 `PULL`，第二个会收到 `PULL_OK(RateLimited)`；
-SDK 已在 `Pull` 内部串行化。
+SDK 已在 `Pull` 内部串行化。需要读取服务端随 `PULL_OK` 返回的属性（游标、限流提示等）
+时使用 `PullBatchResult`，它返回 `Messages` 与 `Properties`。
 
 ### 窗口与确认
 
@@ -258,6 +259,9 @@ client.NewClientOptions().
 `TargetOnly` 是**逐项生效**的：同一客户端可以同时声明 `jobs/**`（只定向投递）
 与 `jobs/public`（广播可达），广播只会命中后者。同一过滤器重复声明时取更宽松的
 模式（只要有一次广播可达，就参与广播匹配）。
+
+需要完整声明结果（`Accepted` / `Pending` / `DECLARE_RESP.Properties`）时使用
+`DeclareChannelsResponse`。
 
 ### 保留 channel
 
@@ -340,7 +344,7 @@ make check      # fmt + vet + lint + test-race
 | 不可靠消息可能未被投递就被淘汰 | 尽力而为的定义 |
 | 队列满时仍会丢可靠消息 | 单队列容量上限的必然结果 |
 | 生产者重试可能产生重复 | 发送后未收到 `PUSH_OK` 就重试会生成新消息；需要业务键 + 消费端幂等 |
-| 无遗嘱消息 | 服务端不代发；可用服务端 `Hooks.OnDisconnect` 或客户端断线事件自行发布 |
+| 无遗嘱消息 | 服务端不代发；可用服务端 `Hooks.Disconnect` 或客户端断线事件自行发布 |
 | TTL 使用发布者时钟 | 设备与服务端时钟偏差过大会导致提前/延后过期，需要 NTP 或服务端校正 |
 | 重启丢全部队列 | 纯内存 |
 | `DECLARE` 不能减轻积压 | 只影响未来匹配 |

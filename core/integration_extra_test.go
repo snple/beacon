@@ -464,11 +464,9 @@ func TestHighPriorityBypassesUnackedMedium(t *testing.T) {
 
 func TestOnDeliverRejectsMessage(t *testing.T) {
 	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
-		Message: core.MessageHandlerFunc{
-			DeliverFn: func(ctx *core.DeliverContext) bool {
-				return ctx.Channel != "ch/blocked"
-			},
-		},
+		Deliver: core.DeliverHandlerFunc(func(ctx *core.DeliverContext) bool {
+			return ctx.Channel != "ch/blocked"
+		}),
 	})
 	b, addr := startCore(t, opts)
 	sub := newTestClient(t, addr, "sub-1", "ch/**")
@@ -503,6 +501,68 @@ func TestOnDeliverRejectsMessage(t *testing.T) {
 	}
 	if b.GetStats().MessagesDropped != 1 {
 		t.Fatalf("dropped=%d", b.GetStats().MessagesDropped)
+	}
+}
+
+// 投递钩子对未确认消息的重发同样生效：拒绝后必须从 delivered 移除，
+// 否则该消息会永久占用窗口并被反复重发。
+func TestOnDeliverRejectsRedelivery(t *testing.T) {
+	var calls atomic.Int32
+	var sawDup atomic.Bool
+	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
+		Deliver: core.DeliverHandlerFunc(func(ctx *core.DeliverContext) bool {
+			if ctx.Dup {
+				sawDup.Store(true)
+				return false
+			}
+			calls.Add(1)
+			return true
+		}),
+	})
+	b, addr := startCore(t, opts)
+	sub := newTestClient(t, addr, "dup-sub", "dup/**")
+	pub := newTestClient(t, addr, "dup-pub")
+	ctx := context.Background()
+
+	if err := pub.Push(ctx, "dup/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || msg == nil {
+		t.Fatalf("first pull: %+v err=%v", msg, err)
+	}
+	if msg.Dup {
+		t.Fatal("first delivery must not be marked dup")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("deliver hook calls = %d, want 1", got)
+	}
+
+	// 故意不确认：再次拉取会重发，钩子拒绝后消息应被丢弃。
+	again, err := sub.Pull(ctx, client.PullOptions{WaitMs: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != nil {
+		t.Fatalf("rejected redelivery should be dropped, got %+v", again)
+	}
+	if !sawDup.Load() {
+		t.Fatal("deliver hook should observe the redelivery")
+	}
+	// 已被丢弃的消息在服务端是 unknown；客户端提交必须幂等成功。
+	if _, err := sub.CommitAll(ctx); err != nil {
+		t.Fatalf("commit after hook drop: %v", err)
+	}
+	if got := b.GetStats().MessagesDropped; got != 1 {
+		t.Fatalf("dropped=%d, want 1", got)
+	}
+	// 窗口已释放：后续消息可以继续投递。
+	if err := pub.Push(ctx, "dup/a", []byte("w"), client.PushOptions{}.WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+	next, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || next == nil || string(next.Payload) != "w" {
+		t.Fatalf("window should be free after hook drop, got %+v err=%v", next, err)
 	}
 }
 
@@ -1233,11 +1293,9 @@ func TestPullBatchMaxBytes(t *testing.T) {
 // PUSH_OK 的 error 属性提供人类可读的拒绝原因。
 func TestPushErrorDetail(t *testing.T) {
 	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
-		Message: core.MessageHandlerFunc{
-			PushFn: func(ctx *core.PushContext) error {
-				return errors.New("blocked by policy")
-			},
-		},
+		Push: core.PushHandlerFunc(func(ctx *core.PushContext) error {
+			return errors.New("blocked by policy")
+		}),
 	})
 	_, addr := startCore(t, opts)
 	pub := newTestClient(t, addr, "err-pub")
@@ -1246,6 +1304,54 @@ func TestPushErrorDetail(t *testing.T) {
 	var se *client.ServerError
 	if !errors.As(err, &se) || se.Detail == "" {
 		t.Fatalf("expected ServerError with detail, got %v", err)
+	}
+}
+
+// 钩子可以用 HookError 指定拒绝原因码，并只回传显式设置的 Detail。
+func TestPushHookRejectReason(t *testing.T) {
+	var hookID atomic.Value
+	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
+		Push: core.PushHandlerFunc(func(ctx *core.PushContext) error {
+			hookID.Store(ctx.ID)
+			if ctx.FromServer {
+				return &core.HookError{Reason: packet.ReasonQuotaExceeded, Detail: "system quota"}
+			}
+			return nil
+		}),
+	})
+	b, addr := startCore(t, opts)
+	pub := newTestClient(t, addr, "reason-pub")
+	ctx := context.Background()
+
+	res, err := pub.PushWithResult(ctx, "ch/a", []byte("x"), client.PushOptions{})
+	if err != nil {
+		t.Fatalf("client push should be accepted: %v", err)
+	}
+	if id, _ := hookID.Load().(packet.PacketID); id != res.ID {
+		t.Fatalf("PushContext.ID = %v, want %v", id, res.ID)
+	}
+
+	// 服务端推送同样经过钩子，System 标记发布者不是客户端。
+	sysRes := b.Push("ch/a", []byte("y"), core.PushOptions{})
+	if sysRes.Reason != packet.ReasonQuotaExceeded {
+		t.Fatalf("system push should be rejected by hook: %+v", sysRes)
+	}
+
+	// 普通 error 不泄露内部信息：Detail 只回落到原因码文本。
+	opts = core.NewCoreOptions().WithHooks(&core.Hooks{
+		Push: core.PushHandlerFunc(func(*core.PushContext) error {
+			return errors.New("internal secret")
+		}),
+	})
+	_, addr = startCore(t, opts)
+	pub = newTestClient(t, addr, "reason-pub-2")
+	_, err = pub.PushWithResult(ctx, "ch/a", []byte("x"), client.PushOptions{})
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Reason != packet.ReasonNotAuthorized {
+		t.Fatalf("plain hook error should map to NotAuthorized, got %v", err)
+	}
+	if strings.Contains(se.Detail, "internal secret") {
+		t.Fatalf("internal error must not be exposed: %q", se.Detail)
 	}
 }
 
@@ -1454,9 +1560,7 @@ func TestConnectPropertiesExchange(t *testing.T) {
 			ctx.ResponseProperties = map[string]string{"session": "ok"}
 			return nil
 		}),
-		Connection: core.ConnectionHandlerFunc{
-			ConnectFn: func(ctx *core.ConnectContext) { connectProps <- ctx.Properties },
-		},
+		Connect: core.ConnectHandlerFunc(func(ctx *core.ConnectContext) { connectProps <- ctx.Properties }),
 	}
 	_, addr := startCore(t, core.NewCoreOptions().
 		WithServerProperties(map[string]string{"region": "cn"}).
@@ -1481,6 +1585,321 @@ func TestConnectPropertiesExchange(t *testing.T) {
 	got := c.ServerProperties()
 	if got["region"] != "cn" || got["session"] != "ok" {
 		t.Fatalf("server properties: %+v", got)
+	}
+}
+
+// OnConnect/OnDisconnect 必须带上身份与会话租约，且二者可互相关联。
+func TestConnectAndDisconnectContext(t *testing.T) {
+	connectCh := make(chan *core.ConnectContext, 1)
+	disconnectCh := make(chan *core.DisconnectContext, 1)
+	hooks := &core.Hooks{
+		Auth: core.AuthHandlerFunc(func(ctx *core.AuthContext) error {
+			ctx.Identity = &core.Identity{ID: ctx.ClientID, Name: "dev", ReadChannels: []string{"**"}}
+			return nil
+		}),
+		Connect:    core.ConnectHandlerFunc(func(ctx *core.ConnectContext) { connectCh <- ctx }),
+		Disconnect: core.DisconnectHandlerFunc(func(ctx *core.DisconnectContext) { disconnectCh <- ctx }),
+	}
+	_, addr := startCore(t, core.NewCoreOptions().WithHooks(hooks))
+	c := newTestClient(t, addr, "ctx-1", "a/**")
+
+	var cc *core.ConnectContext
+	select {
+	case cc = <-connectCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("connect hook not called")
+	}
+	if cc.SessionID == 0 || cc.RemoteAddr == "" {
+		t.Fatalf("connect context missing session/remote: %+v", cc)
+	}
+	if cc.Identity == nil || cc.Identity.Name != "dev" {
+		t.Fatalf("connect context missing identity: %+v", cc.Identity)
+	}
+
+	_ = c.Close()
+	var dc *core.DisconnectContext
+	select {
+	case dc = <-disconnectCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("disconnect hook not called")
+	}
+	if dc.SessionID != cc.SessionID {
+		t.Fatalf("disconnect session %d != connect session %d", dc.SessionID, cc.SessionID)
+	}
+	if dc.RemoteAddr != cc.RemoteAddr {
+		t.Fatalf("disconnect remote %q != %q", dc.RemoteAddr, cc.RemoteAddr)
+	}
+	if dc.Identity == nil || dc.Identity.ID != "ctx-1" {
+		t.Fatalf("disconnect context missing identity: %+v", dc.Identity)
+	}
+}
+
+// OnPush 可以改写 Headers/Payload/Priority；改写会作用到所有命中客户端。
+func TestPushHookMutatesMessage(t *testing.T) {
+	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
+		Push: core.PushHandlerFunc(func(ctx *core.PushContext) error {
+			ctx.Payload = append([]byte("hooked:"), ctx.Payload...)
+			ctx.SetHeader("x-injected", "1")
+			ctx.Priority = packet.PriorityHigh
+			return nil
+		}),
+	})
+	_, addr := startCore(t, opts)
+	sub := newTestClient(t, addr, "mut-sub", "mut/**")
+	pub := newTestClient(t, addr, "mut-pub")
+	ctx := context.Background()
+
+	if err := pub.Push(ctx, "mut/a", []byte("v"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || msg == nil {
+		t.Fatalf("pull: %+v err=%v", msg, err)
+	}
+	if string(msg.Payload) != "hooked:v" {
+		t.Fatalf("payload = %q", msg.Payload)
+	}
+	if msg.Headers["x-injected"] != "1" {
+		t.Fatalf("headers = %+v", msg.Headers)
+	}
+	if msg.Priority != packet.PriorityHigh {
+		t.Fatalf("priority = %v", msg.Priority)
+	}
+}
+
+// 钩子改写后的记录超过单条上限时必须整条拒绝，而不是绕过限制入队。
+func TestPushHookOutputSizeLimited(t *testing.T) {
+	opts := core.NewCoreOptions().
+		WithMaxRecordBytes(256).
+		WithHooks(&core.Hooks{
+			Push: core.PushHandlerFunc(func(ctx *core.PushContext) error {
+				ctx.Payload = []byte(strings.Repeat("x", 4096))
+				return nil
+			}),
+		})
+	_, addr := startCore(t, opts)
+	pub := newTestClient(t, addr, "mut-big")
+
+	_, err := pub.PushWithResult(context.Background(), "mut/a", []byte("v"), client.PushOptions{})
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Reason != packet.ReasonPacketTooLarge {
+		t.Fatalf("expected PacketTooLarge, got %v", err)
+	}
+}
+
+// 响应属性由对应操作的钩子自己设置：CONNACK←Auth、PUSH_OK←Push、
+// PULL_OK←Pull、DECLARE_RESP←Declare。
+func TestResponseProperties(t *testing.T) {
+	var pullSeen atomic.Value
+	hooks := &core.Hooks{
+		Auth: core.AuthHandlerFunc(func(ctx *core.AuthContext) error {
+			ctx.Identity = &core.Identity{
+				ID:            ctx.ClientID,
+				ReadChannels:  []string{"**"},
+				WriteChannels: []string{"**"},
+			}
+			ctx.ResponseProperties = map[string]string{"session-hint": "warm"}
+			return nil
+		}),
+		Push: core.PushHandlerFunc(func(ctx *core.PushContext) error {
+			ctx.ResponseProperties = map[string]string{"trace": "push"}
+			return nil
+		}),
+		Pull: core.PullHandlerFunc(func(ctx *core.PullContext) {
+			pullSeen.Store(*ctx)
+			ctx.ResponseProperties = map[string]string{"trace": "pull"}
+		}),
+		Declare: core.DeclareHandlerFunc(func(ctx *core.DeclareContext) {
+			ctx.ResponseProperties = map[string]string{"trace": "declare"}
+		}),
+	}
+	_, addr := startCore(t, core.NewCoreOptions().WithHooks(hooks))
+	c := newTestClient(t, addr, "rsp-1")
+	ctx := context.Background()
+
+	if got := c.ServerProperties()["session-hint"]; got != "warm" {
+		t.Fatalf("CONNACK properties = %+v", c.ServerProperties())
+	}
+
+	declared, err := c.DeclareChannelsResponse(ctx, nil, client.Channel{Filter: "rsp/**"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if declared.Properties["trace"] != "declare" || declared.Accepted != 1 {
+		t.Fatalf("DECLARE_RESP: accepted=%d props=%+v", declared.Accepted, declared.Properties)
+	}
+
+	pushed, err := c.PushWithResult(ctx, "rsp/a", []byte("v"), client.PushOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pushed.Properties["trace"] != "push" {
+		t.Fatalf("PUSH_OK properties = %+v", pushed.Properties)
+	}
+
+	pulled, err := c.PullBatchResult(ctx, client.PullOptions{
+		WaitMs:     300,
+		Properties: map[string]string{"client-cursor": "42"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pulled.Messages) != 1 || pulled.Properties["trace"] != "pull" {
+		t.Fatalf("PULL_OK: messages=%d props=%+v", len(pulled.Messages), pulled.Properties)
+	}
+	if pc, ok := pullSeen.Load().(core.PullContext); !ok || pc.ClientID != "rsp-1" ||
+		pc.Properties["client-cursor"] != "42" || pc.WaitMs != 300 {
+		t.Fatalf("pull hook context = %+v", pc)
+	}
+}
+
+// 声明变更事件携带请求/接受/拒绝三份视图。
+func TestDeclareHookEvent(t *testing.T) {
+	declared := make(chan *core.DeclareContext, 1)
+	_, addr := startCore(t, core.NewCoreOptions().WithHooks(&core.Hooks{
+		Declare: core.DeclareHandlerFunc(func(ctx *core.DeclareContext) { declared <- ctx }),
+	}))
+	c := newTestClient(t, addr, "decl-1")
+
+	if _, err := c.Declare(context.Background(), "a/**", "$sys/x"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ev := <-declared:
+		if ev.ClientID != "decl-1" || len(ev.Requested) != 2 {
+			t.Fatalf("declare event: %+v", ev)
+		}
+		if ev.Requested[0].Channel != "a/**" || ev.Requested[1].Channel != "$sys/x" {
+			t.Fatalf("requested = %+v", ev.Requested)
+		}
+		if len(ev.Accepted) != 1 || ev.Accepted[0].Channel != "a/**" {
+			t.Fatalf("accepted = %+v", ev.Accepted)
+		}
+		if len(ev.Rejected) != 1 || ev.Rejected[0].Channel != "$sys/x" {
+			t.Fatalf("rejected = %+v", ev.Rejected)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("declare hook not called")
+	}
+}
+
+// 会话销毁（例如断开即清理）时必须触发 SessionEnd 事件。
+func TestSessionEndHook(t *testing.T) {
+	ended := make(chan *core.SessionEndContext, 1)
+	_, addr := startCore(t, core.NewCoreOptions().
+		WithSessionTimeout(0).
+		WithHooks(&core.Hooks{
+			SessionEnd: core.SessionEndHandlerFunc(func(ctx *core.SessionEndContext) { ended <- ctx }),
+		}))
+	sub := newTestClient(t, addr, "end-1", "end/**")
+	pub := newTestClient(t, addr, "end-pub")
+
+	// 留一条未消费的可靠消息，随会话一起释放。
+	if err := pub.Push(context.Background(), "end/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+	_ = sub.Close()
+
+	select {
+	case ev := <-ended:
+		if ev.ClientID != "end-1" || ev.SessionID == 0 {
+			t.Fatalf("session end event: %+v", ev)
+		}
+		if ev.Reason != packet.ReasonNormalDisconnect {
+			t.Fatalf("reason = %v", ev.Reason)
+		}
+		if ev.MessagesDropped != 1 {
+			t.Fatalf("dropped messages = %d, want 1", ev.MessagesDropped)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session end hook not called")
+	}
+}
+
+// 组合器按顺序执行：Push/Deliver 遇到拒绝即中止，Connect 等事件型全部执行。
+func TestChainHooks(t *testing.T) {
+	var first, second, connects atomic.Int32
+	opts := core.NewCoreOptions().WithHooks(&core.Hooks{
+		Push: core.ChainPush(
+			core.PushHandlerFunc(func(ctx *core.PushContext) error {
+				first.Add(1)
+				ctx.SetHeader("x-chain", "1")
+				return nil
+			}),
+			core.PushHandlerFunc(func(ctx *core.PushContext) error {
+				second.Add(1)
+				if ctx.Headers["x-chain"] != "1" {
+					return errors.New("chain order broken")
+				}
+				if ctx.Channel == "chain/blocked" {
+					return &core.HookError{Reason: packet.ReasonQuotaExceeded}
+				}
+				return nil
+			}),
+		),
+		Connect: core.ChainConnect(
+			core.ConnectHandlerFunc(func(*core.ConnectContext) { connects.Add(1) }),
+			core.ConnectHandlerFunc(func(*core.ConnectContext) { connects.Add(1) }),
+		),
+	})
+	_, addr := startCore(t, opts)
+	sub := newTestClient(t, addr, "chain-sub", "chain/**")
+	pub := newTestClient(t, addr, "chain-pub")
+	ctx := context.Background()
+
+	if err := pub.Push(ctx, "chain/ok", []byte("v"), client.PushOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || msg == nil {
+		t.Fatalf("pull: %+v err=%v", msg, err)
+	}
+	if msg.Headers["x-chain"] != "1" {
+		t.Fatalf("chained mutation missing: %+v", msg.Headers)
+	}
+
+	_, err = pub.PushWithResult(ctx, "chain/blocked", []byte("v"), client.PushOptions{})
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Reason != packet.ReasonQuotaExceeded {
+		t.Fatalf("second handler should veto: %v", err)
+	}
+	if first.Load() != 2 || second.Load() != 2 {
+		t.Fatalf("push chain calls: first=%d second=%d", first.Load(), second.Load())
+	}
+	// 两个连接 × 两个 Connect 处理器。
+	if connects.Load() != 4 {
+		t.Fatalf("connect chain calls = %d, want 4", connects.Load())
+	}
+}
+
+// 钩子调用与 panic 计入统计，便于通过 /metrics 发现“钩子一直在拒绝/崩溃”。
+func TestHookStats(t *testing.T) {
+	b, addr := startCore(t, core.NewCoreOptions().WithHooks(&core.Hooks{
+		Push: core.PushHandlerFunc(func(ctx *core.PushContext) error {
+			if ctx.Channel == "boom/x" {
+				panic("boom")
+			}
+			return nil
+		}),
+	}))
+	pub := newTestClient(t, addr, "stat-pub")
+	ctx := context.Background()
+
+	_, err := pub.PushWithResult(ctx, "boom/x", []byte("v"), client.PushOptions{})
+	var se *client.ServerError
+	if !errors.As(err, &se) || se.Reason != packet.ReasonUnspecifiedError {
+		t.Fatalf("expected UnspecifiedError from panicking hook, got %v", err)
+	}
+
+	stats := b.GetStats()
+	if got := stats.Hooks["push"]; got.Calls != 1 || got.Panics != 1 {
+		t.Fatalf("push hook stats = %+v", got)
+	}
+	if got := stats.Hooks["deliver"]; got.Calls != 0 || got.Panics != 0 {
+		t.Fatalf("unregistered hook should stay zero: %+v", got)
+	}
+	if _, ok := stats.Hooks["pull"]; !ok {
+		t.Fatalf("pull hook stats missing: %+v", stats.Hooks)
 	}
 }
 
@@ -1510,6 +1929,9 @@ func TestNackRemovesDelivered(t *testing.T) {
 	case n := <-nackCh:
 		if n.ID != msg.ID || n.ClientID != "nack-1" || n.Channel != "n/a" {
 			t.Fatalf("unexpected nack context: %+v", n)
+		}
+		if string(n.Payload) != "v" {
+			t.Fatalf("nack context should carry the payload, got %q", n.Payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("nack hook not called")

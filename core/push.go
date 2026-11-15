@@ -1,7 +1,6 @@
 package core
 
 import (
-	"maps"
 	"time"
 
 	"github.com/snple/beacon/packet"
@@ -13,8 +12,8 @@ import (
 // 返回 PUSH_OK 中的一条结果。matched 是入队成功的客户端数，
 // dropped 是「因入队导致旧消息被挤出」「新消息本身被丢弃」或
 // 「目标离线且消息为 Low 而被丢弃」的客户端数。
-func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]string, system bool) packet.PushResult {
-	res := packet.PushResult{ID: rec.ID}
+func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]string, system bool) (res packet.PushResult, detail string, respProps map[string]string) {
+	res = packet.PushResult{ID: rec.ID}
 
 	// 服务端生成 ID（客户端不可指定），并填充可信字段
 	newID := packet.NewPacketID()
@@ -31,7 +30,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 		if cl != nil {
 			cl.rejected.Add(1)
 		}
-		return res
+		return res, "", nil
 	}
 
 	validChannel := packet.ValidateChannelNameLimit(rec.Channel, c.options.MaxChannelLength)
@@ -45,7 +44,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 		if cl != nil {
 			cl.rejected.Add(1)
 		}
-		return res
+		return res, "", nil
 	}
 
 	var identity *Identity
@@ -58,7 +57,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 		if cl != nil {
 			cl.rejected.Add(1)
 		}
-		return res
+		return res, "", nil
 	}
 
 	// 定向投递需要单独的写权限：否则任何能写某 channel 的发布者都能
@@ -69,43 +68,68 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 		if cl != nil {
 			cl.rejected.Add(1)
 		}
-		return res
+		return res, "", nil
 	}
 
 	// 单条记录上限覆盖元数据（channel/target/source/headers），
 	// 只检查 payload 会被超大 headers 绕过。
-	if size := int64(packet.RecordSize(rec)); c.options.MaxRecordBytes > 0 && size > int64(c.options.MaxRecordBytes) {
+	if c.recordTooLarge(rec) {
 		res.Reason = packet.ReasonPacketTooLarge
 		c.stats.MessagesRejected.Add(1)
 		if cl != nil {
 			cl.rejected.Add(1)
 		}
-		return res
+		return res, "", nil
 	}
 
 	// 发布钩子
-	if c.options.Hooks.hasMessagePush() {
+	if c.hooks.Push != nil {
 		ctx := &PushContext{
+			ID:          rec.ID,
 			ClientID:    rec.Source,
+			FromServer:  system,
 			Identity:    identity,
 			Channel:     rec.Channel,
 			Target:      rec.Target,
 			Priority:    rec.Priority(),
-			ExpiresAt:   rec.ExpiresAt,
-			PublishedAt: rec.PublishedAt,
 			Headers:     rec.Headers,
 			Payload:     rec.Payload,
-			Properties:  maps.Clone(properties),
+			ExpiresAt:   rec.ExpiresAt,
+			Reliable:    rec.Reliable(),
+			PublishedAt: rec.PublishedAt,
+			Properties:  properties,
 		}
-		if err := c.options.Hooks.callOnPush(ctx); err != nil {
-			res.Reason = packet.ReasonNotAuthorized
+		if err := c.hooks.callOnPush(ctx); err != nil {
+			reason, detail := hookRejection(err)
+			res.Reason = reason
 			c.stats.MessagesRejected.Add(1)
 			if cl != nil {
 				cl.rejected.Add(1)
 			}
 			c.logger.Debug("publish rejected by hook",
-				zap.String("channel", rec.Channel), zap.Error(err))
-			return res
+				zap.String("clientID", rec.Source),
+				zap.String("channel", rec.Channel),
+				zap.String("reason", reason.String()),
+				zap.Error(err))
+			return res, detail, nil
+		}
+		respProps = ctx.ResponseProperties
+		// 应用钩子改写：Channel/Target/Source/ID/Reliable 不可改，
+		// 因此这里只回写内容字段，并重新校验大小上限。
+		rec.Headers = ctx.Headers
+		rec.Payload = ctx.Payload
+		rec.SetPriority(ctx.Priority)
+		rec.SetExpiresAt(ctx.ExpiresAt)
+		if c.recordTooLarge(rec) {
+			res.Reason = packet.ReasonPacketTooLarge
+			c.stats.MessagesRejected.Add(1)
+			if cl != nil {
+				cl.rejected.Add(1)
+			}
+			c.logger.Debug("publish rejected: hook output exceeds max record bytes",
+				zap.String("clientID", rec.Source),
+				zap.String("channel", rec.Channel))
+			return res, "", respProps
 		}
 	}
 
@@ -122,7 +146,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 		c.logger.Debug("dropped expired message",
 			zap.String("channel", rec.Channel),
 			zap.Int64("expiresAt", msg.ExpiresAt))
-		return res
+		return res, "", respProps
 	}
 
 	// 定向投递：完全跳过匹配
@@ -135,13 +159,13 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 			c.stats.TargetMisses.Add(1)
 			c.stats.MessagesNoMatch.Add(1)
 			res.Reason = packet.ReasonTargetNotFound
-			return res
+			return res, "", respProps
 		}
 		// 目标必须声明过能匹配该 channel 的过滤器，定向投递不是订阅后门。
 		if !target.matchesChannel(rec.Channel) {
 			c.stats.MessagesNoMatch.Add(1)
 			res.Reason = packet.ReasonNoMatch
-			return res
+			return res, "", respProps
 		}
 		// 目标当前连接声明的接收上限放不下这条记录：不入队，直接告知发布者，
 		// 否则它会永久堵住目标队列（PULL 时无法跳过）。
@@ -151,7 +175,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 			res.Dropped = 1
 			c.stats.MessagesDropped.Add(1)
 			target.dropped.Add(1)
-			return res
+			return res, "", respProps
 		}
 		if c.overInflightLimit(msg.Size()) {
 			return c.rejectOverInflight(cl, res)
@@ -186,14 +210,14 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 		}
 
 		c.stats.MessagesReceived.Add(1)
-		return res
+		return res, "", respProps
 	}
 
 	targets := c.matcher.match(rec.Channel)
 	if len(targets) == 0 {
 		c.stats.MessagesNoMatch.Add(1)
 		res.Reason = packet.ReasonNoMatch
-		return res
+		return res, "", respProps
 	}
 	if c.overInflightLimit(msg.Size()) {
 		return c.rejectOverInflight(cl, res)
@@ -243,7 +267,7 @@ func (c *Core) pushRecord(cl *Client, rec *packet.Record, properties map[string]
 	} else if res.Matched == 0 && backlog {
 		res.Reason = packet.ReasonConsumerBacklog
 	}
-	return res
+	return res, "", respProps
 }
 
 // overInflightLimit 报告加入 size 字节后是否会超过全局在途消息上限。
@@ -252,13 +276,19 @@ func (c *Core) overInflightLimit(size int64) bool {
 	return limit > 0 && c.inflightBytes.Load()+size > limit
 }
 
-func (c *Core) rejectOverInflight(cl *Client, res packet.PushResult) packet.PushResult {
+// recordTooLarge 报告记录是否超过单条记录上限。
+func (c *Core) recordTooLarge(rec *packet.Record) bool {
+	limit := c.options.MaxRecordBytes
+	return limit > 0 && int64(packet.RecordSize(rec)) > int64(limit)
+}
+
+func (c *Core) rejectOverInflight(cl *Client, res packet.PushResult) (packet.PushResult, string, map[string]string) {
 	res.Reason = packet.ReasonQuotaExceeded
 	c.stats.MessagesRejected.Add(1)
 	if cl != nil {
 		cl.rejected.Add(1)
 	}
-	return res
+	return res, "", nil
 }
 
 func (c *Core) notifyClient(cl *Client) {
@@ -278,7 +308,7 @@ func (cn *conn) handlePush(p *packet.PushPacket) error {
 		return cn.rejectPush(p, packet.ReasonRateLimited)
 	}
 
-	res := cn.core.pushRecord(cl, &p.Record, p.Properties, false)
+	res, detail, respProps := cn.core.pushRecord(cl, &p.Record, p.Properties, false)
 
 	// WantAck=0：客户端不等待结果，不回包以节省一个 RTT 与带宽。
 	if p.Flags&packet.PushFlagWantAck == 0 {
@@ -286,7 +316,7 @@ func (cn *conn) handlePush(p *packet.PushPacket) error {
 	}
 	resp := packet.NewPushOkPacket(p.RequestID)
 	resp.PushResult = res
-	resp.Properties = pushErrorProperties(res.Reason)
+	resp.Properties = mergeProperties(pushErrorProperties(res.Reason, detail), respProps)
 	cn.fitPushOkProperties(resp)
 	return cn.writePacket(resp)
 }
@@ -301,7 +331,7 @@ func (cn *conn) rejectPush(p *packet.PushPacket, reason packet.ReasonCode) error
 	resp := packet.NewPushOkPacket(p.RequestID)
 	resp.Reason = reason
 	resp.ID = packet.NewPacketID()
-	resp.Properties = pushErrorProperties(reason)
+	resp.Properties = pushErrorProperties(reason, "")
 	cn.fitPushOkProperties(resp)
 	return cn.writePacket(resp)
 }
@@ -318,16 +348,15 @@ func (cn *conn) fitPushOkProperties(resp *packet.PushOkPacket) {
 }
 
 // pushErrorProperties 返回错误原因的可读细节；成功时为空。
-func pushErrorProperties(reason packet.ReasonCode) map[string]string {
+// detail 只来自钩子显式设置的 HookError.Detail，避免泄露内部错误。
+func pushErrorProperties(reason packet.ReasonCode, detail string) map[string]string {
 	if !reason.IsError() {
 		return nil
 	}
-	return map[string]string{packet.PropertyError: reason.String()}
-}
-
-// hasMessagePush 报告是否注册了 OnPush 钩子。
-func (h *Hooks) hasMessagePush() bool {
-	return h != nil && h.Message != nil
+	if detail == "" {
+		detail = reason.String()
+	}
+	return map[string]string{packet.PropertyError: detail}
 }
 
 func nowMillis() int64 { return time.Now().UnixMilli() }

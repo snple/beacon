@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -102,6 +103,26 @@ func (c *Core) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeMetric(w, "beacon_inflight_messages", "gauge", "内存中未完成投递的消息条数", float64(snap.InFlightMessages))
 	writeMetric(w, "beacon_inflight_bytes", "gauge", "内存中未完成投递消息的近似字节数", float64(snap.InFlightBytes))
 	writeMetric(w, "beacon_wildcard_filters", "gauge", "参与广播匹配的通配符过滤器数量", float64(snap.WildcardFilters))
+
+	writeHookMetrics(w, snap.Hooks)
+}
+
+// writeHookMetrics 输出各钩子的调用与 panic 计数，按钩子名排序保证输出稳定。
+func writeHookMetrics(w http.ResponseWriter, hooks map[string]HookStat) {
+	names := make([]string, 0, len(hooks))
+	for name := range hooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	_, _ = fmt.Fprintf(w, "# HELP beacon_hook_calls_total 钩子调用次数\n# TYPE beacon_hook_calls_total counter\n")
+	for _, name := range names {
+		_, _ = fmt.Fprintf(w, "beacon_hook_calls_total{hook=%q} %d\n", name, hooks[name].Calls)
+	}
+	_, _ = fmt.Fprintf(w, "# HELP beacon_hook_panics_total 钩子 panic 次数\n# TYPE beacon_hook_panics_total counter\n")
+	for _, name := range names {
+		_, _ = fmt.Fprintf(w, "beacon_hook_panics_total{hook=%q} %d\n", name, hooks[name].Panics)
+	}
 }
 
 func writeMetric(w http.ResponseWriter, name, kind, help string, value float64) {

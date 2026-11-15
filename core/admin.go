@@ -388,7 +388,7 @@ func (c *Core) pushTo(target, channel string, payload []byte, opts PushOptions) 
 		rec.SetPublishedAt(publishedAt)
 	}
 
-	res := c.pushRecord(nil, rec, nil, true)
+	res, detail, _ := c.pushRecord(nil, rec, nil, true)
 	out := PushResult{ID: res.ID, Reason: res.Reason, Matched: res.Matched, Dropped: res.Dropped}
 
 	switch res.Reason {
@@ -400,6 +400,9 @@ func (c *Core) pushTo(target, channel string, payload []byte, opts PushOptions) 
 	case packet.ReasonChannelInvalid, packet.ReasonPacketTooLarge, packet.ReasonNotAuthorized,
 		packet.ReasonQuotaExceeded, packet.ReasonMalformedPacket, packet.ReasonConsumerBacklog,
 		packet.ReasonExpired:
+		if detail != "" {
+			return out, fmt.Errorf("push rejected: %s: %s", res.Reason, detail)
+		}
 		return out, fmt.Errorf("push rejected: %s", res.Reason)
 	default:
 		return out, nil

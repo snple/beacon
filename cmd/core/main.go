@@ -65,7 +65,7 @@ func (a *authenticator) Authenticate(ctx *core.AuthContext) error {
 	if !ok {
 		return &core.AuthError{Reason: packet.ReasonNotAuthorized}
 	}
-	if subtle.ConstantTimeCompare([]byte(node.secret), ctx.Data) != 1 {
+	if subtle.ConstantTimeCompare([]byte(node.secret), ctx.AuthData) != 1 {
 		return &core.AuthError{Reason: packet.ReasonBadAuthMethodOrAuthData}
 	}
 

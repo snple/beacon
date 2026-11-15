@@ -491,7 +491,10 @@ func TestLongPollWakesOnPush(t *testing.T) {
 }
 
 func TestTakeoverFencesOldConnection(t *testing.T) {
-	_, addr := startCore(t, nil)
+	disconnects := make(chan *core.DisconnectContext, 4)
+	_, addr := startCore(t, core.NewCoreOptions().WithHooks(&core.Hooks{
+		Disconnect: core.DisconnectHandlerFunc(func(ctx *core.DisconnectContext) { disconnects <- ctx }),
+	}))
 
 	c1 := newTestClient(t, addr, "dup", "ch/a")
 	oldSID := c1.SessionID()
@@ -513,6 +516,19 @@ func TestTakeoverFencesOldConnection(t *testing.T) {
 	}
 	if c1.Connected() {
 		t.Fatal("old connection should be closed after takeover")
+	}
+
+	// 断开事件必须保留被接管连接自己的租约，而不是新连接的。
+	select {
+	case dc := <-disconnects:
+		if dc.ClientID != "dup" || dc.SessionID != oldSID {
+			t.Fatalf("taken-over connection reported wrong lease: %+v", dc)
+		}
+		if dc.Reason != packet.ReasonSessionTakenOver {
+			t.Fatalf("disconnect reason = %v", dc.Reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("disconnect hook not called for taken-over connection")
 	}
 
 	// 旧连接的请求应失败

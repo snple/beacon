@@ -201,8 +201,8 @@ Limits {
 - 键和值都是 UTF-8 字符串；除保留键 `error` 外，broker 不解释具体含义；
 - `CONNECT.Properties` 可在认证钩子（`AuthContext.Properties`）与连接钩子
   （`ConnectContext.Properties`）中读取；
-- `CONNACK.Properties` 由服务端配置或认证钩子（`AuthContext.ResponseProperties`）提供，
-  客户端连接完成后可读取；
+- `CONNACK.Properties` 由服务端配置与认证钩子（`AuthContext.ResponseProperties`）共同
+  提供，客户端连接完成后可读取；
 - 编码时按键排序；大小受对端 `MaxPacketSize` 约束，不做额外限制；
 - 属性只属于本次连接，不写入会话，也不会跨重连保留；
 - 如果最终 `CONNACK`（含属性）超过客户端声明的 `MaxPacketSize`，服务端返回
@@ -304,7 +304,10 @@ PUSH_OK {
   `Expired`。
 - `PUSH.Properties` 可携带发布侧的附加信息，服务端在 `OnPush` 钩子中通过
   `PushContext.Properties` 读取；broker 不解释键值。
-- `PUSH_OK.Properties` 在失败时提供 `error` 细节，客户端可直接用于日志。
+- `OnPush` 可以改写记录的 `Headers`/`Payload`/`Priority`/`ExpiresAt`（路由字段不可改），
+  改写后会重新校验 `MaxRecordBytes`。
+- `PUSH_OK.Properties` 在失败时提供 `error` 细节；发布钩子也可以通过
+  `PushContext.ResponseProperties` 附加自定义键值，客户端用 `PushResult.Properties` 读取。
 - `PacketTooLarge` 是**记录级**结果：单条记录超过 `MaxRecordBytes`，或定向投递的
   唯一在线目标在 `CONNECT` 中声明的接收上限放不下该记录（此时不会入队）；
   帧级超限在读取阶段就终止连接，见 §1。
@@ -347,7 +350,10 @@ PULL_OK {
 ```
 
 服务端会把 `MaxCount` 裁剪到 `min(客户端请求, MaxPullBatch, 1024)`。
-`MaxBytes` 只统计记录本身的编码大小，不包含包头；放不下下一条时会提前结束本批。
+`MaxBytes` 只统计记录本身的编码大小，不包含包头；放不下下一条时会提前结束本批；
+`PULL_OK.Properties` 的编码大小计入 `MaxPacketSize`，放不下时服务端整组省略属性。
+服务端可通过 `OnPull`（`PullContext.ResponseProperties`）在 `PULL_OK.Properties` 中返回
+游标、限流提示等自定义信息，客户端用 `PullBatchResult` 读取。
 
 拉取顺序：
 
@@ -454,6 +460,9 @@ DECLARE_RESP {
 声明数量超过 `MaxChannelsPerClient` 时**整批拒绝**（不部分生效），
 此时 `Accepted=0` 且 `Results` 只有一条 `QuotaExceeded`（`Channel` 为空）。
 失败项同样会按对端 `MaxPacketSize` 裁剪（至少保留一条）。
+`DECLARE_RESP.Properties` 的编码大小同样计入该上限，放不下时整组省略。
+服务端可通过 `OnDeclare`（`DeclareContext.ResponseProperties`）在此返回自定义信息，
+客户端用 `DeclareChannelsResponse` 读取（含 `Accepted`、`Pending` 与 `Properties`）。
 
 ### 5.6 PING / PONG / DISCONNECT
 

@@ -91,6 +91,26 @@ func (cn *conn) handleDeclare(p *packet.DeclarePacket) error {
 		zap.Int("accepted", acceptedCount),
 		zap.Int("requested", len(p.Channels)))
 
-	resp.Results = trimDeclareResults(resp.Results, cn.responseBudget())
+	// 声明变更事件（通知型，不能否决本次声明），同时由它设置响应属性。
+	declCtx := &DeclareContext{
+		ClientID:   cl.ID,
+		Identity:   cl.getIdentity(),
+		Properties: p.Properties,
+		// Requested 保留客户端原始请求（含重复项），Accepted/Rejected 是处理结果。
+		Requested: append([]packet.ChannelDecl(nil), p.Channels...),
+		Accepted:  append([]packet.ChannelDecl(nil), accepted...),
+		Rejected:  append([]packet.ChannelResult(nil), resp.Results...),
+	}
+	if c.hooks.Declare != nil {
+		c.hooks.callOnDeclare(declCtx)
+	}
+
+	// 响应属性先计入预算，再裁剪 Results。
+	resp.Properties = cn.fitProperties("DECLARE_RESP", declCtx.ResponseProperties, declareRespOverhead)
+	budget := cn.responseBudget()
+	if budget > 0 && len(resp.Properties) > 0 {
+		budget -= packet.StringMapSize(resp.Properties)
+	}
+	resp.Results = trimDeclareResults(resp.Results, budget)
 	return cn.writePacket(resp)
 }

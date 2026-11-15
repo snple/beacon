@@ -154,35 +154,164 @@ func (c *Core) PushToClient(clientID, channel string, payload []byte, opts PushO
 
 ## 事件与审计
 
-没有内建事件流。需要审计时使用 `Hooks`：
+没有内建事件流。需要审计时使用 `Hooks`（每个钩子独立注册，互不依赖）：
 
 ```go
-type MessageHandler interface {
-    OnPush(ctx *PushContext) error        // 返回错误则拒绝该条消息
-    OnDeliver(ctx *DeliverContext) bool   // 返回 false 则丢弃该次投递
+type AuthHandler interface {
+    Authenticate(ctx *AuthContext) error      // 返回错误则拒绝连接
 }
 
-type ConnectionHandler interface {
-    OnConnect(ctx *ConnectContext)
-    OnDisconnect(ctx *DisconnectContext)
+type PushHandler interface {
+    OnPush(ctx *PushContext) error            // 返回错误则拒绝该条消息
 }
 
-type NackHandler interface {
-    OnNack(ctx *NackContext)   // 客户端 NACK 一条消息
+type DeliverHandler interface {
+    OnDeliver(ctx *DeliverContext) bool       // 返回 false 则丢弃该次投递
+}
+
+type ConnectHandler interface     { OnConnect(ctx *ConnectContext) }
+type DisconnectHandler interface  { OnDisconnect(ctx *DisconnectContext) }
+type DeclareHandler interface     { OnDeclare(ctx *DeclareContext) }         // 通知型
+type SessionEndHandler interface  { OnSessionEnd(ctx *SessionEndContext) }   // 通知型
+type PullHandler interface        { OnPull(ctx *PullContext) }               // 通知 + 响应属性
+type NackHandler interface        { OnNack(ctx *NackContext) }
+```
+
+函数适配器为 `AuthHandlerFunc`、`PushHandlerFunc`、`DeliverHandlerFunc`、
+`ConnectHandlerFunc`、`DisconnectHandlerFunc`、`DeclareHandlerFunc`、
+`SessionEndHandlerFunc`、`PullHandlerFunc`、`NackHandlerFunc`。
+
+`OnPush` 可用于 ACL、计费、审计日志；`OnDeliver` 可用于按客户端过滤消息内容；
+`OnNack` 可用于死信、告警或补偿；`OnDeclare` 可审计声明变更；`OnSessionEnd`
+补齐会话过期/断开即清理的观测闭环。
+
+### 改写消息
+
+`PushContext` 的 `Headers`、`Payload`、`Priority`、`ExpiresAt` 可被钩子改写，
+服务端会在入队前应用并**重新校验** `MaxRecordBytes`（超限整条拒绝）。
+`Channel`、`Target`、`Source`、`ID`、`Reliable` 只读——路由与信任字段已经校验过，
+改动会绕过 ACL；需要改路由请在钩子内重新发布。
+
+```go
+Push: core.PushHandlerFunc(func(ctx *core.PushContext) error {
+    ctx.SetHeader("trace-id", traceID()) // Headers 可能为 nil
+    if !allowed(ctx.Channel) {
+        return &core.HookError{Reason: packet.ReasonNotAuthorized}
+    }
+    return nil
+}),
+```
+
+### 拒绝原因
+
+`OnPush` 返回 `*HookError`（`*AuthError` 是它的别名）可以指定拒绝原因码，并可选地
+通过 `Detail` 回传诊断信息（写入 `PUSH_OK` 的 `error` 属性）。普通 `error` 一律映射为
+`NotAuthorized`，且不向客户端泄露错误文本；`Reason` 不是失败码时同样回退为
+`NotAuthorized`，避免“拒绝却回 Success”：
+
+```go
+return &core.HookError{
+    Reason: packet.ReasonQuotaExceeded,
+    Detail: "rate limit 100/s",
 }
 ```
 
-`OnPush` 可用于 ACL、计费、审计日志；`OnDeliver` 可用于按客户端过滤消息内容；
-`OnNack` 可用于死信、告警或补偿。`AuthContext.Properties` 可读取客户端在 CONNECT
-中发送的键值信息；写入 `AuthContext.ResponseProperties` 可随 CONNACK 返回给客户端。
-`ConnectContext.Properties` 可读取认证后的同一组属性，`PushContext.Properties` 可读取
-`PUSH` 携带的发布侧属性；这些 map 都应视为只读。
-两者都在调用方协程中同步执行，**不要在其中做阻塞 IO**，也不要在 `OnDeliver`
+### 响应属性
+
+响应属性由**对应操作的钩子自己设置**，不引入额外的“响应钩子”——每个钩子只处理
+自己那次操作的请求与响应，不需要再按响应类型分派：
+
+| 响应 | 由谁设置 | 说明 |
+|---|---|---|
+| `CONNACK` | `AuthContext.ResponseProperties` | 与 `WithServerProperties` 合并，钩子同名键覆盖；仅认证成功时生效 |
+| `PUSH_OK` | `PushContext.ResponseProperties` | 仅在 `WantAck=1` 时会发出响应；与 `error` 细节合并 |
+| `PULL_OK` | `PullContext.ResponseProperties` | `OnPull` 每个 PULL 请求调用一次（长轮询复用，不会重复触发） |
+| `DECLARE_RESP` | `DeclareContext.ResponseProperties` | 与 `OnDeclare` 同一次回调 |
+
+```go
+hooks := &core.Hooks{
+    Push: core.PushHandlerFunc(func(ctx *core.PushContext) error {
+        ctx.SetHeader("trace-id", traceID())
+        ctx.ResponseProperties = map[string]string{"trace-id": traceID()}
+        return nil
+    }),
+    Pull: core.PullHandlerFunc(func(ctx *core.PullContext) {
+        ctx.ResponseProperties = map[string]string{"server-time": now()}
+    }),
+}
+```
+
+`OnPull` 还能读到请求侧的 `Properties`、`WaitMs`、`MaxCount`、`MaxBytes`
+（均为客户端原始值，未经服务端裁剪），便于审计与按请求返回提示。
+
+大小约束：
+
+- `PUSH_OK` / `PULL_OK` / `DECLARE_RESP` 的属性放不下客户端声明的 `MaxPacketSize` 时
+  **整组丢弃**并记 Warn，不影响响应本身发出；PULL 的属性大小已计入批量预算，
+  DECLARE_RESP 的属性会先从 `Results` 裁剪预算里扣除。
+- `CONNACK` 保持原有语义：最终 `CONNACK`（含属性）超限时返回 `PacketTooLarge` 并关闭
+  连接，此时 `PUSH_OK` 之类的“丢属性”降级不适用——握手阶段必须显式失败。
+- 客户端读取：`ServerProperties()`（CONNACK）、`PushResult.Properties`（PUSH_OK）、
+  `PullBatchResult`（PULL_OK）、`DeclareChannelsResponse`（DECLARE_RESP）。
+
+### 上下文字段
+
+命名约定：`Properties` 是**本次请求**携带的属性（只读），`ResponseProperties`
+是钩子填写、**随响应**返回的属性；两者在所有上下文里保持同名同义。
+
+| 钩子 | 可用字段 |
+|---|---|
+| `AuthContext` | `ClientID`、`RemoteAddr`、`ProtocolVersion`、`CleanSession`、`KeepAlive`、`MaxPacketSize`、`AuthMethod`、`AuthData`、`Properties`、`Identity`（出参）、`ResponseProperties`（出参） |
+| `PushContext` | 只读：`ID`、`ClientID`、`Identity`、`Channel`、`Target`、`FromServer`、`Reliable`、`PublishedAt`、`Properties`；可写：`Headers`、`Payload`、`Priority`、`ExpiresAt`、`ResponseProperties` |
+| `DeliverContext` | `ID`、`ClientID`、`Identity`、`Channel`、`Source`、`Target`、`Priority`、`Reliable`、`ExpiresAt`、`PublishedAt`、`Headers`、`Payload`、`Dup` |
+| `NackContext` | `ID`、`ClientID`、`Identity`、`Channel`、`Source`、`Target`、`Priority`、`Reliable`、`Reason`、`Headers`、`Payload` |
+| `ConnectContext` | `ClientID`、`SessionID`、`RemoteAddr`、`SessionPresent`、`CleanSession`、`Identity`、`Properties` |
+| `DisconnectContext` | `ClientID`、`SessionID`、`RemoteAddr`、`Reason`、`Err`、`Identity` |
+| `DeclareContext` | `ClientID`、`Identity`、`Properties`、`Requested`、`Accepted`、`Rejected`、`ResponseProperties` |
+| `SessionEndContext` | `ClientID`、`SessionID`、`Identity`、`Reason`、`MessagesDropped` |
+| `PullContext` | `ClientID`、`Identity`、`Properties`、`WaitMs`、`MaxCount`、`MaxBytes`、`ResponseProperties` |
+
+`SessionID` 是会话租约标识，同一会话在重连后保持不变，接管或 `CleanSession` 时更换；
+`OnConnect`/`OnDisconnect` 携带的是该连接自己的租约快照，接管事件不会串到新会话。
+`OnDeliver` 对新消息与**重发**都会调用（`Dup=true` 表示重发），因此运行期改变投递策略
+会立即生效；被拒绝的消息从队列中丢弃（计入 `MessagesDropped`），不会反复重发。
+`OnDeclare`/`OnSessionEnd`/`OnPull` 是通知型钩子，不能否决操作。
+`OnSessionEnd.MessagesDropped` 是随会话一起释放的队列消息条数。
+`OnDisconnect` 只在 `OnConnect` 已触发过的连接上调用，二者一一对应。
+
+### 组合与统计
+
+需要多个处理器时用组合器，顺序由调用方决定：
+
+```go
+Push: core.ChainPush(metricsHook, aclHook, auditHook),   // 任一返回错误即中止
+Connect: core.ChainConnect(metricsHook, auditHook),      // 全部执行
+```
+
+- `ChainPush` / `ChainDeliver` 短路：首个拒绝生效；
+- `ChainConnect` / `ChainDisconnect` / `ChainDeclare` / `ChainSessionEnd` /
+  `ChainPull` / `ChainNack` 全部执行；
+- 组合器内部 panic 会中止整条链，由 Core 统一捕获并记为一次 panic；
+- 不提供 `ChainAuth`：认证是单一仲裁，串联语义容易误解。
+
+各钩子的调用次数与 panic 次数计入 `Stats.Hooks`（键为钩子名），
+并通过 `/metrics` 暴露为 `beacon_hook_calls_total{hook="push"}` 与
+`beacon_hook_panics_total{hook="push"}`。
+
+### 执行模型
+
+所有钩子都在调用方协程中同步执行，**不要在其中做阻塞 IO**，也不要在 `OnDeliver`
 中调用 `DisconnectClient`/`DisconnectClientAndWait` 处理同一个客户端（会等待自身退出）。
-`PushContext.Headers/Payload` 与 `DeliverContext.Payload` 直接引用共享消息内容，
-**必须视为只读**；修改会影响其他客户端和后续重发。
+`Identity`、`Headers`、`Payload`、`Properties` 直接引用会话状态或共享消息内容，
+除 `PushContext` 标注为可写的字段外**必须视为只读**；修改会影响其他客户端、ACL 判断
+和后续重发。`OnDeliver` 对每条记录 × 每个命中客户端 × 每次投递调用一次，
+适合做内存内的快速判断，重活应丢进内部队列。
 `DisconnectContext.Err` 会带上连接结束时的 I/O/协议错误（正常断开时为 nil）。
-钩子 panic 会被捕获并记录，不会带崩进程。
+钩子 panic 会被捕获并记录（含堆栈），不会带崩进程：`OnPush`/`Authenticate` 视为拒绝，
+`OnDeliver` 视为丢弃，事件类钩子只记录日志。
+
+`Core` 在创建时对 `Hooks` 做一次浅拷贝，因此需要在 `NewWithOptions` 之前注册完毕；
+运行期替换钩子字段不会生效，但钩子实现可以自行维护可变状态（需保证并发安全）。
 
 ## 配额一览
 

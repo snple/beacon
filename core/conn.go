@@ -62,6 +62,11 @@ type conn struct {
 	pullInflight atomic.Bool
 	registered   atomic.Bool
 
+	// sessionID/identity 是握手完成时的快照，仅用于连接生命周期钩子：
+	// 会话被接管后 cl.sessionID 与 cl.identity 会变成本次握手的值。
+	sessionID uint64
+	identity  *Identity
+
 	disconnect atomic.Pointer[packet.DisconnectPacket]
 
 	// endReason 记录连接结束的原因码，用于 OnDisconnect 钩子与统计。
@@ -346,12 +351,16 @@ type pullPlan struct {
 // 单次最多返回 MaxCount 条记录；可靠消息受会话 ReceiveMaximum 约束。
 // 先投递新消息（窗口有空位时），没有新消息再重发 delivered 中未确认的消息。
 // 放不进客户端接收上限的记录直接为该客户端丢弃，避免永久堵住队列。
-func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
+func (cn *conn) buildPlan(p *packet.PullPacket, props map[string]string, propsSize int64) *pullPlan {
 	cl := cn.client
 	opts := cn.core.options
 
 	now := nowMillis()
 	plan := &pullPlan{resp: packet.NewPullOkPacket(p.RequestID), epoch: cl.resetEpoch.Load()}
+
+	// 响应属性计入批量大小上限；由调用方计算一次，避免重试时重复触发钩子。
+	plan.resp.Properties = props
+	overhead := int64(pullResponseOverhead) + propsSize
 
 	maxCount := int(p.MaxCount)
 	if maxCount <= 0 {
@@ -396,22 +405,6 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 			continue
 		}
 
-		// 投递钩子：拒绝的条目直接丢弃（不进入 delivered）。
-		if cn.core.options.Hooks.hasOnDeliver() && !cn.core.options.Hooks.callOnDeliver(&DeliverContext{
-			ClientID:    cl.ID,
-			Channel:     t.msg.Channel,
-			Source:      t.msg.Source,
-			Priority:    t.prio,
-			ExpiresAt:   t.msg.ExpiresAt,
-			PublishedAt: t.msg.PublishedAt,
-			Payload:     t.msg.Payload,
-		}) {
-			cn.core.releaseMessage(t.msg)
-			cn.core.stats.MessagesDropped.Add(1)
-			cl.dropped.Add(1)
-			continue
-		}
-
 		rec := t.msg.record(false)
 		if !fitsRecordInPacket(cn.maxPacketSize, &rec) {
 			cn.dropPendingForSize(t)
@@ -422,13 +415,20 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 			cl.mb.restore(t)
 			break
 		}
-		if !fitsBatch(cn.maxPacketSize, total+recSize) {
+		if !fitsBatch(cn.maxPacketSize, overhead, total+recSize) {
 			if len(plan.pending) == 0 {
 				cn.dropPendingForSize(t)
 				continue
 			}
 			cl.mb.restore(t)
 			break
+		}
+
+		// 投递钩子：拒绝的条目直接丢弃（不进入 delivered）。
+		// 放在尺寸检查之后，避免为注定发不出去的记录调用钩子。
+		if !cn.deliverAllowed(cl, t, false) {
+			cn.dropPendingRejected(t)
+			continue
 		}
 
 		plan.pending = append(plan.pending, t)
@@ -456,6 +456,7 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 				resp := packet.NewPullOkPacket(p.RequestID)
 				resp.Reason = packet.ReasonCommitRequired
 				resp.Pending = pendingDepth
+				resp.Properties = props
 				cn.core.stats.CommitRequired.Add(1)
 				return &pullPlan{resp: resp}
 			}
@@ -475,13 +476,19 @@ func (cn *conn) buildPlan(p *packet.PullPacket) *pullPlan {
 					cl.mb.release(t)
 					break
 				}
-				if !fitsBatch(cn.maxPacketSize, total+recSize) {
+				if !fitsBatch(cn.maxPacketSize, overhead, total+recSize) {
 					if len(plan.redelivered) == 0 {
 						cn.dropDeliveredForSize(t)
 						continue
 					}
 					cl.mb.release(t)
 					break
+				}
+
+				// 重发同样要经过投递钩子：策略可能在建连后变化。
+				if !cn.deliverAllowed(cl, t, true) {
+					cn.dropDeliveredRejected(t)
+					continue
 				}
 				plan.redelivered = append(plan.redelivered, t)
 				plan.resp.AddRecord(rec)
@@ -545,17 +552,17 @@ func trimDeclareResults(results []packet.ChannelResult, budget int) []packet.Cha
 // pullResponseOverhead 是 PULL_OK 的固定头 + 固定字段（RequestID/Flags/Reason/Count/Pending）。
 const pullResponseOverhead = 5 + 4 + 1 + 1 + 2 + 12
 
-func fitsBatch(limit uint32, recordBytes int64) bool {
+func fitsBatch(limit uint32, overhead, recordBytes int64) bool {
 	if limit == 0 {
 		return true
 	}
-	return int64(pullResponseOverhead)+recordBytes <= int64(limit)
+	return overhead+recordBytes <= int64(limit)
 }
 
 // fitsRecordInPacket 报告一条记录编码为 PULL_OK 后是否不超过 limit。
-// limit 为 0 表示不限制。
+// limit 为 0 表示不限制。这里只按固定开销估算，响应属性由 buildPlan 单独计入。
 func fitsRecordInPacket(limit uint32, rec *packet.Record) bool {
-	return fitsBatch(limit, int64(packet.RecordSize(rec)))
+	return fitsBatch(limit, int64(pullResponseOverhead), int64(packet.RecordSize(rec)))
 }
 
 // dropPendingForSize 丢弃一条无法通过本连接投递的 pending 消息。
@@ -568,6 +575,60 @@ func (cn *conn) dropPendingForSize(t taken) {
 		zap.String("clientID", cl.ID),
 		zap.String("channel", t.msg.Channel),
 		zap.Uint32("maxPacketSize", cn.maxPacketSize))
+}
+
+// deliverAllowed 在投递前调用投递钩子；未注册时一律放行。
+//
+// 新消息与未确认消息的重发都经过这里：策略可能在建连后变化，
+// 重发不能绕过钩子。
+func (cn *conn) deliverAllowed(cl *Client, t taken, dup bool) bool {
+	if cn.core.hooks.Deliver == nil {
+		return true
+	}
+	return cn.core.hooks.callOnDeliver(&DeliverContext{
+		ID:          t.id,
+		ClientID:    cl.ID,
+		Identity:    cl.getIdentity(),
+		Channel:     t.msg.Channel,
+		Source:      t.msg.Source,
+		Target:      t.msg.Target,
+		Priority:    t.prio,
+		Reliable:    t.reliable,
+		ExpiresAt:   t.msg.ExpiresAt,
+		PublishedAt: t.msg.PublishedAt,
+		Headers:     t.msg.Headers,
+		Payload:     t.msg.Payload,
+		Dup:         dup,
+	})
+}
+
+// dropPendingRejected 丢弃一条被投递钩子拒绝的待投递记录。
+func (cn *conn) dropPendingRejected(t taken) {
+	cl := cn.client
+	cn.core.releaseMessage(t.msg)
+	cn.core.stats.MessagesDropped.Add(1)
+	cl.dropped.Add(1)
+	cn.core.logger.Debug("record dropped by deliver hook",
+		zap.String("clientID", cl.ID),
+		zap.String("channel", t.msg.Channel))
+}
+
+// dropDeliveredRejected 丢弃一条被投递钩子拒绝的未确认记录。
+func (cn *conn) dropDeliveredRejected(t taken) {
+	cl := cn.client
+	removed := cl.mb.discardDelivered(t.id)
+	cl.mb.release(t)
+	if !removed {
+		return
+	}
+	cn.core.stats.MessagesDropped.Add(1)
+	cl.dropped.Add(1)
+	if cl.mb.deliveredLen() == 0 {
+		cl.deliveredSince.Store(0)
+	}
+	cn.core.logger.Debug("uncommitted record dropped by deliver hook",
+		zap.String("clientID", cl.ID),
+		zap.String("channel", t.msg.Channel))
 }
 
 // dropDeliveredForSize 丢弃 delivered 中无法通过当前连接投递的消息。
@@ -677,7 +738,8 @@ func (cn *conn) handlePull(p *packet.PullPacket) error {
 		return cn.writePullRateLimited(p)
 	}
 
-	plan := cn.buildPlan(p)
+	props, propsSize := cn.pullProperties(p)
+	plan := cn.buildPlan(p, props, propsSize)
 	if plan.resp == nil {
 		cn.pullInflight.Store(false)
 		return errNoProgress
@@ -695,7 +757,7 @@ func (cn *conn) handlePull(p *packet.PullPacket) error {
 			// 长轮询：把响应交给后台协程，读循环可以继续处理 PING/COMMIT。
 			if cn.spawn(func() {
 				defer cn.pullInflight.Store(false)
-				cn.waitLoop(p, time.Duration(waitMs)*time.Millisecond)
+				cn.waitLoop(p, time.Duration(waitMs)*time.Millisecond, props, propsSize)
 			}) {
 				return nil
 			}
@@ -728,6 +790,7 @@ func (cn *conn) writePullRateLimited(p *packet.PullPacket) error {
 	resp := packet.NewPullOkPacket(p.RequestID)
 	resp.Reason = packet.ReasonRateLimited
 	resp.Pending = pending
+	resp.Properties, _ = cn.pullProperties(p)
 
 	cn.core.stats.MessagesRejected.Add(1)
 	return cn.writePacket(resp)
@@ -741,7 +804,7 @@ func (cn *conn) waitMillis(requested uint32) uint32 {
 	return wait
 }
 
-func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
+func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration, props map[string]string, propsSize int64) {
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
@@ -750,13 +813,13 @@ func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
 		case <-cn.ctx.Done():
 			return
 		case <-timer.C:
-			cn.writeEmptyPull(p)
+			cn.writeEmptyPull(p, props)
 			return
 		case <-cn.wakeCh:
 			if cn.closed.Load() || !cn.client.owns(cn) {
 				return
 			}
-			plan := cn.buildPlan(p)
+			plan := cn.buildPlan(p, props, propsSize)
 			if plan.resp == nil {
 				return
 			}
@@ -782,7 +845,7 @@ func (cn *conn) waitLoop(p *packet.PullPacket, wait time.Duration) {
 	}
 }
 
-func (cn *conn) writeEmptyPull(p *packet.PullPacket) {
+func (cn *conn) writeEmptyPull(p *packet.PullPacket, props map[string]string) {
 	if !cn.client.owns(cn) {
 		return
 	}
@@ -791,6 +854,7 @@ func (cn *conn) writeEmptyPull(p *packet.PullPacket) {
 
 	resp := packet.NewPullOkPacket(p.RequestID)
 	resp.Pending = pending
+	resp.Properties = props
 	_ = cn.writePacket(resp)
 }
 
@@ -811,15 +875,19 @@ func (cn *conn) handleCommit(p *packet.CommitPacket) error {
 	cn.pullMu.Unlock()
 
 	for _, n := range nacked {
-		if cn.core.options.Hooks.hasNack() {
-			cn.core.options.Hooks.callOnNack(&NackContext{
-				ClientID: cl.ID,
+		if cn.core.hooks.Nack != nil {
+			cn.core.hooks.callOnNack(&NackContext{
 				ID:       n.id,
+				ClientID: cl.ID,
+				Identity: cl.getIdentity(),
 				Channel:  n.msg.Channel,
 				Source:   n.msg.Source,
+				Target:   n.msg.Target,
 				Priority: n.msg.Priority,
 				Reliable: n.msg.Reliable,
 				Reason:   n.reason,
+				Headers:  n.msg.Headers,
+				Payload:  n.msg.Payload,
 			})
 		}
 		cn.core.stats.MessagesNacked.Add(1)

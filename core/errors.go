@@ -57,17 +57,50 @@ func (e *ClientNotFoundError) Error() string {
 
 func (e *ClientNotFoundError) Is(target error) bool { return target == ErrClientNotFound }
 
-// AuthError 认证失败，可指定 CONNACK 原因码
-type AuthError struct {
+// HookError 让钩子指定拒绝原因码，并可选择把 Detail 回给客户端。
+//
+// Detail 为空时不会向客户端泄露钩子内部错误；Err 只用于本地日志与
+// errors.Is/As 判断。Reason 不是失败码时按 NotAuthorized 处理。
+type HookError struct {
+	// Reason 是回给客户端的失败原因码；不是失败码时按 NotAuthorized 处理。
 	Reason packet.ReasonCode
-	Err    error
+	// Detail 是回给客户端的诊断信息；应避免包含内部实现细节。
+	Detail string
+	// Err 是仅用于本地日志与 errors.Is/As 判断的原始错误。
+	Err error
 }
 
-func (e *AuthError) Error() string {
-	if e.Err != nil {
+func (e *HookError) Error() string {
+	switch {
+	case e.Detail != "":
+		return e.Detail
+	case e.Err != nil:
 		return e.Err.Error()
+	case e.Reason != 0:
+		return e.Reason.String()
+	default:
+		return "hook rejected"
 	}
-	return e.Reason.String()
 }
 
-func (e *AuthError) Unwrap() error { return e.Err }
+func (e *HookError) Unwrap() error { return e.Err }
+
+// AuthError 认证失败，可指定 CONNACK 原因码。等价于 HookError。
+type AuthError = HookError
+
+// hookRejection 解析钩子返回的拒绝错误。
+//
+// 只有显式设置 HookError.Detail 才会回传诊断信息，普通 error 一律按
+// NotAuthorized 且不带细节处理，避免泄露服务端内部错误。
+func hookRejection(err error) (packet.ReasonCode, string) {
+	var he *HookError
+	if errors.As(err, &he) {
+		reason := he.Reason
+		if !reason.IsError() {
+			// 钩子返回了成功码：拒绝必须带失败码，否则发布者会误以为成功。
+			reason = packet.ReasonNotAuthorized
+		}
+		return reason, he.Detail
+	}
+	return packet.ReasonNotAuthorized, ""
+}

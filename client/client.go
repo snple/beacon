@@ -326,18 +326,18 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	// 声明，这样 CleanSession 清空、运行时 Declare 或被按新身份过滤掉的声明
 	// 都能在重连后恢复。失败项记录日志，但不阻断连接。
 	if decls, props := c.desiredChannelSnapshot(); len(decls) > 0 {
-		results, err := c.declareChannels(c.ctx, decls, props)
+		resp, err := c.declareChannels(c.ctx, decls, props)
 		if err != nil {
 			cn.close(err)
 			return err
 		}
-		if len(results) > 0 {
-			reasons := make([]string, 0, len(results))
-			for _, r := range results {
+		if len(resp.Results) > 0 {
+			reasons := make([]string, 0, len(resp.Results))
+			for _, r := range resp.Results {
 				reasons = append(reasons, r.Channel+": "+r.Reason.String())
 			}
 			c.logger.Warn("some channel declarations were rejected",
-				zap.Int("rejected", len(results)),
+				zap.Int("rejected", len(resp.Results)),
 				zap.Strings("results", reasons))
 		}
 	}
