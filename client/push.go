@@ -11,80 +11,67 @@ import (
 
 const defaultPushAckTimeout = 30 * time.Second
 
-// PushOptions 发布选项。
+// PushOptions 是发布选项；零值表示使用默认行为。
 type PushOptions struct {
-	// Headers 自定义元数据。
-	Headers map[string]string
-	// Target 定向投递的客户端 ID；非空时跳过 channel 匹配
-	// （服务端要求目标声明过该 channel，且发布方具备定向投递权限）。
-	Target string
-	// NoAck 为 true 时不等待 PUSH_OK（默认等待）。
+	// Priority 是消息优先级；零值 PriorityDefault 按 Medium 处理。
+	Priority Priority
+	// Reliable 表示消息是否需要 COMMIT 确认（默认 false，尽力而为）。
+	Reliable bool
+	// NoAck 为 true 时不等待 PUSH_OK，仅尽力写入连接。
 	NoAck bool
-	// Properties 是随 PUSH 发送的可选属性。
+	// Headers 是随消息投递的消息头。
+	Headers map[string]string
+	// Properties 是随 PUSH 发送给服务端的属性，不会投递给消费者。
 	Properties map[string]string
-
-	// priority 只能通过 WithPriority 设置：零值默认为 Medium，
-	// 无法与「显式指定 Low」区分，因此不导出。
-	priority    packet.Priority
-	prioritySet bool
-
-	// reliable 只能通过 WithReliable 设置；默认为 false（不可靠）。
-	reliable bool
-	// ttl > 0 时设置绝对过期时间；publishedAt/expiresAt 为显式值。
-	ttl         time.Duration
-	expiresAt   int64
-	publishedAt int64
+	// TTL 是相对存活时长；ExpiresAt 未设置时换算为绝对过期时间。
+	TTL time.Duration
+	// ExpiresAt 是绝对过期时间（Unix 毫秒）；<= 0 表示未设置。
+	ExpiresAt int64
+	// PublishedAt 是发布者时间戳（Unix 毫秒）；<= 0 表示未设置。
+	PublishedAt int64
 }
 
-// WithPriority 设置优先级（包括显式设置为 Low）。
-func (o PushOptions) WithPriority(p packet.Priority) PushOptions {
-	o.priority = p
-	o.prioritySet = true
+// WithPriority 设置消息优先级。
+func (o PushOptions) WithPriority(p Priority) PushOptions {
+	o.Priority = p
 	return o
 }
 
-// WithReliable 设置是否需要 COMMIT，与优先级相互独立。
+// WithReliable 设置是否需要 COMMIT 确认。
 //
 // 默认为 false（尽力而为、不重发、离线丢弃）；需要投递保证时显式传 true。
 func (o PushOptions) WithReliable(reliable bool) PushOptions {
-	o.reliable = reliable
+	o.Reliable = reliable
 	return o
 }
 
-// WithTTL 设置消息存活时长；发布时自动换算为绝对过期时间，
-// 并记录发布者时间戳。
+// WithTTL 设置相对存活时长；设置 ExpiresAt 时以 ExpiresAt 为准。
 func (o PushOptions) WithTTL(ttl time.Duration) PushOptions {
-	o.ttl = ttl
+	o.TTL = ttl
 	return o
 }
 
 // WithExpiresAt 设置绝对过期时间（Unix 毫秒）；<= 0 表示永不过期。
 func (o PushOptions) WithExpiresAt(ms int64) PushOptions {
-	o.expiresAt = ms
+	o.ExpiresAt = ms
 	return o
 }
 
 // WithPublishedAt 设置发布者时间戳（Unix 毫秒）。
 func (o PushOptions) WithPublishedAt(ms int64) PushOptions {
-	o.publishedAt = ms
+	o.PublishedAt = ms
 	return o
 }
 
-// WithProperties 设置随 PUSH 发送的可选属性。
+// WithHeaders 设置消息头。
+func (o PushOptions) WithHeaders(h map[string]string) PushOptions {
+	o.Headers = maps.Clone(h)
+	return o
+}
+
+// WithProperties 设置随 PUSH 发送的属性。
 func (o PushOptions) WithProperties(props map[string]string) PushOptions {
 	o.Properties = maps.Clone(props)
-	return o
-}
-
-// WithHeaders 设置元数据。
-func (o PushOptions) WithHeaders(h map[string]string) PushOptions {
-	o.Headers = h
-	return o
-}
-
-// WithTarget 设置定向投递目标。
-func (o PushOptions) WithTarget(clientID string) PushOptions {
-	o.Target = clientID
 	return o
 }
 
@@ -94,30 +81,33 @@ func (o PushOptions) WithoutAck() PushOptions {
 	return o
 }
 
-// effectivePriority 返回本次发布实际使用的优先级：默认 Medium。
-func (o PushOptions) effectivePriority() packet.Priority {
-	if o.prioritySet {
-		return o.priority
+// validate 校验发布选项。
+func (o PushOptions) validate() error {
+	if !o.Priority.valid() {
+		return fmt.Errorf("%w: priority %d", ErrInvalidOption, o.Priority)
 	}
-	return packet.PriorityMedium
+	if o.TTL < 0 {
+		return fmt.Errorf("%w: negative TTL", ErrInvalidOption)
+	}
+	return nil
 }
 
-func newRecord(channel string, payload []byte, priority packet.Priority, opts PushOptions) packet.Record {
-	rec := packet.Record{Channel: channel, Payload: payload}
-	rec.Target = opts.Target
+// newRecord 构造待发送的记录。
+func newRecord(channel, target string, payload []byte, opts PushOptions) packet.Record {
+	rec := packet.Record{Channel: channel, Target: target, Payload: payload}
 	rec.Headers = opts.Headers
-	rec.SetPriority(priority)
-	rec.SetReliable(opts.reliable)
+	rec.SetPriority(opts.Priority.packet())
+	rec.SetReliable(opts.Reliable)
 
 	now := time.Now().UnixMilli()
-	expiresAt := opts.expiresAt
-	if expiresAt <= 0 && opts.ttl > 0 {
-		expiresAt = now + opts.ttl.Milliseconds()
+	expiresAt := opts.ExpiresAt
+	if expiresAt <= 0 && opts.TTL > 0 {
+		expiresAt = now + opts.TTL.Milliseconds()
 	}
 	if expiresAt > 0 {
 		rec.SetExpiresAt(expiresAt)
 	}
-	publishedAt := opts.publishedAt
+	publishedAt := opts.PublishedAt
 	if publishedAt <= 0 && expiresAt > 0 {
 		publishedAt = now
 	}
@@ -129,50 +119,52 @@ func newRecord(channel string, payload []byte, priority packet.Priority, opts Pu
 
 // PushResult 是 PUSH_OK 的结果摘要。
 //
-// NoAck 发布没有服务端响应，返回零值。
+// NoAck 发布没有服务端响应，返回零值（Reason 为零值即 Success）。
 type PushResult struct {
-	ID      packet.PacketID
-	Reason  packet.ReasonCode
-	Matched uint32 // 入队成功的客户端数
-	Dropped uint32 // 未入队的客户端数（离线不可靠消息、队列溢出、目标接收上限过小等）
-	// Properties 是 PUSH_OK 返回的可选属性（例如 error 细节）。
+	// ID 是服务端为这条记录分配的 ID。
+	ID packet.PacketID
+	// Reason 是服务端的处理结果；成功为 ReasonSuccess。
+	Reason packet.ReasonCode
+	// Matched 是入队成功的客户端数。
+	Matched uint32
+	// Dropped 是未入队的客户端数（离线不可靠消息、队列溢出、目标接收上限过小等）。
+	Dropped uint32
+	// Properties 是 PUSH_OK 返回的属性，失败时含 error 细节。
 	Properties map[string]string
 }
 
 // Push 发布一条消息到指定 channel。
-func (c *Client) Push(ctx context.Context, channel string, payload []byte, opts PushOptions) error {
-	_, err := c.PushWithResult(ctx, channel, payload, opts)
-	return err
-}
-
-// PushWithResult 与 Push 相同，但额外返回服务端的匹配/丢弃统计。
-func (c *Client) PushWithResult(ctx context.Context, channel string, payload []byte, opts PushOptions) (PushResult, error) {
-	return c.push(ctx, channel, payload, opts, opts.Target != "")
+//
+// 即使返回错误，PushResult 也可能带有服务端给出的 Reason 与 ID，便于排查。
+func (c *Client) Push(ctx context.Context, channel string, payload []byte, opts PushOptions) (PushResult, error) {
+	return c.push(ctx, "", channel, payload, opts)
 }
 
 // PushTo 定向投递到指定客户端。
 //
 // 目标存在但没有声明匹配该 channel 的过滤器时返回 ErrTargetNotSubscribed；
-// 目标不存在时返回 Reason=TargetNotFound 的 ServerError。
-func (c *Client) PushTo(ctx context.Context, clientID, channel string, payload []byte, opts PushOptions) error {
-	_, err := c.PushToWithResult(ctx, clientID, channel, payload, opts)
-	return err
+// 目标不存在时返回匹配 ErrTargetNotFound 的错误。
+func (c *Client) PushTo(ctx context.Context, target, channel string, payload []byte, opts PushOptions) (PushResult, error) {
+	if target == "" {
+		return PushResult{}, fmt.Errorf("%w: empty target", ErrInvalidOption)
+	}
+	return c.push(ctx, target, channel, payload, opts)
 }
 
-// PushToWithResult 与 PushTo 相同，但额外返回服务端的匹配/丢弃统计。
-func (c *Client) PushToWithResult(ctx context.Context, clientID, channel string, payload []byte, opts PushOptions) (PushResult, error) {
-	opts.Target = clientID
-	return c.push(ctx, channel, payload, opts, true)
-}
+func (c *Client) push(ctx context.Context, target, channel string, payload []byte, opts PushOptions) (PushResult, error) {
+	if !packet.ValidateClientChannelName(channel, packet.MaxChannelLength) {
+		return PushResult{}, fmt.Errorf("%w: channel %q", ErrInvalidOption, channel)
+	}
+	if err := opts.validate(); err != nil {
+		return PushResult{}, err
+	}
 
-func (c *Client) push(ctx context.Context, channel string, payload []byte, opts PushOptions, targeted bool) (PushResult, error) {
-	pkt := packet.NewPushPacket(c.nextRequestID(),
-		newRecord(channel, payload, opts.effectivePriority(), opts))
+	pkt := packet.NewPushPacket(c.nextRequestID(), newRecord(channel, target, payload, opts))
 	pkt.Properties = maps.Clone(opts.Properties)
 	if !opts.NoAck {
 		pkt.Flags |= packet.PushFlagWantAck
 	}
-	return c.sendPush(ctx, pkt, opts.NoAck, targeted)
+	return c.sendPush(ctx, pkt, opts.NoAck, target != "")
 }
 
 func (c *Client) sendPush(ctx context.Context, pkt *packet.PushPacket, noAck, targeted bool) (PushResult, error) {

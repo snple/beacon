@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/snple/beacon/client"
-	"github.com/snple/beacon/packet"
 	"go.uber.org/zap"
 )
 
@@ -64,19 +63,19 @@ func main() {
 	defer func() { _ = logger.Sync() }()
 
 	opts := client.NewClientOptions().
-		WithCore(*address).
+		WithServer(*address).
 		WithClientID(*clientID).
 		WithCleanSession(*cleanSess).
 		WithAuth(*authMethod, []byte(*authData)).
 		WithLogger(logger)
 
 	if *channels != "" {
-		opts.WithChannels(splitList(*channels)...)
+		opts.AddChannels(channelList(*channels, false)...)
 	} else if *mode == "pull" {
-		opts.WithChannels(*channel)
+		opts.AddChannels(client.Filter(*channel))
 	}
 	if *targetOnly != "" {
-		opts.WithTargetOnlyChannels(splitList(*targetOnly)...)
+		opts.AddChannels(channelList(*targetOnly, true)...)
 	}
 
 	c, err := client.NewWithOptions(opts)
@@ -113,14 +112,22 @@ func main() {
 	}
 }
 
-func runPush(ctx context.Context, c *client.Client, channel, message string, count int, prio packet.Priority, reliable bool, ttl time.Duration, target string, interval time.Duration) {
-	opts := client.PushOptions{Target: target}.
+func runPush(ctx context.Context, c *client.Client, channel, message string, count int, prio client.Priority, reliable bool, ttl time.Duration, target string, interval time.Duration) {
+	opts := client.PushOptions{}.
 		WithPriority(prio).
 		WithReliable(reliable).
 		WithTTL(ttl)
 
 	for i := 0; i < count; i++ {
-		res, err := c.PushWithResult(ctx, channel, []byte(message), opts)
+		var (
+			res client.PushResult
+			err error
+		)
+		if target != "" {
+			res, err = c.PushTo(ctx, target, channel, []byte(message), opts)
+		} else {
+			res, err = c.Push(ctx, channel, []byte(message), opts)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "push failed: %v\n", err)
 			return
@@ -139,7 +146,7 @@ func runPush(ctx context.Context, c *client.Client, channel, message string, cou
 
 func runPull(ctx context.Context, c *client.Client, waitMs, maxCount int, print bool) {
 	for {
-		msgs, err := c.PullBatch(ctx, client.PullOptions{
+		res, err := c.PullBatch(ctx, client.PullOptions{
 			WaitMs:    uint32(waitMs),
 			Immediate: waitMs == 0,
 			MaxCount:  uint16(maxCount),
@@ -152,8 +159,8 @@ func runPull(ctx context.Context, c *client.Client, waitMs, maxCount int, print 
 			return
 		}
 
-		if len(msgs) > 0 {
-			for _, m := range msgs {
+		if len(res.Messages) > 0 {
+			for _, m := range res.Messages {
 				if print {
 					fmt.Printf("[%s] %s: %s (dup=%v priority=%s reliable=%v)\n",
 						m.ID.Hex()[:8], m.Channel, string(m.Payload), m.Dup, m.Priority, m.Reliable)
@@ -177,17 +184,33 @@ func runPull(ctx context.Context, c *client.Client, waitMs, maxCount int, print 
 	}
 }
 
-func parsePriority(s string) (packet.Priority, error) {
+func parsePriority(s string) (client.Priority, error) {
 	switch strings.ToLower(s) {
+	case "default", "":
+		return client.PriorityDefault, nil
 	case "low":
-		return packet.PriorityLow, nil
-	case "medium", "med", "":
-		return packet.PriorityMedium, nil
+		return client.PriorityLow, nil
+	case "medium", "med":
+		return client.PriorityMedium, nil
 	case "high":
-		return packet.PriorityHigh, nil
+		return client.PriorityHigh, nil
 	default:
-		return 0, fmt.Errorf("invalid priority %q", s)
+		return client.PriorityDefault, fmt.Errorf("invalid priority %q", s)
 	}
+}
+
+// channelList 把逗号分隔的过滤器转换为客户端声明。
+func channelList(s string, targetOnly bool) []client.Channel {
+	filters := splitList(s)
+	out := make([]client.Channel, 0, len(filters))
+	for _, f := range filters {
+		if targetOnly {
+			out = append(out, client.TargetOnly(f))
+		} else {
+			out = append(out, client.Filter(f))
+		}
+	}
+	return out
 }
 
 func splitList(s string) []string {

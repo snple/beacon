@@ -8,21 +8,25 @@ import (
 	"time"
 )
 
-// Dialer 连接拨号器接口
-// 用户可以实现此接口来自定义连接建立方式（WebSocket、QUIC、Unix Socket 等）
+// Dialer 是自定义连接建立方式。
+//
+// 实现方应尊重 ctx 的取消与超时；ctx 已由客户端按 ConnectTimeout 设好上限。
 type Dialer interface {
-	Dial() (net.Conn, error)
+	DialContext(ctx context.Context) (net.Conn, error)
 }
 
-// TCPDialer TCP/TLS 拨号器
+// TCPDialer 是 TCP/TLS 拨号器。
 type TCPDialer struct {
-	Address     string        // 服务器地址 (例如: "127.0.0.1:5208" 或 "tls://127.0.0.1:8883")
-	TLSConfig   *tls.Config   // TLS 配置（可选）
-	DialTimeout time.Duration // 连接超时（默认 10s）
+	// Address 是服务端地址，例如 "127.0.0.1:5208" 或 "tls://127.0.0.1:8883"。
+	Address string
+	// TLSConfig 是 TLS 配置；Address 带 tls:// 前缀或该字段非 nil 时启用 TLS。
+	TLSConfig *tls.Config
+	// DialTimeout 是 ctx 未带截止时间时使用的超时（默认 10s）。
+	DialTimeout time.Duration
 }
 
-// Dial 实现 Dialer 接口
-func (d *TCPDialer) Dial() (net.Conn, error) {
+// DialContext 实现 Dialer 接口。
+func (d *TCPDialer) DialContext(ctx context.Context) (net.Conn, error) {
 	address := d.Address
 	useTLS := false
 	if rest, ok := strings.CutPrefix(address, "tls://"); ok {
@@ -30,13 +34,15 @@ func (d *TCPDialer) Dial() (net.Conn, error) {
 		useTLS = true
 	}
 
-	timeout := d.DialTimeout
-	if timeout == 0 {
-		timeout = defaultConnectTimeout
+	if _, ok := ctx.Deadline(); !ok {
+		timeout := d.DialTimeout
+		if timeout == 0 {
+			timeout = defaultConnectTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 
 	var conn net.Conn
 	var err error

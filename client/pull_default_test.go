@@ -3,13 +3,13 @@ package client
 import "testing"
 
 func TestEffectiveWait(t *testing.T) {
-	c, err := NewWithOptions(NewClientOptions().WithClientID("t").WithCore("127.0.0.1:1"))
+	c, err := NewWithOptions(NewClientOptions().WithClientID("t").WithServer("127.0.0.1:1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if got := c.effectiveWait(PullOptions{}); got != 30000 {
-		t.Fatalf("zero WaitMs should fall back to DefaultWaitMs, got %d", got)
+		t.Fatalf("zero WaitMs should fall back to DefaultPullWaitMs, got %d", got)
 	}
 	if got := c.effectiveWait(PullOptions{WaitMs: 500}); got != 500 {
 		t.Fatalf("explicit WaitMs ignored: %d", got)
@@ -21,18 +21,18 @@ func TestEffectiveWait(t *testing.T) {
 		t.Fatalf("Immediate should win over WaitMs, got %d", got)
 	}
 
-	c.opts.DefaultWaitMs = 0
+	c.opts.DefaultPullWaitMs = 0
 	if got := c.effectiveWait(PullOptions{}); got != 0 {
-		t.Fatalf("DefaultWaitMs=0 should disable long polling, got %d", got)
+		t.Fatalf("DefaultPullWaitMs=0 should disable long polling, got %d", got)
 	}
 }
 
-func TestDefaultWaitMsIsLongPoll(t *testing.T) {
+func TestDefaultPullWaitIsLongPoll(t *testing.T) {
 	// 默认 30s，确保「空队列时等待」是默认行为而不是忙循环。
-	if NewClientOptions().DefaultWaitMs != 30000 {
-		t.Fatal("DefaultWaitMs should default to 30s")
+	if NewClientOptions().DefaultPullWaitMs != 30000 {
+		t.Fatal("DefaultPullWaitMs should default to 30s")
 	}
-	if NewClientOptions().DefaultWaitMs < 1000 {
-		t.Fatal("DefaultWaitMs should be at least 1s")
+	if NewClientOptions().DefaultPullWaitMs < 1000 {
+		t.Fatal("DefaultPullWaitMs should be at least 1s")
 	}
 }

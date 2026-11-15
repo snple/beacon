@@ -19,9 +19,9 @@ import (
 
 func newTestClientWithOptions(t *testing.T, addr, id, channels string, opts *client.ClientOptions) *client.Client {
 	t.Helper()
-	opts = opts.WithCore(addr).WithClientID(id).WithAutoReconnect(false).WithLogger(zap.NewNop())
+	opts = opts.WithServer(addr).WithClientID(id).WithAutoReconnect(false).WithLogger(zap.NewNop())
 	if channels != "" {
-		opts.WithChannels(channels)
+		opts.WithChannels(client.Filter(channels))
 	}
 	c, err := client.NewWithOptions(opts)
 	if err != nil {
@@ -43,7 +43,7 @@ func TestMaxSessionsRejected(t *testing.T) {
 	defer func() { _ = c1.Close() }()
 
 	opts := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("max-2").
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop())
@@ -73,10 +73,10 @@ func TestMaxInflightBytesRejected(t *testing.T) {
 	defer func() { _ = pub.Close() }()
 
 	ctx := context.Background()
-	if err := pub.Push(ctx, "ch/a", []byte("first"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("first"), client.PushOptions{}); err != nil {
 		t.Fatalf("first push should be accepted: %v", err)
 	}
-	err := pub.Push(ctx, "ch/a", []byte("second"), client.PushOptions{})
+	_, err := pub.Push(ctx, "ch/a", []byte("second"), client.PushOptions{})
 	if err == nil {
 		t.Fatal("second push should exceed the in-flight limit")
 	}
@@ -104,7 +104,7 @@ func TestPollMessage(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
-		if err := pub.Push(ctx, "ch/a", []byte{byte('a' + i)}, client.PushOptions{}); err != nil {
+		if _, err := pub.Push(ctx, "ch/a", []byte{byte('a' + i)}, client.PushOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -148,7 +148,7 @@ func TestPushSingleRecord(t *testing.T) {
 		{"ch/b", "2"},
 		{"other/c", "3"},
 	} {
-		if err := pub.Push(ctx, m.channel, []byte(m.payload), client.PushOptions{}); err != nil {
+		if _, err := pub.Push(ctx, m.channel, []byte(m.payload), client.PushOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -173,7 +173,7 @@ func TestPushWithoutAck(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "ch/a", []byte("noack"), client.PushOptions{}.WithoutAck()); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("noack"), client.PushOptions{}.WithoutAck()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,7 +214,7 @@ func TestOfflineQueueDeliveredOnReconnect(t *testing.T) {
 	}
 
 	c2, err := client.NewWithOptions(client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("device-1").
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop()))
@@ -258,7 +258,7 @@ func TestWebSocketTransport(t *testing.T) {
 
 	addr := "ws://" + l.Addr().String() + "/ws"
 	opts := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("ws-1").
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop())
@@ -274,12 +274,12 @@ func TestWebSocketTransport(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	if _, err := c.Declare(ctx, "ws/**"); err != nil {
+	if _, err := c.Declare(ctx, client.Filter("ws/**")); err != nil {
 		t.Fatal(err)
 	}
 
 	pub, err := client.NewWithOptions(client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("ws-2").
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop()))
@@ -291,7 +291,7 @@ func TestWebSocketTransport(t *testing.T) {
 	}
 	defer func() { _ = pub.Close() }()
 
-	if err := pub.Push(ctx, "ws/hello", []byte("over ws"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "ws/hello", []byte("over ws"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -310,7 +310,7 @@ func TestSessionExpiry(t *testing.T) {
 		WithSessionCheckInterval(100*time.Millisecond))
 
 	c, err := client.NewWithOptions(client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("tmp-1").
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop()))
@@ -339,14 +339,14 @@ func TestDeclareReplacesChannels(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	if _, err := sub.Declare(ctx, "b/**"); err != nil {
+	if _, err := sub.Declare(ctx, client.Filter("b/**")); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := pub.Push(ctx, "a/x", []byte("no"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "a/x", []byte("no"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := pub.Push(ctx, "b/x", []byte("yes"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "b/x", []byte("yes"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -365,7 +365,7 @@ func TestMessageAck(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
@@ -394,13 +394,13 @@ func TestPriorityHighBeforeMedium(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	medOpt := client.PushOptions{}.WithPriority(packet.PriorityMedium).WithReliable(true)
-	highOpt := client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(true)
+	medOpt := client.PushOptions{}.WithPriority(client.PriorityMedium).WithReliable(true)
+	highOpt := client.PushOptions{}.WithPriority(client.PriorityHigh).WithReliable(true)
 
-	if err := pub.Push(ctx, "ch/a", []byte("med"), medOpt); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("med"), medOpt); err != nil {
 		t.Fatal(err)
 	}
-	if err := pub.Push(ctx, "ch/a", []byte("high"), highOpt); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("high"), highOpt); err != nil {
 		t.Fatal(err)
 	}
 
@@ -420,10 +420,10 @@ func TestHighPriorityBypassesUnackedMedium(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	medOpt := client.PushOptions{}.WithPriority(packet.PriorityMedium).WithReliable(true)
-	highOpt := client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(true)
+	medOpt := client.PushOptions{}.WithPriority(client.PriorityMedium).WithReliable(true)
+	highOpt := client.PushOptions{}.WithPriority(client.PriorityHigh).WithReliable(true)
 
-	if err := pub.Push(ctx, "ch/a", []byte("med"), medOpt); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("med"), medOpt); err != nil {
 		t.Fatal(err)
 	}
 	med, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
@@ -435,7 +435,7 @@ func TestHighPriorityBypassesUnackedMedium(t *testing.T) {
 	}
 	// 故意不 commit med。
 
-	if err := pub.Push(ctx, "ch/a", []byte("high"), highOpt); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("high"), highOpt); err != nil {
 		t.Fatal(err)
 	}
 	high, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
@@ -454,8 +454,8 @@ func TestHighPriorityBypassesUnackedMedium(t *testing.T) {
 		t.Fatalf("delivered=%d, want 2 occupied slots", info.Delivered)
 	}
 
-	if n, err := sub.CommitAll(ctx); err != nil || n != 2 {
-		t.Fatalf("commit: n=%d err=%v", n, err)
+	if res, err := sub.CommitAll(ctx); err != nil || res.Committed != 2 {
+		t.Fatalf("commit: committed=%d err=%v", res.Committed, err)
 	}
 	if next, err := sub.Pull(ctx, client.PullOptions{WaitMs: 100}); err != nil || next != nil {
 		t.Fatalf("expected empty after commit, got %+v err=%v", next, err)
@@ -473,10 +473,10 @@ func TestOnDeliverRejectsMessage(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "ch/ok", []byte("keep"), client.PushOptions{}.WithReliable(true)); err != nil {
+	if _, err := pub.Push(ctx, "ch/ok", []byte("keep"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
-	if err := pub.Push(ctx, "ch/blocked", []byte("drop"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "ch/blocked", []byte("drop"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -524,7 +524,7 @@ func TestOnDeliverRejectsRedelivery(t *testing.T) {
 	pub := newTestClient(t, addr, "dup-pub")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "dup/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+	if _, err := pub.Push(ctx, "dup/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
@@ -557,7 +557,7 @@ func TestOnDeliverRejectsRedelivery(t *testing.T) {
 		t.Fatalf("dropped=%d, want 1", got)
 	}
 	// 窗口已释放：后续消息可以继续投递。
-	if err := pub.Push(ctx, "dup/a", []byte("w"), client.PushOptions{}.WithReliable(true)); err != nil {
+	if _, err := pub.Push(ctx, "dup/a", []byte("w"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	next, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
@@ -625,7 +625,7 @@ func TestAdminPushDefaultsToMedium(t *testing.T) {
 	if msg == nil {
 		t.Fatal("expected 1 message")
 	}
-	if msg.Priority != packet.PriorityMedium {
+	if msg.Priority != client.PriorityMedium {
 		t.Fatalf("default priority = %v, want medium", msg.Priority)
 	}
 	if msg.NeedsCommit() {
@@ -717,7 +717,7 @@ func TestChannelLengthLimitEnforced(t *testing.T) {
 
 func assertPushChannel(t *testing.T, c *client.Client, ctx context.Context, channel string, wantOK bool) {
 	t.Helper()
-	err := c.Push(ctx, channel, nil, client.PushOptions{})
+	_, err := c.Push(ctx, channel, nil, client.PushOptions{})
 	if wantOK {
 		// 没有订阅者时返回 NoMatch（非错误），说明 channel 本身已通过校验。
 		if err != nil {
@@ -733,19 +733,19 @@ func assertPushChannel(t *testing.T, c *client.Client, ctx context.Context, chan
 
 func assertDeclareChannel(t *testing.T, c *client.Client, ctx context.Context, filter string, want packet.ReasonCode) {
 	t.Helper()
-	res, err := c.Declare(ctx, filter)
+	res, err := c.Declare(ctx, client.Filter(filter))
 	if err != nil {
 		t.Fatalf("declare len %d: %v", len(filter), err)
 	}
 	// DECLARE_RESP 只回显失败项；接受时结果为空。
 	if want == packet.ReasonSuccess {
-		if len(res) != 0 {
-			t.Fatalf("declare len %d: expected no failures, got %+v", len(filter), res)
+		if len(res.Rejected) != 0 {
+			t.Fatalf("declare len %d: expected no failures, got %+v", len(filter), res.Rejected)
 		}
 		return
 	}
-	if len(res) != 1 || res[0].Reason != want {
-		t.Fatalf("declare len %d: got %+v, want reason %s", len(filter), res, want)
+	if len(res.Rejected) != 1 || res.Rejected[0].Reason != want {
+		t.Fatalf("declare len %d: got %+v, want reason %s", len(filter), res.Rejected, want)
 	}
 }
 
@@ -759,20 +759,20 @@ func TestOfflineQueuePolicy(t *testing.T) {
 	_ = sub.Close()
 	waitClientDetached(t, b, "offline-sub")
 
-	push := func(channel string, prio packet.Priority, reliable bool) {
+	push := func(channel string, prio client.Priority, reliable bool) {
 		t.Helper()
 		opts := client.PushOptions{}.WithPriority(prio).WithReliable(reliable)
-		if err := pub.Push(ctx, channel, []byte(channel), opts); err != nil {
+		if _, err := pub.Push(ctx, channel, []byte(channel), opts); err != nil {
 			t.Fatalf("push %s: %v", channel, err)
 		}
 	}
 
-	push("off/m1", packet.PriorityMedium, true)
-	push("off/h1", packet.PriorityHigh, true)
+	push("off/m1", client.PriorityMedium, true)
+	push("off/h1", client.PriorityHigh, true)
 	// 不可靠消息在离线时被丢弃，不占用队列。
-	push("off/l1", packet.PriorityLow, false)
+	push("off/l1", client.PriorityLow, false)
 	// 队列已满（cap=2）：挤掉最旧的 Medium。
-	push("off/m2", packet.PriorityMedium, true)
+	push("off/m2", client.PriorityMedium, true)
 
 	info, err := b.GetClientInfo("offline-sub")
 	if err != nil {
@@ -814,12 +814,12 @@ func TestCleanSessionClearsState(t *testing.T) {
 	_ = sub.Close()
 	waitClientDetached(t, b, "clean-1")
 
-	if err := pub.Push(ctx, "c/x", []byte("stale"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "c/x", []byte("stale"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
 	clean := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("clean-1").
 		WithCleanSession(true).
 		WithAutoReconnect(false).
@@ -852,7 +852,7 @@ func TestCleanSessionTakeover(t *testing.T) {
 	pub := newTestClient(t, addr, "clean-pub2")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "c/1", []byte("stale"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "c/1", []byte("stale"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// 先确认旧会话确实收到了积压。
@@ -861,7 +861,7 @@ func TestCleanSessionTakeover(t *testing.T) {
 	}
 
 	clean := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("clean-2").
 		WithCleanSession(true).
 		WithAutoReconnect(false).
@@ -895,9 +895,9 @@ func TestAutoClientIDReconnectResumesSession(t *testing.T) {
 	b, addr := startCore(t, nil)
 
 	opts := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithAutoReconnect(true).
-		WithChannels("auto/**").
+		WithChannels(client.Filter("auto/**")).
 		WithLogger(zap.NewNop())
 	c, err := client.NewWithOptions(opts)
 	if err != nil {
@@ -919,7 +919,7 @@ func TestAutoClientIDReconnectResumesSession(t *testing.T) {
 	}
 
 	pub := newTestClient(t, addr, "auto-pub")
-	if err := pub.Push(ctx, "auto/x", []byte("queued"), client.PushOptions{}.WithReliable(true)); err != nil {
+	if _, err := pub.Push(ctx, "auto/x", []byte("queued"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -964,8 +964,8 @@ func TestUncommittedTimeoutRestartsOnReconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if err := pub.Push(ctx, "ch/a", []byte("x"),
-		client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(true)); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("x"),
+		client.PushOptions{}.WithPriority(client.PriorityHigh).WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 500})
@@ -979,7 +979,7 @@ func TestUncommittedTimeoutRestartsOnReconnect(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 
 	opts := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("unc-1").
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop())
@@ -1050,7 +1050,7 @@ func TestRuntimeDeclarationReplayedOnReconnect(t *testing.T) {
 	b, addr := startCore(t, nil)
 
 	opts := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("decl-1").
 		WithCleanSession(true).
 		WithAutoReconnect(true).
@@ -1066,7 +1066,7 @@ func TestRuntimeDeclarationReplayedOnReconnect(t *testing.T) {
 	if err := c.ConnectContext(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Declare(ctx, "decl/**"); err != nil {
+	if _, err := c.Declare(ctx, client.Filter("decl/**")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1089,7 +1089,7 @@ func TestRuntimeDeclarationReplayedOnReconnect(t *testing.T) {
 	}
 
 	pub := newTestClient(t, addr, "decl-pub")
-	if err := pub.Push(ctx, "decl/x", []byte("ok"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "decl/x", []byte("ok"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	msg, err := c.Pull(ctx, client.PullOptions{WaitMs: 1000})
@@ -1108,9 +1108,9 @@ func TestSmallReceiveLimitDoesNotRestrictSending(t *testing.T) {
 	ctx := context.Background()
 
 	opts := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("small-recv").
-		WithMaxPacketSize(512).
+		WithMaxRecvPacketSize(512).
 		WithAutoReconnect(false).
 		WithLogger(zap.NewNop())
 	pub, err := client.NewWithOptions(opts)
@@ -1123,7 +1123,7 @@ func TestSmallReceiveLimitDoesNotRestrictSending(t *testing.T) {
 	}
 
 	payload := make([]byte, 2048)
-	if err := pub.Push(ctx, "big/x", payload, client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "big/x", payload, client.PushOptions{}); err != nil {
 		t.Fatalf("send must not be limited by the receive limit: %v", err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 1000})
@@ -1142,7 +1142,7 @@ func TestMaxSendPacketSizeIsEnforced(t *testing.T) {
 	ctx := context.Background()
 
 	opts := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("small-send").
 		WithMaxSendPacketSize(512).
 		WithAutoReconnect(false).
@@ -1155,7 +1155,7 @@ func TestMaxSendPacketSizeIsEnforced(t *testing.T) {
 	if err := pub.ConnectContext(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := pub.Push(ctx, "send/x", make([]byte, 2048), client.PushOptions{}); err == nil {
+	if _, err := pub.Push(ctx, "send/x", make([]byte, 2048), client.PushOptions{}); err == nil {
 		t.Fatal("send should be rejected by MaxSendPacketSize")
 	}
 }
@@ -1172,14 +1172,14 @@ func TestReliabilityIndependentOfPriority(t *testing.T) {
 	}
 	waitClientDetached(t, b, "rel-1")
 
-	lowReliable := client.PushOptions{}.WithPriority(packet.PriorityLow).WithReliable(true)
-	res, err := pub.PushWithResult(ctx, "r/low", []byte("keep"), lowReliable)
+	lowReliable := client.PushOptions{}.WithPriority(client.PriorityLow).WithReliable(true)
+	res, err := pub.Push(ctx, "r/low", []byte("keep"), lowReliable)
 	if err != nil || res.Matched != 1 || res.Dropped != 0 {
 		t.Fatalf("low+reliable should be queued offline: %+v err=%v", res, err)
 	}
 
-	highUnreliable := client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(false)
-	res, err = pub.PushWithResult(ctx, "r/high", []byte("drop"), highUnreliable)
+	highUnreliable := client.PushOptions{}.WithPriority(client.PriorityHigh).WithReliable(false)
+	res, err = pub.Push(ctx, "r/high", []byte("drop"), highUnreliable)
 	if err != nil || res.Matched != 0 || res.Dropped != 1 {
 		t.Fatalf("high+unreliable should be dropped offline: %+v err=%v", res, err)
 	}
@@ -1189,7 +1189,7 @@ func TestReliabilityIndependentOfPriority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if msg == nil || string(msg.Payload) != "keep" || msg.Priority != packet.PriorityLow || !msg.NeedsCommit() {
+	if msg == nil || string(msg.Payload) != "keep" || msg.Priority != client.PriorityLow || !msg.NeedsCommit() {
 		t.Fatalf("unexpected message: %+v", msg)
 	}
 	if err := msg.Ack(ctx); err != nil {
@@ -1204,11 +1204,11 @@ func TestUnreliableDoesNotConsumeWindow(t *testing.T) {
 	pub := newTestClient(t, addr, "win-pub")
 	ctx := context.Background()
 
-	highUnreliable := client.PushOptions{}.WithPriority(packet.PriorityHigh).WithReliable(false)
-	if err := pub.Push(ctx, "w/high", []byte("u"), highUnreliable); err != nil {
+	highUnreliable := client.PushOptions{}.WithPriority(client.PriorityHigh).WithReliable(false)
+	if _, err := pub.Push(ctx, "w/high", []byte("u"), highUnreliable); err != nil {
 		t.Fatal(err)
 	}
-	if err := pub.Push(ctx, "w/med", []byte("r"), client.PushOptions{}.WithReliable(true)); err != nil {
+	if _, err := pub.Push(ctx, "w/med", []byte("r"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1233,7 +1233,7 @@ func TestPushDefaultsToUnreliable(t *testing.T) {
 	ctx := context.Background()
 
 	for _, v := range []string{"1", "2"} {
-		if err := pub.Push(ctx, "d/a", []byte(v), client.PushOptions{}); err != nil {
+		if _, err := pub.Push(ctx, "d/a", []byte(v), client.PushOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1250,8 +1250,8 @@ func TestPushDefaultsToUnreliable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if n, err := sub.CommitAll(ctx); err != nil || n != 0 {
-		t.Fatalf("unreliable messages must not be tracked: n=%d err=%v", n, err)
+	if res, err := sub.CommitAll(ctx); err != nil || res.Committed != 0 {
+		t.Fatalf("unreliable messages must not be tracked: committed=%d err=%v", res.Committed, err)
 	}
 }
 
@@ -1263,29 +1263,29 @@ func TestPullBatchMaxBytes(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 2; i++ {
-		if err := pub.Push(ctx, "m/a", make([]byte, 100), client.PushOptions{}.WithReliable(true)); err != nil {
+		if _, err := pub.Push(ctx, "m/a", make([]byte, 100), client.PushOptions{}.WithReliable(true)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	msgs, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 10, MaxBytes: 150})
+	res, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 10, MaxBytes: 150})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("MaxBytes should limit batch to 1, got %d", len(msgs))
+	if len(res.Messages) != 1 {
+		t.Fatalf("MaxBytes should limit batch to 1, got %d", len(res.Messages))
 	}
-	if err := msgs[0].Ack(ctx); err != nil {
+	if err := res.Messages[0].Ack(ctx); err != nil {
 		t.Fatal(err)
 	}
 	rest, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rest) != 1 {
-		t.Fatalf("remaining message: %d", len(rest))
+	if len(rest.Messages) != 1 {
+		t.Fatalf("remaining message: %d", len(rest.Messages))
 	}
-	if err := rest[0].Ack(ctx); err != nil {
+	if err := rest.Messages[0].Ack(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1300,7 +1300,7 @@ func TestPushErrorDetail(t *testing.T) {
 	_, addr := startCore(t, opts)
 	pub := newTestClient(t, addr, "err-pub")
 
-	_, err := pub.PushWithResult(context.Background(), "ch/a", []byte("x"), client.PushOptions{})
+	_, err := pub.Push(context.Background(), "ch/a", []byte("x"), client.PushOptions{})
 	var se *client.ServerError
 	if !errors.As(err, &se) || se.Detail == "" {
 		t.Fatalf("expected ServerError with detail, got %v", err)
@@ -1323,7 +1323,7 @@ func TestPushHookRejectReason(t *testing.T) {
 	pub := newTestClient(t, addr, "reason-pub")
 	ctx := context.Background()
 
-	res, err := pub.PushWithResult(ctx, "ch/a", []byte("x"), client.PushOptions{})
+	res, err := pub.Push(ctx, "ch/a", []byte("x"), client.PushOptions{})
 	if err != nil {
 		t.Fatalf("client push should be accepted: %v", err)
 	}
@@ -1345,7 +1345,7 @@ func TestPushHookRejectReason(t *testing.T) {
 	})
 	_, addr = startCore(t, opts)
 	pub = newTestClient(t, addr, "reason-pub-2")
-	_, err = pub.PushWithResult(ctx, "ch/a", []byte("x"), client.PushOptions{})
+	_, err = pub.Push(ctx, "ch/a", []byte("x"), client.PushOptions{})
 	var se *client.ServerError
 	if !errors.As(err, &se) || se.Reason != packet.ReasonNotAuthorized {
 		t.Fatalf("plain hook error should map to NotAuthorized, got %v", err)
@@ -1374,9 +1374,9 @@ func TestConnackPropertiesRespectClientMaxPacket(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, addr := startCore(t, tc.opts)
 			opts := client.NewClientOptions().
-				WithCore(addr).
+				WithServer(addr).
 				WithClientID("prop-big").
-				WithMaxPacketSize(packet.MinPacketSize).
+				WithMaxRecvPacketSize(packet.MinPacketSize).
 				WithAutoReconnect(false).
 				WithLogger(zap.NewNop())
 			c, err := client.NewWithOptions(opts)
@@ -1420,7 +1420,7 @@ func TestMessageExpiredAtPush(t *testing.T) {
 	_, addr := startCore(t, nil)
 	pub := newTestClient(t, addr, "exp-pub")
 
-	_, err := pub.PushWithResult(context.Background(), "ch/a", []byte("x"),
+	_, err := pub.Push(context.Background(), "ch/a", []byte("x"),
 		client.PushOptions{}.WithExpiresAt(time.Now().Add(-time.Second).UnixMilli()))
 	if !errors.Is(err, client.ErrExpired) {
 		t.Fatalf("expected ErrExpired, got %v", err)
@@ -1434,7 +1434,7 @@ func TestMessageTTLDroppedBeforePull(t *testing.T) {
 	pub := newTestClient(t, addr, "ttl-pub")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "ttl/a", []byte("x"),
+	if _, err := pub.Push(ctx, "ttl/a", []byte("x"),
 		client.PushOptions{}.WithReliable(true).WithTTL(50*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
@@ -1462,7 +1462,7 @@ func TestOfflineMessageExpires(t *testing.T) {
 	_ = sub.Close()
 	waitClientDetached(t, b, "ttl-off")
 
-	if err := pub.Push(ctx, "off/a", []byte("x"),
+	if _, err := pub.Push(ctx, "off/a", []byte("x"),
 		client.PushOptions{}.WithReliable(true).WithTTL(50*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
@@ -1525,16 +1525,16 @@ func TestMaxPullBatchClamp(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		if err := pub.Push(ctx, "b/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+		if _, err := pub.Push(ctx, "b/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	msgs, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 10})
+	res, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("MaxPullBatch should clamp to 2, got %d", len(msgs))
+	if len(res.Messages) != 2 {
+		t.Fatalf("MaxPullBatch should clamp to 2, got %d", len(res.Messages))
 	}
 	if _, err := sub.CommitAll(ctx); err != nil {
 		t.Fatal(err)
@@ -1649,7 +1649,7 @@ func TestPushHookMutatesMessage(t *testing.T) {
 	pub := newTestClient(t, addr, "mut-pub")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "mut/a", []byte("v"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "mut/a", []byte("v"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
@@ -1662,7 +1662,7 @@ func TestPushHookMutatesMessage(t *testing.T) {
 	if msg.Headers["x-injected"] != "1" {
 		t.Fatalf("headers = %+v", msg.Headers)
 	}
-	if msg.Priority != packet.PriorityHigh {
+	if msg.Priority != client.PriorityHigh {
 		t.Fatalf("priority = %v", msg.Priority)
 	}
 }
@@ -1680,7 +1680,7 @@ func TestPushHookOutputSizeLimited(t *testing.T) {
 	_, addr := startCore(t, opts)
 	pub := newTestClient(t, addr, "mut-big")
 
-	_, err := pub.PushWithResult(context.Background(), "mut/a", []byte("v"), client.PushOptions{})
+	_, err := pub.Push(context.Background(), "mut/a", []byte("v"), client.PushOptions{})
 	var se *client.ServerError
 	if !errors.As(err, &se) || se.Reason != packet.ReasonPacketTooLarge {
 		t.Fatalf("expected PacketTooLarge, got %v", err)
@@ -1721,7 +1721,7 @@ func TestResponseProperties(t *testing.T) {
 		t.Fatalf("CONNACK properties = %+v", c.ServerProperties())
 	}
 
-	declared, err := c.DeclareChannelsResponse(ctx, nil, client.Channel{Filter: "rsp/**"})
+	declared, err := c.Declare(ctx, client.Filter("rsp/**"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1729,7 +1729,7 @@ func TestResponseProperties(t *testing.T) {
 		t.Fatalf("DECLARE_RESP: accepted=%d props=%+v", declared.Accepted, declared.Properties)
 	}
 
-	pushed, err := c.PushWithResult(ctx, "rsp/a", []byte("v"), client.PushOptions{})
+	pushed, err := c.Push(ctx, "rsp/a", []byte("v"), client.PushOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1737,7 +1737,7 @@ func TestResponseProperties(t *testing.T) {
 		t.Fatalf("PUSH_OK properties = %+v", pushed.Properties)
 	}
 
-	pulled, err := c.PullBatchResult(ctx, client.PullOptions{
+	pulled, err := c.PullBatch(ctx, client.PullOptions{
 		WaitMs:     300,
 		Properties: map[string]string{"client-cursor": "42"},
 	})
@@ -1761,7 +1761,7 @@ func TestDeclareHookEvent(t *testing.T) {
 	}))
 	c := newTestClient(t, addr, "decl-1")
 
-	if _, err := c.Declare(context.Background(), "a/**", "$sys/x"); err != nil {
+	if _, err := c.Declare(context.Background(), client.Filter("a/**"), client.Filter("$sys/x")); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -1795,7 +1795,7 @@ func TestSessionEndHook(t *testing.T) {
 	pub := newTestClient(t, addr, "end-pub")
 
 	// 留一条未消费的可靠消息，随会话一起释放。
-	if err := pub.Push(context.Background(), "end/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+	if _, err := pub.Push(context.Background(), "end/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	_ = sub.Close()
@@ -1847,7 +1847,7 @@ func TestChainHooks(t *testing.T) {
 	pub := newTestClient(t, addr, "chain-pub")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "chain/ok", []byte("v"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "chain/ok", []byte("v"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
@@ -1858,7 +1858,7 @@ func TestChainHooks(t *testing.T) {
 		t.Fatalf("chained mutation missing: %+v", msg.Headers)
 	}
 
-	_, err = pub.PushWithResult(ctx, "chain/blocked", []byte("v"), client.PushOptions{})
+	_, err = pub.Push(ctx, "chain/blocked", []byte("v"), client.PushOptions{})
 	var se *client.ServerError
 	if !errors.As(err, &se) || se.Reason != packet.ReasonQuotaExceeded {
 		t.Fatalf("second handler should veto: %v", err)
@@ -1885,7 +1885,7 @@ func TestHookStats(t *testing.T) {
 	pub := newTestClient(t, addr, "stat-pub")
 	ctx := context.Background()
 
-	_, err := pub.PushWithResult(ctx, "boom/x", []byte("v"), client.PushOptions{})
+	_, err := pub.Push(ctx, "boom/x", []byte("v"), client.PushOptions{})
 	var se *client.ServerError
 	if !errors.As(err, &se) || se.Reason != packet.ReasonUnspecifiedError {
 		t.Fatalf("expected UnspecifiedError from panicking hook, got %v", err)
@@ -1914,7 +1914,7 @@ func TestNackRemovesDelivered(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	if err := pub.Push(ctx, "n/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+	if _, err := pub.Push(ctx, "n/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
 		t.Fatal(err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
@@ -1943,8 +1943,8 @@ func TestNackRemovesDelivered(t *testing.T) {
 	if got := b.GetStats().MessagesNacked; got != 1 {
 		t.Fatalf("MessagesNacked=%d", got)
 	}
-	if n, err := sub.CommitAll(ctx); err != nil || n != 0 {
-		t.Fatalf("CommitAll after Nack: n=%d err=%v", n, err)
+	if res, err := sub.CommitAll(ctx); err != nil || res.Committed != 0 {
+		t.Fatalf("CommitAll after Nack: committed=%d err=%v", res.Committed, err)
 	}
 }
 
@@ -2045,7 +2045,7 @@ func TestTargetedPublishRequiresPermission(t *testing.T) {
 	pub := newTestClient(t, addr, "acl-pub")
 	ctx := context.Background()
 
-	err := pub.PushTo(ctx, "acl-sub", "cmd/x", []byte("v"), client.PushOptions{})
+	_, err := pub.PushTo(ctx, "acl-sub", "cmd/x", []byte("v"), client.PushOptions{})
 	var se *client.ServerError
 	if !errors.As(err, &se) || se.Reason != packet.ReasonNotAuthorized {
 		t.Fatalf("expected NotAuthorized for targeted publish, got %v", err)
@@ -2054,7 +2054,7 @@ func TestTargetedPublishRequiresPermission(t *testing.T) {
 	allow.Store(true)
 	// 身份在建连时确定，授权变化后必须重新建连。
 	pubAllowed := newTestClient(t, addr, "acl-pub-2")
-	if err := pubAllowed.PushTo(ctx, "acl-sub", "cmd/x", []byte("v"), client.PushOptions{}); err != nil {
+	if _, err := pubAllowed.PushTo(ctx, "acl-sub", "cmd/x", []byte("v"), client.PushOptions{}); err != nil {
 		t.Fatalf("targeted publish should be allowed: %v", err)
 	}
 	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
@@ -2107,11 +2107,81 @@ func TestDeclareOverLimitRejectedCompactly(t *testing.T) {
 	_, addr := startCore(t, core.NewCoreOptions().WithMaxChannelsPerClient(2))
 	c := newTestClient(t, addr, "dc-1")
 
-	res, err := c.Declare(context.Background(), "a/1", "a/2", "a/3")
+	res, err := c.Declare(context.Background(), client.Filter("a/1"), client.Filter("a/2"), client.Filter("a/3"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res) != 1 || res[0].Reason != packet.ReasonQuotaExceeded {
-		t.Fatalf("expected single QuotaExceeded result, got %+v", res)
+	if len(res.Rejected) != 1 || res.Rejected[0].Reason != packet.ReasonQuotaExceeded {
+		t.Fatalf("expected single QuotaExceeded result, got %+v", res.Rejected)
+	}
+}
+
+// COMMIT_OK 的统计必须如实反映服务端结果：未知 ID 计入 Unknown。
+func TestCommitResultCounts(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "cr-1", "cr/**")
+	pub := newTestClient(t, addr, "cr-pub")
+	ctx := context.Background()
+
+	if _, err := pub.Push(ctx, "cr/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sub.Pull(ctx, client.PullOptions{WaitMs: 300})
+	if err != nil || msg == nil {
+		t.Fatalf("pull: %+v err=%v", msg, err)
+	}
+
+	res, err := sub.Commit(ctx, msg.ID, packet.NewPacketID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Committed != 1 || res.Unknown != 1 || res.Nacked != 0 {
+		t.Fatalf("commit result = %+v, want committed=1 unknown=1", res)
+	}
+}
+
+// PollMessage 不得自动确认未处理的消息：未 Ack 时应拿到同 ID 的重发。
+func TestPollMessageDoesNotAutoCommit(t *testing.T) {
+	_, addr := startCore(t, nil)
+	sub := newTestClient(t, addr, "poll-1", "poll/**")
+	pub := newTestClient(t, addr, "poll-pub")
+	ctx := context.Background()
+
+	if _, err := pub.Push(ctx, "poll/a", []byte("v"), client.PushOptions{}.WithReliable(true)); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := sub.PollMessage(ctx, 2*time.Second)
+	if err != nil || first == nil {
+		t.Fatalf("first poll: %+v err=%v", first, err)
+	}
+	if first.Dup {
+		t.Fatal("first delivery must not be marked dup")
+	}
+
+	second, err := sub.PollMessage(ctx, 2*time.Second)
+	if err != nil || second == nil {
+		t.Fatalf("second poll: %+v err=%v", second, err)
+	}
+	if second.ID != first.ID || !second.Dup {
+		t.Fatalf("unacked message must be redelivered, got %+v", second)
+	}
+
+	if err := second.Ack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if next, err := sub.PollMessage(ctx, 300*time.Millisecond); !errors.Is(err, client.ErrPollTimeout) || next != nil {
+		t.Fatalf("expected poll timeout after ack, got %+v err=%v", next, err)
+	}
+}
+
+// 定向投递到不存在的会话必须映射为 ErrTargetNotFound。
+func TestPushToUnknownTarget(t *testing.T) {
+	_, addr := startCore(t, nil)
+	pub := newTestClient(t, addr, "pt-pub")
+
+	_, err := pub.PushTo(context.Background(), "missing", "pt/a", []byte("v"), client.PushOptions{})
+	if !errors.Is(err, client.ErrTargetNotFound) {
+		t.Fatalf("expected ErrTargetNotFound, got %v", err)
 	}
 }

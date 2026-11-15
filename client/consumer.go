@@ -12,13 +12,19 @@ import (
 
 // Message 是客户端收到的一条消息。
 type Message struct {
-	ID       packet.PacketID
-	Channel  string
-	Source   string
-	Headers  map[string]string
-	Payload  []byte
-	Priority packet.Priority
-	// Reliable 表示该消息需要 COMMIT；与 Priority 独立。
+	// ID 是消息 ID；重发时保持不变，可用于去重。
+	ID packet.PacketID
+	// Channel 是消息所属 channel。
+	Channel string
+	// Source 是原始发布者；服务端发布时为空。
+	Source string
+	// Headers 是发布时携带的消息头。
+	Headers map[string]string
+	// Payload 是消息内容。
+	Payload []byte
+	// Priority 是消息优先级，只会是 Low/Medium/High。
+	Priority Priority
+	// Reliable 表示该消息需要 COMMIT；与优先级独立。
 	Reliable bool
 	// Dup 表示这是服务端重发的消息（此前已投递过但未确认）。
 	Dup bool
@@ -41,12 +47,13 @@ func (m *Message) Expired() bool {
 
 // Ack 立即确认单条消息。
 //
-// 只有 COMMIT 成功后才标记为已确认；失败时调用方可以安全重试。
+// 不可靠消息无需确认，直接返回 nil。只有 COMMIT 成功后才标记为已确认；
+// 失败时调用方可以安全重试。
 func (m *Message) Ack(ctx context.Context) error {
 	if !m.NeedsCommit() || m.acked.Load() {
 		return nil
 	}
-	if err := m.client.Commit(ctx, m.ID); err != nil {
+	if _, err := m.client.Commit(ctx, m.ID); err != nil {
 		return err
 	}
 	m.acked.Store(true)
@@ -54,11 +61,13 @@ func (m *Message) Ack(ctx context.Context) error {
 }
 
 // Nack 拒绝单条消息：服务端会从 delivered 移除并触发 Nack 钩子（死信处理）。
+//
+// 不可靠消息没有 delivered 状态，直接返回 nil。
 func (m *Message) Nack(ctx context.Context, reason packet.ReasonCode) error {
-	if m.acked.Load() {
+	if !m.NeedsCommit() || m.acked.Load() {
 		return nil
 	}
-	if err := m.client.Nack(ctx, m.ID, reason); err != nil {
+	if _, err := m.client.Nack(ctx, NackEntry{ID: m.ID, Reason: reason}); err != nil {
 		return err
 	}
 	m.acked.Store(true)
@@ -72,7 +81,7 @@ func newMessage(c *Client, rec *packet.Record) *Message {
 		Source:      rec.Source,
 		Headers:     rec.Headers,
 		Payload:     rec.Payload,
-		Priority:    rec.Priority(),
+		Priority:    priorityFromPacket(rec.Priority()),
 		Reliable:    rec.Reliable(),
 		Dup:         rec.Dup(),
 		ExpiresAt:   rec.ExpiresAt,
@@ -81,25 +90,22 @@ func newMessage(c *Client, rec *packet.Record) *Message {
 	}
 }
 
-// PullOptions 拉取选项。
+// PullOptions 是拉取选项。
 type PullOptions struct {
-	// WaitMs 是长轮询时长（毫秒）。0 表示使用 ClientOptions.DefaultWaitMs
+	// WaitMs 是长轮询时长（毫秒）。0 表示使用 ClientOptions.DefaultPullWaitMs
 	// （默认 30s），因此默认行为是「队列为空时等待」。
 	WaitMs uint32
-
 	// Immediate 为 true 时无论 WaitMs 如何都立即返回（非阻塞拉取）。
 	Immediate bool
-
 	// MaxCount 是单次最多拉取的记录数（0 = 1）。
 	MaxCount uint16
 	// MaxBytes 是单次响应中记录编码大小的总和上限（0 = 服务端默认）。
 	MaxBytes uint32
-	// Properties 是随 PULL 发送的可选属性。
+	// Properties 是随 PULL 发送的属性。
 	Properties map[string]string
 }
 
-// effectiveWait 计算本次请求实际使用的长轮询时长。
-// 0 表示立即返回。
+// effectiveWait 计算本次请求实际使用的长轮询时长；0 表示立即返回。
 func (c *Client) effectiveWait(opts PullOptions) uint32 {
 	if opts.Immediate {
 		return 0
@@ -107,41 +113,35 @@ func (c *Client) effectiveWait(opts PullOptions) uint32 {
 	if opts.WaitMs > 0 {
 		return opts.WaitMs
 	}
-	return c.opts.DefaultWaitMs
+	return c.opts.DefaultPullWaitMs
 }
 
-// Pull 拉取一条消息；队列为空且等待超时时返回 (nil, nil)。
-//
-// 语义：服务端在窗口内优先投递新消息，窗口已满时重发「已投递未确认」的
-// 可靠消息；因此客户端应在处理完后立即调用 Commit/Nack（或 Ack）。
-func (c *Client) Pull(ctx context.Context, opts PullOptions) (*Message, error) {
-	opts.MaxCount = 1
-	msgs, err := c.PullBatch(ctx, opts)
-	if err != nil {
-		return nil, err
-	}
-	if len(msgs) == 0 {
-		return nil, nil
-	}
-	return msgs[0], nil
-}
-
-// PullResult 是 PULL_OK 的完整结果。
+// PullResult 是一次 PULL 的完整结果。
 type PullResult struct {
-	// Messages 是本批消息；队列为空时为空。
+	// Messages 是本批消息；窗口已满时可能只包含重发的未确认消息。
 	Messages []*Message
 	// Properties 是服务端随 PULL_OK 返回的属性。
 	Properties map[string]string
 }
 
-// PullBatch 拉取一批消息；队列为空且等待超时时返回空切片。
-func (c *Client) PullBatch(ctx context.Context, opts PullOptions) ([]*Message, error) {
-	res, err := c.PullBatchResult(ctx, opts)
-	return res.Messages, err
+// Pull 拉取一条消息；队列为空且等待超时时返回 (nil, nil)。
+//
+// 语义：服务端在窗口内优先投递新消息，窗口已满时重发「已投递未确认」的
+// 可靠消息；因此客户端应在处理完后立即调用 Ack/Nack 或 Commit。
+func (c *Client) Pull(ctx context.Context, opts PullOptions) (*Message, error) {
+	opts.MaxCount = 1
+	res, err := c.PullBatch(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Messages) == 0 {
+		return nil, nil
+	}
+	return res.Messages[0], nil
 }
 
-// PullBatchResult 与 PullBatch 相同，但额外返回 PULL_OK 的属性。
-func (c *Client) PullBatchResult(ctx context.Context, opts PullOptions) (PullResult, error) {
+// PullBatch 拉取一批消息并返回服务端响应属性。
+func (c *Client) PullBatch(ctx context.Context, opts PullOptions) (PullResult, error) {
 	// 同一时刻只允许一个在途 PULL：并发拉取会拿到重复内容，
 	// 且会让本地未确认集合互相覆盖。
 	c.pullMu.Lock()
@@ -204,66 +204,160 @@ func (c *Client) PullBatchResult(ctx context.Context, opts PullOptions) (PullRes
 	}
 }
 
-// Commit 确认一条已处理的消息 ID。
-func (c *Client) Commit(ctx context.Context, id packet.PacketID) error {
-	return c.CommitBatch(ctx, []packet.PacketID{id})
+// PollMessage 反复拉取直到拿到一条消息或到达 timeout（timeout <= 0 表示一直等待）。
+//
+// 不会自动确认任何消息：调用方必须对取到的消息调用 Ack/Nack，
+// 否则未确认窗口会被占满，后续拉取只会拿到重发消息。
+func (c *Client) PollMessage(ctx context.Context, timeout time.Duration) (*Message, error) {
+	var deadline time.Time
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
+
+	for {
+		// 单次拉取的等待窗口：不超过剩余时间，也不超过客户端默认长轮询时长。
+		var waitMs uint32
+		if deadline.IsZero() {
+			waitMs = c.opts.DefaultPullWaitMs
+			if waitMs == 0 {
+				// 默认长轮询被关闭时仍然兜底，避免忙循环
+				waitMs = 30000
+			}
+		} else {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return nil, ErrPollTimeout
+			}
+			waitMs = uint32(remaining.Milliseconds())
+			if waitMs == 0 {
+				return nil, ErrPollTimeout
+			}
+			if d := c.opts.DefaultPullWaitMs; d > 0 && waitMs > d {
+				waitMs = d
+			}
+		}
+
+		msg, err := c.Pull(ctx, PullOptions{WaitMs: waitMs})
+		if err != nil {
+			return nil, err
+		}
+		if msg != nil {
+			return msg, nil
+		}
+	}
 }
 
-// CommitBatch 批量确认消息。
-func (c *Client) CommitBatch(ctx context.Context, ids []packet.PacketID) error {
+// CommitResult 是 COMMIT_OK 的结果摘要。
+type CommitResult struct {
+	// Committed 是服务端确认的条数。
+	Committed uint16
+	// Nacked 是服务端接受的 NACK 条数。
+	Nacked uint16
+	// Unknown 是服务端不认识的 ID 数（已确认、已丢弃或不可靠消息）。
+	Unknown uint16
+	// Pending 是本次确认后剩余的未投递积压。
+	Pending [3]uint32
+}
+
+// Commit 确认若干消息 ID；可变参数支持单条与整批调用。
+func (c *Client) Commit(ctx context.Context, ids ...packet.PacketID) (CommitResult, error) {
+	if len(ids) == 0 {
+		return CommitResult{}, nil
+	}
 	entries := make([]packet.CommitEntry, len(ids))
 	for i, id := range ids {
 		entries[i] = packet.CommitEntry{ID: id, Action: packet.CommitActionCommit}
 	}
-	if _, err := c.commitEntries(ctx, entries); err != nil {
-		return err
+	res, err := c.commitEntries(ctx, entries)
+	if err != nil {
+		return CommitResult{}, err
 	}
 	c.markCommittedBatch(ids)
-	return nil
+	return res, nil
 }
 
 // NackEntry 是一条 NACK 请求。
 type NackEntry struct {
-	ID     packet.PacketID
+	// ID 是要拒绝的消息 ID。
+	ID packet.PacketID
+	// Reason 是给服务端的原因码，供死信/告警使用；协议不改变处理方式。
 	Reason packet.ReasonCode
 }
 
-// Nack 拒绝一条消息（不再重发，触发服务端 Nack 钩子）。
-func (c *Client) Nack(ctx context.Context, id packet.PacketID, reason packet.ReasonCode) error {
-	return c.NackBatch(ctx, []NackEntry{{ID: id, Reason: reason}})
-}
-
-// NackBatch 批量拒绝消息。
-func (c *Client) NackBatch(ctx context.Context, entries []NackEntry) error {
+// Nack 拒绝若干消息（不再重发，并触发服务端 Nack 钩子）。
+func (c *Client) Nack(ctx context.Context, entries ...NackEntry) (CommitResult, error) {
+	if len(entries) == 0 {
+		return CommitResult{}, nil
+	}
 	ce := make([]packet.CommitEntry, len(entries))
-	for i, e := range entries {
-		ce[i] = packet.CommitEntry{ID: e.ID, Action: packet.CommitActionNack, Reason: e.Reason}
-	}
-	if _, err := c.commitEntries(ctx, ce); err != nil {
-		return err
-	}
 	ids := make([]packet.PacketID, len(entries))
 	for i, e := range entries {
+		ce[i] = packet.CommitEntry{ID: e.ID, Action: packet.CommitActionNack, Reason: e.Reason}
 		ids[i] = e.ID
 	}
+	res, err := c.commitEntries(ctx, ce)
+	if err != nil {
+		return CommitResult{}, err
+	}
 	c.markCommittedBatch(ids)
-	return nil
+	return res, nil
 }
 
-func (c *Client) commitEntries(ctx context.Context, entries []packet.CommitEntry) (*packet.CommitOkPacket, error) {
+// CommitAll 确认当前所有未确认的可靠消息。
+//
+// 提交失败时未确认集合保持可重试状态；成功与否以服务端返回的
+// CommitResult 为准（Unknown 表示该 ID 已不在服务端 delivered 中）。
+func (c *Client) CommitAll(ctx context.Context) (CommitResult, error) {
+	c.uncommittedMu.Lock()
+	pending := c.uncommitted
+	c.uncommitted = nil
+	c.uncommittedMu.Unlock()
+
+	ids := make([]packet.PacketID, 0, len(pending))
+	for _, m := range pending {
+		if m.NeedsCommit() && !m.acked.Load() {
+			ids = append(ids, m.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return CommitResult{}, nil
+	}
+
+	entries := make([]packet.CommitEntry, len(ids))
+	for i, id := range ids {
+		entries[i] = packet.CommitEntry{ID: id, Action: packet.CommitActionCommit}
+	}
+	res, err := c.commitEntries(ctx, entries)
+	if err != nil {
+		// 提交失败：全部未确认条目放回，调用方可以重试。
+		c.mergeUncommitted(pending)
+		return CommitResult{}, err
+	}
+	for _, m := range pending {
+		m.acked.Store(true)
+	}
+	return res, nil
+}
+
+func (c *Client) commitEntries(ctx context.Context, entries []packet.CommitEntry) (CommitResult, error) {
 	req := packet.NewCommitBatchPacket(c.nextRequestID(), entries)
 	resp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
 	if err != nil {
-		return nil, err
+		return CommitResult{}, err
 	}
 	ok, valid := resp.(*packet.CommitOkPacket)
 	if !valid {
-		return nil, fmt.Errorf("unexpected response %s", resp.Type())
+		return CommitResult{}, fmt.Errorf("unexpected response %s", resp.Type())
 	}
-	return ok, nil
+	return CommitResult{
+		Committed: ok.Committed,
+		Nacked:    ok.Nacked,
+		Unknown:   ok.Unknown,
+		Pending:   ok.Pending,
+	}, nil
 }
 
-// markCommittedBatch 从本地未确认集合中移除成功提交/拒绝的消息。
+// markCommittedBatch 从本地未确认集合中移除已提交/拒绝的消息。
 func (c *Client) markCommittedBatch(ids []packet.PacketID) {
 	if len(ids) == 0 {
 		return
@@ -319,143 +413,32 @@ func (c *Client) mergeUncommitted(extra []*Message) {
 	c.uncommitted = merged
 }
 
-// CommitAll 批量确认当前所有需要确认的消息。
-//
-// 返回实际提交的条数。提交失败时未确认集合保持可重试状态。
-func (c *Client) CommitAll(ctx context.Context) (int, error) {
-	c.uncommittedMu.Lock()
-	pending := c.uncommitted
-	c.uncommitted = nil
-	c.uncommittedMu.Unlock()
-
-	ids := make([]packet.PacketID, 0, len(pending))
-	for _, m := range pending {
-		if m.NeedsCommit() && !m.acked.Load() {
-			ids = append(ids, m.ID)
-		}
-	}
-	if len(ids) == 0 {
-		return 0, nil
-	}
-
-	entries := make([]packet.CommitEntry, len(ids))
-	for i, id := range ids {
-		entries[i] = packet.CommitEntry{ID: id, Action: packet.CommitActionCommit}
-	}
-	if _, err := c.commitEntries(ctx, entries); err != nil {
-		// 提交失败：全部未确认条目放回，调用方可以重试。
-		c.mergeUncommitted(pending)
-		return 0, err
-	}
-	for _, m := range pending {
-		m.acked.Store(true)
-	}
-	return len(ids), nil
-}
-
-// PollMessage 逐条取消息；timeout<=0 表示一直等待。
-func (c *Client) PollMessage(ctx context.Context, timeout time.Duration) (*Message, error) {
-	var deadline time.Time
-	if timeout > 0 {
-		deadline = time.Now().Add(timeout)
-	}
-
-	for {
-		if c.hasUncommitted() {
-			if _, err := c.CommitAll(ctx); err != nil {
-				return nil, err
-			}
-		}
-
-		// 单次拉取的等待窗口：不超过剩余时间，也不超过客户端默认长轮询时长。
-		var waitMs uint32
-		if deadline.IsZero() {
-			waitMs = c.opts.DefaultWaitMs
-			if waitMs == 0 {
-				// 默认长轮询被关闭时仍然兜底，避免忙循环
-				waitMs = 30000
-			}
-		} else {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				return nil, ErrPollTimeout
-			}
-			waitMs = uint32(remaining.Milliseconds())
-			if waitMs == 0 {
-				return nil, ErrPollTimeout
-			}
-			if d := c.opts.DefaultWaitMs; d > 0 && waitMs > d {
-				waitMs = d
-			}
-		}
-
-		msg, err := c.Pull(ctx, PullOptions{WaitMs: waitMs})
-		if err != nil {
-			return nil, err
-		}
-		if msg != nil {
-			return msg, nil
-		}
-	}
-}
-
-// DeclareResult 单个 channel 的声明结果。
-type DeclareResult struct {
-	Channel string
-	Reason  packet.ReasonCode
-}
-
 // Channel 是一项 channel 声明。
 type Channel struct {
-	// Filter 是 channel 过滤器（支持 "*" / "**" 通配符）。
+	// Filter 是 channel 过滤器（支持 "*" 单层与 "**" 多层通配符）。
 	Filter string
 	// TargetOnly 为 true 时只接收定向投递（PushTo），不参与广播匹配。
-	// 默认同时接收广播与定向投递。
 	TargetOnly bool
 }
 
-// Declare 全量替换 channel 声明：声明的过滤器同时接收广播与定向投递。
-//
-// 返回的切片只包含被拒绝的项（服务端为压缩响应只回显失败项）。
-func (c *Client) Declare(ctx context.Context, channels ...string) ([]DeclareResult, error) {
-	decls := make([]Channel, len(channels))
-	for i, ch := range channels {
-		decls[i] = Channel{Filter: ch}
-	}
-	return c.DeclareChannels(ctx, decls...)
+// Filter 构造同时接收广播与定向投递的声明。
+func Filter(filter string) Channel { return Channel{Filter: filter} }
+
+// TargetOnly 构造只接收定向投递的声明。
+func TargetOnly(filter string) Channel { return Channel{Filter: filter, TargetOnly: true} }
+
+// ChannelResult 是单个 channel 声明的结果。
+type ChannelResult struct {
+	// Channel 是被拒绝的过滤器。
+	Channel string
+	// Reason 是拒绝原因。
+	Reason packet.ReasonCode
 }
 
-// DeclareChannels 全量替换 channel 声明，可逐项指定是否只接收定向投递。
-//
-// 返回的切片只包含被拒绝的项（服务端为压缩响应只回显失败项）。
-// 请求会被记住，并在每次重连后自动重放。
-func (c *Client) DeclareChannels(ctx context.Context, channels ...Channel) ([]DeclareResult, error) {
-	return c.DeclareChannelsWithProperties(ctx, nil, channels...)
-}
-
-// DeclareWithProperties 是 Declare 的属性版本：属性会随 DECLARE 发送并记录，
-// 在每次重连后随声明一起重放。
-func (c *Client) DeclareWithProperties(ctx context.Context, props map[string]string, channels ...string) ([]DeclareResult, error) {
-	decls := make([]Channel, len(channels))
-	for i, ch := range channels {
-		decls[i] = Channel{Filter: ch}
-	}
-	return c.DeclareChannelsWithProperties(ctx, props, decls...)
-}
-
-// DeclareChannelsWithProperties 是 DeclareChannels 的属性版本。
-func (c *Client) DeclareChannelsWithProperties(ctx context.Context, props map[string]string, channels ...Channel) ([]DeclareResult, error) {
-	resp, err := c.DeclareChannelsResponse(ctx, props, channels...)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Results, nil
-}
-
-// DeclareResponse 是 DECLARE_RESP 的完整结果。
-type DeclareResponse struct {
-	// Results 只包含被拒绝的项。
-	Results []DeclareResult
+// DeclareResult 是 DECLARE_RESP 的完整结果。
+type DeclareResult struct {
+	// Rejected 只包含被拒绝的项（服务端为压缩响应不回显成功项）。
+	Rejected []ChannelResult
 	// Accepted 是被接受的项数。
 	Accepted uint16
 	// Pending 是 Low / Medium / High 三个优先级的未投递积压。
@@ -464,41 +447,54 @@ type DeclareResponse struct {
 	Properties map[string]string
 }
 
-// DeclareChannelsResponse 与 DeclareChannelsWithProperties 相同，但返回完整响应。
-func (c *Client) DeclareChannelsResponse(ctx context.Context, props map[string]string, channels ...Channel) (DeclareResponse, error) {
-	resp, err := c.declareChannels(ctx, channels, props)
-	if err != nil {
-		return DeclareResponse{}, err
-	}
-	c.setDesiredChannels(channels, props)
-	return resp, nil
+// Declare 全量替换 channel 声明并返回完整结果。
+//
+// 空切片表示取消全部兴趣。请求会被记住，并在每次重连后自动重放。
+func (c *Client) Declare(ctx context.Context, channels ...Channel) (DeclareResult, error) {
+	return c.DeclareWithProperties(ctx, nil, channels...)
 }
 
-func (c *Client) declareChannels(ctx context.Context, channels []Channel, props map[string]string) (DeclareResponse, error) {
+// DeclareWithProperties 是 Declare 的属性版本：属性会随 DECLARE 发送，
+// 并在每次重连后随声明一起重放。
+func (c *Client) DeclareWithProperties(ctx context.Context, props map[string]string, channels ...Channel) (DeclareResult, error) {
+	res, err := c.declare(ctx, channels, props)
+	if err != nil {
+		return DeclareResult{}, err
+	}
+	c.setDesiredChannels(channels, props)
+	return res, nil
+}
+
+// declare 发送 DECLARE 但不更新期望声明（重连重放使用，避免覆盖用户意图）。
+func (c *Client) declare(ctx context.Context, channels []Channel, props map[string]string) (DeclareResult, error) {
 	decls := make([]packet.ChannelDecl, len(channels))
 	for i, ch := range channels {
+		if !packet.ValidateChannelFilterLimit(ch.Filter, packet.MaxChannelLength) {
+			return DeclareResult{}, fmt.Errorf("%w: channel filter %q", ErrInvalidOption, ch.Filter)
+		}
 		decls[i] = packet.ChannelDecl{Channel: ch.Filter}
 		decls[i].SetTargetOnly(ch.TargetOnly)
 	}
+
 	req := packet.NewDeclarePacket(c.nextRequestID(), decls)
 	req.Properties = maps.Clone(props)
 
-	packetResp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
+	resp, err := c.roundTrip(ctx, req, req.RequestID, 10*time.Second)
 	if err != nil {
-		return DeclareResponse{}, err
+		return DeclareResult{}, err
 	}
-	ok, valid := packetResp.(*packet.DeclareRespPacket)
+	ok, valid := resp.(*packet.DeclareRespPacket)
 	if !valid {
-		return DeclareResponse{}, ErrNotConnected
+		return DeclareResult{}, ErrNotConnected
 	}
 
-	out := make([]DeclareResult, len(ok.Results))
+	out := make([]ChannelResult, len(ok.Results))
 	for i, r := range ok.Results {
-		out[i] = DeclareResult{Channel: r.Channel, Reason: r.Reason}
+		out[i] = ChannelResult{Channel: r.Channel, Reason: r.Reason}
 	}
 
-	return DeclareResponse{
-		Results:    out,
+	return DeclareResult{
+		Rejected:   out,
 		Accepted:   ok.Accepted,
 		Pending:    ok.Pending,
 		Properties: maps.Clone(ok.Properties),

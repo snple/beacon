@@ -20,16 +20,19 @@ import (
 //
 // Address 支持 ws:// 与 wss:// 两种 scheme，路径默认为 "/ws"。
 type WSDialer struct {
-	Address     string        // 服务器 WebSocket 地址 (例如 "ws://127.0.0.1:8080/ws")
-	TLSConfig   *tls.Config   // wss:// 时的 TLS 配置（可选）
-	DialTimeout time.Duration // 连接超时（默认 10s）
+	// Address 是服务端 WebSocket 地址，例如 "ws://127.0.0.1:8080/ws"。
+	Address string
+	// TLSConfig 是 wss:// 连接使用的 TLS 配置；nil 使用系统默认。
+	TLSConfig *tls.Config
+	// DialTimeout 是 ctx 未带截止时间时使用的超时（默认 10s）。
+	DialTimeout time.Duration
 	// MaxMessageSize 限制单个 WebSocket 消息大小（默认 16 MiB），
 	// 防止恶意服务端用超大帧耗尽客户端内存。
 	MaxMessageSize int64
 }
 
-// Dial 建立 WebSocket 连接并包装为 net.Conn
-func (d *WSDialer) Dial() (net.Conn, error) {
+// DialContext 实现 Dialer 接口。
+func (d *WSDialer) DialContext(ctx context.Context) (net.Conn, error) {
 	address := d.Address
 	if address == "" {
 		address = "ws://127.0.0.1:8080/ws"
@@ -38,17 +41,18 @@ func (d *WSDialer) Dial() (net.Conn, error) {
 		address = "ws://" + address
 	}
 
-	timeout := d.DialTimeout
-	if timeout == 0 {
-		timeout = defaultConnectTimeout
+	if _, ok := ctx.Deadline(); !ok {
+		timeout := d.DialTimeout
+		if timeout == 0 {
+			timeout = defaultConnectTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
 	dialer := websocket.Dialer{
-		HandshakeTimeout: timeout,
-		TLSClientConfig:  d.TLSConfig,
+		TLSClientConfig: d.TLSConfig,
 	}
 
 	ws, _, err := dialer.DialContext(ctx, address, nil)

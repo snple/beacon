@@ -353,7 +353,7 @@ PULL_OK {
 `MaxBytes` 只统计记录本身的编码大小，不包含包头；放不下下一条时会提前结束本批；
 `PULL_OK.Properties` 的编码大小计入 `MaxPacketSize`，放不下时服务端整组省略属性。
 服务端可通过 `OnPull`（`PullContext.ResponseProperties`）在 `PULL_OK.Properties` 中返回
-游标、限流提示等自定义信息，客户端用 `PullBatchResult` 读取。
+游标、限流提示等自定义信息，客户端用 `PullBatch` 读取。
 
 拉取顺序：
 
@@ -462,7 +462,7 @@ DECLARE_RESP {
 失败项同样会按对端 `MaxPacketSize` 裁剪（至少保留一条）。
 `DECLARE_RESP.Properties` 的编码大小同样计入该上限，放不下时整组省略。
 服务端可通过 `OnDeclare`（`DeclareContext.ResponseProperties`）在此返回自定义信息，
-客户端用 `DeclareChannelsResponse` 读取（含 `Accepted`、`Pending` 与 `Properties`）。
+客户端用 `Declare` 读取（含 `Accepted`、`Pending` 与 `Properties`）。
 
 ### 5.6 PING / PONG / DISCONNECT
 

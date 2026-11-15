@@ -45,6 +45,9 @@ type Client struct {
 	// 会话变化回调
 	onSessionReset func(prev, next uint64)
 
+	// superviseActive 保证同一时刻只有一条重连循环。
+	superviseActive atomic.Bool
+
 	// declMu 保护 desiredChannels/desiredDeclareProps；重连后按最近一次声明自动重放。
 	declMu              sync.Mutex
 	desiredChannels     []Channel
@@ -58,6 +61,7 @@ func NewWithOptions(opts *ClientOptions) (*Client, error) {
 	if opts == nil {
 		opts = NewClientOptions()
 	}
+	opts = opts.clone()
 	opts.applyDefaults()
 	if err := opts.Validate(); err != nil {
 		return nil, err
@@ -154,6 +158,8 @@ func (c *Client) SessionPresent() bool {
 func (c *Client) Connect() error { return c.ConnectContext(context.Background()) }
 
 // ConnectWithDialer 使用指定拨号器建立连接。
+//
+// 拨号器会被记住，后续自动重连也使用它；传 nil 恢复按 Address 拨号。
 func (c *Client) ConnectWithDialer(d Dialer) error {
 	c.mu.Lock()
 	c.opts.Dialer = d
@@ -171,30 +177,43 @@ func (c *Client) ConnectContext(ctx context.Context) error {
 		return err
 	}
 
-	if c.opts.AutoReconnect {
+	if c.opts.AutoReconnect && c.superviseActive.CompareAndSwap(false, true) {
 		c.supWG.Add(1)
 		go c.supervise()
 	}
 	return nil
 }
 
-func (c *Client) dial() (net.Conn, error) {
+// dial 建立底层连接；ctx 的超时来自 ConnectContext 或重连循环。
+func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 	c.mu.RLock()
 	custom := c.opts.Dialer
 	c.mu.RUnlock()
+
+	if d := c.opts.ConnectTimeout; d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
+
 	if custom != nil {
-		return custom.Dial()
+		return custom.DialContext(ctx)
 	}
 	if hasWSScheme(c.opts.Address) {
 		d := &WSDialer{
 			Address:        c.opts.Address,
+			TLSConfig:      c.opts.TLSConfig,
 			DialTimeout:    c.opts.ConnectTimeout,
-			MaxMessageSize: int64(c.opts.MaxPacketSize),
+			MaxMessageSize: int64(c.opts.MaxRecvPacketSize),
 		}
-		return d.Dial()
+		return d.DialContext(ctx)
 	}
-	d := &TCPDialer{Address: c.opts.Address, DialTimeout: c.opts.ConnectTimeout}
-	return d.Dial()
+	d := &TCPDialer{
+		Address:     c.opts.Address,
+		TLSConfig:   c.opts.TLSConfig,
+		DialTimeout: c.opts.ConnectTimeout,
+	}
+	return d.DialContext(ctx)
 }
 
 // connectOnce 完成一次握手。
@@ -209,7 +228,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		return ErrAlreadyConnected
 	}
 
-	nc, err := c.dial()
+	nc, err := c.dial(ctx)
 	if err != nil {
 		return err
 	}
@@ -228,13 +247,22 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	connect := packet.NewConnectPacket(clientID)
 	connect.KeepAlive = c.opts.KeepAlive
 	connect.SetCleanSession(c.opts.CleanSession)
-	connect.MaxPacketSize = c.opts.MaxPacketSize
+	connect.MaxPacketSize = c.opts.MaxRecvPacketSize
 	connect.AuthMethod = c.opts.AuthMethod
 	connect.AuthData = c.opts.AuthData
 	connect.Properties = maps.Clone(c.opts.Properties)
 
+	// 握手期限取 ConnectTimeout 与调用方 ctx 截止时间的较小值。
 	if d := c.opts.ConnectTimeout; d > 0 {
-		_ = nc.SetDeadline(time.Now().Add(d))
+		deadline := time.Now().Add(d)
+		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+			deadline = ctxDeadline
+		}
+		_ = nc.SetDeadline(deadline)
+	}
+	if err := ctx.Err(); err != nil {
+		_ = nc.Close()
+		return err
 	}
 
 	if err := cn.write(connect); err != nil {
@@ -242,7 +270,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		return NewConnectionError("connect", err)
 	}
 
-	pkt, _, err := packet.ReadPacketWithSize(nc, c.opts.MaxPacketSize)
+	pkt, _, err := packet.ReadPacketWithSize(nc, c.opts.MaxRecvPacketSize)
 	if err != nil {
 		_ = nc.Close()
 		return NewConnectionError("read connack", err)
@@ -260,7 +288,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	}
 
 	cn.connack = connack
-	cn.readMaxPacketSize = c.opts.MaxPacketSize
+	cn.readMaxPacketSize = c.opts.MaxRecvPacketSize
 	writeMax := c.opts.MaxSendPacketSize
 	if serverMax := connack.Limits.MaxPacketSize; serverMax > 0 &&
 		(writeMax == 0 || serverMax < writeMax) {
@@ -268,7 +296,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	}
 	if writeMax == 0 {
 		// 服务端未声明接收上限：保守使用本端配置。
-		writeMax = c.opts.MaxPacketSize
+		writeMax = c.opts.MaxRecvPacketSize
 	}
 	cn.writeMaxPacketSize = writeMax
 	if c.closed.Load() {
@@ -326,18 +354,18 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	// 声明，这样 CleanSession 清空、运行时 Declare 或被按新身份过滤掉的声明
 	// 都能在重连后恢复。失败项记录日志，但不阻断连接。
 	if decls, props := c.desiredChannelSnapshot(); len(decls) > 0 {
-		resp, err := c.declareChannels(c.ctx, decls, props)
+		resp, err := c.declare(c.ctx, decls, props)
 		if err != nil {
 			cn.close(err)
 			return err
 		}
-		if len(resp.Results) > 0 {
-			reasons := make([]string, 0, len(resp.Results))
-			for _, r := range resp.Results {
+		if len(resp.Rejected) > 0 {
+			reasons := make([]string, 0, len(resp.Rejected))
+			for _, r := range resp.Rejected {
 				reasons = append(reasons, r.Channel+": "+r.Reason.String())
 			}
 			c.logger.Warn("some channel declarations were rejected",
-				zap.Int("rejected", len(resp.Results)),
+				zap.Int("rejected", len(resp.Rejected)),
 				zap.Strings("results", reasons))
 		}
 	}
@@ -346,7 +374,10 @@ func (c *Client) connectOnce(ctx context.Context) error {
 
 // supervise 在连接断开后自动重连。
 func (c *Client) supervise() {
-	defer c.supWG.Done()
+	defer func() {
+		c.superviseActive.Store(false)
+		c.supWG.Done()
+	}()
 
 	for {
 		c.mu.RLock()
@@ -414,6 +445,11 @@ func (c *Client) Close() error {
 	c.supWG.Wait()
 	return nil
 }
+
+// Done 返回在客户端被 Close 后关闭的 channel。
+//
+// 连接断开但仍在自动重连时不会关闭，因此可用来等待客户端彻底停止。
+func (c *Client) Done() <-chan struct{} { return c.ctx.Done() }
 
 // Connected 报告当前是否已连接。
 func (c *Client) Connected() bool {
@@ -511,10 +547,4 @@ func (c *Client) dropLocalUncommitted() {
 	c.uncommittedMu.Lock()
 	c.uncommitted = nil
 	c.uncommittedMu.Unlock()
-}
-
-func (c *Client) hasUncommitted() bool {
-	c.uncommittedMu.Lock()
-	defer c.uncommittedMu.Unlock()
-	return len(c.uncommitted) > 0
 }

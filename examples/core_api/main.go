@@ -32,9 +32,9 @@ func main() {
 	ctx := context.Background()
 
 	worker, err := client.NewWithOptions(client.NewClientOptions().
-		WithCore("127.0.0.1:15208").
+		WithServer("127.0.0.1:15208").
 		WithClientID("worker-1").
-		WithChannels("jobs/**").
+		WithChannels(client.Filter("jobs/**")).
 		WithLogger(logger))
 	if err != nil {
 		log.Fatal(err)

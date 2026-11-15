@@ -8,35 +8,51 @@ import (
 )
 
 var (
-	// ErrNotConnected 客户端未连接
+	// ErrNotConnected 客户端未连接。
 	ErrNotConnected = errors.New("client not connected")
-	// ErrClientClosed 客户端已关闭
+	// ErrClientClosed 客户端已关闭。
 	ErrClientClosed = errors.New("client is closed")
-	// ErrAlreadyConnected 客户端已有活动连接
+	// ErrAlreadyConnected 客户端已有活动连接。
 	ErrAlreadyConnected = errors.New("client already connected")
-	// ErrTimeout 请求超时
+	// ErrTimeout 请求超时。
 	ErrTimeout = errors.New("request timeout")
-	// ErrPollTimeout 轮询超时
+	// ErrPollTimeout 轮询超时。
 	ErrPollTimeout = errors.New("poll timeout")
-	// ErrSessionTakenOver 会话被同 ClientID 的其他连接接管，不应自动重连
+	// ErrSessionTakenOver 会话被同 ClientID 的其他连接接管，不应自动重连。
 	ErrSessionTakenOver = errors.New("session taken over by another connection")
-	// ErrKicked 被服务端踢下线
+	// ErrKicked 被服务端踢下线。
 	ErrKicked = errors.New("kicked by server")
-	// ErrCommitRequired 服务端要求先确认再拉取
+	// ErrCommitRequired 服务端要求先确认再拉取。
 	ErrCommitRequired = errors.New("commit required before pulling more")
-	// ErrRateLimited 服务端限流（例如已有在途 PULL）
+	// ErrRateLimited 服务端限流（例如已有在途 PULL）。
 	ErrRateLimited = errors.New("request rate limited")
-	// ErrTargetNotSubscribed 定向投递的目标存在，但没有声明匹配该 channel 的过滤器
+	// ErrTargetNotSubscribed 定向投递的目标存在，但没有声明匹配该 channel 的过滤器。
 	ErrTargetNotSubscribed = errors.New("target has not subscribed to the channel")
-	// ErrKeepAliveTimeout 超过存活窗口没有收到任何包（半开连接或服务端无响应）
-	ErrKeepAliveTimeout = errors.New("keepalive timeout")
-	// ErrExpired 消息已过期，服务端拒绝或丢弃
+	// ErrTargetNotFound 定向投递的目标没有会话。
+	ErrTargetNotFound = errors.New("target client not found")
+	// ErrNotAuthorized 未通过服务端授权。
+	ErrNotAuthorized = errors.New("not authorized")
+	// ErrPacketTooLarge 数据包或记录超过服务端上限。
+	ErrPacketTooLarge = errors.New("packet too large")
+	// ErrQuotaExceeded 服务端配额超限（例如全局在途字节）。
+	ErrQuotaExceeded = errors.New("quota exceeded")
+	// ErrConsumerBacklog 消费端积压导致发布被拒。
+	ErrConsumerBacklog = errors.New("consumer backlog")
+	// ErrChannelInvalid channel 名称或过滤器非法。
+	ErrChannelInvalid = errors.New("invalid channel")
+	// ErrExpired 消息已过期，服务端拒绝或丢弃。
 	ErrExpired = errors.New("message expired")
+	// ErrKeepAliveTimeout 超过存活窗口没有收到任何包（半开连接或服务端无响应）。
+	ErrKeepAliveTimeout = errors.New("keepalive timeout")
+	// ErrInvalidOption 客户端参数不合法，请求在本地就被拒绝（不会发往服务端）。
+	ErrInvalidOption = errors.New("invalid option")
 )
 
 // ConnectionError 表示连接层错误。
 type ConnectionError struct {
-	Op  string
+	// Op 是失败的操作，例如 "connect"、"read"、"write"。
+	Op string
+	// Err 是底层错误。
 	Err error
 }
 
@@ -49,8 +65,13 @@ func NewConnectionError(op string, err error) *ConnectionError {
 }
 
 // ServerError 表示服务端返回了失败原因码。
+//
+// errors.Is 可以把常见原因码匹配到对应的哨兵错误（ErrNotAuthorized、
+// ErrPacketTooLarge、ErrQuotaExceeded 等），同时保留 Reason 与 Detail。
 type ServerError struct {
+	// Reason 是服务端返回的原因码。
 	Reason packet.ReasonCode
+	// Detail 是服务端给出的可读细节（例如钩子设置的诊断信息）。
 	Detail string
 }
 
@@ -59,6 +80,42 @@ func (e *ServerError) Error() string {
 		return fmt.Sprintf("server rejected: %s: %s", e.Reason.String(), e.Detail)
 	}
 	return fmt.Sprintf("server rejected: %s", e.Reason.String())
+}
+
+// Is 把常见原因码映射到哨兵错误，便于 errors.Is 判断。
+func (e *ServerError) Is(target error) bool {
+	var want packet.ReasonCode
+	switch target {
+	case ErrSessionTakenOver:
+		want = packet.ReasonSessionTakenOver
+	case ErrKicked:
+		want = packet.ReasonKicked
+	case ErrCommitRequired:
+		want = packet.ReasonCommitRequired
+	case ErrRateLimited:
+		want = packet.ReasonRateLimited
+	case ErrExpired:
+		want = packet.ReasonExpired
+	case ErrTargetNotFound:
+		want = packet.ReasonTargetNotFound
+	case ErrNotAuthorized:
+		want = packet.ReasonNotAuthorized
+	case ErrPacketTooLarge:
+		want = packet.ReasonPacketTooLarge
+	case ErrQuotaExceeded:
+		want = packet.ReasonQuotaExceeded
+	case ErrConsumerBacklog:
+		want = packet.ReasonConsumerBacklog
+	case ErrChannelInvalid:
+		switch e.Reason {
+		case packet.ReasonChannelInvalid, packet.ReasonChannelNameInvalid, packet.ReasonChannelFilterInvalid:
+			return true
+		}
+		return false
+	default:
+		return false
+	}
+	return e.Reason == want
 }
 
 // NewServerError 构造服务端错误。
@@ -71,7 +128,7 @@ func NewServerErrorWithDetail(reason packet.ReasonCode, detail string) *ServerEr
 	return &ServerError{Reason: reason, Detail: detail}
 }
 
-// reasonToError 把原因码映射为错误（成功返回 nil）。
+// reasonToError 把原因码映射为错误（成功类与路由类返回 nil）。
 func reasonToError(reason packet.ReasonCode) error {
 	return reasonToErrorWithDetail(reason, "")
 }
@@ -81,18 +138,5 @@ func reasonToErrorWithDetail(reason packet.ReasonCode, detail string) error {
 	if !reason.IsError() {
 		return nil
 	}
-	switch reason {
-	case packet.ReasonSessionTakenOver:
-		return ErrSessionTakenOver
-	case packet.ReasonKicked:
-		return ErrKicked
-	case packet.ReasonCommitRequired:
-		return ErrCommitRequired
-	case packet.ReasonRateLimited:
-		return ErrRateLimited
-	case packet.ReasonExpired:
-		return ErrExpired
-	default:
-		return NewServerErrorWithDetail(reason, detail)
-	}
+	return NewServerErrorWithDetail(reason, detail)
 }

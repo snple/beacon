@@ -274,11 +274,11 @@ func TestOversizeQueuedRecordDroppedOnReconnect(t *testing.T) {
 	b.Push("big/ch", make([]byte, 2048), core.PushOptions{}.WithPriority(packet.PriorityHigh))
 
 	opts := client.NewClientOptions().
-		WithCore(addr).
+		WithServer(addr).
 		WithClientID("shrink-1").
-		WithMaxPacketSize(512).
+		WithMaxRecvPacketSize(512).
 		WithAutoReconnect(false).
-		WithChannels("big/**").
+		WithChannels(client.Filter("big/**")).
 		WithLogger(zap.NewNop())
 	sub, err := client.NewWithOptions(opts)
 	if err != nil {
@@ -309,7 +309,7 @@ func TestOversizeQueuedRecordDroppedOnReconnect(t *testing.T) {
 
 	// 队列仍可继续工作。
 	pub := newTestClient(t, addr, "shrink-pub")
-	if err := pub.Push(ctx, "big/small", []byte("ok"), client.PushOptions{}); err != nil {
+	if _, err := pub.Push(ctx, "big/small", []byte("ok"), client.PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	msg, err = sub.Pull(ctx, client.PullOptions{WaitMs: 500})

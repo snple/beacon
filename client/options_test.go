@@ -4,14 +4,16 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/snple/beacon/packet"
 )
 
 func TestOptionsDefaults(t *testing.T) {
 	opts := NewClientOptions()
-	if opts.KeepAlive == 0 || opts.MaxPacketSize == 0 || opts.ConnectTimeout == 0 {
+	if opts.KeepAlive == 0 || opts.MaxRecvPacketSize == 0 || opts.ConnectTimeout == 0 {
 		t.Fatalf("defaults not applied: %+v", opts)
 	}
-	if opts.DefaultWaitMs == 0 {
+	if opts.DefaultPullWaitMs == 0 {
 		t.Fatalf("pull defaults not applied: %+v", opts)
 	}
 	if !opts.AutoReconnect {
@@ -40,6 +42,16 @@ func TestOptionsValidate(t *testing.T) {
 	if err := o.Validate(); err == nil {
 		t.Fatal("expected error for over-long clientID")
 	}
+
+	o = NewClientOptions().WithChannels(Filter("a/#"))
+	if err := o.Validate(); err == nil {
+		t.Fatal("expected error for invalid channel filter")
+	}
+
+	o = NewClientOptions().WithReconnectBackoff(2, 1)
+	if err := o.Validate(); err == nil {
+		t.Fatal("expected error for inverted reconnect backoff")
+	}
 }
 
 func TestReasonToError(t *testing.T) {
@@ -49,36 +61,51 @@ func TestReasonToError(t *testing.T) {
 	if err := reasonToError(0x10); err != nil {
 		t.Fatalf("no-match is not an error, got %v", err)
 	}
-	if err := reasonToError(0x8E); err != ErrSessionTakenOver {
-		t.Fatalf("session taken over: %v", err)
+
+	cases := []struct {
+		reason packet.ReasonCode
+		want   error
+	}{
+		{packet.ReasonSessionTakenOver, ErrSessionTakenOver},
+		{packet.ReasonKicked, ErrKicked},
+		{packet.ReasonCommitRequired, ErrCommitRequired},
+		{packet.ReasonExpired, ErrExpired},
+		{packet.ReasonNotAuthorized, ErrNotAuthorized},
+		{packet.ReasonPacketTooLarge, ErrPacketTooLarge},
+		{packet.ReasonQuotaExceeded, ErrQuotaExceeded},
+		{packet.ReasonConsumerBacklog, ErrConsumerBacklog},
+		{packet.ReasonTargetNotFound, ErrTargetNotFound},
+		{packet.ReasonChannelInvalid, ErrChannelInvalid},
+		{packet.ReasonChannelFilterInvalid, ErrChannelInvalid},
 	}
-	if err := reasonToError(0xA2); err != ErrKicked {
-		t.Fatalf("kicked: %v", err)
+	for _, tc := range cases {
+		err := reasonToError(tc.reason)
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("reason %s: got %v, want %v", tc.reason, err, tc.want)
+		}
 	}
-	if err := reasonToError(0xA1); err != ErrCommitRequired {
-		t.Fatalf("commit required: %v", err)
-	}
-	if err := reasonToError(0x87); err == nil {
-		t.Fatal("not authorized should be an error")
-	}
-	if err := reasonToError(0xA5); !errors.Is(err, ErrExpired) {
-		t.Fatalf("expired: %v", err)
-	}
-	err := reasonToErrorWithDetail(0x87, "channel denied")
+
+	err := reasonToErrorWithDetail(packet.ReasonNotAuthorized, "channel denied")
 	var se *ServerError
 	if !errors.As(err, &se) || se.Detail != "channel denied" {
 		t.Fatalf("detail not preserved: %#v", err)
 	}
 }
 
-func TestOptionsTargetOnlyChannels(t *testing.T) {
+func TestOptionsChannelsReplaceAndAppend(t *testing.T) {
 	o := NewClientOptions().
-		WithChannels("a/**").
-		WithTargetOnlyChannels("b/1", "b/2")
+		WithChannels(Filter("a/**")).
+		AddChannels(TargetOnly("b/1"), TargetOnly("b/2"))
 	if len(o.Channels) != 3 {
 		t.Fatalf("channels: %+v", o.Channels)
 	}
 	if o.Channels[0].TargetOnly || !o.Channels[1].TargetOnly || !o.Channels[2].TargetOnly {
 		t.Fatalf("target-only flags: %+v", o.Channels)
+	}
+
+	// WithChannels 是替换语义。
+	o.WithChannels(Filter("c/**"))
+	if len(o.Channels) != 1 || o.Channels[0].Filter != "c/**" {
+		t.Fatalf("WithChannels should replace: %+v", o.Channels)
 	}
 }

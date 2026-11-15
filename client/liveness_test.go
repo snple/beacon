@@ -47,7 +47,7 @@ func TestClientDetectsUnresponsiveServer(t *testing.T) {
 	}()
 
 	opts := client.NewClientOptions().
-		WithCore(ln.Addr().String()).
+		WithServer(ln.Addr().String()).
 		WithClientID("live-1").
 		WithKeepAlive(1).
 		WithAutoReconnect(false)

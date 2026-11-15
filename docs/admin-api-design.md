@@ -252,7 +252,7 @@ hooks := &core.Hooks{
 - `CONNACK` 保持原有语义：最终 `CONNACK`（含属性）超限时返回 `PacketTooLarge` 并关闭
   连接，此时 `PUSH_OK` 之类的“丢属性”降级不适用——握手阶段必须显式失败。
 - 客户端读取：`ServerProperties()`（CONNACK）、`PushResult.Properties`（PUSH_OK）、
-  `PullBatchResult`（PULL_OK）、`DeclareChannelsResponse`（DECLARE_RESP）。
+  `PullBatch`（PULL_OK）、`Declare`（DECLARE_RESP）。
 
 ### 上下文字段
 

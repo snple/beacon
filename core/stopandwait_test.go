@@ -18,7 +18,7 @@ func TestReceiveMaximumGatesNewDelivery(t *testing.T) {
 	ctx := context.Background()
 
 	for _, v := range []string{"m1", "m2", "m3"} {
-		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
+		if _, err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -59,7 +59,7 @@ func TestReceiveWindowAllowsPipelinedDelivery(t *testing.T) {
 	ctx := context.Background()
 
 	for _, v := range []string{"m1", "m2"} {
-		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
+		if _, err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -76,10 +76,10 @@ func TestReceiveWindowAllowsPipelinedDelivery(t *testing.T) {
 		t.Fatal("pipelined pulls must return distinct messages")
 	}
 
-	if n, err := sub.CommitAll(ctx); err != nil {
+	if res, err := sub.CommitAll(ctx); err != nil {
 		t.Fatal(err)
-	} else if n != 2 {
-		t.Fatalf("committed %d, want 2", n)
+	} else if res.Committed != 2 {
+		t.Fatalf("committed %d, want 2", res.Committed)
 	}
 }
 
@@ -91,30 +91,30 @@ func TestPullBatchAndCommitBatch(t *testing.T) {
 	ctx := context.Background()
 
 	for _, v := range []string{"m1", "m2", "m3"} {
-		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
+		if _, err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	msgs, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 3})
+	res, err := sub.PullBatch(ctx, client.PullOptions{WaitMs: 300, MaxCount: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 records, got %d", len(msgs))
+	if len(res.Messages) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(res.Messages))
 	}
-	ids := make([]packet.PacketID, len(msgs))
-	for i, m := range msgs {
+	ids := make([]packet.PacketID, len(res.Messages))
+	for i, m := range res.Messages {
 		ids[i] = m.ID
 		if m.Dup {
 			t.Fatalf("batch record %d should not be dup", i)
 		}
 	}
-	if err := sub.CommitBatch(ctx, ids); err != nil {
+	if _, err := sub.Commit(ctx, ids...); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := sub.CommitAll(ctx); err != nil || n != 0 {
-		t.Fatalf("CommitAll after CommitBatch: n=%d err=%v", n, err)
+	if res, err := sub.CommitAll(ctx); err != nil || res.Committed != 0 {
+		t.Fatalf("CommitAll after CommitBatch: committed=%d err=%v", res.Committed, err)
 	}
 }
 
@@ -125,11 +125,11 @@ func TestLowPriorityDoesNotBlock(t *testing.T) {
 	pub := newTestClient(t, addr, "pub-1")
 	ctx := context.Background()
 
-	low := client.PushOptions{}.WithPriority(packet.PriorityLow)
-	if err := pub.Push(ctx, "ch/a", []byte("l1"), low); err != nil {
+	low := client.PushOptions{}.WithPriority(client.PriorityLow)
+	if _, err := pub.Push(ctx, "ch/a", []byte("l1"), low); err != nil {
 		t.Fatal(err)
 	}
-	if err := pub.Push(ctx, "ch/a", []byte("l2"), low); err != nil {
+	if _, err := pub.Push(ctx, "ch/a", []byte("l2"), low); err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,7 +154,7 @@ func TestConcurrentPullSerializedByClient(t *testing.T) {
 	ctx := context.Background()
 
 	for _, v := range []string{"1", "2"} {
-		if err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
+		if _, err := pub.Push(ctx, "ch/a", []byte(v), client.PushOptions{}.WithReliable(true)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -186,10 +186,10 @@ func TestConcurrentPullSerializedByClient(t *testing.T) {
 		t.Fatalf("fresh window should not redeliver: %+v", results)
 	}
 
-	if n, err := sub.CommitAll(ctx); err != nil {
+	if res, err := sub.CommitAll(ctx); err != nil {
 		t.Fatal(err)
-	} else if n != 2 {
-		t.Fatalf("committed %d, want 2 messages", n)
+	} else if res.Committed != 2 {
+		t.Fatalf("committed %d, want 2 messages", res.Committed)
 	}
 
 	next, err := sub.Pull(ctx, client.PullOptions{WaitMs: 200})

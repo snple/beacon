@@ -9,7 +9,7 @@ import (
 
 // 回归：COMMIT 失败后未确认集合必须保持可重试，不能被标记为已确认。
 func TestCommitAllRetriesAfterFailure(t *testing.T) {
-	c, err := NewWithOptions(NewClientOptions().WithClientID("t").WithCore("127.0.0.1:1"))
+	c, err := NewWithOptions(NewClientOptions().WithClientID("t").WithServer("127.0.0.1:1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestCommitAllRetriesAfterFailure(t *testing.T) {
 }
 
 func TestMarkCommittedRemovesEntries(t *testing.T) {
-	c, err := NewWithOptions(NewClientOptions().WithClientID("t").WithCore("127.0.0.1:1"))
+	c, err := NewWithOptions(NewClientOptions().WithClientID("t").WithServer("127.0.0.1:1"))
 	if err != nil {
 		t.Fatal(err)
 	}

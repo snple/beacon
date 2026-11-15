@@ -100,10 +100,10 @@ import (
 )
 
 c, err := client.NewWithOptions(client.NewClientOptions().
-    WithCore("127.0.0.1:5208").
+    WithServer("127.0.0.1:5208").
     WithClientID("worker-1").
-    WithProperty("model", "x1"). // 随 CONNECT 发给服务端
-    WithChannels("jobs/**"))     // 建连后自动 DECLARE（广播 + 定向投递）
+    WithProperty("model", "x1").                  // 随 CONNECT 发给服务端
+    WithChannels(client.Filter("jobs/**")))       // 建连后自动 DECLARE（广播 + 定向投递）
 if err != nil {
     return err
 }
@@ -119,15 +119,15 @@ limits := c.ServerLimits()
 
 // 消费循环：批量拉取 → 处理 → 一个 RTT 批量确认
 for {
-    msgs, err := c.PullBatch(ctx, client.PullOptions{WaitMs: 30000, MaxCount: 32})
+    res, err := c.PullBatch(ctx, client.PullOptions{WaitMs: 30000, MaxCount: 32})
     if err != nil {
         return err
     }
-    for _, m := range msgs {
+    for _, m := range res.Messages {
         handle(m.Channel, m.Payload)
     }
-    if len(msgs) > 0 {
-        if err := c.CommitAll(ctx); err != nil {
+    if len(res.Messages) > 0 {
+        if _, err := c.CommitAll(ctx); err != nil {
             return err
         }
     }
@@ -138,14 +138,16 @@ for {
 
 ```go
 opts := client.PushOptions{}.
-    WithPriority(packet.PriorityHigh).
+    WithPriority(client.PriorityHigh).
     WithReliable(true) // 需要 COMMIT；默认不可靠
 
-if err := pub.Push(ctx, "jobs/image", payload, opts); err != nil { ... }
+// Push 返回 PushResult（ID/Matched/Dropped/Reason/Properties）与 error。
+res, err := pub.Push(ctx, "jobs/image", payload, opts)
+if err != nil { ... }
 
 // 低紧急但必须送达：Low + Reliable
 lowReliable := client.PushOptions{}.
-    WithPriority(packet.PriorityLow).
+    WithPriority(client.PriorityLow).
     WithReliable(true)
 
 // 10 秒后过期；同时记录发布者时间戳
@@ -154,20 +156,17 @@ ttlOpts := client.PushOptions{}.
     WithTTL(10 * time.Second)
 
 // 不等待确认（省一个 RTT，但发送失败不可知）
-if err := pub.Push(ctx, "jobs/image", payload, opts.WithoutAck()); err != nil { ... }
+if _, err := pub.Push(ctx, "jobs/image", payload, opts.WithoutAck()); err != nil { ... }
 
-// 需要感知匹配/丢弃数量时使用带结果版本
-res, err := pub.PushWithResult(ctx, "jobs/image", payload, opts)
-// res.Matched / res.Dropped / res.Reason
-
-// 定向投递（跳过 channel 匹配，直接进入目标客户端队列）
-// 目标存在但未声明匹配的过滤器时返回 client.ErrTargetNotSubscribed。
-if err := pub.PushTo(ctx, "worker-1", "cmd/stop", nil, client.PushOptions{}); err != nil { ... }
+// 定向投递（跳过 channel 匹配，直接进入目标客户端队列）；
+// 目标存在但未声明匹配的过滤器时返回 client.ErrTargetNotSubscribed，
+// 目标没有会话时返回匹配 client.ErrTargetNotFound 的错误。
+if _, err := pub.PushTo(ctx, "worker-1", "cmd/stop", nil, client.PushOptions{}); err != nil { ... }
 ```
 
-`WithMaxPacketSize` 只限制**接收**；发送上限默认采用服务端
-`CONNACK.Limits.MaxPacketSize`，可用 `WithMaxSendPacketSize` 进一步收紧。运行时 `DeclareChannels` 的声明会被记住，
-并在每次重连后自动重放。
+`WithMaxRecvPacketSize` 只限制**接收**；发送上限默认采用服务端
+`CONNACK.Limits.MaxPacketSize`，可用 `WithMaxSendPacketSize` 进一步收紧。
+运行时 `Declare` 的声明会被记住，并在每次重连后自动重放。
 
 ## 语义要点
 
@@ -178,14 +177,14 @@ SDK 层的默认值不同——为了让朴素循环不会空转：
 
 | 调用方式 | 行为 |
 |---|---|
-| `Pull(ctx, client.PullOptions{})` | 长轮询，最多等 `ClientOptions.DefaultWaitMs`（默认 30s） |
+| `Pull(ctx, client.PullOptions{})` | 长轮询，最多等 `ClientOptions.DefaultPullWaitMs`（默认 30s） |
 | `Pull(ctx, client.PullOptions{WaitMs: 500})` | 最多等 500ms |
 | `Pull(ctx, client.PullOptions{Immediate: true})` | 立即返回，不等待 |
-| `PollMessage(ctx, timeout)` | 内部逐条长轮询，直到取到消息或超时 |
+| `PollMessage(ctx, timeout)` | 内部逐条长轮询，直到取到消息或超时（不会自动确认） |
 
 同一连接同一时刻只允许一个在途 `PULL`，第二个会收到 `PULL_OK(RateLimited)`；
-SDK 已在 `Pull` 内部串行化。需要读取服务端随 `PULL_OK` 返回的属性（游标、限流提示等）
-时使用 `PullBatchResult`，它返回 `Messages` 与 `Properties`。
+SDK 已在 `Pull` 内部串行化。`PullBatch` 返回 `PullResult`：`Messages` 是本批消息，
+`Properties` 是服务端随 `PULL_OK` 返回的属性（游标、限流提示等）。
 
 ### 窗口与确认
 
@@ -196,8 +195,10 @@ SDK 已在 `Pull` 内部串行化。需要读取服务端随 `PULL_OK` 返回的
 - 超过 `NoProgressSoft`（默认 4）：返回 `PULL_OK(ReasonCommitRequired)`，不返回数据；
 - 超过 `NoProgressHard`（默认 16）：断开连接（`DISCONNECT(CommitRequired)`）。
 
-`client.CommitAll()` 用一个 `COMMIT` 确认当前所有未确认消息；`Message.Ack()` 确认单条；
-`Message.Nack(ctx, reason)` 拒绝单条（服务端不再重发，并触发 `Hooks.Nack`）。
+`client.CommitAll()` 用一个 `COMMIT` 确认当前所有未确认消息，返回
+`client.CommitResult`（`Committed` / `Nacked` / `Unknown` / `Pending`）；
+`Message.Ack()` 确认单条；`Message.Nack(ctx, reason)` 拒绝单条
+（服务端不再重发，并触发 `Hooks.Nack`）。
 
 ### 响应内容
 
@@ -245,23 +246,23 @@ SDK 已在 `Pull` 内部串行化。需要读取服务端随 `PULL_OK` 返回的
 
 ```go
 // 默认：同时接收广播与定向投递
-c.DeclareChannels(ctx,
-    client.Channel{Filter: "jobs/**"},                            // 广播 + 定向投递
-    client.Channel{Filter: "worker-1/inbox", TargetOnly: true},   // 只接收定向投递
+c.Declare(ctx,
+    client.Filter("jobs/**"),                 // 广播 + 定向投递
+    client.TargetOnly("worker-1/inbox"),      // 只接收定向投递
 )
 
 // 建连后自动声明时同样可以区分
 client.NewClientOptions().
-    WithChannels("jobs/**").                       // 广播 + 定向投递
-    WithTargetOnlyChannels("worker-1/inbox")       // 只接收定向投递
+    WithChannels(client.Filter("jobs/**"), client.TargetOnly("worker-1/inbox"))
 ```
 
 `TargetOnly` 是**逐项生效**的：同一客户端可以同时声明 `jobs/**`（只定向投递）
 与 `jobs/public`（广播可达），广播只会命中后者。同一过滤器重复声明时取更宽松的
 模式（只要有一次广播可达，就参与广播匹配）。
 
-需要完整声明结果（`Accepted` / `Pending` / `DECLARE_RESP.Properties`）时使用
-`DeclareChannelsResponse`。
+`Declare` 返回完整的 `DeclareResult`：`Rejected` 只包含被拒绝的项，
+另有 `Accepted`、`Pending` 与 `DECLARE_RESP.Properties`。需要随 DECLARE 携带属性时
+使用 `DeclareWithProperties`。
 
 ### 保留 channel
 

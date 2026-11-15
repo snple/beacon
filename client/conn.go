@@ -51,7 +51,7 @@ func newConn(c *Client, nc net.Conn) *conn {
 		client:             c,
 		nc:                 nc,
 		writeTimeout:       c.opts.WriteTimeout,
-		readMaxPacketSize:  c.opts.MaxPacketSize,
+		readMaxPacketSize:  c.opts.MaxRecvPacketSize,
 		writeMaxPacketSize: writeMax,
 		pending:            make(map[uint32]chan packet.Packet),
 		done:               make(chan struct{}),
