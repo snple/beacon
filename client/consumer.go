@@ -120,6 +120,8 @@ func (c *Client) effectiveWait(opts PullOptions) uint32 {
 type PullResult struct {
 	// Messages 是本批消息；窗口已满时可能只包含重发的未确认消息。
 	Messages []*Message
+	// Pending 是服务端 Low / Medium / High 三个优先级的待投递积压。
+	Pending [3]uint32
 	// Properties 是服务端随 PULL_OK 返回的属性。
 	Properties map[string]string
 }
@@ -190,7 +192,10 @@ func (c *Client) PullBatch(ctx context.Context, opts PullOptions) (PullResult, e
 			return PullResult{}, err
 		}
 
-		result := PullResult{Properties: maps.Clone(ok.Properties)}
+		result := PullResult{
+			Pending:    ok.Pending,
+			Properties: maps.Clone(ok.Properties),
+		}
 		if len(ok.Records) == 0 {
 			return result, nil
 		}
@@ -443,6 +448,8 @@ type DeclareResult struct {
 	Accepted uint16
 	// Pending 是 Low / Medium / High 三个优先级的未投递积压。
 	Pending [3]uint32
+	// Limits 是服务端在 DECLARE_RESP 中回传的最新限制。
+	Limits packet.Limits
 	// Properties 是服务端随 DECLARE_RESP 返回的属性。
 	Properties map[string]string
 }
@@ -487,6 +494,7 @@ func (c *Client) declare(ctx context.Context, channels []Channel, props map[stri
 	if !valid {
 		return DeclareResult{}, ErrNotConnected
 	}
+	c.applyDeclareLimits(ok.Limits)
 
 	out := make([]ChannelResult, len(ok.Results))
 	for i, r := range ok.Results {
@@ -497,6 +505,7 @@ func (c *Client) declare(ctx context.Context, channels []Channel, props map[stri
 		Rejected:   out,
 		Accepted:   ok.Accepted,
 		Pending:    ok.Pending,
+		Limits:     ok.Limits,
 		Properties: maps.Clone(ok.Properties),
 	}, nil
 }

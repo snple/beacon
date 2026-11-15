@@ -70,6 +70,13 @@ func (cn *conn) unregister(id uint32) {
 	cn.pendingMu.Unlock()
 }
 
+// setWriteMaxPacketSize 采用服务端在会话期间更新的发送上限。
+func (cn *conn) setWriteMaxPacketSize(size uint32) {
+	cn.writeMu.Lock()
+	cn.writeMaxPacketSize = size
+	cn.writeMu.Unlock()
+}
+
 func (cn *conn) write(pkt packet.Packet) error {
 	cn.writeMu.Lock()
 	defer cn.writeMu.Unlock()

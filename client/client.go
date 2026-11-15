@@ -127,7 +127,7 @@ func (c *Client) ReceiveMaximum() int {
 	return int(c.connack.ReceiveMaximum)
 }
 
-// ServerLimits 返回 CONNACK 中服务端声明的限制。
+// ServerLimits 返回服务端声明的最新限制（CONNACK，或最近一次 DECLARE_RESP）。
 func (c *Client) ServerLimits() packet.Limits {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -135,6 +135,32 @@ func (c *Client) ServerLimits() packet.Limits {
 		return packet.Limits{}
 	}
 	return c.connack.Limits
+}
+
+// applyDeclareLimits 采用 DECLARE_RESP 回传的最新限制。
+//
+// 服务端可能在会话期间调整 MaxPacketSize，发送上限必须随之更新，
+// 否则要么发出超过对端上限的包，要么无谓地限制自己。
+func (c *Client) applyDeclareLimits(limits packet.Limits) {
+	c.mu.Lock()
+	if c.connack != nil {
+		c.connack.Limits = limits
+	}
+	cn := c.conn
+	c.mu.Unlock()
+
+	if cn == nil {
+		return
+	}
+	writeMax := c.opts.MaxSendPacketSize
+	if serverMax := limits.MaxPacketSize; serverMax > 0 &&
+		(writeMax == 0 || serverMax < writeMax) {
+		writeMax = serverMax
+	}
+	if writeMax == 0 {
+		writeMax = c.opts.MaxRecvPacketSize
+	}
+	cn.setWriteMaxPacketSize(writeMax)
 }
 
 // ServerProperties 返回服务端在 CONNACK 中返回的键值信息（副本）。
